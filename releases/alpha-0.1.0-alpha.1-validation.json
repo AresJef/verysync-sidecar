@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "library_version": "0.1.0-alpha.1",
+  "engine_baseline": "v2.33.2",
+  "source_candidate": "5ce97ec548ad51b3847b603bf2184eafa0e5af14",
+  "source_tree": "058f7fa024b8edf8d04b55e0087b5a3be7b2c3da",
+  "source_pull_request": "https://github.com/AresJef/verysync-sidecar/pull/11",
+  "native_run": "https://github.com/AresJef/verysync-sidecar/actions/runs/43220655264",
+  "quality_run": "https://github.com/AresJef/verysync-sidecar/actions/runs/43220654818",
+  "scope": "Initial existing-instance management API; default TLS-feature builds; selected modern native runners; no owned-runtime, peer/batch completion, optional-license, minimum-OS, native HTTPS or cross-network claim",
+  "targets": [
+    {
+      "id": "macos-arm64-standard",
+      "controller_rust_target": "aarch64-apple-darwin",
+      "rust_version": "1.85.0",
+      "engine_version": "v2.33.2",
+      "engine_archive": "verysync-macos-arm64-v2.33.2.zip",
+      "engine_archive_sha256": "7921321d2df082a03647388cd50e30f187d37f7af4439246797118f4f05478f4",
+      "engine_executable_sha256": "f8e9bd67be3fb1b45eafea794008c4dfae24aec4e177617578b268598bf12274",
+      "execution": "native",
+      "management_transport": "Unix socket",
+      "job_id": 131191022237,
+      "actual_effect_groups": [
+        "authentication and identity",
+        "fresh version/system/folder status",
+        "guarded creation and configuration reads",
+        "partial label/pause and actual resumed indexing",
+        "unregister with sample hashes retained",
+        "HTTP/denial/uncertain applied-write faults",
+        "constrained raw requests and actual readback",
+        "explicit capability conditions",
+        "three compiled examples"
+      ],
+      "compiled_examples": [
+        {
+          "name": "connect_existing",
+          "sha256": "9a0d18573adf4e452e923e696d45bf04c662f0acf2d954bd210ed33f5fc44df5"
+        },
+        {
+          "name": "create_folder",
+          "sha256": "9200dd351df0959f40cfa1bf8e25e4e8581520c84c9479957bce54b14657952f"
+        },
+        {
+          "name": "manage_existing",
+          "sha256": "455189519a0f50d019dc0cc971e4bda7b700d2e32ce4f4f55689bf38e663fbaf"
+        }
+      ],
+      "exact_owned_engine_cleanup": "zero remaining"
+    },
+    {
+      "id": "macos-amd64-standard",
+      "controller_rust_target": "x86_64-apple-darwin",
+      "rust_version": "1.85.0",
+      "engine_version": "v2.33.2",
+      "engine_archive": "verysync-macos-amd64-v2.33.2.zip",
+      "engine_archive_sha256": "530ce9dc326b9b259bb88f0225519ec273f1c26ec497e026daa19ff0b59872f9",
+      "engine_executable_sha256": "531b6df93546b591080025007a141be51a4c63be94900bf86b50555db149c182",
+      "execution": "native",
+      "management_transport": "Unix socket",
+      "job_id": 131191022567,
+      "actual_effect_groups": [
+        "authentication and identity",
+        "fresh version/system/folder status",
+        "guarded creation and configuration reads",
+        "partial label/pause and actual resumed indexing",
+        "unregister with sample hashes retained",
+        "HTTP/denial/uncertain applied-write faults",
+        "constrained raw requests and actual readback",
+        "explicit capability conditions",
+        "three compiled examples"
+      ],
+      "compiled_examples": [
+        {
+          "name": "connect_existing",
+          "sha256": "20937074258b950a11f767649c7a2173ba9f1305cc39676cefac9cba88fb69ea"
+        },
+        {
+          "name": "create_folder",
+          "sha256": "fbbc18c8ae139020d014e75f36a1479414f85cfac9075d036ab6c79c70587b5b"
+        },
+        {
+          "name": "manage_existing",
+          "sha256": "146b654afccd3623ff9b669b958f81767bbe37629454d03a9e60ddf9e9fac856"
+        }
+      ],
+      "exact_owned_engine_cleanup": "zero remaining"
+    },
+    {
+      "id": "windows-amd64-standard",
+      "controller_rust_target": "x86_64-pc-windows-msvc",
+      "rust_version": "1.85.0",
+      "engine_version": "v2.33.2",
+      "engine_archive": "verysync-windows-amd64-v2.33.2.zip",
+      "engine_archive_sha256": "53d7363c1dc021dcdfaefeb27e1d7faf130a1dc83d6ebf0c04530eaa828839db",
+      "engine_executable_sha256": "b1455da891a0723404c8c025ca77dc5ee8bc73632979edf4542c45d57fc73ea7",
+      "execution": "native",
+      "management_transport": "loopback HTTP",
+      "job_id": 131191022686,
+      "actual_effect_groups": [
+        "authentication and identity",
+        "fresh version/system/folder status",
+        "guarded creation and configuration reads",
+        "partial label/pause and actual resumed indexing",
+        "unregister with sample hashes retained",
+        "HTTP/denial/uncertain applied-write faults",
+        "constrained raw requests and actual readback",
+        "explicit capability conditions",
+        "three compiled examples"
+      ],
+      "compiled_examples": [
+        {
+          "name": "connect_existing",
+          "sha256": "4b14543d55213d604bd032d61d5b613d71eaf79d9504210e2edb5cc7fa55c71b"
+        },
+        {
+          "name": "create_folder",
+          "sha256": "9ca34caca0073cb7eec96a2bc46dfcc8d95a2d2d85a4298346f4b35182827468"
+        },
+        {
+          "name": "manage_existing",
+          "sha256": "b0b21c96a7926585e27abe6d01fe53da79d838131cb57c138417c28baf00fe11"
+        }
+      ],
+      "exact_owned_engine_cleanup": "zero remaining"
+    },
+    {
+      "id": "linux-arm64-standard",
+      "controller_rust_target": "aarch64-unknown-linux-gnu",
+      "rust_version": "1.85.0",
+      "engine_version": "v2.33.2",
+      "engine_archive": "verysync-linux-arm64-v2.33.2.tar.gz",
+      "engine_archive_sha256": "708702fa19c321acb7e1aaa895a6f2cf8cb6189ab8ede6edf5049b61ad1f0ae0",
+      "engine_executable_sha256": "7134a1d78cc45a47f6eb1455094ccd199b98a36eb05862b2ef95332538127b98",
+      "execution": "native",
+      "management_transport": "Unix socket",
+      "job_id": 131191022705,
+      "actual_effect_groups": [
+        "authentication and identity",
+        "fresh version/system/folder status",
+        "guarded creation and configuration reads",
+        "partial label/pause and actual resumed indexing",
+        "unregister with sample hashes retained",
+        "HTTP/denial/uncertain applied-write faults",
+        "constrained raw requests and actual readback",
+        "explicit capability conditions",
+        "three compiled examples"
+      ],
+      "compiled_examples": [
+        {
+          "name": "connect_existing",
+          "sha256": "ab6935553e1bc2e6b8a7fa8593b434b133e290965729654caf592644d4395278"
+        },
+        {
+          "name": "create_folder",
+          "sha256": "17855149ef7904f37e237a21e2eec1872eb5dbd845efccc013f3389c182f6afe"
+        },
+        {
+          "name": "manage_existing",
+          "sha256": "52d1a7b5e72cb73bf61688d72e42c3af21ffa38585332d09ab7c9448bbba3804"
+        }
+      ],
+      "exact_owned_engine_cleanup": "zero remaining"
+    },
+    {
+      "id": "windows-arm64-standard",
+      "controller_rust_target": "aarch64-pc-windows-msvc",
+      "rust_version": "1.85.0",
+      "engine_version": "v2.33.2",
+      "engine_archive": "verysync-windows-arm64-v2.33.2.zip",
+      "engine_archive_sha256": "37fb7edd64c7eab2c69f33c57c3e5d5e186abed944f785573bbaf6d7c291b37a",
+      "engine_executable_sha256": "56ee421e3933e8d8bb164164f25cc0cf7626d13ba4ed30f8a2ee9b78b8d841fa",
+      "execution": "native",
+      "management_transport": "loopback HTTP",
+      "job_id": 131191022727,
+      "actual_effect_groups": [
+        "authentication and identity",
+        "fresh version/system/folder status",
+        "guarded creation and configuration reads",
+        "partial label/pause and actual resumed indexing",
+        "unregister with sample hashes retained",
+        "HTTP/denial/uncertain applied-write faults",
+        "constrained raw requests and actual readback",
+        "explicit capability conditions",
+        "three compiled examples"
+      ],
+      "compiled_examples": [
+        {
+          "name": "connect_existing",
+          "sha256": "05eeb618fde8693e8bdf0ca578f3db34c013f48dcd6b626659670e2793dbfdb7"
+        },
+        {
+          "name": "create_folder",
+          "sha256": "b7ec237b2f22ac01810bcf128432c5324ff084b56a9235773d14de65e05b7f0b"
+        },
+        {
+          "name": "manage_existing",
+          "sha256": "91e9b48a0a9edc0a0c519e100fa4c988398bac998fdc688ca5dd1d55266a6e04"
+        }
+      ],
+      "exact_owned_engine_cleanup": "zero remaining"
+    },
+    {
+      "id": "linux-amd64-standard",
+      "controller_rust_target": "x86_64-unknown-linux-gnu",
+      "rust_version": "1.85.0",
+      "engine_version": "v2.33.2",
+      "engine_archive": "verysync-linux-amd64-v2.33.2.tar.gz",
+      "engine_archive_sha256": "8a4b347669cd33def98b3bf1888576c8dc786ed77485080901bba0101c4413bd",
+      "engine_executable_sha256": "770324d3411bf6ff7d18109ba5fa1e5057056b5e93441f29185b50895f55693a",
+      "execution": "native",
+      "management_transport": "Unix socket",
+      "job_id": 131191023276,
+      "actual_effect_groups": [
+        "authentication and identity",
+        "fresh version/system/folder status",
+        "guarded creation and configuration reads",
+        "partial label/pause and actual resumed indexing",
+        "unregister with sample hashes retained",
+        "HTTP/denial/uncertain applied-write faults",
+        "constrained raw requests and actual readback",
+        "explicit capability conditions",
+        "three compiled examples"
+      ],
+      "compiled_examples": [
+        {
+          "name": "connect_existing",
+          "sha256": "cbb39d8a3060cc26ff455ba684169cbc8373a45a946434aa55745078bd1ea3ca"
+        },
+        {
+          "name": "create_folder",
+          "sha256": "043de10cb2f205a26d0b8b4854166a73682c718878dcccaf30c104942b2b01e4"
+        },
+        {
+          "name": "manage_existing",
+          "sha256": "0e4a3938bfbffeef748a8b77b7cc7841ddfefe3ffe15fc96bd37119780a83a13"
+        }
+      ],
+      "exact_owned_engine_cleanup": "zero remaining"
+    }
+  ],
+  "record_stage": "Initial native candidate validation; registry publication is separate and the release/tag is authoritative",
+  "authorization": "Independent API key with GUI authentication enabled; no Pro/Local-API/enterprise license supplied; optional instance conditions remain unknown"
+}

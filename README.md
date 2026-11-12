@@ -217,7 +217,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo doc --no-deps --all-features --locked
 ```
 
-Read the [getting-started guide](docs/public/getting-started.md) for explicit connection, folder control, failure interpretation and actual example commands. The [complete management example](examples/manage_existing.rs) confirms create/update/resume/pause/unregister configuration readbacks on a deliberately chosen instance.
+Read the [initial alpha validation scope](docs/public/alpha-scope.md) and the [getting-started guide](docs/public/getting-started.md) for explicit connection, folder control, failure interpretation and actual example commands. The [complete management example](examples/manage_existing.rs) confirms create/update/resume/pause/unregister configuration readbacks on a deliberately chosen instance.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before running engine integration tests. Tests must use an explicitly supplied official executable, isolated state and synthetic data. The existing user instance is never a test target.
 
