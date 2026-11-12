@@ -21,6 +21,7 @@ include = [
     "docs/platforms.csv",
     "releases/*.json",
     "README.md",
+    "CONTRIBUTING.md",
     "CHANGELOG.md",
     "LICENSE-MIT",
     "LICENSE-APACHE",
@@ -28,6 +29,7 @@ include = [
 
 [dependencies]
 tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
+url = "2.5.8"
 
 [features]
 engine-tests = []

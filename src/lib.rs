@@ -1,11 +1,29 @@
 //! Asynchronous management of the official VerySync program.
 //!
-//! This crate is under development. The current foundation identifies the fixed
-//! engine baseline; management operations are added only with their tests and
-//! documentation. Adding this dependency or compiling it does not download or
+//! This crate is under development. It provides explicit endpoint and path
+//! values; management operations are added with their tests and documentation.
+//! Adding this dependency or compiling it does not download or
 //! start VerySync, install services, or configure global logging or signals.
 //!
 //! All public interfaces are unstable during alpha.
+//!
+//! ```
+//! use verysync_sidecar::{EndpointKind, ManagementEndpoint, PathStyle, TargetPath};
+//!
+//! let endpoint = ManagementEndpoint::http("https://synthetic.invalid/control")?;
+//! assert_eq!(endpoint.kind(), EndpointKind::RemoteHttp);
+//! let path = TargetPath::remote(PathStyle::Windows, r"C:\Synthetic Data")?;
+//! assert_eq!(path.to_protocol()?, r"C:\Synthetic Data");
+//! # Ok::<(), verysync_sidecar::Error>(())
+//! ```
+
+mod endpoint;
+mod error;
+mod path;
+
+pub use endpoint::{EndpointKind, ManagementEndpoint};
+pub use error::{Error, Result};
+pub use path::{PathStyle, TargetPath};
 
 /// The fixed upstream version selected for initial compatibility acceptance.
 ///

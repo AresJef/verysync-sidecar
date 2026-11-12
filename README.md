@@ -2,7 +2,7 @@
 
 A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
 
-The project is under active development. The Rust engineering foundation is in place; management features are being implemented and tested. No crate has been published yet, and no functional or platform support is claimed by this initial source snapshot.
+The project is under active development. Explicit management endpoint and target path types are available; management operations are being implemented and tested. No crate has been published yet, and no engine management or platform support is claimed by this source snapshot. Successful engine fixture tests establish the test harness, not control-library functionality.
 
 The development plan runs through full delivery. Alpha releases are intermediate milestones: after publishing an alpha, development continues in the same project until the complete agreed functionality, platforms, documentation, and examples pass acceptance and the full release is delivered.
 
@@ -20,12 +20,36 @@ The [capability inventory](docs/capabilities.csv) separates behavior candidates,
 
 ## Development
 
+Endpoint construction performs no I/O and never discovers an existing instance.
+Supply an explicit Unix socket path or HTTP(S) base URL. Private LAN addresses
+are accepted; URL user information, queries and fragments are rejected. Keep
+credentials in connection authentication. Reverse proxy base paths are retained
+and normalized to a trailing slash.
+
+```rust
+use verysync_sidecar::{ManagementEndpoint, PathStyle, TargetPath};
+
+fn main() -> verysync_sidecar::Result<()> {
+    let _endpoint = ManagementEndpoint::http("https://synthetic.invalid/control")?;
+    let folder = TargetPath::remote(PathStyle::Windows, r"C:\Synthetic Data")?;
+    assert_eq!(folder.to_protocol()?, r"C:\Synthetic Data");
+    Ok(())
+}
+```
+
+For local filesystem paths use `TargetPath::local(path_buf)`, composing paths
+with native `Path::join` operations. Native encoding is retained until the
+protocol boundary, where unrepresentable paths return `Error::PathEncoding`.
+Remote paths require an explicit target style and are preserved without host
+normalization. These values do not access files or start a management request.
+
 Rust 1.85 or later is required. APIs use the caller's Tokio runtime. Adding this crate as a dependency and building it does not download or start VerySync, install a service, or configure global logging or signals.
 
 ```sh
 cargo fmt --all -- --check
 cargo check --all-targets --locked
 cargo test --lib --locked
+cargo test --test client_contract --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo doc --no-deps --all-features --locked
 ```

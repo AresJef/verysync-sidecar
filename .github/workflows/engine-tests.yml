@@ -66,6 +66,8 @@ jobs:
           --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}"
           --github-env "${{ github.env }}"
+      - name: Run public endpoint and path contracts
+        run: cargo +"$TEST_TOOLCHAIN" test --test client_contract --locked
       - name: Run independent-engine fixture contracts
         run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test fixture_contract --locked -- --test-threads=1 --nocapture
       - name: Confirm no task-owned engine remains

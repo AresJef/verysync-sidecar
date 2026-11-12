@@ -4,6 +4,8 @@
 
 - Establish the single Tokio crate, fixed VerySync v2.33.2 baseline, dual source
   license, capability/platform inventories and build-quality checks.
+- Add explicit Unix socket and HTTP(S) endpoint values, target path syntax,
+  lossless native-path conversion checks, and matchable input errors.
 - No management feature or platform runtime support is claimed by the initial
   engineering foundation.
 
