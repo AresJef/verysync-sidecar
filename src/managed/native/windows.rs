@@ -36,7 +36,9 @@ use windows_sys::Win32::System::JobObjects::{
     TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcessToken, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
+};
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
 pub(in crate::managed) struct ProcessGuard(OwnedHandle);
@@ -66,7 +68,14 @@ pub(in crate::managed) fn spawn(
     {
         return Err(io::Error::last_os_error());
     }
-    command.creation_flags(0x0800_0004); // CREATE_NO_WINDOW | CREATE_SUSPENDED.
+    // Detach the core from console allocation, not from this owner's Job. Short
+    // metadata helpers retain their existing hidden-console invocation policy.
+    let console = if helper {
+        CREATE_NO_WINDOW
+    } else {
+        DETACHED_PROCESS
+    };
+    command.creation_flags(CREATE_SUSPENDED | console);
     if !helper {
         // Keep the fixed-baseline core in the direct inner-process mode. The
         // upstream monitor can otherwise create a worker with its own console;
