@@ -42,6 +42,7 @@ that the permission check rejects it. These are test-harness controls, not publi
 library lifecycle guarantees.
 
 ```sh
+cargo +1.85.0 fetch --locked
 python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \
   --test-target engine_control --evidence-dir "<absolute-new-private-evidence-dir>"
 ```

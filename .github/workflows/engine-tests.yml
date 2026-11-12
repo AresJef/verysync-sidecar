@@ -63,6 +63,8 @@ jobs:
         run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
       - name: Record compiler identity
         run: rustc +"$TEST_TOOLCHAIN" -vV
+      - name: Fetch locked Rust dependencies before offline runtime isolation
+        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
       - name: Explicitly prepare fixed official test engine
         run: >-
           python scripts/prepare-test-engine.py prepare
