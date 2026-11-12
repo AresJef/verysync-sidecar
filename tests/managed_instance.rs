@@ -375,8 +375,33 @@ async fn shutdown_management_failure_does_not_force_the_owned_instance() -> Test
         RequestEffect::MayModify,
     )?
     .json_body(&gui)?;
-    let response = instance.client().raw_request(&patch).await?;
-    assert!((200..300).contains(&response.status()));
+    let setup_response = match instance.client().raw_request(&patch).await {
+        Ok(response) => {
+            assert!((200..300).contains(&response.status()));
+            "acknowledged"
+        }
+        Err(Error::MutationOutcomeUnknown { .. }) => "outcome_unknown",
+        Err(error) => return Err(error.into()),
+    };
+    // GUI reload can close the connection before its response is complete.
+    // Never retry this write or infer application from an unknown outcome.
+    // Independently reconcile the exact synthetic key in this private state.
+    let configured = instance.state_directory().join("setting.dat");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let applied = std::fs::read(&configured).ok().is_some_and(|bytes| {
+            rmpv::decode::read_value(&mut std::io::Cursor::new(bytes))
+                .ok()
+                .is_some_and(|config| config["4"]["6"].as_str() == gui["apiKey"].as_str())
+        });
+        if applied {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("private GUI setup was not independently persisted".into());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         match instance.client().version().await {
@@ -415,7 +440,7 @@ async fn shutdown_management_failure_does_not_force_the_owned_instance() -> Test
     drop(paused);
     let exit = instance.force_stop(Duration::from_secs(10)).await?;
     assert!(exit.forced && exit.tree_stopped);
-    println!("public managed shutdown failure evidence: {{\"actual_management_credential_changed\":true,\"typed_failure_kind\":\"{failure_kind}\",\"retained_root_still_alive\":true,\"state_still_exclusive\":true,\"invalid_deadline_did_not_stop\":true,\"force_requires_explicit_call\":true}}");
+    println!("public managed shutdown failure evidence: {{\"actual_management_credential_changed\":true,\"setup_configuration_independently_persisted\":true,\"setup_response_kind\":\"{setup_response}\",\"typed_failure_kind\":\"{failure_kind}\",\"retained_root_still_alive\":true,\"state_still_exclusive\":true,\"invalid_deadline_did_not_stop\":true,\"force_requires_explicit_call\":true}}");
     Ok(())
 }
 
