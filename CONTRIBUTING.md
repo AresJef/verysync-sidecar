@@ -36,7 +36,9 @@ resuming. The job contains descendants, uses kill-on-close, and is explicitly
 terminated and checked when a fixture unwinds. A separate panic-path test checks
 that the entire job becomes empty. Normal shutdown must empty it without force.
 The state directory has a protected owner/System DACL; the configuration and
-private key ACLs are inspected too. These are test-harness controls, not public
+private key ACLs are inspected too, using native ACL queries and SID equality.
+A negative check grants an extra reader to an empty test directory and verifies
+that the permission check rejects it. These are test-harness controls, not public
 library lifecycle guarantees.
 
 ```sh

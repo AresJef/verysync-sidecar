@@ -651,88 +651,11 @@ fn windows_sid() -> TestResult<String> {
 
 #[cfg(windows)]
 fn protected_windows_acl(path: &Path, require_protected: bool) -> TestResult<bool> {
-    let directory = if path.is_dir() {
-        path
-    } else {
-        path.parent().ok_or("ACL path has no parent")?
-    };
-    let output_path = directory.join("acl-check.txt");
-    let status = command(&windows_tool("icacls.exe")?)
-        .arg(path)
-        .arg("/save")
-        .arg(&output_path)
-        .arg("/q")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    if !status.success() {
-        return Err("could not inspect the fixture directory DACL".into());
-    }
-    let bytes = fs::read(output_path)?;
-    let text = decode_acl_export(&bytes)?;
-    let sid = windows_sid()?;
-    let Some(sddl) = text.lines().find(|s| s.starts_with("D:")) else {
-        return Err("fixture ACL export contains no DACL record".into());
-    };
-    let entries: Vec<_> = sddl.split('(').skip(1).collect();
-    let valid = (!require_protected || sddl.starts_with("D:P"))
-        && entries.len() == 2
-        && entries.iter().all(|e| {
-            let fields: Vec<_> = e.trim_end_matches(')').split(';').collect();
-            fields.len() == 6
-                && fields[0] == "A"
-                && fields[2] == "FA"
-                && [sid.as_str(), "SY", "S-1-5-18"].contains(&fields[5])
-        });
-    if !valid {
-        // Report structure, never the runner's account name or SID.
-        let details: Vec<_> = entries
-            .iter()
-            .map(|entry| {
-                let fields: Vec<_> = entry.trim_end_matches(')').split(';').collect();
-                if fields.len() != 6 {
-                    return "malformed ACE".to_owned();
-                }
-                let principal = if fields[5] == sid {
-                    "owner"
-                } else if ["SY", "S-1-5-18"].contains(&fields[5]) {
-                    "system"
-                } else {
-                    "other"
-                };
-                format!(
-                    "type={},flags={},rights={},principal={principal}",
-                    fields[0], fields[1], fields[2]
-                )
-            })
-            .collect();
-        return Err(format!(
-            "private fixture DACL mismatch: protected={}, entries={details:?}",
-            sddl.starts_with("D:P")
-        )
-        .into());
-    }
-    Ok(true)
-}
-
-fn decode_acl_export(bytes: &[u8]) -> TestResult<String> {
-    // icacls exports can be UTF-16LE without a BOM. Treating these bytes as
-    // UTF-8 produces embedded NULs and falsely reports a missing DACL.
-    let has_bom = bytes.starts_with(&[0xff, 0xfe]);
-    Ok(if has_bom || bytes.contains(&0) {
-        let wide = if has_bom { &bytes[2..] } else { bytes };
-        if wide.len() % 2 != 0 {
-            return Err("truncated UTF-16 fixture ACL export".into());
-        }
-        String::from_utf16(
-            &wide
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect::<Vec<_>>(),
-        )?
-    } else {
-        String::from_utf8(bytes.to_vec())?
-    })
+    Ok(windows_fixture::private_acl(
+        path,
+        require_protected,
+        &windows_sid()?,
+    )?)
 }
 
 fn baseline_version_output(text: &str) -> bool {
@@ -768,6 +691,23 @@ fn device_id_output(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod fixture_unit_tests {
     #[cfg(windows)]
+    #[test]
+    fn windows_acl_check_rejects_an_extra_reader() -> super::TestResult {
+        let state = tempfile::tempdir()?;
+        super::protect_directory(state.path())?;
+        assert!(super::protected_windows_acl(state.path(), true)?);
+        let status = super::command(&super::windows_tool("icacls.exe")?)
+            .arg(state.path())
+            .args(["/grant", "*S-1-1-0:R"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+        assert!(status.success());
+        assert!(!super::protected_windows_acl(state.path(), true)?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
     #[tokio::test]
     async fn windows_panic_cleanup_terminates_the_entire_owned_job() -> super::TestResult {
         let fixture = super::EngineFixture::start().await?;
@@ -778,18 +718,6 @@ mod fixture_unit_tests {
         }));
         assert!(result.is_err());
         probe.wait_empty(std::time::Duration::from_secs(5))?;
-        Ok(())
-    }
-
-    #[test]
-    fn acl_export_decodes_utf16_with_or_without_bom() -> super::TestResult {
-        let expected = "state\r\nD:P(A;OICI;FA;;;SY)\r\n";
-        let wide: Vec<_> = expected.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        assert_eq!(super::decode_acl_export(&wide)?, expected);
-        let mut with_bom = vec![0xff, 0xfe];
-        with_bom.extend_from_slice(&wide);
-        assert_eq!(super::decode_acl_export(&with_bom)?, expected);
-        assert_eq!(super::decode_acl_export(expected.as_bytes())?, expected);
         Ok(())
     }
 
