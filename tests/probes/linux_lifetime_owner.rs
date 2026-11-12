@@ -223,6 +223,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .args(["--no-browser", "--no-restart", "--no-upgrade"])
         .current_dir(&state)
         .env("TMPDIR", state.join("tmp"))
+        .env("HOME", state.join("profile"))
+        .env("XDG_CONFIG_HOME", state.join("roaming"))
+        .env("XDG_CACHE_HOME", state.join("local"))
+        .env("XDG_DATA_HOME", state.join("profile").join("data"))
         .stdin(input)
         .stdout(log.try_clone()?)
         .stderr(log);

@@ -41,6 +41,9 @@ protected owner/SYSTEM DACL on Windows. The program's identity, GUI/API credenti
 folders and unrelated settings persist across subsequent starts. Fresh state
 disables discovery, trackers, relays, NAT, automatic upgrades and tray/browser
 startup; explicitly configured later networking settings are retained.
+Unix child processes also receive state-local HOME and XDG profile/cache paths;
+the caller's environment is not changed. Windows retains its dedicated
+APPDATA/LOCALAPPDATA/USERPROFILE and temporary paths.
 
 The executable's actual SHA-256 is recorded, an optional expected checksum is
 checked before execution, and its actual CLI version must report exactly v2.33.2.
@@ -51,7 +54,9 @@ Configuration changes use a private synchronized temporary file and atomic
 replacement; malformed or partial identity/configuration is not silently reset.
 
 The private owner thread retains the native child/containment and state lease.
-Unix uses a separate session and private PTY; Windows assigns a suspended,
+Unix uses a separate session and private PTY whose master/slave descriptors are
+close-on-exec at allocation, without an open-then-fcntl inheritance interval.
+Windows assigns a suspended,
 hidden child to a noninheritable kill-on-close Job before resuming it. Direct
 inner-process mode on Linux/Windows is specific to the fixed program baseline.
 There is no production supervisor executable, installed service, caller-global logger,
@@ -69,7 +74,7 @@ alive. Await an explicit exit observation when completion matters.
 Do not independently launch or modify the same state while its library owner is
 active. The library lease coordinates SDK owners; handing the official lock back
 immediately before the core acquires it is not an atomic protocol with unrelated
-launchers. Inherited signal/descriptor stress, intentional persistence and full platform UI/lifetime
+launchers. Intentional persistence and further platform UI/lifetime
 acceptance continue in the same development plan. Modern native runner evidence
 does not establish other architectures, minimum systems or cross-network scope.
 
@@ -112,6 +117,35 @@ A dangling link, including the official state lock, is never treated as an absen
 retained keys, or malformed configuration, is also rejected. Preserve the original files and repair or
 restore them explicitly before retrying. The tests restore only their own
 synthetic fixture's original files and verify identity and sample hashes.
+
+## Unix caller lifetime
+
+The default Unix ownership policy retains the private PTY master in the caller.
+Ordinary owner drop requests exact termination; exiting the caller closes its
+owned descriptors, including when the caller skips destructors or is killed.
+The core receives its own default HUP disposition and unblocked signal mask in
+the new child only. The caller's ignored/blocked HUP settings are preserved.
+
+Dedicated test hosts invoke the public API, authenticate their real core and
+then return, exit without destructors or undergo actual SIGKILL. A separate
+test keeps an unrelated exec child alive after the caller dies: the core must
+exit while that child is still independently observed, before the test stops
+the unrelated process. Exact-program inventory confirms absence before any
+fallback; identity/sample hashes and another isolated instance are checked,
+then an explicit retry must authenticate the retained identity. The test host
+is a test executable, not a production supervisor.
+
+These cases cover ordinary exec inheritance on the tested Unix systems. Code
+that deliberately retains or duplicates the private ownership descriptors
+outside the normal exec boundary can retain the terminal connection. Intentional
+persistence is a separate API policy under development. Windows caller Job
+ownership has its own native acceptance gate. Stopping an in-flight transfer
+can interrupt work; use explicit normal shutdown when the caller can cooperate.
+
+The official core can issue maintenance/NAT HTTP requests even with discovery
+and relays disabled. Runtime tests use a temporary nonforwarding loopback HTTP
+proxy to reject those requests. Proxy observations do not establish an OS-wide
+egress restriction, and the library does not install a global proxy or firewall.
 
 ## Explicit shutdown and termination
 

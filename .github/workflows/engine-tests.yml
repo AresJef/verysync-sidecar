@@ -56,11 +56,15 @@ jobs:
         with:
           python-version: '3.13'
       - name: Check extraction and exact process inventory contracts
-        run: python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+        run: |
+          python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+          python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
       - name: Install native Rust toolchain
         run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
       - name: Record compiler identity
         run: rustc +"$TEST_TOOLCHAIN" -vV
+      - name: Fetch locked Rust dependencies before offline runtime isolation
+        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
       - name: Explicitly prepare fixed official test engine
         run: >-
           python scripts/prepare-test-engine.py prepare
@@ -71,36 +75,47 @@ jobs:
         run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --locked
       - name: Validate the Windows UI probe before the complete lifecycle bundle
         if: startsWith(matrix.package, 'windows-')
-        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test managed_instance --locked restart_preserves_identity_folders_settings_and_samples -- --test-threads=1 --nocapture
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_instance --test-filter restart_preserves_identity_folders_settings_and_samples
+          --evidence-dir "${{ runner.temp }}/vs-managed-ui-proxy"
       - name: Exercise public managed startup, shutdown, restart and owned UI observations
-        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test managed_instance --locked -- --test-threads=1 --nocapture
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-managed-proxy"
+      - name: Verify public Unix host exit and descriptor ownership
+        if: startsWith(matrix.package, 'macos-') || startsWith(matrix.package, 'linux-')
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_lifetime --evidence-dir "${{ runner.temp }}/vs-host-lifetime-proxy"
       - name: Run independent-engine fixture contracts
-        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test engine_control --locked -- --test-threads=1 --nocapture
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-control-proxy"
       - name: Build public examples explicitly
         run: >-
           python scripts/prepare-test-examples.py
           --toolchain "$TEST_TOOLCHAIN"
           --github-env "${{ github.env }}"
       - name: Run compiled public examples on an independent engine
-        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test example_control --locked -- --test-threads=1 --nocapture
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target example_control --evidence-dir "${{ runner.temp }}/vs-examples-proxy"
       - name: Investigate native macOS lifetime mechanisms
         if: startsWith(matrix.package, 'macos-')
         run: >-
-          python scripts/run-macos-lifetime-probes.py
-          --toolchain "$TEST_TOOLCHAIN"
-          --evidence-dir "${{ runner.temp }}/verysync-lifetime-evidence"
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --mechanism macos --evidence-dir "${{ runner.temp }}/vs-macos-mechanism-proxy"
       - name: Investigate native Linux lifetime mechanisms
         if: startsWith(matrix.package, 'linux-')
         run: >-
-          python scripts/run-linux-lifetime-probes.py
-          --toolchain "$TEST_TOOLCHAIN"
-          --evidence-dir "${{ runner.temp }}/verysync-linux-lifetime-evidence"
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --mechanism linux --evidence-dir "${{ runner.temp }}/vs-linux-mechanism-proxy"
       - name: Investigate native Windows Job lifetime mechanisms
         if: startsWith(matrix.package, 'windows-')
         run: >-
-          python scripts/run-windows-lifetime-probes.py
-          --toolchain "$TEST_TOOLCHAIN"
-          --evidence-dir "${{ runner.temp }}/verysync-windows-lifetime-evidence"
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --mechanism windows --evidence-dir "${{ runner.temp }}/vs-windows-mechanism-proxy"
       - name: Confirm no task-owned engine remains
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup

@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Allocate Unix PTYs with close-on-exec from creation, isolate child Unix
+  HOME/XDG paths, and add real public-API caller return/exit/SIGKILL/inherited-HUP
+  and unrelated-exec lifetime regressions. Preserve caller environment/signals.
+- Run engine tests behind an explicit test-only nonforwarding HTTP proxy,
+  with credential-safe observations and an independent no-forwarding control.
 - Add explicit local-program selection and initial owned startup, private state
   leases, fixed-version/checksum checks, authenticated readiness, persisted
   identity/configuration reuse and actual process-tree exit observation.

@@ -38,6 +38,12 @@ pub(super) fn check_active(cancel: &Receiver<()>, deadline: Instant) -> Result<(
 pub(super) fn command(binary: &Path, state: &Path) -> Command {
     let mut command = Command::new(binary);
     command.current_dir(state).env("TMPDIR", state.join("tmp"));
+    #[cfg(unix)]
+    command
+        .env("HOME", state.join("profile"))
+        .env("XDG_CONFIG_HOME", state.join("roaming"))
+        .env("XDG_CACHE_HOME", state.join("local"))
+        .env("XDG_DATA_HOME", state.join("profile").join("data"));
     #[cfg(windows)]
     command
         .env("APPDATA", state.join("roaming"))
