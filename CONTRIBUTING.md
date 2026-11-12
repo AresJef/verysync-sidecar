@@ -78,6 +78,11 @@ It compiles a standalone Rust test host into a private temporary directory and
 tests only its own processes, groups and PTY. Host SIGKILL, native exit and
 observer fallback are recorded separately. An unsupported platform or missing
 prerequisite fails the explicitly requested probe; it does not pass as skipped.
+On native Linux, `scripts/run-linux-lifetime-probes.py` additionally investigates
+creating-thread termination, parent-death signal installation races, exec/fork
+inheritance and whole-group outcomes. An isolated PTY is compared with the
+parent-death signal; negative mechanism results remain explicit. These helpers
+are test hosts only and do not add a product daemon or managed-runtime API.
 Only sanitized result JSON enters CI logs; upstream programs, raw state, keys
 and private logs are not uploaded.
 

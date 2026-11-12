@@ -77,6 +77,12 @@ jobs:
           python scripts/run-macos-lifetime-probes.py
           --toolchain "$TEST_TOOLCHAIN"
           --evidence-dir "${{ runner.temp }}/verysync-lifetime-evidence"
+      - name: Investigate native Linux lifetime mechanisms
+        if: startsWith(matrix.package, 'linux-')
+        run: >-
+          python scripts/run-linux-lifetime-probes.py
+          --toolchain "$TEST_TOOLCHAIN"
+          --evidence-dir "${{ runner.temp }}/verysync-linux-lifetime-evidence"
       - name: Confirm no task-owned engine remains
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
