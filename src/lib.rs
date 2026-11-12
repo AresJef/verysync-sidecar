@@ -20,6 +20,7 @@
 
 #![doc = include_str!("../docs/public/getting-started.md")]
 #![doc = include_str!("../docs/public/managed-instances.md")]
+#![doc = include_str!("../docs/public/events.md")]
 
 mod auth;
 mod capabilities;
@@ -27,6 +28,7 @@ mod client;
 mod endpoint;
 mod engine_source;
 mod error;
+mod events;
 mod folders;
 mod managed;
 mod path;
@@ -44,6 +46,10 @@ pub use client::{
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use engine_source::{LocalProgram, ProgramInfo};
 pub use error::{Error, ProcessDiagnostic, ResponseDiagnostic, Result};
+pub use events::{
+    EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventStreamItem,
+    EventSubscription,
+};
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
 pub use managed::{ManagedExit, ManagedInstance, ManagedOptions};
 pub use path::{PathStyle, TargetPath};

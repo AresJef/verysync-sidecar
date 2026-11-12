@@ -159,6 +159,32 @@ pub struct Client {
 }
 
 impl Client {
+    pub(crate) async fn event_wire(
+        &self,
+        since: u64,
+        limit: usize,
+    ) -> Result<Vec<crate::events::WireEvent>> {
+        let since = since.to_string();
+        let limit_text = limit.to_string();
+        let url = self.connection.management_url(
+            "rest/events",
+            &[("since", &since), ("limit", &limit_text), ("timeout", "0")],
+        )?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes("read engine events", reqwest::Method::GET, url, None, false)
+            .await?;
+        let invalid = || Error::InvalidResponse {
+            operation: "read bounded ordered engine events",
+            response: ResponseDiagnostic::new(status, bytes.clone()),
+        };
+        let events: Vec<crate::events::WireEvent> =
+            serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        if !crate::events::validate_wire(&events, limit) {
+            return Err(invalid());
+        }
+        Ok(events)
+    }
     pub(crate) async fn request_owned_shutdown(&self) -> Result<()> {
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;

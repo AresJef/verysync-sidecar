@@ -136,7 +136,11 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::Events),
+    LibraryCapability {
+        capability: Capability::Events,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::ObservableTasks),
     planned(Capability::PeerSharing),
     planned(Capability::EngineDownloadUpgrade),

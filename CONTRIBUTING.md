@@ -115,6 +115,14 @@ Windows retains a separate outer Job throughout the verdict to test an existing
 caller Job and avoid confusing observer cleanup with SDK-owned termination.
 Do not rename successful mechanism probes as public-library acceptance.
 
+The `events` engine-test target uses the public subscription API for real
+configuration/state events, bounded backpressure, newest-tail gaps, ahead
+cursors, actual shutdown and same-identity restart recovery. Run it through the
+same isolated HTTP proxy wrapper (`--test-target events`). The default-feature
+`events_contract` target separately exercises synthetic schema, finite recovery,
+backpressure and cancellation of actual pending HTTP connections; it does not
+count as real-engine effects. Never print raw configuration-event payloads.
+
 Use synthetic files. Disable discovery, trackers, relay, NAT and external
 connections unless the particular network case requires them. Await only owned
 child processes when cleaning up; never kill by executable name. Keep private
