@@ -447,12 +447,23 @@ fn print_owned_group(_pid: u32) {}
 #[tokio::test]
 async fn restart_preserves_identity_folders_settings_and_samples() -> TestResult {
     let root = lifecycle_root()?;
-    let baseline = managed_ui::observe(None, root.path())?;
+    let baseline = managed_ui::observe(None, root.path()).await?;
     let path = root.path().join("state");
     let mut instance = start_checked(options(source()?, &path)?).await?;
-    let started_ui = managed_ui::observe(Some(instance.process_id()), root.path())?;
+    let started_ui = managed_ui::observe(Some(instance.process_id()), root.path()).await?;
     println!("public managed startup UI observation: {started_ui}");
     managed_ui::assert_background(&baseline, &started_ui)?;
+    if let Err(error) = instance.client().system_status().await {
+        eprintln!(
+            "management after native probe: {error:?}; source={:?}",
+            std::error::Error::source(&error)
+        );
+        let exit = tokio::time::timeout(Duration::from_millis(250), instance.wait_for_exit()).await;
+        eprintln!("actual owner exit observation after probe failure: {exit:?}");
+        let fresh_read = instance.client().system_status().await;
+        eprintln!("separate diagnostic read after first failure: {fresh_read:?}");
+        return Err(error.into());
+    }
     let old_pid = instance.process_id();
     let identity = instance.client().instance().device_id.clone();
     let key_hash = Sha256::digest(std::fs::read(path.join("key.pem"))?);
@@ -484,7 +495,7 @@ async fn restart_preserves_identity_folders_settings_and_samples() -> TestResult
     assert_eq!(instance.process_id(), old_pid);
     instance.client().system_status().await?;
     instance.restart(Duration::from_secs(25)).await?;
-    let restarted_ui = managed_ui::observe(Some(instance.process_id()), root.path())?;
+    let restarted_ui = managed_ui::observe(Some(instance.process_id()), root.path()).await?;
     managed_ui::assert_background(&baseline, &restarted_ui)?;
     println!(
         "public managed UI observation: {}",

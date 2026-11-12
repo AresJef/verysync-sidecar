@@ -5,8 +5,15 @@ use std::path::Path;
 
 type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+pub async fn observe(root_pid: Option<u32>, scratch: &Path) -> TestResult<Value> {
+    let scratch = scratch.to_owned();
+    // Native CLI/desktop probes can take seconds. Keep the test runtime's I/O
+    // reactor/timers progressing while its management Client remains connected.
+    tokio::task::spawn_blocking(move || observe_blocking(root_pid, &scratch)).await?
+}
+
 #[cfg(target_os = "macos")]
-pub fn observe(root_pid: Option<u32>, scratch: &Path) -> TestResult<Value> {
+fn observe_blocking(root_pid: Option<u32>, scratch: &Path) -> TestResult<Value> {
     use std::process::Command;
     let mut pids = Vec::new();
     if let Some(root) = root_pid {
@@ -79,7 +86,7 @@ print(String(decoding:bytes, as:UTF8.self))
 "#;
 
 #[cfg(windows)]
-pub fn observe(root_pid: Option<u32>, scratch: &Path) -> TestResult<Value> {
+fn observe_blocking(root_pid: Option<u32>, scratch: &Path) -> TestResult<Value> {
     use std::os::windows::process::CommandExt;
     let script = scratch.join("managed-ui.ps1");
     std::fs::write(&script, WINDOWS)?;
@@ -201,7 +208,7 @@ $browserWindows = @($rows | Where-Object { $_[2] -eq 1 -and $browserIds -contain
 "#;
 
 #[cfg(target_os = "linux")]
-pub fn observe(root_pid: Option<u32>, _scratch: &Path) -> TestResult<Value> {
+fn observe_blocking(root_pid: Option<u32>, _scratch: &Path) -> TestResult<Value> {
     let headless =
         std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none();
     if !headless {
