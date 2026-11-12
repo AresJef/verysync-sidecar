@@ -18,6 +18,10 @@ use tempfile::TempDir;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+#[cfg(windows)]
+#[path = "windows_fixture.rs"]
+mod windows_fixture;
+
 pub struct TestBinary {
     path: PathBuf,
     sha256: String,
@@ -69,11 +73,47 @@ impl TestBinary {
 }
 
 /// An exact child handle, retained before any asynchronous wait.
-struct OwnedChild(Option<Child>);
+struct OwnedChild {
+    child: Option<Child>,
+    #[cfg(windows)]
+    job: windows_fixture::Job,
+}
+
+impl OwnedChild {
+    fn spawn(command: &mut Command) -> TestResult<Self> {
+        #[cfg(windows)]
+        let job = {
+            use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+            command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+            windows_fixture::Job::new()?
+        };
+        let owned = Self {
+            child: Some(command.spawn()?),
+            #[cfg(windows)]
+            job,
+        };
+        #[cfg(windows)]
+        owned
+            .job
+            .assign_and_resume(owned.child.as_ref().ok_or("missing new child")?)?;
+        Ok(owned)
+    }
+
+    fn confirm_tree_stopped(&self) -> TestResult {
+        #[cfg(windows)]
+        self.job.wait_empty(Duration::from_secs(10))?;
+        Ok(())
+    }
+}
 
 impl Drop for OwnedChild {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
+        #[cfg(windows)]
+        if let Err(error) = self.job.terminate_and_wait() {
+            eprintln!("private fixture job cleanup failed: {error}");
+        }
+        if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -174,10 +214,10 @@ impl EngineFixture {
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log);
-        let child = command.spawn()?;
-        let pid = child.id();
+        let child = OwnedChild::spawn(&mut command)?;
+        let pid = child.child.as_ref().ok_or("missing fixture child")?.id();
         let mut fixture = Self {
-            child: OwnedChild(Some(child)),
+            child,
             state,
             client,
             base,
@@ -191,7 +231,7 @@ impl EngineFixture {
         loop {
             if let Some(status) = fixture
                 .child
-                .0
+                .child
                 .as_mut()
                 .ok_or("lost fixture process ownership")?
                 .try_wait()?
@@ -313,10 +353,11 @@ impl EngineFixture {
             .is_success();
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let child = self.child.0.as_mut().ok_or("fixture already stopped")?;
+            let child = self.child.child.as_mut().ok_or("fixture already stopped")?;
             if let Some(status) = child.try_wait()? {
+                self.child.confirm_tree_stopped()?;
                 self.reaped = true;
-                self.child.0.take();
+                self.child.child.take();
                 if !acknowledged {
                     return Err("fixture shutdown was not acknowledged".into());
                 }
@@ -346,7 +387,16 @@ impl EngineFixture {
         }
         #[cfg(windows)]
         {
-            protected_windows_acl(self.state.path())
+            for (path, require_protected) in [
+                (self.state.path().to_owned(), true),
+                (self.state.path().join("setting.dat"), false),
+                (self.state.path().join("key.pem"), false),
+            ] {
+                if !protected_windows_acl(&path, require_protected)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
         }
     }
 }
@@ -403,10 +453,10 @@ async fn run_tool(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut owned = OwnedChild(Some(c.spawn()?));
+    let mut owned = OwnedChild::spawn(&mut c)?;
     if let Some(password) = password {
         let mut input = owned
-            .0
+            .child
             .as_mut()
             .and_then(|c| c.stdin.take())
             .ok_or("missing private credential input")?;
@@ -415,14 +465,14 @@ async fn run_tool(
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if owned
-            .0
+            .child
             .as_mut()
             .ok_or("lost helper ownership")?
             .try_wait()?
             .is_some()
         {
             let output = owned
-                .0
+                .child
                 .take()
                 .ok_or("lost helper ownership")?
                 .wait_with_output()?;
@@ -540,6 +590,18 @@ fn protect_directory(path: &Path) -> TestResult {
     #[cfg(windows)]
     {
         let sid = windows_sid()?;
+        // The new, empty directory may contain explicit permissions inherited
+        // from its creation policy. Reset first; /inheritance:r alone removes
+        // only inherited ACEs. No credentials exist in this directory yet.
+        let reset = command(&windows_tool("icacls.exe")?)
+            .arg(path)
+            .arg("/reset")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if !reset.success() {
+            return Err("could not reset the new empty fixture DACL".into());
+        }
         let status = command(&windows_tool("icacls.exe")?)
             .arg(path)
             .args(["/inheritance:r", "/grant:r"])
@@ -588,8 +650,13 @@ fn windows_sid() -> TestResult<String> {
 }
 
 #[cfg(windows)]
-fn protected_windows_acl(path: &Path) -> TestResult<bool> {
-    let output_path = path.join("acl-check.txt");
+fn protected_windows_acl(path: &Path, require_protected: bool) -> TestResult<bool> {
+    let directory = if path.is_dir() {
+        path
+    } else {
+        path.parent().ok_or("ACL path has no parent")?
+    };
+    let output_path = directory.join("acl-check.txt");
     let status = command(&windows_tool("icacls.exe")?)
         .arg(path)
         .arg("/save")
@@ -602,22 +669,13 @@ fn protected_windows_acl(path: &Path) -> TestResult<bool> {
         return Err("could not inspect the fixture directory DACL".into());
     }
     let bytes = fs::read(output_path)?;
-    let text = if bytes.starts_with(&[0xff, 0xfe]) {
-        String::from_utf16(
-            &bytes[2..]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect::<Vec<_>>(),
-        )?
-    } else {
-        String::from_utf8(bytes)?
-    };
+    let text = decode_acl_export(&bytes)?;
     let sid = windows_sid()?;
     let Some(sddl) = text.lines().find(|s| s.starts_with("D:")) else {
-        return Ok(false);
+        return Err("fixture ACL export contains no DACL record".into());
     };
     let entries: Vec<_> = sddl.split('(').skip(1).collect();
-    Ok(sddl.starts_with("D:P")
+    let valid = (!require_protected || sddl.starts_with("D:P"))
         && entries.len() == 2
         && entries.iter().all(|e| {
             let fields: Vec<_> = e.trim_end_matches(')').split(';').collect();
@@ -625,7 +683,56 @@ fn protected_windows_acl(path: &Path) -> TestResult<bool> {
                 && fields[0] == "A"
                 && fields[2] == "FA"
                 && [sid.as_str(), "SY", "S-1-5-18"].contains(&fields[5])
-        }))
+        });
+    if !valid {
+        // Report structure, never the runner's account name or SID.
+        let details: Vec<_> = entries
+            .iter()
+            .map(|entry| {
+                let fields: Vec<_> = entry.trim_end_matches(')').split(';').collect();
+                if fields.len() != 6 {
+                    return "malformed ACE".to_owned();
+                }
+                let principal = if fields[5] == sid {
+                    "owner"
+                } else if ["SY", "S-1-5-18"].contains(&fields[5]) {
+                    "system"
+                } else {
+                    "other"
+                };
+                format!(
+                    "type={},flags={},rights={},principal={principal}",
+                    fields[0], fields[1], fields[2]
+                )
+            })
+            .collect();
+        return Err(format!(
+            "private fixture DACL mismatch: protected={}, entries={details:?}",
+            sddl.starts_with("D:P")
+        )
+        .into());
+    }
+    Ok(true)
+}
+
+fn decode_acl_export(bytes: &[u8]) -> TestResult<String> {
+    // icacls exports can be UTF-16LE without a BOM. Treating these bytes as
+    // UTF-8 produces embedded NULs and falsely reports a missing DACL.
+    let has_bom = bytes.starts_with(&[0xff, 0xfe]);
+    Ok(if has_bom || bytes.contains(&0) {
+        let wide = if has_bom { &bytes[2..] } else { bytes };
+        if wide.len() % 2 != 0 {
+            return Err("truncated UTF-16 fixture ACL export".into());
+        }
+        String::from_utf16(
+            &wide
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
+        )?
+    } else {
+        String::from_utf8(bytes.to_vec())?
+    })
 }
 
 fn baseline_version_output(text: &str) -> bool {
@@ -660,6 +767,32 @@ fn device_id_output(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod fixture_unit_tests {
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_panic_cleanup_terminates_the_entire_owned_job() -> super::TestResult {
+        let fixture = super::EngineFixture::start().await?;
+        let probe = fixture.child.job.try_clone()?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _owned = fixture;
+            panic!("synthetic fixture failure exercises process-tree cleanup");
+        }));
+        assert!(result.is_err());
+        probe.wait_empty(std::time::Duration::from_secs(5))?;
+        Ok(())
+    }
+
+    #[test]
+    fn acl_export_decodes_utf16_with_or_without_bom() -> super::TestResult {
+        let expected = "state\r\nD:P(A;OICI;FA;;;SY)\r\n";
+        let wide: Vec<_> = expected.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(super::decode_acl_export(&wide)?, expected);
+        let mut with_bom = vec![0xff, 0xfe];
+        with_bom.extend_from_slice(&wide);
+        assert_eq!(super::decode_acl_export(&with_bom)?, expected);
+        assert_eq!(super::decode_acl_export(expected.as_bytes())?, expected);
+        Ok(())
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_child_can_write_its_state_but_not_an_outside_canary() -> super::TestResult {

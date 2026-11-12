@@ -31,6 +31,13 @@ working and temporary directories; Windows profile/data environment paths are
 scoped to that state. On macOS a child sandbox denies non-loopback IP traffic
 and file writes outside the fixture. These controls apply to helpers as well as
 the serving process, and never change host startup settings or a firewall.
+On Windows, fixture engines start suspended and join a private Job Object before
+resuming. The job contains descendants, uses kill-on-close, and is explicitly
+terminated and checked when a fixture unwinds. A separate panic-path test checks
+that the entire job becomes empty. Normal shutdown must empty it without force.
+The state directory has a protected owner/System DACL; the configuration and
+private key ACLs are inspected too. These are test-harness controls, not public
+library lifecycle guarantees.
 
 ```sh
 cargo test --features engine-tests --test fixture_contract --locked -- --test-threads=1
