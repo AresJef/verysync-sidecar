@@ -119,19 +119,29 @@ def main() -> None:
     verify_native_abi(args.evidence_dir)
     compiler = subprocess.check_output(
         ["rustup", "which", "rustc", "--toolchain", args.toolchain], text=True).strip()
+    failures = []
     for case in CASES:
         output = args.evidence_dir / f"{case}.json"
         env = dict(os.environ, VERYSYNC_PROBE_RUSTC=compiler,
                    VERYSYNC_LIFETIME_CASE=case, VERYSYNC_LIFETIME_EVIDENCE=str(output))
-        subprocess.run(["cargo", f"+{args.toolchain}", "test", "--locked", "--features",
-                        "engine-tests", "--test", "lifetime_probes", "linux_lifetime_case",
-                        "--", "--test-threads=1"], env=env, check=True)
-        report = json.loads(output.read_text())
-        verify(case, report)
-        # Only bounded, credential-free investigation results enter CI logs.
-        print(json.dumps(report, sort_keys=True), flush=True)
-        subprocess.run([sys.executable, str(Path(__file__).with_name("prepare-test-engine.py")),
-                        "check-cleanup"], env=env, check=True)
+        try:
+            subprocess.run(["cargo", f"+{args.toolchain}", "test", "--locked", "--features",
+                            "engine-tests", "--test", "lifetime_probes", "linux_lifetime_case",
+                            "--", "--test-threads=1"], env=env, check=True)
+            report = json.loads(output.read_text())
+            # Preserve sanitized negative evidence before validating its verdict.
+            print(json.dumps(report, sort_keys=True), flush=True)
+            verify(case, report)
+        except (AssertionError, subprocess.CalledProcessError) as failure:
+            failures.append(case)
+            print(f"Investigation case {case} failed: {type(failure).__name__}", flush=True)
+        finally:
+            # A leak aborts immediately; independent cases continue only after
+            # exact-path cleanup is confirmed. No failed case counts as passed.
+            subprocess.run([sys.executable, str(Path(__file__).with_name("prepare-test-engine.py")),
+                            "check-cleanup"], env=env, check=True)
+    if failures:
+        raise RuntimeError("Native Linux investigation failed cases: " + ", ".join(failures))
     print("All explicit Linux mechanism cases verified; not product lifecycle acceptance.")
 
 
