@@ -235,10 +235,14 @@ async fn cancelled_start_by_sdk_deadline_cleans_an_observed_process() -> TestRes
         .clone()
         .startup_timeout(Duration::from_secs(12))?;
     let mut pending = Box::pin(ManagedInstance::start(settings));
-    tokio::select! {
+    let seen = tokio::select! {
         result = &mut pending => return Err(format!("startup ended before its observed deadline boundary: {result:?}").into()),
-        pids = core_created(&case.binary, &case.state) => assert!(!pids?.is_empty()),
-    }
+        pids = core_created(&case.binary, &case.state) => pids?,
+    };
+    let root = super::managed_pause::startup_root(&seen)?;
+    let paused = super::managed_pause::PausedRoot::new(root)?;
+    assert!(paused.is_paused()?);
+    paused.leave_paused();
     let identity = private_identity(&case.state)?;
     let result = pending.await;
     assert!(
@@ -255,7 +259,7 @@ async fn cancelled_start_by_sdk_deadline_cleans_an_observed_process() -> TestRes
         .contains(&retried.process_id()));
     retried.shutdown(Duration::from_secs(10)).await?;
     case.cleanup().await?;
-    println!("public SDK startup deadline evidence: {{\"actual_core_observed\":true,\"typed_sdk_timeout\":true,\"independent_process_exit_confirmed\":true,\"lease_released_separately\":true,\"explicit_retry_same_identity\":true}}");
+    println!("public SDK startup deadline evidence: {{\"actual_core_observed\":true,\"actual_retained_root_frozen\":true,\"typed_sdk_timeout\":true,\"independent_process_exit_confirmed\":true,\"lease_released_separately\":true,\"explicit_retry_same_identity\":true}}");
     Ok(())
 }
 
