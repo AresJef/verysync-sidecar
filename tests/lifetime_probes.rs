@@ -287,7 +287,11 @@ mod unix {
             )
             .request_timeout(Duration::from_millis(500))?;
             match Client::connect(options).await {
-                Err(verysync_sidecar::Error::Authentication { status: 403 }) => return Ok(()),
+                Err(verysync_sidecar::Error::AccessDenied { response })
+                    if response.status() == 403 =>
+                {
+                    return Ok(())
+                }
                 Ok(_) => return Err("wrong probe credential unexpectedly accepted".into()),
                 Err(error) => {
                     if Instant::now() >= deadline {

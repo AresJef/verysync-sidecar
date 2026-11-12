@@ -3,6 +3,9 @@
 #[path = "common/engine_fixture.rs"]
 mod engine_fixture;
 
+#[path = "common/response_proxy.rs"]
+mod response_proxy;
+
 use engine_fixture::{EngineFixture, TestBinary, TestResult};
 use reqwest::{Method, StatusCode};
 use verysync_sidecar::{ApiKey, Client, ConnectOptions, DeviceId, Error, ManagementEndpoint};
@@ -63,7 +66,7 @@ async fn connect_auth_version_and_identity_through_the_public_api() -> TestResul
         ConnectOptions::new(endpoint(&instance)?, ApiKey::new("synthetic-invalid-key")?);
     assert!(matches!(
         Client::connect(wrong_key).await,
-        Err(Error::Authentication { status: 403 })
+        Err(Error::AccessDenied { response }) if response.status() == 403
     ));
 
     let wrong_id =
@@ -606,6 +609,89 @@ async fn folder_remove_keep_files_preserves_samples_and_unrelated_configuration(
         .ok_or("missing removal evidence object")?
     {
         assert_eq!(value, &serde_json::json!(true), "{name}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn error_timeout_native_denial_http_diagnostics_and_connection_reuse() -> TestResult {
+    use verysync_sidecar::FolderId;
+    let mut instance = EngineFixture::start().await?;
+    let verified: TestResult<serde_json::Value> = async {
+        let denied = Client::connect(ConnectOptions::new(endpoint(&instance)?,ApiKey::new("dedicated-incorrect-test-key")?)).await;
+        let denial_safe = denied.as_ref().is_err_and(|error|!format!("{error:?} {error}").contains(instance.api_key()));
+        let access_denied = matches!(denied,Err(Error::AccessDenied { response }) if response.status()==403);
+        let client = Client::connect(ConnectOptions::new(endpoint(&instance)?,ApiKey::new(instance.api_key())?)
+            .expected_device_id(DeviceId::parse(instance.device_id())?)).await?;
+        let missing = client.folder_status(&FolderId::parse("sidecar-error-missing-folder")?).await;
+        let (http_error, bounded_diagnostic) = match missing {
+            Err(Error::Http { response }) => (response.status()>=400,!response.body_bytes().is_empty() && response.body_bytes().len()<=1024*1024),
+            _ => (false,false),
+        };
+        let after = client.system_status().await?;
+        Ok(serde_json::json!({"native_wrong_key_access_denied":access_denied,"denial_debug_safe":denial_safe,"native_missing_folder_http_error":http_error,"bounded_http_diagnostic":bounded_diagnostic,"same_client_read_after_http_failure":after.device_id.as_str()==instance.device_id()}))
+    }.await;
+    let stopped = instance.shutdown().await;
+    let report = verified?;
+    println!("public native error evidence: {report}");
+    assert!(stopped?.success());
+    for (name, value) in report.as_object().ok_or("missing error evidence")? {
+        assert_eq!(value, &serde_json::json!(true), "{name}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn error_timeout_and_cancellation_preserve_actual_applied_mutation() -> TestResult {
+    use response_proxy::{ResponseFault, ResponseProxy};
+    use std::time::Duration;
+    use verysync_sidecar::{CreateFolderOptions, FolderId, TargetPath};
+    let mut instance = EngineFixture::start().await?;
+    let verified:TestResult<serde_json::Value>=async {
+        let mut reports=Vec::new();
+        for (name,fault) in [("lost-response",ResponseFault::DropAfterApply),("deadline",ResponseFault::HoldAfterApply),("cancelled",ResponseFault::HoldAfterApply)] {
+            let proxy=ResponseProxy::start(&instance,fault).await?;
+            let timeout=if name=="deadline" {Duration::from_secs(1)} else {Duration::from_secs(10)};
+            let client=Client::connect(ConnectOptions::new(proxy.endpoint(),ApiKey::new(instance.api_key())?)
+                .expected_device_id(DeviceId::parse(instance.device_id())?).request_timeout(timeout)?).await?;
+            let id=FolderId::parse(&format!("sidecar-error-{name}"))?;
+            let options=CreateFolderOptions::new(id.clone(),TargetPath::local(instance.state_dir().join(name))).paused(true);
+            let mut pending=Box::pin(client.create_folder(&options));
+            let failure_correct=if name=="cancelled" {
+                tokio::select! {
+                    applied=tokio::time::timeout(Duration::from_secs(5),proxy.mutation_applied())=>{applied?;},
+                    _=&mut pending=>return Err("modifying future completed before cancellation fault was injected".into()),
+                }
+                drop(pending);
+                true
+            } else {
+                let error=tokio::time::timeout(Duration::from_secs(5),pending).await?.err().ok_or("faulted mutation unexpectedly returned success")?;
+                tokio::time::timeout(Duration::from_secs(5),proxy.mutation_applied()).await?;
+                let safe=!format!("{error:?} {error}").contains(instance.api_key());
+                safe && if name=="deadline" {
+                    matches!(error,Error::MutationOutcomeUnknown { source,.. } if matches!(*source,Error::Timeout {..}))
+                } else {matches!(error,Error::MutationOutcomeUnknown {..})}
+            };
+            proxy.release_response();
+            let observed=client.folder(&id).await?;
+            let repeated=client.create_folder(&options).await;
+            let identity=client.system_status().await?.device_id.as_str()==instance.device_id();
+            let posts=proxy.post_count();
+            proxy.finish().await?;
+            reports.push(serde_json::json!({"case":name,"failure_or_cancellation_correct":failure_correct,"actual_mutation_read_back":observed.id==id && observed.paused,"no_automatic_write_retry":posts==1,"repeated_create_rejected_without_write":matches!(repeated,Err(Error::FolderAlreadyExists {..})) && posts==1,"same_client_remains_usable":identity,"proxy_joined":true}));
+        }
+        Ok(serde_json::Value::Array(reports))
+    }.await;
+    let stopped = instance.shutdown().await;
+    let report = verified?;
+    println!("public mutation uncertainty evidence: {report}");
+    assert!(stopped?.success());
+    for case in report.as_array().ok_or("missing uncertainty cases")? {
+        for (name, value) in case.as_object().ok_or("missing uncertainty result")? {
+            if name != "case" {
+                assert_eq!(value, &serde_json::json!(true), "{} {name}", case["case"]);
+            }
+        }
     }
     Ok(())
 }
