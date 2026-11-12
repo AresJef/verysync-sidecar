@@ -1,5 +1,5 @@
 //! Native public-API host exit regression. Separate test processes, never a service.
-#![cfg(any(target_os = "macos", target_os = "linux"))]
+#![cfg(any(target_os = "macos", target_os = "linux", windows))]
 #![allow(unsafe_code)]
 
 use serde_json::{json, Value};
@@ -10,9 +10,21 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use verysync_sidecar::{LocalProgram, ManagedInstance, ManagedOptions, ManagementEndpoint};
 
+#[cfg(windows)]
+#[path = "common/managed_ui.rs"]
+mod managed_ui;
+#[cfg(windows)]
+#[allow(dead_code)]
+#[path = "common/windows_fixture.rs"]
+mod windows_fixture;
+
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const HOST_MODE: &str = "VERYSYNC_OWNED_TEST_HOST_MODE";
 const HOST_ROOT: &str = "VERYSYNC_OWNED_TEST_HOST_ROOT";
+#[cfg(unix)]
+const CORE_FILE: &str = "private-core";
+#[cfg(windows)]
+const CORE_FILE: &str = "private-core.exe";
 
 fn require(value: bool, message: &'static str) -> TestResult {
     if value {
@@ -33,12 +45,15 @@ fn program(path: &Path) -> TestResult<LocalProgram> {
 }
 
 fn settings(binary: &Path, state: &Path) -> TestResult<ManagedOptions> {
-    Ok(ManagedOptions::new(
-        program(binary)?,
-        state,
-        ManagementEndpoint::unix_socket(state.join("gui.sock"))?,
-    )?
-    .startup_timeout(Duration::from_secs(25))?)
+    #[cfg(unix)]
+    let endpoint = ManagementEndpoint::unix_socket(state.join("gui.sock"))?;
+    #[cfg(windows)]
+    let endpoint = {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?
+    };
+    Ok(ManagedOptions::new(program(binary)?, state, endpoint)?
+        .startup_timeout(Duration::from_secs(25))?)
 }
 
 fn identity_files(state: &Path) -> TestResult<Vec<Vec<u8>>> {
@@ -48,6 +63,7 @@ fn identity_files(state: &Path) -> TestResult<Vec<Vec<u8>>> {
         .collect()
 }
 
+#[cfg(unix)]
 fn ignored_blocked_hup(initialize: bool) -> std::io::Result<bool> {
     // This function initializes signals only in a separately launched test host.
     // The library and the parent test process never install a global handler.
@@ -78,6 +94,28 @@ fn ignored_blocked_hup(initialize: bool) -> std::io::Result<bool> {
     }
 }
 
+fn host_command(root: &Path, mode: &str) -> TestResult<Command> {
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args([
+            "--exact",
+            "owned_host_returns",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(HOST_MODE, mode)
+        .env(HOST_ROOT, root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    }
+    Ok(command)
+}
+
 async fn run_test_host() -> TestResult {
     let mode = std::env::var(HOST_MODE)?;
     let root = PathBuf::from(std::env::var_os(HOST_ROOT).ok_or("private host root required")?);
@@ -93,17 +131,29 @@ async fn run_test_host() -> TestResult {
         }
         return Ok(());
     }
+    #[cfg(unix)]
     let inherited = mode == "inherited";
+    #[cfg(unix)]
     if inherited {
         require(
             ignored_blocked_hup(true)?,
             "test host HUP control not established",
         )?;
     }
+    #[cfg(unix)]
     let environment_names = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"];
+    #[cfg(windows)]
+    let environment_names = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "TEMP", "TMP"];
     let environment_before: Vec<_> = environment_names.iter().map(std::env::var_os).collect();
+    #[cfg(windows)]
+    let ui_baseline = if mode == "kill" {
+        Some(managed_ui::observe(None, &root).await?)
+    } else {
+        None
+    };
     let state = root.join("state");
-    let instance = ManagedInstance::start(settings(&root.join("private-core"), &state)?).await?;
+    let instance = ManagedInstance::start(settings(&root.join(CORE_FILE), &state)?).await?;
+    #[cfg(unix)]
     if inherited {
         require(
             ignored_blocked_hup(false)?,
@@ -123,21 +173,7 @@ async fn run_test_host() -> TestResult {
         b"synthetic host lifetime sample",
     )?;
     let mut unrelated = if mode == "exec" {
-        Some(
-            Command::new(std::env::current_exe()?)
-                .args([
-                    "--exact",
-                    "owned_host_returns",
-                    "--nocapture",
-                    "--test-threads=1",
-                ])
-                .env(HOST_MODE, "unrelated")
-                .env(HOST_ROOT, &root)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()?,
-        )
+        Some(host_command(&root, "unrelated")?.spawn()?)
     } else {
         None
     };
@@ -156,10 +192,23 @@ async fn run_test_host() -> TestResult {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
+    #[cfg(unix)]
+    let inherited_hup_preserved = inherited && ignored_blocked_hup(false)?;
+    #[cfg(windows)]
+    let inherited_hup_preserved = false;
     let ready = json!({"pid":instance.process_id(), "identity":instance.client().instance().device_id.as_str(),
         "authenticated":instance.client().system_status().await?.device_id == instance.client().instance().device_id,
-        "inherited_hup_preserved":inherited && ignored_blocked_hup(false)?,
+        "inherited_hup_preserved":inherited_hup_preserved,
         "unrelated_pid":unrelated.as_ref().map(Child::id)});
+    #[cfg(windows)]
+    let ready = {
+        let mut ready = ready;
+        if let Some(baseline) = ui_baseline {
+            let observed = managed_ui::observe(Some(instance.process_id()), &root).await?;
+            ready["ui"] = json!({"baseline": baseline, "start": observed});
+        }
+        ready
+    };
     std::fs::write(root.join("ready.tmp"), serde_json::to_vec(&ready)?)?;
     std::fs::rename(root.join("ready.tmp"), root.join("ready.json"))?;
     let mut input = String::new();
@@ -171,6 +220,64 @@ async fn run_test_host() -> TestResult {
     // Ordinary return drops its real owner; forced/exit cases bypass this line.
     drop(instance);
     Ok(())
+}
+
+#[cfg(windows)]
+fn process_birth(pid: u32) -> std::io::Result<Option<(u64, u64)>> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_PARAMETER, FILETIME, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE,
+    };
+    // SAFETY: Read-only rights for this fixture's recorded process; the owned
+    // handle pins the native process object while observing exit and birth time.
+    let raw = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
+    if raw.is_null() {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
+            Ok(None)
+        } else {
+            Err(error)
+        };
+    }
+    // SAFETY: A successful OpenProcess returned a newly owned handle.
+    let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+    // SAFETY: Query only, with a live process handle and zero timeout.
+    match unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } {
+        WAIT_OBJECT_0 => return Ok(None),
+        WAIT_TIMEOUT => (),
+        _ => return Err(std::io::Error::last_os_error()),
+    }
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: Four initialized, distinct FILETIME outputs and a live handle.
+    if unsafe {
+        GetProcessTimes(
+            process.as_raw_handle(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(Some((
+        u64::from(creation.dwHighDateTime),
+        u64::from(creation.dwLowDateTime),
+    )))
 }
 
 #[cfg(target_os = "macos")]
@@ -303,6 +410,7 @@ async fn processes_gone(binary: &Path) -> TestResult {
     }
 }
 
+#[cfg(unix)]
 async fn emergency_cleanup(binary: &Path, recorded_group: Option<u32>) -> TestResult {
     // This path never makes a failed lifetime case pass. Inspect exact copied
     // program membership before signalling only its private session/group.
@@ -326,35 +434,32 @@ async fn emergency_cleanup(binary: &Path, recorded_group: Option<u32>) -> TestRe
 }
 
 async fn exercise(mode: &'static str) -> TestResult {
-    let root = tempfile::Builder::new()
-        .prefix("vsl-")
-        .tempdir_in("/tmp")?
-        .keep();
-    let binary = root.join("private-core");
+    let root = tempfile::Builder::new().prefix("vsl-").tempdir()?.keep();
+    let binary = root.join(CORE_FILE);
     let selected =
         PathBuf::from(std::env::var_os("VERYSYNC_TEST_BINARY").ok_or("explicit engine required")?);
     std::fs::copy(&selected, &binary)?;
     let mut canary = ManagedInstance::start(settings(&selected, &root.join("canary"))?).await?;
     let canary_id = canary.client().instance().device_id.clone();
-    let mut host = Host(
-        Command::new(std::env::current_exe()?)
-            .args([
-                "--exact",
-                "owned_host_returns",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(HOST_MODE, mode)
-            .env(HOST_ROOT, &root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?,
-    );
+    let mut command = host_command(&root, mode)?;
+    command.stdin(Stdio::piped());
+    #[cfg(windows)]
+    let outer = {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+        windows_fixture::Job::new()?
+    };
+    let mut host = Host(command.spawn()?);
+    #[cfg(windows)]
+    outer.assign_and_resume(&host.0)?;
+    #[cfg(unix)]
     let mut group = None;
     let mut unrelated_identity = None;
     let result: TestResult = async {
-        let deadline = Instant::now() + Duration::from_secs(30);
+        // Windows' separate native UI probes run in the actual test caller,
+        // before and after core startup; their bounded work is inside readiness.
+        let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 60 } else { 30 });
         let ready: Value = loop {
             if root.join("ready.json").try_exists()? {
                 break serde_json::from_slice(&std::fs::read(root.join("ready.json"))?)?;
@@ -367,7 +472,10 @@ async fn exercise(mode: &'static str) -> TestResult {
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
         let pid = u32::try_from(ready["pid"].as_u64().ok_or("missing owned root")?)?;
-        group = Some(pid);
+        #[cfg(unix)]
+        {
+            group = Some(pid);
+        }
         require(
             ready["authenticated"] == true,
             "host did not authenticate its real core",
@@ -376,6 +484,32 @@ async fn exercise(mode: &'static str) -> TestResult {
             inventory(&binary).await?.contains(&pid),
             "positive private core inventory missing",
         )?;
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let snapshot = outer.snapshot(&host.0)?;
+            require(
+                snapshot.root_in_job
+                    && !snapshot.handle_inheritable
+                    && snapshot.limit_flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0
+                    && snapshot.process_ids.contains(&host.0.id())
+                    && snapshot.process_ids.contains(&pid),
+                "caller Job membership was not observed",
+            )?;
+            println!(
+                "public owned host Job observation: {}",
+                json!({"case": mode, "snapshot": snapshot})
+            );
+            if mode == "kill" {
+                let ui = &ready["ui"];
+                println!("public owned host UI observation: {ui}");
+                require(
+                    ui["baseline"].is_object() && ui["start"].is_object(),
+                    "actual host UI observation missing",
+                )?;
+                managed_ui::assert_background(&ui["baseline"], &ui["start"])?;
+            }
+        }
         if mode == "inherited" {
             require(
                 ready["inherited_hup_preserved"] == true,
@@ -417,10 +551,18 @@ async fn exercise(mode: &'static str) -> TestResult {
                 "explicit no-destructor exit not observed",
             )?;
         } else {
-            use std::os::unix::process::ExitStatusExt;
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                require(
+                    status.signal() == Some(libc::SIGKILL),
+                    "actual forced host exit not observed",
+                )?;
+            }
+            #[cfg(windows)]
             require(
-                status.signal() == Some(libc::SIGKILL),
-                "actual forced host exit not observed",
+                !status.success(),
+                "actual forced Windows host exit not observed",
             )?;
         }
         processes_gone(&binary).await?;
@@ -431,6 +573,14 @@ async fn exercise(mode: &'static str) -> TestResult {
             )?;
             std::fs::write(root.join("unrelated-stop"), b"stop")?;
             unrelated_finished(other, birth).await?;
+        }
+        #[cfg(windows)]
+        {
+            // Retain the outer Job until the SDK-owned inner Job has already
+            // removed its core. Closing the observer cannot make this pass.
+            let observer = outer.try_clone()?;
+            tokio::task::spawn_blocking(move || observer.wait_empty(Duration::from_secs(8)))
+                .await??;
         }
         require(
             canary.client().system_status().await?.device_id == canary_id,
@@ -481,7 +631,14 @@ async fn exercise(mode: &'static str) -> TestResult {
             root.join("failed-before-fallback.json"),
             serde_json::to_vec(&json!({"mode":mode,"fallback_required":true}))?,
         )?;
+        #[cfg(unix)]
         emergency_cleanup(&binary, group).await?;
+        #[cfg(windows)]
+        {
+            let observer = outer.try_clone()?;
+            tokio::task::spawn_blocking(move || observer.terminate_and_wait()).await??;
+            processes_gone(&binary).await?;
+        }
         return result;
     }
     canary.shutdown(Duration::from_secs(10)).await?;
@@ -496,6 +653,10 @@ async fn exercise(mode: &'static str) -> TestResult {
     if mode == "exec" {
         evidence["unrelated_exec_live_when_core_exited"] = true.into();
         evidence["unrelated_exec_explicitly_stopped_and_observed"] = true.into();
+    }
+    #[cfg(windows)]
+    {
+        evidence["core_exited_while_caller_job_retained"] = true.into();
     }
     println!("public owned host lifetime evidence: {evidence}");
     Ok(())
@@ -518,6 +679,7 @@ async fn owned_host_is_forced_without_destructors() -> TestResult {
     exercise("kill").await
 }
 #[tokio::test]
+#[cfg(unix)]
 async fn owned_host_inherited_hup_is_only_reset_in_its_child() -> TestResult {
     exercise("inherited").await
 }

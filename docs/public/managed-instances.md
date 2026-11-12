@@ -138,9 +138,25 @@ is a test executable, not a production supervisor.
 These cases cover ordinary exec inheritance on the tested Unix systems. Code
 that deliberately retains or duplicates the private ownership descriptors
 outside the normal exec boundary can retain the terminal connection. Intentional
-persistence is a separate API policy under development. Windows caller Job
-ownership has its own native acceptance gate. Stopping an in-flight transfer
+persistence is a separate API policy under development. Stopping an in-flight transfer
 can interrupt work; use explicit normal shutdown when the caller can cooperate.
+
+## Windows caller lifetime
+
+The caller owns an unnamed, noninheritable Job handle. The library assigns its
+suspended core to that Job before allowing execution; the Job terminates its
+remaining processes when its last handle closes. Dedicated test hosts exercise
+ordinary return, exit without destructors and actual forced termination inside
+an existing caller Job. The observer retains that outer Job while confirming
+the SDK's core has exited, so observer cleanup cannot supply the passing result.
+
+An unrelated child launched after startup must remain alive while the core
+exits. The test then stops and independently observes that child, checks the
+outer Job is empty and retries the retained identity explicitly. These cases
+cover the tested nested Job configuration on the recorded Windows runners;
+arbitrary restrictive ancestor Jobs can reject assignment, which is a startup
+error. They do not establish compatibility with every host Job policy. The
+forced-exit case also records native window/console observations separately.
 
 The official core can issue maintenance/NAT HTTP requests even with discovery
 and relays disabled. Runtime tests use a temporary nonforwarding loopback HTTP
