@@ -234,21 +234,32 @@ def windows_processes_for_binary(binary):
     return matches
 
 
-def check_cleanup():
-    binary = os.environ.get("VERYSYNC_TEST_BINARY")
+def owned_processes(binary=None):
+    """Read exact native image/argv ownership, including filesystem aliases."""
+    binary = binary or os.environ.get("VERYSYNC_TEST_BINARY")
     if not binary or not Path(binary).is_absolute():
-        raise ValueError("explicit test executable is required for cleanup verification")
+        raise ValueError("explicit absolute test executable is required for process verification")
+    # Managed startup resolves the selected executable before spawning it. The
+    # inventory must compare that same native path, not an alias spelling.
+    binary = str(Path(binary).resolve())
     if os.name == "nt":
-        matches = windows_processes_for_binary(binary)
-        if matches:
-            raise RuntimeError("task-owned test engine processes remain: " + str(len(matches)))
-    else:
-        result = subprocess.run(["pgrep", "-f", "^" + re.escape(binary) + "( |$)"],
-                                capture_output=True, text=True, timeout=10)
-        if result.returncode not in (0, 1):
-            raise RuntimeError("cannot verify exact test-process ownership")
-        if result.returncode == 0:
-            raise RuntimeError("task-owned test engine processes remain")
+        return sorted(windows_processes_for_binary(binary))
+    result = subprocess.run(["pgrep", "-f", "^" + re.escape(binary) + "( |$)"],
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode not in (0, 1):
+        raise RuntimeError("cannot verify exact test-process ownership")
+    if result.returncode == 1:
+        return []
+    matches = sorted(int(pid) for pid in result.stdout.split())
+    if not matches or len(matches) > 4096 or any(pid <= 0 for pid in matches):
+        raise RuntimeError("exact test-process inventory was incomplete")
+    return matches
+
+
+def check_cleanup():
+    matches = owned_processes()
+    if matches:
+        raise RuntimeError("task-owned test engine processes remain: " + str(len(matches)))
     print("No process remains for the exact task-owned test executable.")
 
 
@@ -261,9 +272,12 @@ def main():
     prepare_parser.add_argument("--archive", help="Optional existing archive; same fixed SHA-256 required")
     prepare_parser.add_argument("--github-env", help="Explicit GitHub environment file to append to")
     commands.add_parser("check-cleanup")
+    commands.add_parser("list-owned-processes")
     args = parser.parse_args()
     if args.command == "prepare":
         prepare(args)
+    elif args.command == "list-owned-processes":
+        print(json.dumps({"pids": owned_processes()}))
     else:
         check_cleanup()
 

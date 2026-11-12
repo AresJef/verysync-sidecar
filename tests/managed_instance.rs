@@ -10,6 +10,9 @@ use verysync_sidecar::{
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+#[path = "common/managed_startup.rs"]
+mod managed_startup;
+
 fn source() -> TestResult<LocalProgram> {
     let path = PathBuf::from(
         std::env::var_os("VERYSYNC_TEST_BINARY")
@@ -557,6 +560,9 @@ async fn restart_rejects_changed_program_and_readiness_timeout_then_can_retry() 
         endpoint,
     )?;
     let mut instance = start_checked(settings).await?;
+    assert!(managed_startup::inventory(&copy)
+        .await?
+        .contains(&instance.process_id()));
     let identity = instance.client().instance().device_id.clone();
     instance.shutdown(Duration::from_secs(10)).await?;
     std::fs::write(

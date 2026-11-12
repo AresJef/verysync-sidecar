@@ -9,7 +9,10 @@
   exit; explicit force_stop remains a separately chosen action.
 - Add owned restart with one total deadline, retained state and authenticated
   new-generation readiness; expose actual stop/start failures for explicit retry.
-- Keep further lifecycle policy and cancellation gates
+- Validate startup cancellation after actual core creation, caller/SDK deadlines
+  and Tokio runtime shutdown. Preserve incomplete identity/configuration for
+  explicit repair; confirm exact private process exit before successful retry.
+- Keep further lifecycle policy gates
   in the same full-delivery development plan. This development version has not
   been published.
 
