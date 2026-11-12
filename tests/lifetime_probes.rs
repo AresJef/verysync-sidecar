@@ -148,7 +148,7 @@ mod unix {
                         rows.push(row.trim().to_owned());
                     }
                 }
-                return Ok(rows);
+                Ok(rows)
             }
             #[cfg(target_os = "macos")]
             {

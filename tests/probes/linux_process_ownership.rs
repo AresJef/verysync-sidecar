@@ -16,23 +16,38 @@ unsafe extern "C" {
 
 fn matches(pid: u32, binary: &Path, state: &Path) -> io::Result<bool> {
     let root = PathBuf::from("/proc").join(pid.to_string());
-    let executable = match fs::read_link(root.join("exe")) {
-        Ok(path) => path,
-        Err(e) if matches!(e.raw_os_error(), Some(2 | 3)) => return Ok(false),
-        Err(e) => return Err(e),
-    };
-    if executable != binary {
-        return Ok(false);
-    }
+    // Read the public command-line selector first. Some unrelated same-user
+    // runner processes prohibit exe/ptrace access; they are not this fixture.
     let args = match fs::read(root.join("cmdline")) {
         Ok(bytes) => bytes,
         Err(e) if matches!(e.raw_os_error(), Some(2 | 3)) => return Ok(false),
-        Err(e) => return Err(e),
+        Err(e) => {
+            return Err(io::Error::new(
+                e.kind(),
+                format!("native command selector for PID {pid}: {e}"),
+            ))
+        }
     };
     let args: Vec<_> = args.split(|b| *b == 0).collect();
-    Ok(args
+    let home_matches = args
         .windows(2)
-        .any(|pair| pair[0] == b"--home" && pair[1] == state.as_os_str().as_bytes()))
+        .any(|pair| pair[0] == b"--home" && pair[1] == state.as_os_str().as_bytes());
+    let race_matches = args.get(2).copied() == Some(state.as_os_str().as_bytes())
+        && args.get(3).copied() == Some(b"race");
+    if !home_matches && !race_matches {
+        return Ok(false);
+    }
+    let executable = match fs::read_link(root.join("exe")) {
+        Ok(path) => path,
+        Err(e) if matches!(e.raw_os_error(), Some(2 | 3)) => return Ok(false),
+        Err(e) => {
+            return Err(io::Error::new(
+                e.kind(),
+                format!("exact private executable query for PID {pid}: {e}"),
+            ))
+        }
+    };
+    Ok(executable == binary)
 }
 
 pub fn owned_pids(binary: &Path, state: &Path) -> io::Result<Vec<u32>> {
@@ -40,6 +55,13 @@ pub fn owned_pids(binary: &Path, state: &Path) -> io::Result<Vec<u32>> {
     let mut result = Vec::new();
     for entry in fs::read_dir("/proc")? {
         let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
         // Other users' processes cannot belong to this nonprivileged private
         // fixture. Same-user observation errors remain errors, never "gone".
         let metadata = match entry.metadata() {
@@ -50,13 +72,6 @@ pub fn owned_pids(binary: &Path, state: &Path) -> io::Result<Vec<u32>> {
         if metadata.uid() != unsafe { geteuid() } {
             continue;
         }
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|s| s.parse::<u32>().ok())
-        else {
-            continue;
-        };
         if matches(pid, &binary, state)? {
             result.push(pid);
             if result.len() > 256 {
