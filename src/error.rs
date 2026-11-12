@@ -110,6 +110,11 @@ pub enum Error {
         /// The underlying transport error, without its request URL.
         source: reqwest::Error,
     },
+    /// A folder identifier cannot be used as a protocol value.
+    InvalidFolderId {
+        /// A description that excludes the supplied identifier.
+        reason: &'static str,
+    },
     /// A management address violates the documented endpoint contract.
     InvalidEndpoint {
         /// A credential-free description of the invalid input.
@@ -169,6 +174,9 @@ impl fmt::Display for Error {
                 formatter,
                 "management transport failed while attempting to {operation}"
             ),
+            Self::InvalidFolderId { reason } => {
+                write!(formatter, "invalid folder identifier: {reason}")
+            }
             Self::InvalidEndpoint { reason } => {
                 write!(formatter, "invalid management endpoint: {reason}")
             }

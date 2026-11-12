@@ -1,7 +1,8 @@
 //! Asynchronous management of the official VerySync program.
 //!
 //! This crate is under development. It provides explicit endpoint/path values
-//! and authenticated management connections with version and identity checks.
+//! authenticated management connections with version and identity checks, and
+//! fresh typed system/folder status reads.
 //! Adding this dependency or compiling it does not download or
 //! start VerySync, install services, or configure global logging or signals.
 //!
@@ -22,6 +23,7 @@ mod client;
 mod endpoint;
 mod error;
 mod path;
+mod status;
 
 pub use auth::{ApiKey, DeviceId};
 pub use client::{
@@ -30,6 +32,7 @@ pub use client::{
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use error::{Error, ResponseDiagnostic, Result};
 pub use path::{PathStyle, TargetPath};
+pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
 
 /// The fixed upstream version selected for initial compatibility acceptance.
 ///

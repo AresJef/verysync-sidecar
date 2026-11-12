@@ -9,8 +9,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
 
 use crate::{
-    ApiKey, DeviceId, Error, ManagementEndpoint, ResponseDiagnostic, Result,
-    BASELINE_ENGINE_VERSION,
+    ApiKey, DeviceId, Error, FolderId, FolderStatus, ManagementEndpoint, ResponseDiagnostic,
+    Result, SystemStatus, BASELINE_ENGINE_VERSION,
 };
 
 /// The policy applied to an engine version during connection.
@@ -252,6 +252,49 @@ impl Client {
         })
     }
 
+    /// Read current engine build metadata with a new authenticated request.
+    ///
+    /// This does not replace the handshake snapshot or reclassify its version
+    /// policy result. Reconnect after an engine replacement or upgrade to apply
+    /// connection version/identity policy to that new instance.
+    pub async fn version(&self) -> Result<EngineVersion> {
+        self.connection
+            .get_json("read current version", "rest/system/version")
+            .await
+    }
+
+    /// Read fresh system status and require the handshake identity to match.
+    ///
+    /// Missing metrics remain unknown. This read does not own the process or
+    /// establish that any particular file batch finished synchronizing.
+    pub async fn system_status(&self) -> Result<SystemStatus> {
+        let status: SystemStatus = self
+            .connection
+            .get_json("read system status", "rest/system/status")
+            .await?;
+        if status.device_id != self.instance.device_id {
+            return Err(Error::IdentityMismatch {
+                expected: self.instance.device_id.clone(),
+                actual: status.device_id,
+            });
+        }
+        Ok(status)
+    }
+
+    /// Read current synchronization state for one configured folder.
+    ///
+    /// The opaque identifier is encoded as one query value. Activity and
+    /// counters are a snapshot, not a transfer or business-batch guarantee.
+    pub async fn folder_status(&self, folder: &FolderId) -> Result<FolderStatus> {
+        self.connection
+            .get_json_with_query(
+                "read folder status",
+                "rest/db/status",
+                &[("folder", folder.as_str())],
+            )
+            .await
+    }
+
     /// Borrow the authenticated identity/version snapshot captured on connect.
     pub fn instance(&self) -> &InstanceInfo {
         &self.instance
@@ -284,9 +327,21 @@ impl Connection {
         operation: &'static str,
         route: &'static str,
     ) -> Result<T> {
-        let url = self.base.join(route).map_err(|_| Error::InvalidEndpoint {
+        self.get_json_with_query(operation, route, &[]).await
+    }
+
+    async fn get_json_with_query<T: DeserializeOwned>(
+        &self,
+        operation: &'static str,
+        route: &'static str,
+        query: &[(&str, &str)],
+    ) -> Result<T> {
+        let mut url = self.base.join(route).map_err(|_| Error::InvalidEndpoint {
             reason: "management route cannot be joined to base URL",
         })?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query.iter().copied());
+        }
         let mut response = self
             .http
             .get(url)
