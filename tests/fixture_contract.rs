@@ -41,6 +41,18 @@ async fn two_private_instances_have_separate_identity_authentication_and_cleanup
         "fixtures must not share API keys"
     );
 
+    let helper = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("scripts")
+        .join("prepare-test-engine.py");
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let cleanup_probe = std::process::Command::new(python)
+        .arg(helper)
+        .arg("check-cleanup")
+        .output()?;
+    assert!(!cleanup_probe.status.success());
+    assert!(String::from_utf8(cleanup_probe.stderr)?
+        .contains("task-owned test engine processes remain"));
+
     let wrong_key = first
         .request_with_key(Method::GET, "/rest/system/version", "invalid-test-key")?
         .send()

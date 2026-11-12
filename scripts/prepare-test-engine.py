@@ -8,6 +8,7 @@ the archive. It does not launch the program or change host configuration.
 import argparse
 import hashlib
 import json
+import ntpath
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -170,18 +171,77 @@ def prepare(args):
         raise
 
 
+def windows_processes_for_binary(binary):
+    """Query native process image paths without WMI/provider startup or a shell."""
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_void_p),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    for name in ["Process32FirstW", "Process32NextW"]:
+        function = getattr(kernel, name)
+        function.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+        function.restype = wintypes.BOOL
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                                wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+    kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+
+    snapshot = kernel.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if snapshot in (None, ctypes.c_void_p(-1).value):
+        raise ctypes.WinError(ctypes.get_last_error())
+    entry = ProcessEntry()
+    entry.dwSize = ctypes.sizeof(entry)
+    expected = ntpath.normcase(ntpath.normpath(binary))
+    matches = []
+    deadline = time.monotonic() + 10
+    try:
+        available = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+        while available:
+            if time.monotonic() > deadline:
+                raise TimeoutError("native test-process inventory exceeded its deadline")
+            if ntpath.normcase(entry.szExeFile) == ntpath.basename(expected):
+                process = kernel.OpenProcess(0x1000, False, entry.th32ProcessID)  # QUERY_LIMITED_INFORMATION
+                if not process:
+                    if ctypes.get_last_error() != 87:  # A process may already have exited.
+                        raise ctypes.WinError(ctypes.get_last_error())
+                else:
+                    try:
+                        image = ctypes.create_unicode_buffer(32768)
+                        size = wintypes.DWORD(len(image))
+                        if not kernel.QueryFullProcessImageNameW(process, 0, image, ctypes.byref(size)):
+                            raise ctypes.WinError(ctypes.get_last_error())
+                        if ntpath.normcase(ntpath.normpath(image.value)) == expected:
+                            matches.append(entry.th32ProcessID)
+                    finally:
+                        kernel.CloseHandle(process)
+            available = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+        if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        kernel.CloseHandle(snapshot)
+    return matches
+
+
 def check_cleanup():
     binary = os.environ.get("VERYSYNC_TEST_BINARY")
     if not binary or not Path(binary).is_absolute():
         raise ValueError("explicit test executable is required for cleanup verification")
     if os.name == "nt":
-        # The path is data in an environment variable, never interpolated into code.
-        code = "$p=$env:VERYSYNC_TEST_BINARY; @(Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -eq $p}).Count"
-        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", code],
-                                check=True, capture_output=True, text=True, timeout=20)
-        count = int(result.stdout.strip())
-        if count:
-            raise RuntimeError("task-owned test engine processes remain: " + str(count))
+        matches = windows_processes_for_binary(binary)
+        if matches:
+            raise RuntimeError("task-owned test engine processes remain: " + str(len(matches)))
     else:
         result = subprocess.run(["pgrep", "-f", "^" + re.escape(binary) + "( |$)"],
                                 capture_output=True, text=True, timeout=10)

@@ -401,6 +401,7 @@ async fn run_tool(
     }
 }
 
+#[cfg(unix)]
 fn path_string(path: &Path) -> TestResult<String> {
     path.to_str().map(str::to_owned).ok_or_else(|| {
         "test path cannot be represented without loss at the protocol boundary".into()
@@ -497,7 +498,7 @@ fn protect_directory(path: &Path) -> TestResult {
     #[cfg(windows)]
     {
         let sid = windows_sid()?;
-        let status = command(Path::new("icacls.exe"))
+        let status = command(&windows_tool("icacls.exe")?)
             .arg(path)
             .args(["/inheritance:r", "/grant:r"])
             .arg(format!("*{sid}:(OI)(CI)F"))
@@ -512,14 +513,34 @@ fn protect_directory(path: &Path) -> TestResult {
     Ok(())
 }
 
+fn sid_from_csv(text: &str) -> Option<&str> {
+    text.split(|c: char| c == '"' || c == ',' || c.is_whitespace())
+        .find(|field| {
+            field.strip_prefix("S-1-").is_some_and(|tail| {
+                !tail.is_empty()
+                    && tail
+                        .split('-')
+                        .all(|part| !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()))
+            })
+        })
+}
+
+#[cfg(windows)]
+fn windows_tool(name: &str) -> TestResult<PathBuf> {
+    let root = std::env::var_os("SystemRoot").ok_or("Windows SystemRoot missing")?;
+    Ok(PathBuf::from(root).join("System32").join(name))
+}
+
 #[cfg(windows)]
 fn windows_sid() -> TestResult<String> {
-    let output = command(Path::new("whoami.exe"))
+    let output = command(&windows_tool("whoami.exe")?)
         .args(["/user", "/fo", "csv", "/nh"])
         .output()?;
+    if !output.status.success() {
+        return Err("native Windows identity tool failed".into());
+    }
     let text = String::from_utf8(output.stdout)?;
-    text.split('"')
-        .find(|s| s.starts_with("S-1-") && s.bytes().all(|c| c.is_ascii_digit() || c == b'-'))
+    sid_from_csv(&text)
         .map(str::to_owned)
         .ok_or_else(|| "could not determine the fixture owner's SID".into())
 }
@@ -527,7 +548,7 @@ fn windows_sid() -> TestResult<String> {
 #[cfg(windows)]
 fn protected_windows_acl(path: &Path) -> TestResult<bool> {
     let output_path = path.join("acl-check.txt");
-    let status = command(Path::new("icacls.exe"))
+    let status = command(&windows_tool("icacls.exe")?)
         .arg(path)
         .arg("/save")
         .arg(&output_path)
@@ -563,4 +584,19 @@ fn protected_windows_acl(path: &Path) -> TestResult<bool> {
                 && fields[2] == "FA"
                 && [sid.as_str(), "SY", "S-1-5-18"].contains(&fields[5])
         }))
+}
+
+#[cfg(test)]
+mod fixture_unit_tests {
+    #[test]
+    fn windows_sid_csv_accepts_quoted_and_unquoted_fields() {
+        for text in [
+            "\"machine\\synthetic\",\"S-1-5-21-100-200-300-1001\"\r\n",
+            "machine\\synthetic,S-1-5-21-100-200-300-1001\r\n",
+        ] {
+            assert_eq!(super::sid_from_csv(text), Some("S-1-5-21-100-200-300-1001"));
+        }
+        assert_eq!(super::sid_from_csv("command failed"), None);
+        assert_eq!(super::sid_from_csv("name,S-1-5-invalid"), None);
+    }
 }
