@@ -1,6 +1,6 @@
 [package]
 name = "verysync-sidecar"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2021"
 rust-version = "1.85"
 resolver = "3"
@@ -31,11 +31,21 @@ include = [
 ]
 
 [dependencies]
+fs2 = "0.4.3"
+getrandom = "0.4.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+rmpv = "1.3.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.10.9"
 tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
 url = "2.5.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
 
 [features]
 default = ["tls"]
@@ -52,6 +62,11 @@ tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "i
 [[test]]
 name = "engine_control"
 path = "tests/engine_control.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "managed_instance"
+path = "tests/managed_instance.rs"
 required-features = ["engine-tests"]
 
 [[test]]

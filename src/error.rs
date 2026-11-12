@@ -43,6 +43,32 @@ impl fmt::Debug for ResponseDiagnostic {
 /// change; callers should handle the cases relevant to their operation.
 #[non_exhaustive]
 pub enum Error {
+    /// The selected local executable failed a baseline or checksum check.
+    ProgramRejected {
+        /// A description excluding paths, arguments and captured program output.
+        reason: &'static str,
+    },
+    /// An owned program exited before the required managed operation completed.
+    ManagedProcessExited {
+        /// Its actual normal exit code, absent for a signal termination.
+        code: Option<i32>,
+    },
+    /// A managed-state or lifecycle invariant could not be established.
+    ManagedFailure {
+        /// A description excluding credentials and captured output.
+        reason: &'static str,
+    },
+    /// The dedicated state already has an exclusive library owner.
+    ManagedStateInUse,
+    /// The supplied directory is not an admissible library-owned state.
+    UnmanagedState,
+    /// A native filesystem or process operation failed without echoing arguments.
+    LocalIo {
+        /// The credential-free operation name.
+        operation: &'static str,
+        /// The original I/O error, available for explicit diagnosis.
+        source: std::io::Error,
+    },
     /// A connection setting is invalid; no operation has started.
     InvalidConfiguration {
         /// A credential-free description of the setting.
@@ -184,6 +210,12 @@ impl fmt::Debug for Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ProgramRejected { reason } => write!(formatter, "selected program rejected: {reason}"),
+            Self::ManagedProcessExited { code } => write!(formatter, "owned program exited before completion (code {code:?})"),
+            Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),
+            Self::ManagedStateInUse => formatter.write_str("managed state already has an exclusive owner"),
+            Self::UnmanagedState => formatter.write_str("state is not an admissible private library-owned directory"),
+            Self::LocalIo { operation, .. } => write!(formatter, "native operation failed while attempting to {operation}"),
             Self::InvalidConfiguration { reason } => {
                 write!(formatter, "invalid configuration: {reason}")
             }
@@ -249,6 +281,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::LocalIo { source, .. } => Some(source),
             Self::Transport { source, .. } => Some(source),
             Self::MutationOutcomeUnknown { source, .. } => Some(source.as_ref()),
             _ => None,

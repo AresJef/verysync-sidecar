@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.1.0-alpha.2)
+
+- Add explicit local-program selection and initial owned startup, private state
+  leases, fixed-version/checksum checks, authenticated readiness, persisted
+  identity/configuration reuse and actual process-tree exit observation.
+- Keep further lifecycle policy, typed shutdown/restart and cancellation gates
+  in the same full-delivery development plan. This development version has not
+  been published.
+
 ## 0.1.0-alpha.1
 
 - Establish the single Tokio crate, fixed VerySync v2.33.2 baseline, dual source
