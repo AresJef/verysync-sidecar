@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - releases/crates-io-release.json
+      - scripts/publish-github-release.py
+      - scripts/tests/test_publish_github_release.py
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - releases/crates-io-release.json
+      - scripts/publish-github-release.py
+      - scripts/tests/test_publish_github_release.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Release metadata contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts/tests -p test_publish_github_release.py
+      - run: python3 scripts/publish-github-release.py --check-metadata
+
+  publish:
+    name: Verify registry and publish GitHub release
+    needs: metadata
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Verify exact registry artifact, publisher, accepted source and native jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish-github-release.py --publish

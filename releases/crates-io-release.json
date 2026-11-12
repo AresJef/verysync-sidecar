@@ -1,0 +1,13 @@
+{
+  "repository": "AresJef/verysync-sidecar",
+  "crate": "verysync-sidecar",
+  "version": "0.1.0-alpha.1",
+  "source": "ae5a48f6471327034f8acd61b8d1641dc078fdb9",
+  "tree": "31dde2cd2d8bbf6bfdd2e962f8918ed9f3d02bf8",
+  "package_sha256": "2775050dc582a0bd22b5d0d576def3e8c6bbc57e46dc645495cd414468f40cbd",
+  "publisher": "AresJef",
+  "publisher_id": 448021,
+  "native_run": 43228949271,
+  "quality_run": 43228949440,
+  "notes": "Initial real alpha for controlling an explicitly selected, already running official VerySync v2.33.2 instance. Includes authenticated identity/version policy, fresh typed status, guarded folder registration/configuration reads, partial label/pause changes, unregistering without a file-deletion request, bounded failures/reconciliation, constrained raw requests, capability snapshots and three working examples.\n\nThe exact source passed six native controller/engine combinations (macOS, Windows and GNU Linux, each amd64/arm64), current/minimum Rust, doc-tests, strict lint/docs, actual compiled examples, fault cases and exact cleanup. The actual crate also passed clean Rust 1.85 dependency consumption and isolated example execution.\n\nPin `verysync-sidecar = \"=0.1.0-alpha.1\"`. All alpha APIs are unstable. This is an intermediate milestone: owned runtime, full P2P, events/tasks, program acquisition/upgrades, history/storage, commercial authorization, other architectures/minimum systems and final cross-network acceptance continue in the same full-delivery project.\n\nThe official program is separately licensed and is not included. See the repository's getting-started guide and alpha scope for precise verification limits."
+}
