@@ -122,6 +122,7 @@ public static class ManagedUiQuery {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AttachConsole(uint process);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
+  [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
   public static List<long[]> Windows() {
     var rows = new List<long[]>();
     if (!EnumWindows((window, data) => {
@@ -131,12 +132,17 @@ public static class ManagedUiQuery {
     }, IntPtr.Zero)) throw new System.ComponentModel.Win32Exception();
     return rows;
   }
-  public static bool HasConsole(uint process) {
+  public static long[] ConsoleInfo(uint process) {
     FreeConsole();
     bool attached = AttachConsole(process);
     int error = Marshal.GetLastWin32Error();
-    if (attached) { FreeConsole(); return true; }
-    if (error == 6) return false; // ERROR_INVALID_HANDLE: target has no console.
+    if (attached) {
+      IntPtr window = GetConsoleWindow();
+      bool visible = window != IntPtr.Zero && IsWindowVisible(window);
+      FreeConsole();
+      return new long[] {process, 1, window.ToInt64(), visible ? 1 : 0};
+    }
+    if (error == 6) return new long[] {process, 0, 0, 0}; // Target has no console.
     throw new System.ComponentModel.Win32Exception(error);
   }
 }
@@ -155,11 +161,13 @@ if ($OwnedRoot -ne 0) {
 }
 $rows = [ManagedUiQuery]::Windows()
 $ownWindows = @($rows | Where-Object { $owned.Contains([uint32]$_[1]) })
-$consoles = 0
-foreach ($processId in $owned) { if ([ManagedUiQuery]::HasConsole($processId)) { $consoles++ } }
+$consoleInfo = @()
+foreach ($processId in $owned) { $consoleInfo += ,([ManagedUiQuery]::ConsoleInfo($processId)) }
+$consoles = @($consoleInfo | Where-Object { $_[1] -eq 1 }).Count
+$visibleConsoles = @($consoleInfo | Where-Object { $_[3] -eq 1 }).Count
 $browserIds = @($processes | Where-Object { $_.Name -match '^(msedge|chrome|chromium|firefox|brave|opera|arc)\.exe$' } | ForEach-Object { [uint32]$_.ProcessId })
 $browserWindows = @($rows | Where-Object { $_[2] -eq 1 -and $browserIds -contains [uint32]$_[1] } | ForEach-Object { $_[0] } | Sort-Object)
-@{platform='windows';current_desktop_enumerated=$true;interactive_session=[Environment]::UserInteractive;session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;owned_processes=$owned.Count;owned_windows=$ownWindows.Count;owned_console_processes=$consoles;browser_windows=$browserWindows;scope='Current desktop EnumWindows, owned descendants and separate-probe AttachConsole; no titles collected'} | ConvertTo-Json -Compress
+@{platform='windows';current_desktop_enumerated=$true;interactive_session=[Environment]::UserInteractive;session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;owned_root=$OwnedRoot;owned_processes=$owned.Count;owned_windows=$ownWindows.Count;owned_console_processes=$consoles;owned_visible_consoles=$visibleConsoles;console_observations=$consoleInfo;browser_windows=$browserWindows;scope='Current desktop EnumWindows, owned descendants and separate-probe AttachConsole; no titles collected'} | ConvertTo-Json -Compress -Depth 5
 "#;
 
 #[cfg(target_os = "linux")]

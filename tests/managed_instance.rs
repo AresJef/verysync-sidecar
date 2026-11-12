@@ -336,11 +336,11 @@ async fn shutdown_timeout_retains_owner_until_the_real_root_resumes() -> TestRes
         Err(Error::ManagedStateInUse)
     ));
     drop(paused);
-    // Linux's validated inner-process mode freezes the API itself. The other
-    // baselines freeze the monitor while its worker acknowledges shutdown.
-    #[cfg(target_os = "linux")]
+    // Direct Linux/Windows inner mode freezes the API itself. macOS freezes
+    // its monitor while the worker can acknowledge the shutdown request.
+    #[cfg(any(target_os = "linux", windows))]
     let exit = instance.shutdown(Duration::from_secs(10)).await?;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     let exit = tokio::time::timeout(Duration::from_secs(10), instance.wait_for_exit()).await??;
     assert_eq!(exit.code, Some(0));
     assert!(!exit.forced && exit.tree_stopped);
@@ -390,7 +390,6 @@ async fn shutdown_management_failure_does_not_force_the_owned_instance() -> Test
             }
         }
     }
-    let paused = managed_pause::PausedRoot::new(instance.process_id())?;
     let result = instance.shutdown(Duration::from_secs(2)).await;
     let failure_kind = match result {
         Err(Error::Transport { .. }) => "transport",
@@ -401,6 +400,8 @@ async fn shutdown_management_failure_does_not_force_the_owned_instance() -> Test
             )
         }
     };
+    let paused = managed_pause::PausedRoot::new(instance.process_id())?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
     assert!(paused.is_paused()?);
     assert!(matches!(
         ManagedInstance::start(settings).await,
@@ -450,6 +451,7 @@ async fn restart_preserves_identity_folders_settings_and_samples() -> TestResult
     let path = root.path().join("state");
     let mut instance = start_checked(options(source()?, &path)?).await?;
     let started_ui = managed_ui::observe(Some(instance.process_id()), root.path())?;
+    println!("public managed startup UI observation: {started_ui}");
     managed_ui::assert_background(&baseline, &started_ui)?;
     let old_pid = instance.process_id();
     let identity = instance.client().instance().device_id.clone();
@@ -632,10 +634,10 @@ async fn restart_stop_timeout_retains_the_old_owner_without_a_second_start() -> 
         Err(Error::ManagedStateInUse)
     ));
     drop(paused);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     let old_exit =
         tokio::time::timeout(Duration::from_secs(10), instance.wait_for_exit()).await??;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     let old_exit = instance.shutdown(Duration::from_secs(10)).await?;
     assert_eq!(old_exit.code, Some(0));
     assert!(!old_exit.forced && old_exit.tree_stopped);

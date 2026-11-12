@@ -43,7 +43,7 @@ pub(in crate::managed) struct ProcessGuard(OwnedHandle);
 
 pub(in crate::managed) fn spawn(
     mut command: Command,
-    _helper: bool,
+    helper: bool,
 ) -> io::Result<(Child, ProcessGuard)> {
     // SAFETY: Null attributes/name create an unnamed noninheritable private Job.
     let raw = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
@@ -67,6 +67,12 @@ pub(in crate::managed) fn spawn(
         return Err(io::Error::last_os_error());
     }
     command.creation_flags(0x0800_0004); // CREATE_NO_WINDOW | CREATE_SUSPENDED.
+    if !helper {
+        // Keep the fixed-baseline core in the direct inner-process mode. The
+        // upstream monitor can otherwise create a worker with its own console;
+        // our suspended creation/Job ownership must apply to the actual core.
+        command.env("VSMONITORED", "yes");
+    }
     let mut child = command.spawn()?;
     // SAFETY: The exact child is suspended and both handles remain live. It
     // cannot create any descendants before joining the private Job.

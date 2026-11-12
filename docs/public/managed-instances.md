@@ -52,9 +52,9 @@ replacement; malformed or partial identity/configuration is not silently reset.
 
 The private owner thread retains the native child/containment and state lease.
 Unix uses a separate session and private PTY; Windows assigns a suspended,
-hidden child to a noninheritable kill-on-close Job before resuming it. Linux's
-fixed-program inner-process environment is version-specific. There is no
-production supervisor executable, installed service, caller-global logger,
+hidden child to a noninheritable kill-on-close Job before resuming it. Direct
+inner-process mode on Linux/Windows is specific to the fixed program baseline.
+There is no production supervisor executable, installed service, caller-global logger,
 signal handler or exit hook. Dedicated startup helpers are temporary invocations
 of the explicitly selected official program.
 
