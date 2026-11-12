@@ -2,7 +2,7 @@
 
 A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
 
-The project is under active development. The current API provides explicit endpoints, target paths, and authenticated connections with version/identity checks, and fresh typed system/folder status reads, and folder creation/configuration queries. Further management operations are being implemented and tested. No crate has been published yet. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
+The project is under active development. The current API provides explicit endpoints and target paths, authenticated version/identity checks, fresh typed status reads, and folder registration, partial label/pause updates and unregistering while retaining files. Further management operations are being implemented and tested. No crate has been published yet. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
 
 The development plan runs through full delivery. Alpha releases are intermediate milestones: after publishing an alpha, development continues in the same project until the complete agreed functionality, platforms, documentation, and examples pass acceptance and the full release is delivered.
 
@@ -105,6 +105,16 @@ layers, peer transfers and business batches require their own observations.
 Folder item URLs encode IDs as one path segment. Literal `.` and `..` IDs are
 rejected for updates before network I/O because URL normalization would change
 the target. Configuration reads continue to use exact ID lookup.
+
+`client.remove_folder_keep_files(&id)` unregisters one folder using only the
+configuration DELETE, without a file-deletion parameter or request body. It
+checks the fresh instance identity and exact configured ID first. The returned
+`FolderRemoval` includes the previous configuration and `configuration_absent`
+from a subsequent read. Check that flag rather than treating acknowledgment as
+proof of absence: pending application or another writer can leave the ID visible.
+Missing targets are errors and are never silently treated as completed removals.
+The controller performs no filesystem deletion or inspection; independent
+fixed-engine tests verify retained nested sample files and unchanged hashes.
 
 Endpoint construction performs no I/O and never discovers an existing instance.
 Supply an explicit Unix socket path or HTTP(S) base URL. Private LAN addresses

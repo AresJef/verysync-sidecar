@@ -506,3 +506,87 @@ async fn folder_update_sends_only_requested_fields_and_reports_stale_readback() 
     assert_eq!(body(patches[1])?, serde_json::json!({"paused":true}));
     Ok(())
 }
+
+#[tokio::test]
+async fn folder_remove_keep_files_checks_identity_existence_and_absence_readback() -> TestResult {
+    use verysync_sidecar::FolderId;
+    let id = FolderId::parse("remove 中文?#%")?;
+    let other = serde_json::json!({"id":"other","label":"Retained","path":"/synthetic/other","paused":true});
+    let target = serde_json::json!({"id":id.as_str(),"label":"Target","path":"/synthetic/target","paused":false,"unknown":{"keep":7}});
+    let different = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[target,other.clone()]})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"folders":[other.clone()]})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[other]})),
+        Reply::json(serde_json::json!({"myID":different})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let removed = client.remove_folder_keep_files(&id).await?;
+    assert!(removed.configuration_absent);
+    assert_eq!(removed.previous_configuration.id, id);
+    assert_eq!(removed.previous_configuration.extra["unknown"]["keep"], 7);
+    assert!(matches!(
+        client.remove_folder_keep_files(&id).await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert!(matches!(
+        client
+            .remove_folder_keep_files(&FolderId::parse("other")?)
+            .await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    let requests = server.finish().await?;
+    let deletes: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("DELETE "))
+        .collect();
+    assert_eq!(deletes.len(), 1);
+    let line = deletes[0].lines().next().ok_or("missing target")?;
+    assert!(line.starts_with("DELETE /prefix/rest/config/folders/remove%20"));
+    assert!(line.contains("%3F%23%25"));
+    assert!(!line.contains('?'));
+    assert_eq!(
+        deletes[0]
+            .split_once("\r\n\r\n")
+            .ok_or("missing body boundary")?
+            .1,
+        ""
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unregister_acknowledgment_does_not_invent_absence_when_id_is_still_visible() -> TestResult
+{
+    let target = serde_json::json!({"id":"still-visible","label":"Concurrent writer","path":"/synthetic","paused":true});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[target.clone()]})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"folders":[target]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let result = client
+        .remove_folder_keep_files(&verysync_sidecar::FolderId::parse("still-visible")?)
+        .await?;
+    assert!(!result.configuration_absent);
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("DELETE "))
+            .count(),
+        1
+    );
+    Ok(())
+}

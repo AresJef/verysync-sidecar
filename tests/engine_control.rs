@@ -544,3 +544,68 @@ async fn folder_update_pause_preserves_fields_and_resumes_actual_indexing() -> T
     assert_eq!(report["resumed_actual_file_count"], 2);
     Ok(())
 }
+
+#[tokio::test]
+async fn folder_remove_keep_files_preserves_samples_and_unrelated_configuration() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use std::{
+        fs,
+        time::{Duration, Instant},
+    };
+    use verysync_sidecar::{CreateFolderOptions, FolderId, FolderState, TargetPath};
+    let mut instance = EngineFixture::start().await?;
+    let client = Client::connect(
+        ConnectOptions::new(endpoint(&instance)?, ApiKey::new(instance.api_key())?)
+            .expected_device_id(DeviceId::parse(instance.device_id())?),
+    )
+    .await?;
+    let verified:TestResult<serde_json::Value>=async {
+        let path=instance.state_dir().join("unregister retained 中文");
+        let nested=path.join("nested");fs::create_dir_all(&nested)?;
+        let file=nested.join("retained.txt");fs::write(&file,b"retain this synthetic file after unregister\n")?;
+        let hash=Sha256::digest(fs::read(&file)?);
+        let other_path=instance.state_dir().join("unrelated retained folder");fs::create_dir(&other_path)?;
+        let other_file=other_path.join("untouched.txt");fs::write(&other_file,b"unrelated synthetic file\n")?;
+        let other_hash=Sha256::digest(fs::read(&other_file)?);
+        let id=FolderId::parse("sidecar-remove 中文?#%")?;
+        client.create_folder(&CreateFolderOptions::new(id.clone(),TargetPath::local(path.clone())).label("Unregister target").paused(false)).await?;
+        let other_id=FolderId::parse("sidecar-keep-configured")?;
+        let other=client.create_folder(&CreateFolderOptions::new(other_id.clone(),TargetPath::local(other_path.clone())).label("Keep configured").paused(true)).await?;
+        let deadline=Instant::now()+Duration::from_secs(30);
+        loop {
+            if client.folder_status(&id).await.is_ok_and(|s|s.local_files==Some(1) && s.state==Some(FolderState::Idle)){break;}
+            if Instant::now()>=deadline{return Err("active removal target did not index its sample".into());}
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let before=instance.read_json("/rest/config").await?;
+        let missing_before=client.remove_folder_keep_files(&FolderId::parse("sidecar-no-such-removal")?).await;
+        let target_survived_wrong_id=client.folder(&id).await?.id==id;
+        let removed=client.remove_folder_keep_files(&id).await?;
+        let absent=matches!(client.folder(&id).await,Err(Error::FolderNotFound{..}));
+        let missing_after=client.remove_folder_keep_files(&id).await;
+        let other_after=client.folder(&other_id).await?;
+        let after=instance.read_json("/rest/config").await?;
+        Ok(serde_json::json!({
+            "absence_readback":removed.configuration_absent && absent,
+            "previous_target_correct":removed.previous_configuration.id==id && removed.previous_configuration.path.to_protocol()?==TargetPath::local(path.clone()).to_protocol()?,
+            "target_directory_retained":path.is_dir() && nested.is_dir(),
+            "sample_sha_unchanged":Sha256::digest(fs::read(file)?)==hash,
+            "unrelated_sample_sha_unchanged":Sha256::digest(fs::read(other_file)?)==other_hash,
+            "unrelated_configuration_retained":other_after.id==other.id && other_after.label==other.label && other_after.path.to_protocol()?==other.path.to_protocol()? && other_after.paused==other.paused && other_after.extra==other.extra,
+            "wrong_id_rejected_before_mutation":matches!(missing_before,Err(Error::FolderNotFound{..})) && target_survived_wrong_id,
+            "already_removed_rejected":matches!(missing_after,Err(Error::FolderNotFound{..})),
+            "devices_and_options_unchanged":before["devices"]==after["devices"] && before["options"]==after["options"]
+        }))
+    }.await;
+    let stopped = instance.shutdown().await;
+    let report = verified?;
+    println!("public folder remove evidence: {report}");
+    assert!(stopped?.success());
+    for (name, value) in report
+        .as_object()
+        .ok_or("missing removal evidence object")?
+    {
+        assert_eq!(value, &serde_json::json!(true), "{name}");
+    }
+    Ok(())
+}
