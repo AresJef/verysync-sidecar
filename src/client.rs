@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -9,8 +10,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
 
 use crate::{
-    ApiKey, DeviceId, Error, FolderId, FolderStatus, ManagementEndpoint, ResponseDiagnostic,
-    Result, SystemStatus, BASELINE_ENGINE_VERSION,
+    ApiKey, CreateFolderOptions, DeviceId, Error, FolderConfig, FolderId, FolderStatus,
+    ManagementEndpoint, PathStyle, ResponseDiagnostic, Result, SystemStatus,
+    BASELINE_ENGINE_VERSION,
 };
 
 /// The policy applied to an engine version during connection.
@@ -140,6 +142,7 @@ struct Connection {
     base: Url,
     key: ApiKey,
     response_limit: usize,
+    mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// An authenticated connection that does not own the engine process.
@@ -212,6 +215,7 @@ impl Client {
             base,
             key: options.api_key,
             response_limit: options.response_limit,
+            mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let version: EngineVersion = connection
             .get_json("read version", "rest/system/version")
@@ -295,6 +299,106 @@ impl Client {
             .await
     }
 
+    fn folder_path_style(&self) -> Result<PathStyle> {
+        match self.instance.version.os.as_str() {
+            "windows" => Ok(PathStyle::Windows),
+            "linux" | "darwin" => Ok(PathStyle::Unix),
+            _ => Err(Error::InvalidConfiguration {
+                reason: "engine path syntax is unknown; no host-based guess is made",
+            }),
+        }
+    }
+
+    /// Read configured folders while retaining their target paths and extra fields.
+    ///
+    /// This reads the configuration snapshot and extracts its folders. It does
+    /// not expose other configuration values or access the caller's filesystem.
+    pub async fn folders(&self) -> Result<Vec<FolderConfig>> {
+        let style = self.folder_path_style()?;
+        let wire: crate::folders::WireFolderIndex = self
+            .connection
+            .get_json("read configured folders", "rest/config")
+            .await?;
+        wire.folders
+            .into_iter()
+            .map(|folder| folder.into_config(style))
+            .collect()
+    }
+
+    /// Find one exact opaque ID in the current folder configuration snapshot.
+    pub async fn folder(&self, id: &FolderId) -> Result<FolderConfig> {
+        self.folders()
+            .await?
+            .into_iter()
+            .find(|folder| folder.id == *id)
+            .ok_or_else(|| Error::FolderNotFound { id: id.clone() })
+    }
+
+    /// Register a new folder from upstream defaults, then read its configuration.
+    ///
+    /// Existing IDs and, by default, identical path strings are rejected before
+    /// POST. Clones of this Client serialize creation. The upstream POST is an
+    /// upsert and ignores the tested If-Match condition: independent clients or
+    /// other writers must coordinate; this is not an atomic create-if-absent.
+    ///
+    /// Success means configuration was accepted and read back. Directory setup,
+    /// scanning and synchronization can continue afterward; inspect folder status.
+    /// After cancellation or MutationOutcomeUnknown, read the ID before retrying.
+    pub async fn create_folder(&self, options: &CreateFolderOptions) -> Result<FolderConfig> {
+        let style = self.folder_path_style()?;
+        if options.path.style() != style {
+            return Err(Error::InvalidPath {
+                reason: "path syntax differs from the connected engine",
+            });
+        }
+        let path = options.path.to_protocol()?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let configured = self.folders().await?;
+        if configured.iter().any(|folder| folder.id == options.id) {
+            return Err(Error::FolderAlreadyExists {
+                id: options.id.clone(),
+            });
+        }
+        if !options.allow_shared_path {
+            if let Some(folder) = configured.iter().find(|folder| {
+                folder
+                    .path
+                    .to_protocol()
+                    .is_ok_and(|configured| configured == path)
+            }) {
+                return Err(Error::FolderPathAlreadyConfigured {
+                    id: folder.id.clone(),
+                });
+            }
+        }
+        let mut defaults: serde_json::Map<String, serde_json::Value> = self
+            .connection
+            .get_json("read folder defaults", "rest/config/defaults/folder")
+            .await?;
+        defaults.insert("id".to_owned(), serde_json::json!(options.id.as_str()));
+        defaults.insert("path".to_owned(), serde_json::json!(path));
+        if let Some(label) = &options.label {
+            defaults.insert("label".to_owned(), serde_json::json!(label));
+        }
+        if let Some(paused) = options.paused {
+            defaults.insert("paused".to_owned(), serde_json::json!(paused));
+        }
+        self.connection
+            .post_json(
+                "create folder",
+                "rest/config/folders",
+                &serde_json::Value::Object(defaults),
+            )
+            .await?;
+        self.folder(&options.id)
+            .await
+            .map_err(|source| Error::MutationOutcomeUnknown {
+                operation: "read back created folder",
+                source: Box::new(source),
+            })
+    }
+
     /// Borrow the authenticated identity/version snapshot captured on connect.
     pub fn instance(&self) -> &InstanceInfo {
         &self.instance
@@ -336,19 +440,67 @@ impl Connection {
         route: &'static str,
         query: &[(&str, &str)],
     ) -> Result<T> {
+        let (status, bytes) = self
+            .request_bytes(operation, reqwest::Method::GET, route, query, None, false)
+            .await?;
+        serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse {
+            operation,
+            response: ResponseDiagnostic::new(status, bytes),
+        })
+    }
+    async fn post_json(
+        &self,
+        operation: &'static str,
+        route: &'static str,
+        body: &serde_json::Value,
+    ) -> Result<()> {
+        self.request_bytes(
+            operation,
+            reqwest::Method::POST,
+            route,
+            &[],
+            Some(body),
+            true,
+        )
+        .await
+        .map(|_| ())
+    }
+    async fn request_bytes(
+        &self,
+        operation: &'static str,
+        method: reqwest::Method,
+        route: &'static str,
+        query: &[(&str, &str)],
+        body: Option<&serde_json::Value>,
+        mutation: bool,
+    ) -> Result<(u16, Vec<u8>)> {
         let mut url = self.base.join(route).map_err(|_| Error::InvalidEndpoint {
             reason: "management route cannot be joined to base URL",
         })?;
         if !query.is_empty() {
             url.query_pairs_mut().extend_pairs(query.iter().copied());
         }
-        let mut response = self
+        let mut request = self
             .http
-            .get(url)
-            .header("X-API-Key", self.key.header())
+            .request(method, url)
+            .header("X-API-Key", self.key.header());
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let uncertain = |source| {
+            if mutation {
+                Error::MutationOutcomeUnknown {
+                    operation,
+                    source: Box::new(source),
+                }
+            } else {
+                source
+            }
+        };
+        let mut response = request
             .send()
             .await
-            .map_err(|e| transport_error(operation, e))?;
+            .map_err(|e| uncertain(transport_error(operation, e)))?;
         let status = response.status().as_u16();
         if matches!(status, 401 | 403) {
             return Err(Error::Authentication { status });
@@ -357,24 +509,21 @@ impl Connection {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| transport_error(operation, e))?
+            .map_err(|e| uncertain(transport_error(operation, e)))?
         {
             if chunk.len() > self.response_limit.saturating_sub(bytes.len()) {
-                return Err(Error::ResponseTooLarge {
+                return Err(uncertain(Error::ResponseTooLarge {
                     limit: self.response_limit,
-                });
+                }));
             }
             bytes.extend_from_slice(&chunk);
         }
         if !(200..300).contains(&status) {
-            return Err(Error::Http {
+            return Err(uncertain(Error::Http {
                 response: ResponseDiagnostic::new(status, bytes),
-            });
+            }));
         }
-        serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse {
-            operation,
-            response: ResponseDiagnostic::new(status, bytes),
-        })
+        Ok((status, bytes))
     }
 }
 

@@ -58,13 +58,39 @@ impl ScriptedServer {
                 let (mut stream, _) =
                     tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
                 let mut bytes = Vec::new();
-                while !bytes.ends_with(b"\r\n\r\n") {
+                while !bytes.windows(4).any(|part| part == b"\r\n\r\n") {
                     let mut buffer = [0; 1024];
                     let count =
                         tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer))
                             .await??;
                     if count == 0 || bytes.len() + count > 16 * 1024 {
                         return Err("invalid synthetic HTTP request".into());
+                    }
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
+                let header_end = bytes
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .ok_or("missing bounded header")?
+                    + 4;
+                let header = std::str::from_utf8(&bytes[..header_end])?;
+                let length = header
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .map(|(_, value)| value.trim().parse::<usize>())
+                    .transpose()?
+                    .unwrap_or(0);
+                if header_end + length > 16 * 1024 {
+                    return Err("synthetic request body too large".into());
+                }
+                while bytes.len() < header_end + length {
+                    let mut buffer = [0; 1024];
+                    let count =
+                        tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer))
+                            .await??;
+                    if count == 0 {
+                        return Err("synthetic body ended early".into());
                     }
                     bytes.extend_from_slice(&buffer[..count]);
                 }
@@ -327,5 +353,88 @@ async fn fresh_status_rejects_invalid_metrics_and_changed_identity() -> TestResu
         Err(Error::IdentityMismatch { .. })
     ));
     server.finish().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_folder_preserves_defaults_and_never_posts_over_an_existing_id() -> TestResult {
+    use verysync_sidecar::{CreateFolderOptions, FolderId, PathStyle, TargetPath};
+    let configured = serde_json::json!({"id":"test-folder","label":"New label","path":"/synthetic/folder","paused":true,"vendorDefault":{"retained":7},"secret":"sensitive-folder-secret"});
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[]})),
+        Reply::json(serde_json::json!({"id":"","path":"","label":"Default","paused":false,"vendorDefault":{"retained":7},"secret":"sensitive-folder-secret"})),
+        Reply { status:200,body:vec![],headers:String::new(),delay:Duration::ZERO },
+        Reply::json(serde_json::json!({"folders":[configured.clone()]})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[configured]})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let options = CreateFolderOptions::new(
+        FolderId::parse("test-folder")?,
+        TargetPath::remote(PathStyle::Unix, "/synthetic/folder")?,
+    )
+    .label("New label")
+    .paused(true);
+    let created = client.create_folder(&options).await?;
+    assert_eq!(created.id, *options.id());
+    assert_eq!(created.extra["vendorDefault"]["retained"], 7);
+    assert!(!format!("{created:?}").contains("sensitive-folder-secret"));
+    assert!(matches!(
+        client.create_folder(&options).await,
+        Err(Error::FolderAlreadyExists { .. })
+    ));
+    let requests = server.finish().await?;
+    let posts: Vec<_> = requests
+        .iter()
+        .filter(|request| request.starts_with("POST "))
+        .collect();
+    assert_eq!(posts.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_str(posts[0].split_once("\r\n\r\n").ok_or("missing body")?.1)?;
+    assert_eq!(body["label"], "New label");
+    assert_eq!(body["paused"], true);
+    assert_eq!(body["vendorDefault"]["retained"], 7);
+    assert_eq!(body["secret"], "sensitive-folder-secret");
+    Ok(())
+}
+
+#[tokio::test]
+async fn modifying_request_failure_has_an_explicit_unknown_outcome_without_retry() -> TestResult {
+    use verysync_sidecar::{CreateFolderOptions, FolderId, PathStyle, TargetPath};
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[]})),
+        Reply::json(serde_json::json!({"vendorDefault":true})),
+        Reply {
+            status: 500,
+            body: KEY.as_bytes().to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let options = CreateFolderOptions::new(
+        FolderId::parse("uncertain-folder")?,
+        TargetPath::remote(PathStyle::Unix, "/synthetic/uncertain")?,
+    );
+    let error = client.create_folder(&options).await.unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?}").contains(KEY));
+    assert!(!error.to_string().contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|request| request.starts_with("POST "))
+            .count(),
+        1
+    );
     Ok(())
 }

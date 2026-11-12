@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::DeviceId;
+use crate::{DeviceId, FolderId};
 
 /// Bounded upstream response bytes, excluded from ordinary debug/display output.
 ///
@@ -41,7 +41,6 @@ impl fmt::Debug for ResponseDiagnostic {
 ///
 /// Error messages never include management credentials. Alpha variants may
 /// change; callers should handle the cases relevant to their operation.
-#[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
     /// A connection setting is invalid; no operation has started.
@@ -81,7 +80,7 @@ pub enum Error {
         /// The HTTP rejection status, normally 401 or 403.
         status: u16,
     },
-    /// A bounded management read did not finish before its deadline.
+    /// A bounded management request did not finish before its deadline.
     Timeout {
         /// The operation that timed out.
         operation: &'static str,
@@ -115,6 +114,31 @@ pub enum Error {
         /// A description that excludes the supplied identifier.
         reason: &'static str,
     },
+    /// The requested folder is absent from the authenticated configuration.
+    FolderNotFound {
+        /// The requested opaque identifier.
+        id: FolderId,
+    },
+    /// Creation would replace an already configured folder ID.
+    FolderAlreadyExists {
+        /// The existing opaque identifier.
+        id: FolderId,
+    },
+    /// Another configured ID has the exact requested protocol path string.
+    FolderPathAlreadyConfigured {
+        /// The existing configuration using that path string.
+        id: FolderId,
+    },
+    /// A modifying request or its verification failed after a write could start.
+    ///
+    /// Reconcile by reading configuration before retrying. The engine may have
+    /// applied the request even though no successful readback was obtained.
+    MutationOutcomeUnknown {
+        /// The attempted operation, without arguments or credentials.
+        operation: &'static str,
+        /// The bounded, credential-safe underlying failure.
+        source: Box<Error>,
+    },
     /// A management address violates the documented endpoint contract.
     InvalidEndpoint {
         /// A credential-free description of the invalid input.
@@ -127,6 +151,15 @@ pub enum Error {
     },
     /// A native path cannot be represented as UTF-8 without changing it.
     PathEncoding,
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Domain identifiers and upstream diagnostics may reflect credentials.
+        // Default Debug uses only the credential-free Display contract; typed
+        // fields and bounded response bytes remain explicitly inspectable.
+        write!(formatter, "Error({self})")
+    }
 }
 
 impl fmt::Display for Error {
@@ -177,6 +210,10 @@ impl fmt::Display for Error {
             Self::InvalidFolderId { reason } => {
                 write!(formatter, "invalid folder identifier: {reason}")
             }
+            Self::FolderNotFound {..}=>formatter.write_str("folder is not configured"),
+            Self::FolderAlreadyExists {..}=>formatter.write_str("folder ID is already configured; creation did not start"),
+            Self::FolderPathAlreadyConfigured {..}=>formatter.write_str("target path string is already configured; creation did not start"),
+            Self::MutationOutcomeUnknown {operation,..}=>write!(formatter,"outcome is unknown after attempting to {operation}; read current configuration before retrying"),
             Self::InvalidEndpoint { reason } => {
                 write!(formatter, "invalid management endpoint: {reason}")
             }
@@ -192,6 +229,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Transport { source, .. } => Some(source),
+            Self::MutationOutcomeUnknown { source, .. } => Some(source.as_ref()),
             _ => None,
         }
     }

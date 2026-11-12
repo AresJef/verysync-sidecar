@@ -288,3 +288,151 @@ async fn status_queries_report_real_synthetic_folder_counts_through_public_api()
     assert!(instance.shutdown().await?.success());
     Ok(())
 }
+
+#[tokio::test]
+async fn fixture_research_folder_post_conflicts_and_conditions() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use std::fs;
+    use verysync_sidecar::TargetPath;
+    let mut instance = EngineFixture::start().await?;
+    let observation:TestResult<serde_json::Value>=async {
+        let first=instance.state_dir().join("research original folder");
+        let second=instance.state_dir().join("research replacement folder");
+        let conditional=instance.state_dir().join("research conditional folder");
+        fs::create_dir(&first)?;fs::create_dir(&second)?;
+        let file=first.join("retained.txt");fs::write(&file,b"synthetic conflict data")?;
+        let before=Sha256::digest(fs::read(&file)?);
+        let response=instance.request(Method::GET,"/rest/config")?.send().await?;
+        let etag_present=response.headers().contains_key("etag");
+        let mut defaults=instance.read_json("/rest/config/defaults/folder").await?;
+        defaults["id"]=serde_json::json!("sidecar-contract-research");
+        defaults["label"]=serde_json::json!("original");
+        defaults["path"]=serde_json::json!(TargetPath::local(first.clone()).to_protocol()?);
+        defaults["paused"]=serde_json::json!(true);
+        let first_http=instance.request(Method::POST,"/rest/config/folders")?.json(&defaults).send().await?.status().as_u16();
+        let original=instance.read_json("/rest/config/folders/sidecar-contract-research").await?;
+        defaults["label"]=serde_json::json!("replacement");
+        defaults["path"]=serde_json::json!(TargetPath::local(second.clone()).to_protocol()?);
+        let duplicate_http=instance.request(Method::POST,"/rest/config/folders")?.json(&defaults).send().await?.status().as_u16();
+        let replacement=instance.read_json("/rest/config/folders/sidecar-contract-research").await?;
+        defaults["id"]=serde_json::json!("sidecar-contract-condition");
+        defaults["path"]=serde_json::json!(TargetPath::local(conditional).to_protocol()?);
+        let conditional_http=instance.request(Method::POST,"/rest/config/folders")?.header("If-Match","\"synthetic-stale-etag\"").json(&defaults).send().await?.status().as_u16();
+        let conditional_lookup=instance.request(Method::GET,"/rest/config/folders/sidecar-contract-condition")?.send().await?.status().as_u16();
+        defaults["id"] = serde_json::json!("sidecar-contract-research");
+        defaults["label"] = serde_json::json!("if-none-match-replacement");
+        let if_none_http = instance.request(Method::POST,"/rest/config/folders")?
+            .header("If-None-Match","*").json(&defaults).send().await?.status().as_u16();
+        let after_if_none = instance.read_json("/rest/config/folders/sidecar-contract-research").await?;
+        Ok(serde_json::json!({"scope":"raw fixture contract research, not public create-folder acceptance","first_http":first_http,"duplicate_http":duplicate_http,"original_label_correct":original["label"]=="original","duplicate_replaced_label":replacement["label"]=="replacement","duplicate_replaced_path":replacement["path"]==TargetPath::local(second).to_protocol()?,"config_etag_present":etag_present,"stale_if_match_http":conditional_http,"conditional_resource_lookup_http":conditional_lookup,"if_none_match_star_http":if_none_http,"if_none_match_replaced_label":after_if_none["label"]=="if-none-match-replacement","original_file_sha_unchanged":Sha256::digest(fs::read(file)?)==before}))
+    }.await;
+    let stopped = instance.shutdown().await;
+    let observation = observation?;
+    assert!(stopped?.success());
+    if let Some(path) = std::env::var_os("VERYSYNC_FOLDER_CONTRACT_EVIDENCE") {
+        let path = std::path::PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err("absolute research evidence path required".into());
+        }
+        use std::io::Write;
+        writeln!(
+            fs::File::options()
+                .write(true)
+                .create_new(true)
+                .open(path)?,
+            "{}",
+            serde_json::to_string_pretty(&observation)?
+        )?;
+    }
+    println!("folder POST fixture research: {observation}");
+    // Fixed-version protocol characterization, separate from public API proof.
+    for field in [
+        "first_http",
+        "duplicate_http",
+        "stale_if_match_http",
+        "conditional_resource_lookup_http",
+        "if_none_match_star_http",
+    ] {
+        assert_eq!(observation[field], 200, "{field}");
+    }
+    for field in [
+        "original_label_correct",
+        "duplicate_replaced_label",
+        "duplicate_replaced_path",
+        "if_none_match_replaced_label",
+        "original_file_sha_unchanged",
+    ] {
+        assert_eq!(observation[field], true, "{field}");
+    }
+    assert_eq!(observation["config_etag_present"], false);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn folder_create_read_conflicts_and_existing_data_through_public_api() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use std::fs;
+    use std::time::{Duration, Instant};
+    use verysync_sidecar::{CreateFolderOptions, FolderId, TargetPath};
+    let mut instance = EngineFixture::start().await?;
+    let client = Client::connect(
+        ConnectOptions::new(endpoint(&instance)?, ApiKey::new(instance.api_key())?)
+            .expected_device_id(DeviceId::parse(instance.device_id())?),
+    )
+    .await?;
+    let verified:TestResult<serde_json::Value>=async {
+        let fresh=instance.state_dir().join("created by API 中文");
+        let absent_before=!fresh.exists();
+        let id=FolderId::parse("sidecar-created-folder")?;
+        let options=CreateFolderOptions::new(id.clone(),TargetPath::local(fresh.clone())).label("Created folder 中文").paused(false);
+        let created=client.create_folder(&options).await?;
+        let deadline=Instant::now()+Duration::from_secs(15);
+        while !fresh.is_dir() {
+            if Instant::now()>=deadline {return Err("official engine did not create the requested directory".into());}
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        let configured=client.folder(&id).await?;
+        let duplicate=client.create_folder(&CreateFolderOptions::new(id.clone(),TargetPath::local(fresh.clone())).label("must not overwrite")).await;
+        let path_conflict=client.create_folder(&CreateFolderOptions::new(FolderId::parse("sidecar-other-id")?,TargetPath::local(fresh.clone()))).await;
+        let after=client.folder(&id).await?;
+        let existing=instance.state_dir().join("existing synthetic directory");fs::create_dir(&existing)?;
+        let file=existing.join("retained.txt");fs::write(&file,b"retain pre-existing synthetic bytes")?;
+        let hash=Sha256::digest(fs::read(&file)?);
+        let existing_id=FolderId::parse("sidecar-existing-directory")?;
+        let added=client.create_folder(&CreateFolderOptions::new(existing_id.clone(),TargetPath::local(existing.clone())).paused(true)).await?;
+        let alias_id = FolderId::parse("sidecar-explicit-shared-path")?;
+        let alias = client.create_folder(&CreateFolderOptions::new(alias_id.clone(),TargetPath::local(existing.clone())).paused(true).allow_shared_path(true)).await?;
+        let race_id=FolderId::parse("sidecar-concurrent-create")?;
+        let first=CreateFolderOptions::new(race_id.clone(),TargetPath::local(instance.state_dir().join("race-first"))).paused(true);
+        let second=CreateFolderOptions::new(race_id.clone(),TargetPath::local(instance.state_dir().join("race-second"))).paused(true);
+        let cloned=client.clone();let (one,two)=tokio::join!(client.create_folder(&first),cloned.create_folder(&second));
+        let successes=usize::from(one.is_ok())+usize::from(two.is_ok());
+        let conflicts=usize::from(matches!(one,Err(Error::FolderAlreadyExists{..})))+usize::from(matches!(two,Err(Error::FolderAlreadyExists{..})));
+        let list=client.folders().await?;
+        Ok(serde_json::json!({"new_directory_absent_before":absent_before,"official_engine_created_directory":fresh.is_dir(),"id_correct":created.id==id,"path_correct":configured.path.to_protocol()?==TargetPath::local(fresh).to_protocol()?,"label_correct":after.label=="Created folder 中文","duplicate_rejected":matches!(duplicate,Err(Error::FolderAlreadyExists{..})),"identical_path_rejected":matches!(path_conflict,Err(Error::FolderPathAlreadyConfigured{..})),"existing_directory_registered":added.id==existing_id && added.paused,"explicit_shared_path_registered":alias.id==alias_id && alias.paused,"original_file_sha_unchanged":Sha256::digest(fs::read(file)?)==hash,"concurrent_successes":successes,"concurrent_conflicts":conflicts,"single_concurrent_id":list.iter().filter(|folder|folder.id==race_id).count()==1,"upstream_defaults_retained":created.extra.contains_key("markerName") && created.extra.contains_key("devices")}))
+    }.await;
+    let stopped = instance.shutdown().await;
+    let report = verified?;
+    assert!(stopped?.success());
+    for name in [
+        "new_directory_absent_before",
+        "official_engine_created_directory",
+        "id_correct",
+        "path_correct",
+        "label_correct",
+        "duplicate_rejected",
+        "identical_path_rejected",
+        "existing_directory_registered",
+        "explicit_shared_path_registered",
+        "original_file_sha_unchanged",
+        "single_concurrent_id",
+        "upstream_defaults_retained",
+    ] {
+        assert_eq!(report[name], true, "{name}");
+    }
+    assert_eq!(report["concurrent_successes"], 1);
+    assert_eq!(report["concurrent_conflicts"], 1);
+    println!("public folder create evidence: {report}");
+    Ok(())
+}
