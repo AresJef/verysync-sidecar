@@ -63,8 +63,8 @@ def main():
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
     parser.add_argument("--test-filter")
     args = parser.parse_args()
-    if args.test_target == "managed_lifetime" and sys.platform not in {"darwin", "linux"}:
-        raise RuntimeError("this owned-host acceptance target currently requires native macOS or Linux")
+    if args.test_target == "managed_lifetime" and sys.platform not in {"darwin", "linux", "win32"}:
+        raise RuntimeError("owned-host acceptance requires native macOS, Linux or Windows")
     if args.mechanism and {"macos": "darwin", "linux": "linux", "windows": "win32"}[args.mechanism] != sys.platform:
         raise RuntimeError("mechanism investigation requires its actual native platform")
     if args.test_filter and not args.test_target:

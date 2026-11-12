@@ -48,7 +48,7 @@ python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \
 ```
 
 The explicit runner also accepts `managed_instance`, `example_control` and the
-native Unix `managed_lifetime` target. It starts a test-only loopback HTTP proxy
+native `managed_lifetime` target. It starts a test-only loopback HTTP proxy
 that returns 403 without forwarding. Only hostnames/method counts are recorded;
 credentials, query values and headers are excluded. A separate loopback canary
 tests that neither HTTP nor CONNECT reaches a forwarding destination. The core
@@ -108,9 +108,11 @@ Use `run-isolated-engine-tests.py --mechanism macos` (or `linux`/`windows` on th
 matching native system) with the same toolchain/evidence arguments to wrap these
 investigations too. The public `managed_lifetime` target is separate: dedicated
 hosts call `ManagedInstance`, then actually return, exit without destructors or
-undergo SIGKILL. Native process observations must confirm core exit before any
+undergo forced termination (SIGKILL on Unix). Native process observations must confirm core exit before any
 fallback. An unrelated exec case verifies its process identity/start time while
 the core exits, then explicitly stops and observes that test process as well.
+Windows retains a separate outer Job throughout the verdict to test an existing
+caller Job and avoid confusing observer cleanup with SDK-owned termination.
 Do not rename successful mechanism probes as public-library acceptance.
 
 Use synthetic files. Disable discovery, trackers, relay, NAT and external

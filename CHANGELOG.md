@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Exercise public Windows caller return, no-destructor exit and forced exit
+  inside a retained outer Job, including an unrelated live child and native UI
+  observations. Confirm core exit before any test cleanup or explicit retry.
 - Allocate Unix PTYs with close-on-exec from creation, isolate child Unix
   HOME/XDG paths, and add real public-API caller return/exit/SIGKILL/inherited-HUP
   and unrelated-exec lifetime regressions. Preserve caller environment/signals.
