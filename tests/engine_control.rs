@@ -728,3 +728,28 @@ async fn raw_request_uses_owned_management_connection_and_preserves_actual_resul
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn capabilities_report_matches_native_coordinates_without_inventing_authorization(
+) -> TestResult {
+    use verysync_sidecar::{
+        Capability, ImplementationStatus, InstanceObservation, TargetValidation, VerificationStatus,
+    };
+    let mut instance = EngineFixture::start().await?;
+    let verified:TestResult<serde_json::Value>=async {
+        let client=Client::connect(ConnectOptions::new(endpoint(&instance)?,ApiKey::new(instance.api_key())?)
+            .expected_device_id(DeviceId::parse(instance.device_id())?)).await?;
+        let report=client.capabilities();
+        let runtime=report.library.iter().find(|entry|entry.capability==Capability::ManagedRuntime).ok_or("runtime scope missing")?;
+        let raw=report.library.iter().find(|entry|entry.capability==Capability::RawManagement).ok_or("raw scope missing")?;
+        Ok(serde_json::json!({"baseline_snapshot_correct":report.target.engine_version==verysync_sidecar::BASELINE_ENGINE_VERSION,"native_coordinates_match":report.target_validation==TargetValidation::MatchesRecordedCoordinates,"authenticated_at_handshake_only":report.instance.authentication==InstanceObservation::ObservedAtHandshake,"unprobed_license_unknown":report.instance.commercial_license==InstanceObservation::Unknown,"unprobed_permissions_unknown":report.instance.operation_authorization==InstanceObservation::Unknown,"runtime_not_implemented_not_promoted":runtime.implementation==ImplementationStatus::NotImplemented && runtime.verification==VerificationStatus::NotRun,"raw_is_transport_only":raw.implementation==ImplementationStatus::RawTransport,"raw_evidence_explicit":matches!(raw.verification,VerificationStatus::NativeEvidence {engine_version,..} if engine_version==verysync_sidecar::BASELINE_ENGINE_VERSION),"debug_key_safe":!format!("{report:?}").contains(instance.api_key())}))
+    }.await;
+    let stopped = instance.shutdown().await;
+    let report = verified?;
+    println!("public capability evidence: {report}");
+    assert!(stopped?.success());
+    for (name, value) in report.as_object().ok_or("missing capability evidence")? {
+        assert_eq!(value, &serde_json::json!(true), "{name}");
+    }
+    Ok(())
+}

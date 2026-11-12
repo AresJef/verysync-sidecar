@@ -19,6 +19,7 @@
 //! ```
 
 mod auth;
+mod capabilities;
 mod client;
 mod endpoint;
 mod error;
@@ -28,6 +29,10 @@ mod raw;
 mod status;
 
 pub use auth::{ApiKey, DeviceId};
+pub use capabilities::{
+    library_capabilities, Capability, CapabilityReport, ImplementationStatus, InstanceConditions,
+    InstanceObservation, LibraryCapability, TargetSnapshot, TargetValidation, VerificationStatus,
+};
 pub use client::{
     Client, ConnectOptions, EngineVersion, InstanceInfo, VersionCompatibility, VersionPolicy,
 };
