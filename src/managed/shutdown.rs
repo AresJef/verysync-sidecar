@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use super::{ManagedExit, ManagedInstance};
 use crate::{Error, Result};
 
-fn deadline(timeout: Duration) -> Result<tokio::time::Instant> {
+pub(super) fn deadline(timeout: Duration) -> Result<tokio::time::Instant> {
     tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
         reason: "owned lifecycle operations require a Tokio runtime with I/O and timers",
     })?;

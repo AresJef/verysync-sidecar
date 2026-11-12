@@ -39,6 +39,7 @@ pub struct ManagedExit {
 /// does not extend ownership. Await `wait_for_exit` to observe actual termination.
 /// No process, service, logger or parent signal handler is installed implicitly.
 pub struct ManagedInstance {
+    pub(super) options: ManagedOptions,
     client: Client,
     info: ProgramInfo,
     state: PathBuf,
@@ -124,6 +125,7 @@ impl ManagedInstance {
                 });
             }
             Ok(Self {
+                options,
                 client,
                 info: context.info,
                 state: context.state,

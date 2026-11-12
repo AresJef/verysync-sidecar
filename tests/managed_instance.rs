@@ -442,3 +442,206 @@ fn print_owned_group(pid: u32) {
 }
 #[cfg(not(unix))]
 fn print_owned_group(_pid: u32) {}
+
+#[tokio::test]
+async fn restart_preserves_identity_folders_settings_and_samples() -> TestResult {
+    let root = lifecycle_root()?;
+    let baseline = managed_ui::observe(None, root.path())?;
+    let path = root.path().join("state");
+    let mut instance = start_checked(options(source()?, &path)?).await?;
+    let started_ui = managed_ui::observe(Some(instance.process_id()), root.path())?;
+    managed_ui::assert_background(&baseline, &started_ui)?;
+    let old_pid = instance.process_id();
+    let identity = instance.client().instance().device_id.clone();
+    let key_hash = Sha256::digest(std::fs::read(path.join("key.pem"))?);
+    let cert_hash = Sha256::digest(std::fs::read(path.join("cert.pem"))?);
+    let sample = path.join("restart-sample");
+    std::fs::create_dir(&sample)?;
+    std::fs::write(sample.join("data.bin"), b"synthetic restart data")?;
+    let sample_hash = Sha256::digest(std::fs::read(sample.join("data.bin"))?);
+    let folder_id = verysync_sidecar::FolderId::parse("restart-retained")?;
+    instance
+        .client()
+        .create_folder(
+            &verysync_sidecar::CreateFolderOptions::new(
+                folder_id.clone(),
+                verysync_sidecar::TargetPath::local(&sample),
+            )
+            .paused(true),
+        )
+        .await?;
+    let read_config = RawRequest::new(RawMethod::Get, ["rest", "config"], RequestEffect::ReadOnly)?;
+    let before: serde_json::Value = serde_json::from_slice(
+        instance
+            .client()
+            .raw_request(&read_config)
+            .await?
+            .body_bytes(),
+    )?;
+    assert!(instance.restart(Duration::ZERO).await.is_err());
+    assert_eq!(instance.process_id(), old_pid);
+    instance.client().system_status().await?;
+    instance.restart(Duration::from_secs(25)).await?;
+    let restarted_ui = managed_ui::observe(Some(instance.process_id()), root.path())?;
+    managed_ui::assert_background(&baseline, &restarted_ui)?;
+    println!(
+        "public managed UI observation: {}",
+        serde_json::json!({"start":started_ui,"restart":restarted_ui,"browser_scope":"visible windows of named common browsers in the current native session; no titles captured"})
+    );
+    assert_ne!(instance.process_id(), old_pid);
+    assert_eq!(instance.client().instance().device_id, identity);
+    assert_eq!(instance.client().version().await?.version, "v2.33.2");
+    assert_eq!(instance.client().system_status().await?.device_id, identity);
+    assert_eq!(
+        Sha256::digest(std::fs::read(path.join("key.pem"))?),
+        key_hash
+    );
+    assert_eq!(
+        Sha256::digest(std::fs::read(path.join("cert.pem"))?),
+        cert_hash
+    );
+    assert_eq!(
+        Sha256::digest(std::fs::read(sample.join("data.bin"))?),
+        sample_hash
+    );
+    assert!(instance.client().folder(&folder_id).await?.paused);
+    let after: serde_json::Value = serde_json::from_slice(
+        instance
+            .client()
+            .raw_request(&read_config)
+            .await?
+            .body_bytes(),
+    )?;
+    assert_eq!(after["devices"], before["devices"]);
+    assert_eq!(after["options"], before["options"]);
+    assert!(before["gui"]["apiKey"]
+        .as_str()
+        .is_some_and(|key| !key.is_empty()));
+    assert_eq!(after["gui"]["apiKey"], before["gui"]["apiKey"]);
+    instance.shutdown(Duration::from_secs(10)).await?;
+    println!("public managed restart evidence: {{\"invalid_deadline_no_effect\":true,\"new_process_generation\":true,\"authenticated_same_identity\":true,\"actual_management_ready\":true,\"key_sha_unchanged\":true,\"cert_sha_unchanged\":true,\"folder_retained\":true,\"devices_and_options_unchanged\":true,\"sample_sha_unchanged\":true,\"api_key_unchanged\":true}}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn restart_rejects_changed_program_and_readiness_timeout_then_can_retry() -> TestResult {
+    let root = lifecycle_root()?;
+    #[cfg(windows)]
+    let copy = root.path().join("restart-engine.exe");
+    #[cfg(unix)]
+    let copy = root.path().join("restart-engine");
+    let selected = source()?;
+    std::fs::copy(selected.path(), &copy)?;
+    let checksum: [u8; 32] = Sha256::digest(std::fs::read(&copy)?).into();
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let address = listener.local_addr()?;
+    let endpoint = ManagementEndpoint::http(&format!("http://{address}"))?;
+    drop(listener);
+    let state = root.path().join("state");
+    let settings = ManagedOptions::new(
+        LocalProgram::new(&copy)?.expected_sha256(checksum),
+        &state,
+        endpoint,
+    )?;
+    let mut instance = start_checked(settings).await?;
+    let identity = instance.client().instance().device_id.clone();
+    instance.shutdown(Duration::from_secs(10)).await?;
+    std::fs::write(
+        &copy,
+        b"synthetic changed executable, rejected before launch",
+    )?;
+    let rejected = instance.restart(Duration::from_secs(5)).await;
+    assert!(
+        matches!(rejected, Err(Error::ProgramRejected { .. })),
+        "{rejected:?}"
+    );
+    assert_eq!(instance.wait_for_exit().await?.code, Some(0));
+    std::fs::copy(selected.path(), &copy)?;
+    // Occupy only the exact explicit endpoint after its old owner has stopped.
+    // The new core cannot become authenticated/ready; no false success is allowed.
+    let blocker = std::net::TcpListener::bind(address)?;
+    let not_ready = instance.restart(Duration::from_secs(2)).await;
+    assert!(
+        matches!(
+            not_ready,
+            Err(Error::Timeout { .. } | Error::ManagedProcessExited { .. })
+        ),
+        "{not_ready:?}"
+    );
+    assert_eq!(instance.wait_for_exit().await?.code, Some(0));
+    drop(blocker);
+    // This is an explicit retry after the failed startup's own cleanup. Lease
+    // availability chooses when to retry; it is not presented as exit proof.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let lease = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(state.join(".verysync-sidecar-lease"))?;
+        if fs2::FileExt::try_lock_exclusive(&lease).is_ok() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("failed restart retained its lease past cleanup bound".into());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    instance.restart(Duration::from_secs(25)).await?;
+    assert_eq!(instance.client().instance().device_id, identity);
+    instance.client().system_status().await?;
+    instance.shutdown(Duration::from_secs(10)).await?;
+    #[cfg(windows)]
+    let python = "python";
+    #[cfg(unix)]
+    let python = "python3";
+    let cleanup = std::process::Command::new(python)
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("scripts")
+                .join("prepare-test-engine.py"),
+        )
+        .arg("check-cleanup")
+        .env("VERYSYNC_TEST_BINARY", &copy)
+        .output()?;
+    assert!(
+        cleanup.status.success(),
+        "private copied-program cleanup was not confirmed: {}",
+        String::from_utf8_lossy(&cleanup.stderr)
+    );
+    println!("public managed restart failure evidence: {{\"changed_program_rejected_before_execution\":true,\"old_exit_observation_retained\":true,\"occupied_endpoint_not_reported_ready\":true,\"explicit_retry_authenticated_same_identity\":true,\"final_actual_zero_exit\":true,\"private_copied_program_no_processes\":true}}");
+    Ok(())
+}
+
+#[path = "common/managed_ui.rs"]
+mod managed_ui;
+
+#[tokio::test]
+async fn restart_stop_timeout_retains_the_old_owner_without_a_second_start() -> TestResult {
+    let root = lifecycle_root()?;
+    let settings = options(source()?, &root.path().join("state"))?;
+    let mut instance = start_checked(settings.clone()).await?;
+    let old_pid = instance.process_id();
+    let identity = instance.client().instance().device_id.clone();
+    let paused = managed_pause::PausedRoot::new(old_pid)?;
+    let result = instance.restart(Duration::from_millis(300)).await;
+    assert!(matches!(result, Err(Error::Timeout { .. })), "{result:?}");
+    assert_eq!(instance.process_id(), old_pid);
+    assert!(paused.is_paused()?);
+    assert!(matches!(
+        ManagedInstance::start(settings).await,
+        Err(Error::ManagedStateInUse)
+    ));
+    drop(paused);
+    #[cfg(not(target_os = "linux"))]
+    let old_exit =
+        tokio::time::timeout(Duration::from_secs(10), instance.wait_for_exit()).await??;
+    #[cfg(target_os = "linux")]
+    let old_exit = instance.shutdown(Duration::from_secs(10)).await?;
+    assert_eq!(old_exit.code, Some(0));
+    assert!(!old_exit.forced && old_exit.tree_stopped);
+    instance.restart(Duration::from_secs(25)).await?;
+    assert_eq!(instance.client().system_status().await?.device_id, identity);
+    instance.shutdown(Duration::from_secs(10)).await?;
+    println!("public managed restart stop-timeout evidence: {{\"actual_root_paused\":true,\"deadline_not_success\":true,\"old_owner_and_pid_retained\":true,\"state_still_exclusive\":true,\"no_implicit_force_or_second_start\":true,\"explicit_retry_authenticated\":true}}");
+    Ok(())
+}

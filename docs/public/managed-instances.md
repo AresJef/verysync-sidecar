@@ -69,7 +69,7 @@ alive. Await an explicit exit observation when completion matters.
 Do not independently launch or modify the same state while its library owner is
 active. The library lease coordinates SDK owners; handing the official lock back
 immediately before the core acquires it is not an atomic protocol with unrelated
-launchers. Restart, startup cancellation/recovery, inherited
+launchers. Startup cancellation/recovery, inherited
 signal/descriptor stress, intentional persistence and full platform UI/lifetime
 acceptance continue in the same development plan. Modern native runner evidence
 does not establish other architectures, minimum systems or cross-network scope.
@@ -118,3 +118,53 @@ implicit lifecycle responsibility from these methods.
 On macOS, exit observation queries native private-group membership and process
 state. Exited zombies are not treated as running members; an incomplete or denied
 inspection remains a failure to confirm exit. The retained direct child is reaped.
+
+
+## Restart the owned generation
+
+`restart(total_timeout)` normally shuts down the current generation and starts
+with its retained local program, state, endpoint and startup settings. It returns
+success only after the new generation authenticates as the persisted identity and
+accepts management queries. The total deadline covers both phases; the configured
+startup timeout still bounds the new start. Restart rechecks the selected program
+and any expected SHA-256 before execution.
+
+```rust
+use std::time::Duration;
+use verysync_sidecar::ManagedInstance;
+
+async fn restart_dedicated(instance: &mut ManagedInstance) -> verysync_sidecar::Result<()> {
+    instance.restart(Duration::from_secs(30)).await?;
+    let fresh = instance.client().system_status().await?;
+    println!("Restarted device: {}", fresh.device_id);
+    Ok(())
+}
+```
+
+Successful restart replaces the owner's Client, PID, program information and exit
+observation. Identity, API credential, private key/certificate, folders, unrelated
+settings and local files are retained. Existing borrowed Client clones keep their
+previous connection metadata; reconnect when a fresh snapshot matters.
+
+If normal shutdown fails or times out, restart retains that owner and does not
+start another process or select force. If the old generation stopped but the new
+start fails, the object retains the old exit observation and options for an
+explicit retry. Its `wait_for_exit()` then describes the **old generation**. The
+failed startup requests its own exact cleanup; an immediate retry can find its
+lease still busy while that cleanup completes. There is no automatic retry,
+credential replacement, data reset or rollback. Zero total deadlines do nothing.
+
+This owned operation uses normal shutdown followed by explicit startup. It does
+not claim a typed implementation of the official `POST /rest/system/restart`
+route for borrowed instances; that direct system action remains separately
+tracked in the complete capability inventory.
+
+Native tests record startup/restart UI observations separately from authenticated
+readiness: macOS queries the owned process group's CGWindow/AppKit registration;
+Windows queries owned descendants' top-level windows and console association from
+a separate probe process; Linux runs without DISPLAY/Wayland. Desktop runs compare
+visible windows of named common browsers with their baseline, without collecting
+window titles or contents. These observations are scoped to the runner's current
+session, do not visually inspect every menu/tray icon, and do not establish a
+minimum OS or every possible browser. Further host-exit and platform UI/lifetime
+gates remain in the same full-delivery plan.
