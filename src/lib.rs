@@ -51,7 +51,7 @@ pub use events::{
     EventSubscription,
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
-pub use managed::{ManagedExit, ManagedInstance, ManagedOptions};
+pub use managed::{ManagedExit, ManagedInstance, ManagedLifetime, ManagedOptions};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};

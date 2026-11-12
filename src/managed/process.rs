@@ -12,8 +12,12 @@ pub(super) struct OwnedProcess {
 }
 
 impl OwnedProcess {
-    pub(super) fn spawn(command: Command, helper: bool) -> io::Result<Self> {
-        let (child, guard) = native::spawn(command, helper)?;
+    pub(super) fn spawn(
+        command: Command,
+        helper: bool,
+        lifetime: super::ManagedLifetime,
+    ) -> io::Result<Self> {
+        let (child, guard) = native::spawn(command, helper, lifetime)?;
         Ok(Self { child, guard })
     }
 

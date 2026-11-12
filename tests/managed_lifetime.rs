@@ -8,11 +8,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-use verysync_sidecar::{LocalProgram, ManagedInstance, ManagedOptions, ManagementEndpoint};
+use verysync_sidecar::{
+    LocalProgram, ManagedInstance, ManagedLifetime, ManagedOptions, ManagementEndpoint,
+};
 
-#[cfg(windows)]
 #[path = "common/managed_ui.rs"]
 mod managed_ui;
+#[path = "common/owned_example.rs"]
+mod owned_example;
 #[cfg(windows)]
 #[allow(dead_code)]
 #[path = "common/windows_fixture.rs"]
@@ -145,14 +148,23 @@ async fn run_test_host() -> TestResult {
     #[cfg(windows)]
     let environment_names = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "TEMP", "TMP"];
     let environment_before: Vec<_> = environment_names.iter().map(std::env::var_os).collect();
-    #[cfg(windows)]
-    let ui_baseline = if mode == "kill" {
+    let ui_baseline = if mode == "persist-kill" || (cfg!(windows) && mode == "kill") {
         Some(managed_ui::observe(None, &root).await?)
     } else {
         None
     };
     let state = root.join("state");
-    let instance = ManagedInstance::start(settings(&root.join(CORE_FILE), &state)?).await?;
+    let options = settings(&root.join(CORE_FILE), &state)?;
+    let management_http = options
+        .management_endpoint()
+        .http_url()
+        .map(|url| url.as_str().to_owned());
+    let options = if mode.starts_with("persist-") {
+        options.lifetime(ManagedLifetime::Persistent)
+    } else {
+        options
+    };
+    let mut instance = ManagedInstance::start(options).await?;
     #[cfg(unix)]
     if inherited {
         require(
@@ -199,8 +211,8 @@ async fn run_test_host() -> TestResult {
     let ready = json!({"pid":instance.process_id(), "identity":instance.client().instance().device_id.as_str(),
         "authenticated":instance.client().system_status().await?.device_id == instance.client().instance().device_id,
         "inherited_hup_preserved":inherited_hup_preserved,
+        "management_http":management_http,
         "unrelated_pid":unrelated.as_ref().map(Child::id)});
-    #[cfg(windows)]
     let ready = {
         let mut ready = ready;
         if let Some(baseline) = ui_baseline {
@@ -216,9 +228,34 @@ async fn run_test_host() -> TestResult {
     if input.trim() == "exit" {
         std::process::exit(23);
     }
+    if input.trim() == "force" {
+        let exit = instance.force_stop(Duration::from_secs(10)).await?;
+        require(
+            exit.tree_stopped && exit.forced,
+            "persistent explicit force did not observe tree exit",
+        )?;
+        std::fs::write(
+            root.join("force-observed.json"),
+            serde_json::to_vec(&json!({"tree_stopped":exit.tree_stopped,"forced":exit.forced}))?,
+        )?;
+        return Ok(());
+    }
     require(input.trim() == "return", "unexpected test host instruction")?;
     // Ordinary return drops its real owner; forced/exit cases bypass this line.
+    let borrowed = if mode == "persist-return" {
+        Some(instance.client().clone())
+    } else {
+        None
+    };
     drop(instance);
+    if let Some(borrowed) = borrowed {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        borrowed.system_status().await?;
+        std::fs::write(
+            root.join("owner-drop-observed"),
+            b"authenticated after owner drop while caller alive",
+        )?;
+    }
     Ok(())
 }
 
@@ -686,4 +723,173 @@ async fn owned_host_inherited_hup_is_only_reset_in_its_child() -> TestResult {
 #[tokio::test]
 async fn owned_host_exit_does_not_wait_for_an_unrelated_exec() -> TestResult {
     exercise("exec").await
+}
+
+async fn persistent_exercise(mode: &'static str) -> TestResult {
+    let root = tempfile::Builder::new().prefix("vsp-").tempdir()?.keep();
+    let binary = root.join(CORE_FILE);
+    let selected = PathBuf::from(
+        std::env::var_os("VERYSYNC_TEST_BINARY").ok_or("explicit private engine required")?,
+    );
+    std::fs::copy(&selected, &binary)?;
+    let mut canary = ManagedInstance::start(settings(&selected, &root.join("canary"))?).await?;
+    let canary_id = canary.client().instance().device_id.clone();
+    let mut command = host_command(&root, mode)?;
+    command.stdin(Stdio::piped());
+    #[cfg(windows)]
+    let outer = {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+        windows_fixture::Job::new()?
+    };
+    let mut host = Host(command.spawn()?);
+    #[cfg(windows)]
+    outer.assign_and_resume(&host.0)?;
+    #[cfg(unix)]
+    let mut group = None;
+    let result:TestResult=async {
+        let deadline=Instant::now()+Duration::from_secs(60);
+        let ready:Value=loop {
+            if root.join("ready.json").try_exists()? {break serde_json::from_slice(&std::fs::read(root.join("ready.json"))?)?;}
+            require(host.0.try_wait()?.is_none(),"persistent test host exited before readiness")?;
+            require(Instant::now()<deadline,"persistent test host readiness deadline")?;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let pid=u32::try_from(ready["pid"].as_u64().ok_or("persistent root missing")?)?;
+        #[cfg(unix)]
+        {group=Some(pid);}
+        let birth=process_birth(pid)?.ok_or("persistent core not observed alive")?;
+        require(ready["authenticated"]==true&&inventory(&binary).await?.contains(&pid),"persistent positive core observation missing")?;
+        #[cfg(windows)]
+        {
+            let snapshot=outer.snapshot(&host.0)?;
+            require(snapshot.root_in_job&&!snapshot.handle_inheritable&&snapshot.process_ids.contains(&pid),"persistent caller outer Job not established")?;
+            println!("public persistent outer Job observation: {}",json!({"case":mode,"snapshot":snapshot}));
+        }
+        if mode=="persist-kill" {
+            let ui=&ready["ui"];
+            println!("public persistent UI observation: {ui}");
+            require(ui["baseline"].is_object()&&ui["start"].is_object(),"persistent native UI observation missing")?;
+            managed_ui::assert_background(&ui["baseline"],&ui["start"])?;
+            host.0.kill()?;
+        } else {
+            let input=host.0.stdin.as_mut().ok_or("persistent host input closed")?;
+            writeln!(input,"{}",if mode=="persist-exit" {"exit"} else if mode=="persist-force" {"force"} else {"return"})?;input.flush()?;
+        }
+        let deadline=Instant::now()+Duration::from_secs(10);
+        let status=loop {if let Some(status)=host.0.try_wait()? {break status;} require(Instant::now()<deadline,"persistent test caller did not exit")?;tokio::time::sleep(Duration::from_millis(20)).await;};
+        if matches!(mode,"persist-return"|"persist-force") {require(status.success(),"persistent caller ordinary return failed")?;}
+        else if mode=="persist-exit" {require(status.code()==Some(23),"persistent no-destructor exit missing")?;}
+        else {
+            #[cfg(unix)]
+            {use std::os::unix::process::ExitStatusExt;require(status.signal()==Some(libc::SIGKILL),"persistent caller actual SIGKILL missing")?;}
+            #[cfg(windows)]
+            require(!status.success(),"persistent caller forced exit missing")?;
+        }
+        if mode=="persist-force" {
+            processes_gone(&binary).await?;
+            let forced:Value=serde_json::from_slice(&std::fs::read(root.join("force-observed.json"))?)?;
+            require(forced["tree_stopped"]==true&&forced["forced"]==true,"actual persistent force report missing")?;
+            #[cfg(windows)]
+            {let observer=outer.try_clone()?;tokio::task::spawn_blocking(move||observer.wait_empty(Duration::from_secs(8))).await??;}
+            require(canary.client().system_status().await?.device_id==canary_id,"persistent force affected another instance")?;
+            let state=root.join("state");let identity=identity_files(&state)?;
+            let mut retry=ManagedInstance::start(settings(&binary,&state)?).await?;
+            require(Some(retry.client().instance().device_id.as_str())==ready["identity"].as_str(),"retry after persistent force changed identity")?;
+            require(identity_files(&state)?==identity,"persistent force retry changed identity files")?;
+            let exit=retry.shutdown(Duration::from_secs(10)).await?;
+            require(exit.tree_stopped&&!exit.forced,"retry after force did not normally exit")?;
+            processes_gone(&binary).await?;
+            println!("public persistent force evidence: {}",json!({"actual_ready_core_observed":true,"explicit_force_selected":true,
+                "actual_private_tree_exit":true,"observer_not_used_to_supply_exit":true,"other_instance_untouched":true,
+                "same_identity_retry_ready":true,"retry_normal_exit":true}));
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        require(process_birth(pid)?==Some(birth)&&inventory(&binary).await?.contains(&pid),"explicitly persistent core ended with its caller")?;
+        if mode == "persist-return" { require(root.join("owner-drop-observed").is_file(), "owner drop was not observed while caller remained alive")?; }
+        let state=root.join("state");
+        let identity=identity_files(&state)?;
+        let config_sha=Sha256::digest(std::fs::read(state.join("setting.dat"))?);
+        let sample=Sha256::digest(std::fs::read(state.join("retained.bin"))?);
+        #[cfg(unix)]
+        let endpoint=ManagementEndpoint::unix_socket(state.join("gui.sock"))?;
+        #[cfg(windows)]
+        let endpoint=ManagementEndpoint::http(ready["management_http"].as_str().ok_or("persistent HTTP address missing")?)?;
+        let retained=ManagedOptions::new(program(&binary)?,&state,endpoint.clone())?;
+        // A nonexistent program proves reconnection never executes or inspects it.
+        let read_only=ManagedOptions::new(LocalProgram::new(root.join("not-executed"))?,&state,endpoint)?;
+        let listener=std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST,0))?;
+        let wrong=ManagedOptions::new(LocalProgram::new(root.join("not-executed"))?,&state,ManagementEndpoint::http(&format!("http://{}/",listener.local_addr()?))?)?;
+        require(matches!(wrong.connect_existing().await,Err(verysync_sidecar::Error::InvalidConfiguration{..})),"wrong saved endpoint was not rejected before connection")?;
+        listener.set_nonblocking(true)?;
+        require(matches!(listener.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock),"wrong endpoint received a credential-bearing request")?;
+        drop(listener);
+        let connected=read_only.connect_existing().await?;
+        require(Some(connected.instance().device_id.as_str())==ready["identity"].as_str(),"reconnect did not authenticate retained identity")?;
+        drop(connected);
+        require(process_birth(pid)?==Some(birth),"dropping borrowed reconnection stopped persistent core")?;
+        let connected=read_only.connect_existing().await?;
+        connected.system_status().await?;
+        require(Sha256::digest(std::fs::read(state.join("setting.dat"))?)==config_sha,"read-only reconnect changed configuration")?;
+        require(identity_files(&state)?==identity&&Sha256::digest(std::fs::read(state.join("retained.bin"))?)==sample,"persistent identity or sample changed")?;
+        let request=match connected.request_shutdown().await {
+            Ok(())=>"acknowledged",
+            Err(verysync_sidecar::Error::MutationOutcomeUnknown{..})=>"uncertain_response",
+            Err(error)=>return Err(error.into()),
+        };
+        processes_gone(&binary).await?;
+        #[cfg(windows)]
+        {let observer=outer.try_clone()?;tokio::task::spawn_blocking(move||observer.wait_empty(Duration::from_secs(8))).await??;}
+        require(canary.client().system_status().await?.device_id==canary_id,"persistent lifecycle affected another instance")?;
+        let mut retry=ManagedInstance::start(retained).await?;
+        require(Some(retry.client().instance().device_id.as_str())==ready["identity"].as_str(),"explicit owned retry changed identity")?;
+        let exit=retry.shutdown(Duration::from_secs(10)).await?;
+        require(exit.tree_stopped&&!exit.forced&&exit.code==Some(0),"explicit owned retry did not normally end")?;
+        processes_gone(&binary).await?;
+        println!("public persistent core evidence: {}",json!({"case":mode,"actual_core_observed":true,"actual_caller_exit_observed":true,
+            "same_core_survived_caller_exit":true,"read_only_reconnect_without_program_execution":true,"borrowed_drop_does_not_stop_core":true,
+            "wrong_endpoint_rejected_before_request":true,
+            "configuration_sha_retained":true,"identity_hashes_retained":true,"sample_sha_retained":true,"explicit_shutdown_actual_tree_exit":true,
+            "other_instance_untouched":true,"explicit_owned_retry_same_identity":true,"shutdown_response":request}));
+        Ok(())
+    }.await;
+    drop(host);
+    if result.is_err() {
+        std::fs::write(
+            root.join("failed-before-fallback.json"),
+            serde_json::to_vec(&json!({"case":mode,"fallback_required":true}))?,
+        )?;
+        #[cfg(unix)]
+        emergency_cleanup(&binary, group).await?;
+        #[cfg(windows)]
+        {
+            let observer = outer.try_clone()?;
+            tokio::task::spawn_blocking(move || observer.terminate_and_wait()).await??;
+            processes_gone(&binary).await?;
+        }
+        return result;
+    }
+    canary.shutdown(Duration::from_secs(10)).await?;
+    std::fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn persistent_core_survives_caller_return_and_reconnects_without_ownership() -> TestResult {
+    persistent_exercise("persist-return").await
+}
+#[tokio::test]
+async fn persistent_core_survives_no_destructor_exit_and_reconnects() -> TestResult {
+    persistent_exercise("persist-exit").await
+}
+#[tokio::test]
+async fn persistent_core_survives_actual_caller_kill_with_native_ui_observation() -> TestResult {
+    persistent_exercise("persist-kill").await
+}
+
+#[tokio::test]
+async fn persistent_core_force_stop_is_explicit_and_observes_real_tree_exit() -> TestResult {
+    persistent_exercise("persist-force").await
 }

@@ -46,6 +46,7 @@ pub(in crate::managed) struct ProcessGuard(OwnedHandle);
 pub(in crate::managed) fn spawn(
     mut command: Command,
     helper: bool,
+    lifetime: crate::managed::ManagedLifetime,
 ) -> io::Result<(Child, ProcessGuard)> {
     // SAFETY: Null attributes/name create an unnamed noninheritable private Job.
     let raw = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
@@ -55,7 +56,12 @@ pub(in crate::managed) fn spawn(
     // SAFETY: Successful API returned one newly owned handle.
     let guard = ProcessGuard(unsafe { OwnedHandle::from_raw_handle(raw) });
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    limits.BasicLimitInformation.LimitFlags =
+        if helper || lifetime == crate::managed::ManagedLifetime::CallerOwned {
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        } else {
+            0
+        };
     // SAFETY: Live Job and correctly typed initialized native structure/length.
     if unsafe {
         SetInformationJobObject(

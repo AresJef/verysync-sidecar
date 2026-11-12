@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit persistent lifetime, protected read-only state reconnection and a
+  borrowed shutdown request with acknowledgement-only semantics. Keep cancelled
+  startup cleanup active until authenticated readiness commits. Add a compiled
+  owned/persistent/reconnect/shutdown example and actual native lifetime cases.
+
 - Add bounded caller-owned event subscriptions, preserved unknown events,
   credential-safe Debug, explicit cursor gaps and finite read-only recovery.
   Keep producer queue positions separate from consumed cursors; close/drop

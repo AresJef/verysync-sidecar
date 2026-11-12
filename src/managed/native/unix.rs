@@ -92,16 +92,21 @@ pub(in crate::managed) struct ProcessGuard {
 pub(in crate::managed) fn spawn(
     mut command: Command,
     helper: bool,
+    lifetime: crate::managed::ManagedLifetime,
 ) -> io::Result<(Child, ProcessGuard)> {
-    let (master, slave) = private_pty()?;
-    // Helpers retain pipe stdin for a private generated password. Their stderr
-    // slave supplies the controlling terminal; the long-running core uses stdin.
-    let terminal = if helper { 2 } else { 0 };
-    if helper {
-        command.stderr(Stdio::from(slave));
+    let (master, terminal) = if helper || lifetime == crate::managed::ManagedLifetime::CallerOwned {
+        let (master, slave) = private_pty()?;
+        // Helpers retain pipe stdin; their stderr supplies the private terminal.
+        let terminal = if helper { 2 } else { 0 };
+        if helper {
+            command.stderr(Stdio::from(slave));
+        } else {
+            command.stdin(Stdio::from(slave));
+        }
+        (Some(master), Some(terminal))
     } else {
-        command.stdin(Stdio::from(slave));
-    }
+        (None, None)
+    };
     #[cfg(target_os = "linux")]
     command.env("VSMONITORED", "yes");
     // SAFETY: The closure executes only in the newly forked child. It calls
@@ -121,21 +126,17 @@ pub(in crate::managed) fn spawn(
             {
                 return Err(io::Error::last_os_error());
             }
-            if libc::ioctl(terminal, libc::TIOCSCTTY as _, 0) < 0 {
-                return Err(io::Error::last_os_error());
+            if let Some(terminal) = terminal {
+                if libc::ioctl(terminal, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
             }
             Ok(())
         });
     }
     let child = command.spawn()?;
     let group = child.id() as libc::pid_t;
-    Ok((
-        child,
-        ProcessGuard {
-            master: Some(master),
-            group,
-        },
-    ))
+    Ok((child, ProcessGuard { master, group }))
 }
 
 impl ProcessGuard {

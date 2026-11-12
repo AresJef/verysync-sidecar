@@ -41,7 +41,7 @@ impl ManagedInstance {
             if self.exit_snapshot().is_some() {
                 return self.wait_for_exit().await;
             }
-            self.client().request_owned_shutdown().await?;
+            self.client().request_shutdown().await?;
             self.wait_for_exit().await
         };
         tokio::time::timeout_at(deadline, graceful)

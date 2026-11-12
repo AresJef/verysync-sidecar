@@ -6,6 +6,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use tokio::sync::{oneshot, watch};
@@ -35,8 +39,9 @@ pub struct ManagedExit {
 /// Explicit startup checks the executable and private state, then authenticates
 /// the selected endpoint and verifies its persisted identity before returning.
 /// The private owner thread retains the state lease through process cleanup.
-/// Dropping this owner requests exact contained-process cleanup; a cloned Client
-/// does not extend ownership. Await `wait_for_exit` to observe actual termination.
+/// The default lifetime requests exact contained-process cleanup on owner drop.
+/// Explicit Persistent lifetime retains a successfully started core instead; a
+/// cloned Client never takes ownership. Await `wait_for_exit` for actual termination.
 /// No process, service, logger or parent signal handler is installed implicitly.
 pub struct ManagedInstance {
     pub(super) options: ManagedOptions,
@@ -92,10 +97,19 @@ impl ManagedInstance {
         let (ready_sender, ready) = oneshot::channel();
         let (exit_sender, exit) = watch::channel(None);
         let worker_options = options.clone();
+        let committed = Arc::new(AtomicBool::new(false));
+        let worker_committed = committed.clone();
         std::thread::Builder::new()
             .name("verysync-sidecar-owner".to_owned())
             .spawn(move || {
-                owner_thread(worker_options, cancel, ready_sender, exit_sender, deadline)
+                owner_thread(
+                    worker_options,
+                    cancel,
+                    ready_sender,
+                    exit_sender,
+                    deadline,
+                    worker_committed,
+                )
             })
             .map_err(|e| io_error("create private owner thread", e))?;
         let startup = async {
@@ -128,6 +142,7 @@ impl ManagedInstance {
                     diagnostic: Some(report.diagnostic),
                 });
             }
+            committed.store(true, Ordering::Release);
             Ok(Self {
                 options,
                 client,
@@ -205,6 +220,7 @@ fn owner_thread(
     ready: oneshot::Sender<Result<ReadyContext>>,
     exit: watch::Sender<Option<ManagedExit>>,
     deadline: Instant,
+    committed: Arc<AtomicBool>,
 ) {
     let mut prepared = match bootstrap::prepare(&options, &cancel, deadline) {
         Ok(prepared) => prepared,
@@ -214,7 +230,12 @@ fn owner_thread(
         }
     };
     let state = prepared.lease.path().to_owned();
-    let spawned = spawn_core(&prepared.binary, &state, &mut prepared.lease);
+    let spawned = spawn_core(
+        &prepared.binary,
+        &state,
+        &mut prepared.lease,
+        options.lifetime,
+    );
     let (mut process, mut capture) = match spawned {
         Ok(pair) => pair,
         Err(error) => {
@@ -258,6 +279,14 @@ fn owner_thread(
         }
         match cancel.recv_timeout(Duration::from_millis(10)) {
             Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected)
+                if options.lifetime == super::ManagedLifetime::Persistent
+                    && committed.load(Ordering::Acquire) =>
+            {
+                // Keep the exact child/lease on this existing owner thread.
+                // Abrupt caller exit releases OS handles without a service.
+                std::thread::sleep(Duration::from_millis(100));
+            }
             _ => {
                 forced = true;
                 let _ = process.abort();
@@ -287,6 +316,7 @@ fn spawn_core(
     binary: &Path,
     state: &Path,
     lease: &mut super::state::StateLease,
+    lifetime: super::ManagedLifetime,
 ) -> Result<(OwnedProcess, File)> {
     let mut capture = super::native::open_private(&state.join(".verysync-sidecar-core.log"), false)
         .map_err(|e| io_error("open private core diagnostics", e))?;
@@ -314,8 +344,14 @@ fn spawn_core(
                 .map_err(|e| io_error("capture core errors", e))?,
         );
     lease.release_engine_lock_for_spawn();
+    if lifetime == super::ManagedLifetime::Persistent {
+        // The caller can exit, so its capture-trimming thread cannot provide a
+        // durable log bound. Discard inherited core output in this explicit mode.
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+    }
     Ok((
-        OwnedProcess::spawn(command, false).map_err(|e| io_error("spawn owned program", e))?,
+        OwnedProcess::spawn(command, false, lifetime)
+            .map_err(|e| io_error("spawn owned program", e))?,
         capture,
     ))
 }

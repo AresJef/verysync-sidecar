@@ -4,7 +4,7 @@ A general-purpose Rust library for managing and controlling the official VerySyn
 
 The project is under active development. The current API provides explicit endpoints and target paths, authenticated version/identity checks, fresh typed status reads, and folder registration, partial label/pause updates and unregistering while retaining files. Further management operations are being implemented and tested. The initial alpha version is `0.1.0-alpha.1`; pin it exactly and review the validation scope. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
 
-The working branch also develops explicit owned-program startup. See [managed instances](docs/public/managed-instances.md) for the unreleased API and its distinct lifetime/state responsibility; the published initial alpha still targets already running instances.
+The working branch also develops explicit owned-program startup and deliberately selected persistence. See [managed instances](docs/public/managed-instances.md) for the unreleased API and its distinct lifetime/state responsibility; the published initial alpha still targets already running instances.
 
 The unreleased [event subscription API](docs/public/events.md) provides bounded
 queues, explicit continuity gaps and finite read-only recovery. Its task belongs

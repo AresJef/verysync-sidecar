@@ -138,7 +138,7 @@ is a test executable, not a production supervisor.
 These cases cover ordinary exec inheritance on the tested Unix systems. Code
 that deliberately retains or duplicates the private ownership descriptors
 outside the normal exec boundary can retain the terminal connection. Intentional
-persistence is a separate API policy under development. Stopping an in-flight transfer
+persistence requires the explicit policy described below. Stopping an in-flight transfer
 can interrupt work; use explicit normal shutdown when the caller can cooperate.
 
 ## Windows caller lifetime
@@ -157,6 +157,73 @@ cover the tested nested Job configuration on the recorded Windows runners;
 arbitrary restrictive ancestor Jobs can reject assignment, which is a startup
 error. They do not establish compatibility with every host Job policy. The
 forced-exit case also records native window/console observations separately.
+
+## Explicit persistence and reconnection
+
+`ManagedLifetime::CallerOwned` remains the default. Select
+`ManagedLifetime::Persistent` in the startup options when the core should remain
+running after its owner or caller exits. The policy is chosen before startup;
+there is no in-place conversion of an existing owner. Unix persistent cores have
+their own session without the caller-owned controlling terminal. Windows retains
+a private, noninheritable Job without last-handle-close termination. External
+ancestor Jobs or other OS process-manager policies can still terminate a core;
+the SDK does not promise independence from them. See the official
+[Windows nested Job rules](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs).
+
+```rust
+use verysync_sidecar::{ManagedInstance, ManagedLifetime, ManagedOptions, Result};
+
+async fn explicitly_persistent(settings: ManagedOptions) -> Result<()> {
+    let settings = settings.lifetime(ManagedLifetime::Persistent);
+    let instance = ManagedInstance::start(settings.clone()).await?;
+    drop(instance); // The explicitly persistent core keeps running.
+    let client = settings.connect_existing().await?;
+    let _status = client.system_status().await?;
+    client.request_shutdown().await?; // Acknowledgement, not observed OS exit.
+    Ok(())
+}
+```
+
+While the caller remains alive, its existing owner thread retains the exact child
+and state lease even after a persistent owner is dropped. It observes/reaps the
+core when it exits. No service or helper daemon is installed. Core stdout/stderr
+are discarded in persistent mode because the caller's bounded capture/trimming
+thread cannot outlive the caller. Metadata-helper diagnostics remain bounded.
+
+Failed/cancelled startup requests exact cleanup until authenticated readiness is
+committed, including when a Tokio runtime drops the startup task. Abrupt caller
+death after persistent core creation can leave the core running before the
+startup handshake returns; the policy already permitted that process to outlive
+the caller. Use the saved private state and explicit endpoint to reconnect.
+
+`ManagedOptions::connect_existing` is a read-only operation. It requires completed,
+protected SDK state, reads its identity/credential, checks the selected endpoint
+against saved configuration and authenticates the expected device ID. It creates
+no state or lease, changes no configuration and never executes or inspects the
+selected program. It returns a borrowed `Client`, whose drop does not stop the
+core. It does not adopt OS process ownership. A second owned startup against a
+still-running state is rejected instead of creating another owner.
+
+`Client::request_shutdown` sends one guarded normal shutdown request. Success
+means the management response acknowledged it. `ManagedInstance::shutdown` also
+observes its retained process tree and lease release; `force_stop` is an explicit
+owned termination action. A borrowed Client cannot safely force a PID it does
+not own. Saved identity/configuration and local samples remain after shutdown.
+
+The compiled `manage_owned` example accepts:
+
+```text
+manage_owned <owned|persistent|connect|shutdown> PROGRAM STATE <http|socket> ADDRESS
+```
+
+`owned` starts, queries and normally stops an owned instance with actual exit
+observation. `persistent` starts and leaves it running. Run `connect` with the
+same private state/address to authenticate it again, then `shutdown` to request
+normal stop. The program argument remains the profile's startup selection in
+all modes; read-only reconnection does not inspect or run it. Optionally set
+`VERYSYNC_EXAMPLE_PROGRAM_SHA256` to require a trusted 64-character digest for
+startup. Supply a private absolute socket path or an explicit available literal
+loopback HTTP port. Nothing is discovered or downloaded implicitly.
 
 The official core can issue maintenance/NAT HTTP requests even with discovery
 and relays disabled. Runtime tests use a temporary nonforwarding loopback HTTP

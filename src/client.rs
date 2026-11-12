@@ -185,7 +185,12 @@ impl Client {
         }
         Ok(events)
     }
-    pub(crate) async fn request_owned_shutdown(&self) -> Result<()> {
+    /// Request normal engine shutdown once, after a fresh identity check.
+    ///
+    /// Success acknowledges the management command; this borrowed Client cannot
+    /// observe OS process-tree exit. Transport uncertainty is not retried. Owned
+    /// callers should use ManagedInstance::shutdown to observe actual exit.
+    pub async fn request_shutdown(&self) -> Result<()> {
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
         self.connection

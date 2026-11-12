@@ -144,3 +144,9 @@ from the fixed upstream links only when explicitly running the relevant test
 or application API; never from a Cargo build script.
 
 Native process containment and private state creation use small platform modules under `src/managed/native`. These modules locally permit audited unsafe OS calls with safety comments; the crate-wide unsafe-code deny lint remains in effect elsewhere. Keep blocking filesystem/process reaping on the private owner thread and test actual effects on the native matched controller/engine targets.
+
+Native engine acceptance runs on pull requests and explicit workflow dispatches.
+The same accepted source tree is not automatically run again merely because its
+PR was merged. The lighter quality workflow still runs on main pushes. A direct
+main change requires an explicit native workflow dispatch before claiming native
+acceptance; an absent run is never a passing result.

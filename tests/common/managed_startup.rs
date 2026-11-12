@@ -155,7 +155,23 @@ fn private_identity(state: &Path) -> TestResult<(Vec<u8>, Vec<u8>, Vec<u8>)> {
 #[tokio::test]
 async fn cancelled_start_after_actual_core_creation_cleans_and_retries_same_identity() -> TestResult
 {
+    cancelled_start_case(false).await
+}
+
+#[tokio::test]
+async fn cancelled_persistent_start_before_authenticated_commit_still_cleans_exact_core(
+) -> TestResult {
+    cancelled_start_case(true).await
+}
+
+async fn cancelled_start_case(persistent: bool) -> TestResult {
     let mut case = StartupCase::blocked()?;
+    if persistent {
+        case.settings = case
+            .settings
+            .clone()
+            .lifetime(verysync_sidecar::ManagedLifetime::Persistent);
+    }
     let canary_root = lifecycle_root()?;
     let mut canary = start_checked(options(source()?, &canary_root.path().join("state"))?).await?;
     let canary_id = canary.client().instance().device_id.clone();
@@ -176,7 +192,12 @@ async fn cancelled_start_after_actual_core_creation_cleans_and_retries_same_iden
     assert_eq!(Sha256::digest(std::fs::read(&sample)?), sample_sha);
     assert_eq!(canary.client().system_status().await?.device_id, canary_id);
     case.unblock();
-    let mut retried = start_checked(case.settings.clone()).await?;
+    let mut retried = start_checked(
+        case.settings
+            .clone()
+            .lifetime(verysync_sidecar::ManagedLifetime::CallerOwned),
+    )
+    .await?;
     assert!(inventory(&case.binary)
         .await?
         .contains(&retried.process_id()));
@@ -189,7 +210,12 @@ async fn cancelled_start_after_actual_core_creation_cleans_and_retries_same_iden
     retried.shutdown(Duration::from_secs(10)).await?;
     canary.shutdown(Duration::from_secs(10)).await?;
     case.cleanup().await?;
-    println!("public cancelled startup evidence: {{\"actual_private_core_pids_observed\":true,\"future_dropped_before_readiness\":true,\"independent_exact_processes_gone\":true,\"identity_key_certificate_retained\":true,\"sample_sha_retained\":true,\"other_instance_untouched\":true,\"explicit_retry_authenticated_same_identity\":true}}");
+    let label = if persistent {
+        "cancelled persistent startup"
+    } else {
+        "cancelled startup"
+    };
+    println!("public {label} evidence: {{\"actual_private_core_pids_observed\":true,\"future_dropped_before_readiness\":true,\"independent_exact_processes_gone\":true,\"identity_key_certificate_retained\":true,\"sample_sha_retained\":true,\"other_instance_untouched\":true,\"explicit_retry_authenticated_same_identity\":true}}");
     Ok(())
 }
 
