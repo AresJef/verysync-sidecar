@@ -349,7 +349,7 @@ async fn shutdown_timeout_retains_owner_until_the_real_root_resumes() -> TestRes
 }
 
 #[tokio::test]
-async fn shutdown_transport_failure_does_not_force_the_owned_instance() -> TestResult {
+async fn shutdown_management_failure_does_not_force_the_owned_instance() -> TestResult {
     let root = lifecycle_root()?;
     let settings = options(source()?, &root.path().join("state"))?;
     let mut instance = start_checked(settings.clone()).await?;
@@ -362,9 +362,10 @@ async fn shutdown_transport_failure_does_not_force_the_owned_instance() -> TestR
     assert!((200..300).contains(&response.status()));
     let mut gui: serde_json::Value = serde_json::from_slice(response.body_bytes())?;
     assert_eq!(gui["enabled"], true);
-    // Deliberately remove this test instance's management endpoint, then prove
-    // a failed normal shutdown cannot silently acquire permission to kill it.
-    gui["enabled"] = false.into();
+    // Deliberately invalidate this test instance's retained API credential.
+    // A platform may reload the listener or reject the old key in place. Both
+    // must retain process ownership, with the actual failure category exposed.
+    gui["apiKey"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into();
     let patch = RawRequest::new(
         RawMethod::Patch,
         ["rest", "config", "gui"],
@@ -376,20 +377,30 @@ async fn shutdown_transport_failure_does_not_force_the_owned_instance() -> TestR
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         match instance.client().version().await {
-            Err(Error::Transport { .. }) => break,
+            Err(
+                Error::Transport { .. } | Error::Authentication { .. } | Error::AccessDenied { .. },
+            ) => break,
             Ok(_) if std::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(20)).await
             }
             other => {
                 return Err(
-                    format!("management endpoint did not become unavailable: {other:?}").into(),
+                    format!("retained management credential did not fail: {other:?}").into(),
                 )
             }
         }
     }
     let paused = managed_pause::PausedRoot::new(instance.process_id())?;
     let result = instance.shutdown(Duration::from_secs(2)).await;
-    assert!(matches!(result, Err(Error::Transport { .. })), "{result:?}");
+    let failure_kind = match result {
+        Err(Error::Transport { .. }) => "transport",
+        Err(Error::Authentication { .. } | Error::AccessDenied { .. }) => "authentication",
+        other => {
+            return Err(
+                format!("shutdown did not expose the actual management failure: {other:?}").into(),
+            )
+        }
+    };
     assert!(paused.is_paused()?);
     assert!(matches!(
         ManagedInstance::start(settings).await,
@@ -400,7 +411,7 @@ async fn shutdown_transport_failure_does_not_force_the_owned_instance() -> TestR
     drop(paused);
     let exit = instance.force_stop(Duration::from_secs(10)).await?;
     assert!(exit.forced && exit.tree_stopped);
-    println!("public managed shutdown failure evidence: {{\"actual_management_endpoint_disabled\":true,\"typed_transport_failure\":true,\"retained_root_still_alive\":true,\"state_still_exclusive\":true,\"invalid_deadline_did_not_stop\":true,\"force_requires_explicit_call\":true}}");
+    println!("public managed shutdown failure evidence: {{\"actual_management_credential_changed\":true,\"typed_failure_kind\":\"{failure_kind}\",\"retained_root_still_alive\":true,\"state_still_exclusive\":true,\"invalid_deadline_did_not_stop\":true,\"force_requires_explicit_call\":true}}");
     Ok(())
 }
 
