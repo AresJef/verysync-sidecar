@@ -36,14 +36,16 @@ use windows_sys::Win32::System::JobObjects::{
     TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcessToken, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+};
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
 pub(in crate::managed) struct ProcessGuard(OwnedHandle);
 
 pub(in crate::managed) fn spawn(
     mut command: Command,
-    _helper: bool,
+    helper: bool,
 ) -> io::Result<(Child, ProcessGuard)> {
     // SAFETY: Null attributes/name create an unnamed noninheritable private Job.
     let raw = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
@@ -66,7 +68,13 @@ pub(in crate::managed) fn spawn(
     {
         return Err(io::Error::last_os_error());
     }
-    command.creation_flags(0x0800_0004); // CREATE_NO_WINDOW | CREATE_SUSPENDED.
+    command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
+    if !helper {
+        // The SDK owns monitoring/restart for this fixed baseline. Select the
+        // direct core so suspended creation and private Job ownership apply to
+        // that core, without another upstream monitoring generation.
+        command.env("VSMONITORED", "yes");
+    }
     let mut child = command.spawn()?;
     // SAFETY: The exact child is suspended and both handles remain live. It
     // cannot create any descendants before joining the private Job.

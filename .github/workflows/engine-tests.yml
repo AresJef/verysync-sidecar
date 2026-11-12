@@ -69,10 +69,13 @@ jobs:
           --github-env "${{ github.env }}"
       - name: Run public input and synthetic transport contracts
         run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --locked
+      - name: Validate the Windows UI probe before the complete lifecycle bundle
+        if: startsWith(matrix.package, 'windows-')
+        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test managed_instance --locked restart_preserves_identity_folders_settings_and_samples -- --test-threads=1 --nocapture
+      - name: Exercise public managed startup, shutdown, restart and owned UI observations
+        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test managed_instance --locked -- --test-threads=1 --nocapture
       - name: Run independent-engine fixture contracts
         run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test engine_control --locked -- --test-threads=1 --nocapture
-      - name: Start owned program through the public API and verify state reuse/conflicts
-        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test managed_instance --locked -- --test-threads=1 --nocapture
       - name: Build public examples explicitly
         run: >-
           python scripts/prepare-test-examples.py

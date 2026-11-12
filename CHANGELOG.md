@@ -7,7 +7,9 @@
   identity/configuration reuse and actual process-tree exit observation.
 - Add typed normal shutdown with one total deadline and observed process-tree
   exit; explicit force_stop remains a separately chosen action.
-- Keep further lifecycle policy, typed restart and cancellation gates
+- Add owned restart with one total deadline, retained state and authenticated
+  new-generation readiness; expose actual stop/start failures for explicit retry.
+- Keep further lifecycle policy and cancellation gates
   in the same full-delivery development plan. This development version has not
   been published.
 

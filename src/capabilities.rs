@@ -26,7 +26,7 @@ pub enum Capability {
     ManagementErrors,
     /// Explicit constrained raw requests.
     RawManagement,
-    /// Initial owned startup and observed exit; further lifecycle APIs are pending.
+    /// Owned startup, shutdown and restart; full lifecycle validation is pending.
     ManagedRuntime,
     /// Resumable engine events.
     Events,
