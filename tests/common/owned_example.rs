@@ -62,6 +62,7 @@ async fn invoke(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut host = container.spawn(&mut command)?;
+    eprintln!("compiled owned example stage: {mode} spawned");
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if host.0.try_wait()?.is_some() {
@@ -70,6 +71,7 @@ async fn invoke(
         require(Instant::now() < deadline, "compiled owned example deadline")?;
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    eprintln!("compiled owned example stage: {mode} caller exited");
     // The example emits one small JSON document; cores never inherit these pipes.
     let output = tokio::task::spawn_blocking(move || -> TestResult<_> {
         use std::io::Read;
@@ -89,6 +91,7 @@ async fn invoke(
         Ok(serde_json::from_slice::<Value>(&stdout)?)
     })
     .await??;
+    eprintln!("compiled owned example stage: {mode} output consumed");
     require(
         output["mode"] == mode,
         "compiled owned example mode mismatch",
@@ -192,6 +195,7 @@ async fn compiled_owned_example_persists_reconnects_stops_and_reuses_identity() 
             "compiled shutdown not acknowledged",
         )?;
         processes_gone(&binary).await?;
+        eprintln!("compiled owned example stage: shutdown actual core exit");
         container.empty().await?;
         let owned = invoke(&container, &executable, "owned", &binary, &state, &address).await?;
         require(
