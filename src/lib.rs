@@ -2,7 +2,7 @@
 //!
 //! This crate is under development. It provides explicit endpoint/path values
 //! authenticated management connections with version and identity checks, and
-//! fresh typed system/folder status reads.
+//! fresh typed system/folder status reads, and folder registration/configuration.
 //! Adding this dependency or compiling it does not download or
 //! start VerySync, install services, or configure global logging or signals.
 //!
@@ -22,6 +22,7 @@ mod auth;
 mod client;
 mod endpoint;
 mod error;
+mod folders;
 mod path;
 mod status;
 
@@ -31,6 +32,7 @@ pub use client::{
 };
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use error::{Error, ResponseDiagnostic, Result};
+pub use folders::{CreateFolderOptions, FolderConfig};
 pub use path::{PathStyle, TargetPath};
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
 

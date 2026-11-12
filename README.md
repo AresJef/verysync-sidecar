@@ -2,7 +2,7 @@
 
 A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
 
-The project is under active development. The current API provides explicit endpoints, target paths, and authenticated connections with version/identity checks, and fresh typed system/folder status reads. Further management operations are being implemented and tested. No crate has been published yet. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
+The project is under active development. The current API provides explicit endpoints, target paths, and authenticated connections with version/identity checks, and fresh typed system/folder status reads, and folder creation/configuration queries. Further management operations are being implemented and tested. No crate has been published yet. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
 
 The development plan runs through full delivery. Alpha releases are intermediate milestones: after publishing an alpha, development continues in the same project until the complete agreed functionality, platforms, documentation, and examples pass acceptance and the full release is delivered.
 
@@ -63,6 +63,29 @@ async fn read_folder(client: &Client, id: &str) -> verysync_sidecar::Result<Fold
     client.folder_status(&id).await
 }
 ```
+
+`client.folders()` reads folder configuration snapshots; `client.folder(&id)`
+returns an exact configured ID or `Error::FolderNotFound`. Target-reported paths
+retain the target OS syntax. Use `CreateFolderOptions` with a `FolderId` and
+`TargetPath` to register a new folder. The library reads this instance's defaults
+and changes only the explicit ID, path, and optional label/paused overrides.
+
+Creation rejects an existing ID and, by default, an identical configured path
+string before POST; it serializes requests made through clones of one Client.
+The fixed upstream POST can replace an existing ID and ignores the tested
+conditional-write headers. Coordinate independent clients and external writers;
+this is not an atomic create-if-absent transaction. Exact path checks do not
+canonicalize aliases, symlinks or case; `allow_shared_path(true)` explicitly
+permits identical configured strings when required.
+
+A successful create returns current configuration readback. The engine may still
+be preparing the directory or scanning it afterward. Inspect folder status for
+activity and reconcile the ID before retrying after cancellation or
+`Error::MutationOutcomeUnknown`; no modifying request is retried automatically.
+The [folder creation example](examples/create_folder.rs) requires an explicit
+instance, expected identity, new ID and absolute native path, and registers the
+folder paused. It does not start or stop an engine. Remote paths should use the
+target's explicit `PathStyle`, independently of the controller's host.
 
 Endpoint construction performs no I/O and never discovers an existing instance.
 Supply an explicit Unix socket path or HTTP(S) base URL. Private LAN addresses
