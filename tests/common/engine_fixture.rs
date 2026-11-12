@@ -101,6 +101,11 @@ impl EngineFixture {
         binary.verify()?;
         let state = tempfile::Builder::new().prefix("vs-test-").tempdir()?;
         protect_directory(state.path())?;
+        fs::write(state.path().join("appconf.yaml"), "auto_startup: false\n")?;
+        protect_file(&state.path().join("appconf.yaml"))?;
+        for directory in ["roaming", "local", "profile", "tmp"] {
+            fs::create_dir(state.path().join(directory))?;
+        }
         let version = run_tool(&binary.path, state.path(), &["version"], None).await?;
         if !baseline_version_output(&version) {
             return Err("fixture requires the verified VerySync v2.33.2 baseline".into());
@@ -160,7 +165,7 @@ impl EngineFixture {
         let api_key = configure_state(state.path(), &management_address)?;
         let log = File::create(state.path().join("engine.log"))?;
         protect_file(&state.path().join("engine.log"))?;
-        let mut command = serve_command(&binary.path);
+        let mut command = engine_command(&binary.path, state.path())?;
         command
             .arg("serve")
             .arg("--home")
@@ -358,18 +363,27 @@ fn command(program: &Path) -> Command {
     command
 }
 
-fn serve_command(program: &Path) -> Command {
+fn engine_command(program: &Path, home: &Path) -> TestResult<Command> {
     #[cfg(target_os = "macos")]
-    {
+    let mut c = {
         let mut c = command(Path::new("/usr/bin/sandbox-exec"));
-        c.args(["-p", "(version 1)(allow default)(deny network-outbound (require-all (remote ip) (require-not (remote ip \"localhost:*\"))))(deny network-inbound (require-all (local ip) (require-not (local ip \"localhost:*\"))))"]);
+        let canonical_home = fs::canonicalize(home)?;
+        let quoted_home = serde_json::to_string(&path_string(&canonical_home)?)?;
+        let profile = format!("(version 1)(allow default)(deny network-outbound (require-all (remote ip) (require-not (remote ip \"localhost:*\"))))(deny network-inbound (require-all (local ip) (require-not (local ip \"localhost:*\"))))(deny file-write* (require-not (require-any (subpath {quoted_home}) (literal \"/dev/null\"))))");
+        c.args(["-p", &profile]);
         c.arg(program);
         c
-    }
+    };
     #[cfg(not(target_os = "macos"))]
-    {
-        command(program)
-    }
+    let mut c = command(program);
+    c.current_dir(home).env("TMPDIR", home.join("tmp"));
+    #[cfg(windows)]
+    c.env("APPDATA", home.join("roaming"))
+        .env("LOCALAPPDATA", home.join("local"))
+        .env("USERPROFILE", home.join("profile"))
+        .env("TEMP", home.join("tmp"))
+        .env("TMP", home.join("tmp"));
+    Ok(c)
 }
 
 async fn run_tool(
@@ -378,7 +392,7 @@ async fn run_tool(
     args: &[&str],
     password: Option<&str>,
 ) -> TestResult<String> {
-    let mut c = command(program);
+    let mut c = engine_command(program, home)?;
     c.args(args)
         .arg("--home")
         .arg(home)
@@ -489,7 +503,7 @@ fn configure_state(home: &Path, address: &str) -> TestResult<String> {
         Value::Array(vec![Value::from("tcp://127.0.0.1:0")]),
     )?;
     set(options, "2", Value::Array(Vec::new()))?;
-    for key in ["3", "4", "10", "12", "13", "59"] {
+    for key in ["3", "4", "10", "12", "13", "59", "74", "79"] {
         set(options, key, Value::Boolean(false))?;
     }
     set(options, "17", Value::from(-1))?;
@@ -646,6 +660,24 @@ fn device_id_output(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod fixture_unit_tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_child_can_write_its_state_but_not_an_outside_canary() -> super::TestResult {
+        let state = tempfile::tempdir()?;
+        let outside = tempfile::tempdir()?;
+        let allowed = state.path().join("allowed-canary");
+        let denied = outside.path().join("outside-canary");
+        let mut command =
+            super::engine_command(std::path::Path::new("/usr/bin/touch"), state.path())?;
+        assert!(command.arg(&allowed).output()?.status.success());
+        assert!(allowed.exists());
+        let mut command =
+            super::engine_command(std::path::Path::new("/usr/bin/touch"), state.path())?;
+        assert!(!command.arg(&denied).output()?.status.success());
+        assert!(!denied.exists());
+        Ok(())
+    }
+
     #[test]
     fn device_id_probe_accepts_preamble_and_requires_a_unique_canonical_line() {
         let id = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";

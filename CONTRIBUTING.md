@@ -25,6 +25,13 @@ SHA-256. The fixture checks this digest before running anything, generates fresh
 state and GUI credentials, authenticates a private management address, and
 compares the generated identity before any mutation.
 
+The fixture also writes `auto_startup: false` in its own `appconf.yaml` and
+explicitly disables the tracker and tray options. Child processes use private
+working and temporary directories; Windows profile/data environment paths are
+scoped to that state. On macOS a child sandbox denies non-loopback IP traffic
+and file writes outside the fixture. These controls apply to helpers as well as
+the serving process, and never change host startup settings or a firewall.
+
 ```sh
 cargo test --features engine-tests --test fixture_contract --locked -- --test-threads=1
 ```

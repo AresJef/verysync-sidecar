@@ -86,6 +86,8 @@ async fn two_private_instances_have_separate_identity_authentication_and_cleanup
             "natEnabled",
             "udpEnabled",
             "startBrowser",
+            "systrayEnabled",
+            "trackerEnabled",
         ] {
             assert_eq!(
                 config["options"][key], false,
