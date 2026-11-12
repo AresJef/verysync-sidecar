@@ -33,6 +33,7 @@ jobs:
       - run: cargo +1.99.1 test --lib --test client_contract --test transport_contract --locked
       - run: cargo +1.99.1 clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo +1.99.1 doc --no-deps --all-features --locked
+      - run: cargo +1.99.1 test --doc --locked
 
   msrv:
     name: Minimum Rust 1.85
@@ -47,3 +48,4 @@ jobs:
       - run: cargo +1.85.0 check --all-targets --locked
       - run: cargo +1.85.0 test --lib --test client_contract --test transport_contract --locked
       - run: cargo +1.85.0 test --no-default-features --lib --test client_contract --test transport_contract --locked
+      - run: cargo +1.85.0 test --doc --locked

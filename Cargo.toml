@@ -55,6 +55,11 @@ path = "tests/engine_control.rs"
 required-features = ["engine-tests"]
 
 [[test]]
+name = "example_control"
+path = "tests/example_control.rs"
+required-features = ["engine-tests"]
+
+[[test]]
 name = "lifetime_probes"
 path = "tests/lifetime_probes.rs"
 required-features = ["engine-tests"]
