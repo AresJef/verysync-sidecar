@@ -22,6 +22,52 @@ fn connection_without_a_tokio_runtime_returns_an_error() -> Result<(), Box<dyn s
 }
 
 #[test]
+fn raw_request_requires_structured_paths_and_protects_connection_headers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use verysync_sidecar::{RawMethod, RawRequest, RequestEffect};
+    let request = RawRequest::new(
+        RawMethod::Get,
+        ["rest", "system", "version"],
+        RequestEffect::ReadOnly,
+    )?
+    .query("folder", "synthetic /?#%")
+    .header("Accept", "application/json")?
+    .body(b"synthetic-raw-secret".to_vec());
+    assert!(!format!("{request:?}").contains("synthetic-raw-secret"));
+    for component in ["", ".", "..", "bad\0segment", "bad\nsegment"] {
+        assert!(RawRequest::new(RawMethod::Get, [component], RequestEffect::ReadOnly).is_err());
+    }
+    for name in [
+        "Host",
+        "X-API-Key",
+        "Authorization",
+        "Proxy-Authorization",
+        "Content-Length",
+        "Transfer-Encoding",
+        "Connection",
+    ] {
+        assert!(RawRequest::new(
+            RawMethod::Post,
+            ["rest", "config"],
+            RequestEffect::MayModify
+        )?
+        .header(name, "synthetic-protected-header")
+        .is_err());
+    }
+    assert!(
+        RawRequest::new(RawMethod::Get, ["rest"], RequestEffect::ReadOnly)?
+            .header("Bad Header", "value")
+            .is_err()
+    );
+    assert!(
+        RawRequest::new(RawMethod::Get, ["rest"], RequestEffect::ReadOnly)?
+            .header("Accept", "bad\nvalue")
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn credential_debug_and_invalid_input_errors_do_not_echo_secrets() {
     let secret = "synthetic-api-key-value";
     let key = ApiKey::new(secret).unwrap();

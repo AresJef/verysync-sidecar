@@ -691,3 +691,116 @@ async fn body_deadline_and_post_write_readback_failure_are_not_success_or_retry(
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn raw_request_preserves_error_binary_headers_and_selected_origin() -> TestResult {
+    use verysync_sidecar::{RawMethod, RawRequest, RequestEffect};
+    let destination = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    destination.set_nonblocking(true)?;
+    let mut binary = vec![0, 255, 1];
+    binary.extend_from_slice(KEY.as_bytes());
+    let location = format!("http://{}/must-not-receive-key", destination.local_addr()?);
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply {
+            status: 418,
+            body: binary.clone(),
+            headers: format!("X-Vendor: one\r\nX-Vendor: {KEY}\r\n"),
+            delay: Duration::ZERO,
+        },
+        Reply {
+            status: 302,
+            body: Vec::new(),
+            headers: format!("Location: {location}\r\n"),
+            delay: Duration::ZERO,
+        },
+        Reply::json(serde_json::json!({"error":KEY})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let request = RawRequest::new(
+        RawMethod::Get,
+        ["rest", "https://synthetic.invalid", "../slash"],
+        RequestEffect::ReadOnly,
+    )?
+    .query("name", "/ ?#%中文")
+    .header("X-Business", "synthetic-business-value")?
+    .body(b"explicit synthetic body".to_vec());
+    let raw = client.raw_request(&request).await?;
+    assert_eq!(raw.status(), 418);
+    assert_eq!(raw.body_bytes(), binary);
+    assert_eq!(
+        raw.headers()
+            .filter(|(name, _)| *name == "x-vendor")
+            .count(),
+        2
+    );
+    assert!(!format!("{raw:?}").contains(KEY));
+    let redirect = client
+        .raw_request(&RawRequest::new(
+            RawMethod::Get,
+            ["rest", "redirect"],
+            RequestEffect::ReadOnly,
+        )?)
+        .await?;
+    assert_eq!(redirect.status(), 302);
+    assert!(redirect
+        .headers()
+        .any(|(name, value)| name == "location" && value == location.as_bytes()));
+    assert_eq!(
+        destination.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    let body_error = client
+        .raw_request(&RawRequest::new(
+            RawMethod::Get,
+            ["rest", "unmodeled"],
+            RequestEffect::ReadOnly,
+        )?)
+        .await?;
+    assert_eq!(body_error.status(), 200);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(body_error.body_bytes())?["error"],
+        KEY
+    );
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 5);
+    let first = &requests[2];
+    let target = first.lines().next().ok_or("missing raw target")?;
+    assert!(target.starts_with("GET /prefix/rest/https:%2F%2Fsynthetic.invalid/..%2Fslash?name="));
+    assert!(target.contains("%23%25%E4%B8%AD%E6%96%87"));
+    assert!(first
+        .to_ascii_lowercase()
+        .contains(&format!("x-api-key: {KEY}\r\n")));
+    assert!(first.ends_with("explicit synthetic body"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_state_changing_get_requires_fresh_identity_before_sending() -> TestResult {
+    use verysync_sidecar::{RawMethod, RawRequest, RequestEffect};
+    let different = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":different})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let request = RawRequest::new(
+        RawMethod::Get,
+        ["rest", "account", "logout"],
+        RequestEffect::MayModify,
+    )?;
+    assert!(matches!(
+        client.raw_request(&request).await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 3);
+    assert!(!requests
+        .iter()
+        .any(|request| request.contains("account/logout")));
+    Ok(())
+}

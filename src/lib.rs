@@ -24,6 +24,7 @@ mod endpoint;
 mod error;
 mod folders;
 mod path;
+mod raw;
 mod status;
 
 pub use auth::{ApiKey, DeviceId};
@@ -34,6 +35,7 @@ pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use error::{Error, ResponseDiagnostic, Result};
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
 pub use path::{PathStyle, TargetPath};
+pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
 
 /// The fixed upstream version selected for initial compatibility acceptance.

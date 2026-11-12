@@ -14,6 +14,7 @@ use crate::{
     FolderRemoval, FolderStatus, FolderUpdate, ManagementEndpoint, PathStyle, ResponseDiagnostic,
     Result, SystemStatus, BASELINE_ENGINE_VERSION,
 };
+use crate::{RawRequest, RawResponse, RequestEffect};
 
 /// The policy applied to an engine version during connection.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -496,6 +497,61 @@ impl Client {
         })
     }
 
+    /// Send an explicit raw request only through this management connection.
+    ///
+    /// Components/queries are encoded under the configured base path. The
+    /// connection's authentication, deadline, response bound and redirect/retry
+    /// policy remain active. MayModify requests serialize with typed mutations
+    /// and recheck instance identity first, even when their HTTP method is GET.
+    /// The caller is responsible for declaring an unmodeled operation's effects.
+    ///
+    /// All HTTP statuses, headers and body bytes are retained. A returned raw
+    /// response is not a typed business-success or capability-support claim.
+    /// Transport/body failures after a possible write remain unknown outcomes.
+    pub async fn raw_request(&self, request: &RawRequest) -> Result<RawResponse> {
+        let mutation = request.effect == RequestEffect::MayModify;
+        let _guard = if mutation {
+            Some(self.connection.mutation_lock.lock().await)
+        } else {
+            None
+        };
+        if mutation {
+            self.system_status().await?;
+        }
+        let mut url = self.connection.base.clone();
+        if !request.components.is_empty() {
+            let mut path = url
+                .path_segments_mut()
+                .map_err(|_| Error::InvalidEndpoint {
+                    reason: "management URL cannot contain path components",
+                })?;
+            path.pop_if_empty();
+            for component in &request.components {
+                path.push(component);
+            }
+        }
+        if !request.query.is_empty() {
+            url.query_pairs_mut().extend_pairs(
+                request
+                    .query
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str())),
+            );
+        }
+        let mut outgoing = self
+            .connection
+            .http
+            .request(request.method.http(), url)
+            .headers(request.headers.clone())
+            .header("X-API-Key", self.connection.key.header());
+        if let Some(body) = &request.body {
+            outgoing = outgoing.body(body.clone());
+        }
+        self.connection
+            .receive_response("raw management request", outgoing, mutation)
+            .await
+    }
+
     /// Borrow the authenticated identity/version snapshot captured on connect.
     pub fn instance(&self) -> &InstanceInfo {
         &self.instance
@@ -603,37 +659,15 @@ impl Connection {
         if let Some(body) = body {
             request = request.json(body);
         }
-        let uncertain = |source| {
-            if mutation {
-                Error::MutationOutcomeUnknown {
-                    operation,
-                    source: Box::new(source),
-                }
-            } else {
-                source
-            }
-        };
-        let mut response = request
-            .send()
-            .await
-            .map_err(|e| uncertain(transport_error(operation, e)))?;
-        let status = response.status().as_u16();
+        let RawResponse {
+            status,
+            body: bytes,
+            ..
+        } = self.receive_response(operation, request, mutation).await?;
         if status == 401 {
             return Err(Error::Authentication { status });
         }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| uncertain(transport_error(operation, e)))?
-        {
-            if chunk.len() > self.response_limit.saturating_sub(bytes.len()) {
-                return Err(uncertain(Error::ResponseTooLarge {
-                    limit: self.response_limit,
-                }));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
+        let uncertain = |source| mutation_error(operation, mutation, source);
         if status == 403 {
             return Err(Error::AccessDenied {
                 response: ResponseDiagnostic::new(status, bytes),
@@ -658,6 +692,54 @@ impl Connection {
             }));
         }
         Ok((status, bytes))
+    }
+
+    async fn receive_response(
+        &self,
+        operation: &'static str,
+        request: reqwest::RequestBuilder,
+        mutation: bool,
+    ) -> Result<RawResponse> {
+        let uncertain = |source| mutation_error(operation, mutation, source);
+        let mut response = request
+            .send()
+            .await
+            .map_err(|e| uncertain(transport_error(operation, e)))?;
+        let status = response.status().as_u16();
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| (name.as_str().to_owned(), value.as_bytes().to_vec()))
+            .collect();
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| uncertain(transport_error(operation, e)))?
+        {
+            if chunk.len() > self.response_limit.saturating_sub(body.len()) {
+                return Err(uncertain(Error::ResponseTooLarge {
+                    limit: self.response_limit,
+                }));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(RawResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+}
+
+fn mutation_error(operation: &'static str, mutation: bool, source: Error) -> Error {
+    if mutation {
+        Error::MutationOutcomeUnknown {
+            operation,
+            source: Box::new(source),
+        }
+    } else {
+        source
     }
 }
 
