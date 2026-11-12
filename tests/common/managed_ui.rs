@@ -93,6 +93,7 @@ pub fn observe(root_pid: Option<u32>, scratch: &Path) -> TestResult<Value> {
         ])
         .arg(script)
         .arg(root_pid.unwrap_or(0).to_string())
+        .arg(std::process::id().to_string())
         .env("TEMP", scratch)
         .env("TMP", scratch)
         .creation_flags(0x08000000) // CREATE_NO_WINDOW applies only to this test query.
@@ -109,7 +110,7 @@ pub fn observe(root_pid: Option<u32>, scratch: &Path) -> TestResult<Value> {
 
 #[cfg(windows)]
 const WINDOWS: &str = r#"
-param([uint32]$OwnedRoot)
+param([uint32]$OwnedRoot, [uint32]$CallerPid)
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
@@ -123,6 +124,7 @@ public static class ManagedUiQuery {
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AttachConsole(uint process);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
   [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern uint GetConsoleProcessList([Out] uint[] processes, uint capacity);
   public static List<long[]> Windows() {
     var rows = new List<long[]>();
     if (!EnumWindows((window, data) => {
@@ -139,10 +141,16 @@ public static class ManagedUiQuery {
     if (attached) {
       IntPtr window = GetConsoleWindow();
       bool visible = window != IntPtr.Zero && IsWindowVisible(window);
+      var members = new uint[128];
+      uint count = GetConsoleProcessList(members, (uint)members.Length);
+      int listError = Marshal.GetLastWin32Error();
       FreeConsole();
-      return new long[] {process, 1, window.ToInt64(), visible ? 1 : 0};
+      if (count > members.Length) throw new InvalidOperationException("Console membership observation truncated");
+      var result = new List<long> {process, 1, window.ToInt64(), visible ? 1 : 0, count == 0 ? listError : 0, count};
+      for (uint i=0; i<count; i++) result.Add(members[i]);
+      return result.ToArray();
     }
-    if (error == 6) return new long[] {process, 0, 0, 0}; // Target has no console.
+    if (error == 6) return new long[] {process, 0, 0, 0, error, 0}; // Target has no console.
     throw new System.ComponentModel.Win32Exception(error);
   }
 }
@@ -165,9 +173,10 @@ $consoleInfo = @()
 foreach ($processId in $owned) { $consoleInfo += ,([ManagedUiQuery]::ConsoleInfo($processId)) }
 $consoles = @($consoleInfo | Where-Object { $_[1] -eq 1 }).Count
 $visibleConsoles = @($consoleInfo | Where-Object { $_[3] -eq 1 }).Count
+$callerConsole = [ManagedUiQuery]::ConsoleInfo($CallerPid)
 $browserIds = @($processes | Where-Object { $_.Name -match '^(msedge|chrome|chromium|firefox|brave|opera|arc)\.exe$' } | ForEach-Object { [uint32]$_.ProcessId })
 $browserWindows = @($rows | Where-Object { $_[2] -eq 1 -and $browserIds -contains [uint32]$_[1] } | ForEach-Object { $_[0] } | Sort-Object)
-@{platform='windows';current_desktop_enumerated=$true;interactive_session=[Environment]::UserInteractive;session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;owned_root=$OwnedRoot;owned_processes=$owned.Count;owned_windows=$ownWindows.Count;owned_console_processes=$consoles;owned_visible_consoles=$visibleConsoles;console_observations=$consoleInfo;browser_windows=$browserWindows;scope='Current desktop EnumWindows, owned descendants and separate-probe AttachConsole; no titles collected'} | ConvertTo-Json -Compress -Depth 5
+@{platform='windows';current_desktop_enumerated=$true;interactive_session=[Environment]::UserInteractive;session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;caller_pid=$CallerPid;caller_console=$callerConsole;owned_root=$OwnedRoot;owned_processes=$owned.Count;owned_windows=$ownWindows.Count;owned_console_processes=$consoles;owned_visible_consoles=$visibleConsoles;console_observations=$consoleInfo;browser_windows=$browserWindows;scope='Current desktop EnumWindows, owned descendants and separate-probe AttachConsole; no titles collected'} | ConvertTo-Json -Compress -Depth 5
 "#;
 
 #[cfg(target_os = "linux")]
