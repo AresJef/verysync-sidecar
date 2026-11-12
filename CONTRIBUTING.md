@@ -83,6 +83,12 @@ creating-thread termination, parent-death signal installation races, exec/fork
 inheritance and whole-group outcomes. An isolated PTY is compared with the
 parent-death signal; negative mechanism results remain explicit. These helpers
 are test hosts only and do not add a product daemon or managed-runtime API.
+On native Windows, `scripts/run-windows-lifetime-probes.py` runs an explicitly
+filtered Rust test host to investigate last-Job-handle closure, forced host
+termination, nested containment, startup failures and an explicitly non-killing
+persistent candidate. Observers retain process handles, never the tested inner
+Job handle. Ancestor Job restrictions remain applicable to persistence; modern
+runner results do not establish Windows 7/legacy support.
 Only sanitized result JSON enters CI logs; upstream programs, raw state, keys
 and private logs are not uploaded.
 

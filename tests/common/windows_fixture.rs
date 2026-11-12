@@ -13,7 +13,9 @@ use std::process::Child;
 use std::ptr;
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{LocalFree, ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    GetHandleInformation, LocalFree, ERROR_NO_MORE_FILES, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
@@ -25,14 +27,24 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+    JobObjectBasicAccountingInformation, JobObjectBasicProcessIdList,
     JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-    TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_PROCESS_ID_LIST,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
 pub(super) struct Job(OwnedHandle);
+
+#[derive(serde::Serialize)]
+pub(super) struct JobSnapshot {
+    pub(super) limit_flags: u32,
+    pub(super) handle_inheritable: bool,
+    pub(super) root_in_job: bool,
+    pub(super) active_processes: u32,
+    pub(super) process_ids: Vec<u32>,
+}
 
 struct LocalAllocation(*mut core::ffi::c_void);
 
@@ -140,6 +152,10 @@ impl Job {
     }
 
     pub(super) fn new() -> io::Result<Self> {
+        Self::new_with_kill_on_close(true)
+    }
+
+    pub(super) fn new_with_kill_on_close(kill_on_close: bool) -> io::Result<Self> {
         // SAFETY: Null security attributes/name create a fresh unnamed,
         // noninheritable handle. Check it before transferring unique ownership.
         let raw = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
@@ -149,7 +165,11 @@ impl Job {
         // SAFETY: CreateJobObjectW returned a newly owned valid handle.
         let job = Self(unsafe { OwnedHandle::from_raw_handle(raw) });
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        limits.BasicLimitInformation.LimitFlags = if kill_on_close {
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        } else {
+            0
+        };
         // SAFETY: The handle lives through the call; the pointer and byte count
         // describe the initialized structure required by this information class.
         let result = unsafe {
@@ -166,11 +186,80 @@ impl Job {
         Ok(job)
     }
 
+    pub(super) fn snapshot(&self, child: &Child) -> io::Result<JobSnapshot> {
+        let mut handle_flags = 0;
+        let mut in_job = 0;
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        // SAFETY: All handles are live; typed outputs and byte sizes match
+        // their native information classes. No handle is duplicated here.
+        if unsafe { GetHandleInformation(self.0.as_raw_handle(), &mut handle_flags) } == 0
+            || unsafe { IsProcessInJob(child.as_raw_handle(), self.0.as_raw_handle(), &mut in_job) }
+                == 0
+            || unsafe {
+                QueryInformationJobObject(
+                    self.0.as_raw_handle(),
+                    JobObjectExtendedLimitInformation,
+                    ptr::from_mut(&mut limits).cast(),
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                    ptr::null_mut(),
+                )
+            } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // A usize-backed buffer supplies native pointer alignment and room
+        // for the two u32 counts plus at most 256 process IDs on both targets.
+        let mut storage = vec![0usize; 258];
+        if unsafe {
+            QueryInformationJobObject(
+                self.0.as_raw_handle(),
+                JobObjectBasicProcessIdList,
+                storage.as_mut_ptr().cast(),
+                (storage.len() * size_of::<usize>()) as u32,
+                ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: Successful OS fill with sufficient aligned storage. Check
+        // both counts before borrowing its flexible array member.
+        let list = unsafe { &*storage.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+        let count = list.NumberOfProcessIdsInList as usize;
+        if count > 256 || list.NumberOfAssignedProcesses as usize > count {
+            return Err(io::Error::other("private Job process bound exceeded"));
+        }
+        let ids = unsafe {
+            std::slice::from_raw_parts(ptr::addr_of!(list.ProcessIdList).cast::<usize>(), count)
+        };
+        let process_ids = ids
+            .iter()
+            .map(|&pid| {
+                u32::try_from(pid).map_err(|_| io::Error::other("Job returned invalid process ID"))
+            })
+            .collect::<io::Result<_>>()?;
+        Ok(JobSnapshot {
+            limit_flags: limits.BasicLimitInformation.LimitFlags,
+            handle_inheritable: handle_flags & HANDLE_FLAG_INHERIT != 0,
+            root_in_job: in_job != 0,
+            active_processes: self.active_processes()?,
+            process_ids,
+        })
+    }
+
     pub(super) fn assign_and_resume(&self, child: &Child) -> io::Result<()> {
         // SAFETY: Both handles remain live. The caller created this child with
         // CREATE_SUSPENDED and retains its kill/wait guard on every error path.
         if unsafe { AssignProcessToJobObject(self.0.as_raw_handle(), child.as_raw_handle()) } == 0 {
             return Err(io::Error::last_os_error());
+        }
+        // Query while the exact child is still suspended: neither a fast
+        // startup failure nor a new descendant can race this membership check.
+        let snapshot = self.snapshot(child)?;
+        if snapshot.handle_inheritable || !snapshot.root_in_job {
+            return Err(io::Error::other(
+                "private Job handle/membership contract failed before resume",
+            ));
         }
         resume_initial_thread(child.id())
     }
