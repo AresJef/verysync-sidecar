@@ -18,6 +18,8 @@
 //! # Ok::<(), verysync_sidecar::Error>(())
 //! ```
 
+#![doc = include_str!("../docs/public/getting-started.md")]
+
 mod auth;
 mod capabilities;
 mod client;

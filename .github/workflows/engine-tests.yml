@@ -71,6 +71,13 @@ jobs:
         run: cargo +"$TEST_TOOLCHAIN" test --test client_contract --test transport_contract --locked
       - name: Run independent-engine fixture contracts
         run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test engine_control --locked -- --test-threads=1 --nocapture
+      - name: Build public examples explicitly
+        run: >-
+          python scripts/prepare-test-examples.py
+          --toolchain "$TEST_TOOLCHAIN"
+          --github-env "${{ github.env }}"
+      - name: Run compiled public examples on an independent engine
+        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test example_control --locked -- --test-threads=1 --nocapture
       - name: Investigate native macOS lifetime mechanisms
         if: startsWith(matrix.package, 'macos-')
         run: >-
