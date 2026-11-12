@@ -34,3 +34,5 @@
 **/verysync.exe
 **/*.zip
 **/*.tar.gz
+**/__pycache__/
+**/*.pyc

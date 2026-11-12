@@ -1,0 +1,73 @@
+name: Engine fixture
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-fixture-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fixture:
+    name: ${{ matrix.package }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+          - package: linux-amd64-standard
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-gnu
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.99.1-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Check archive extraction contracts
+        run: python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+      - name: Install native Rust toolchain
+        run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+      - name: Record compiler identity
+        run: rustc +"$TEST_TOOLCHAIN" -vV
+      - name: Explicitly prepare fixed official test engine
+        run: >-
+          python scripts/prepare-test-engine.py prepare
+          --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}"
+          --github-env "${{ github.env }}"
+      - name: Run independent-engine fixture contracts
+        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test fixture_contract --locked -- --test-threads=1 --nocapture
+      - name: Confirm no task-owned engine remains
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
