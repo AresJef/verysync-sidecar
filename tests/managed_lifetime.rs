@@ -145,6 +145,12 @@ async fn run_test_host() -> TestResult {
     #[cfg(windows)]
     let environment_names = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "TEMP", "TMP"];
     let environment_before: Vec<_> = environment_names.iter().map(std::env::var_os).collect();
+    #[cfg(windows)]
+    let ui_baseline = if mode == "kill" {
+        Some(managed_ui::observe(None, &root).await?)
+    } else {
+        None
+    };
     let state = root.join("state");
     let instance = ManagedInstance::start(settings(&root.join(CORE_FILE), &state)?).await?;
     #[cfg(unix)]
@@ -194,6 +200,15 @@ async fn run_test_host() -> TestResult {
         "authenticated":instance.client().system_status().await?.device_id == instance.client().instance().device_id,
         "inherited_hup_preserved":inherited_hup_preserved,
         "unrelated_pid":unrelated.as_ref().map(Child::id)});
+    #[cfg(windows)]
+    let ready = {
+        let mut ready = ready;
+        if let Some(baseline) = ui_baseline {
+            let observed = managed_ui::observe(Some(instance.process_id()), &root).await?;
+            ready["ui"] = json!({"baseline": baseline, "start": observed});
+        }
+        ready
+    };
     std::fs::write(root.join("ready.tmp"), serde_json::to_vec(&ready)?)?;
     std::fs::rename(root.join("ready.tmp"), root.join("ready.json"))?;
     let mut input = String::new();
@@ -426,12 +441,6 @@ async fn exercise(mode: &'static str) -> TestResult {
     std::fs::copy(&selected, &binary)?;
     let mut canary = ManagedInstance::start(settings(&selected, &root.join("canary"))?).await?;
     let canary_id = canary.client().instance().device_id.clone();
-    #[cfg(windows)]
-    let baseline = if mode == "kill" {
-        Some(managed_ui::observe(None, &root).await?)
-    } else {
-        None
-    };
     let mut command = host_command(&root, mode)?;
     command.stdin(Stdio::piped());
     #[cfg(windows)]
@@ -448,7 +457,9 @@ async fn exercise(mode: &'static str) -> TestResult {
     let mut group = None;
     let mut unrelated_identity = None;
     let result: TestResult = async {
-        let deadline = Instant::now() + Duration::from_secs(30);
+        // Windows' separate native UI probes run in the actual test caller,
+        // before and after core startup; their bounded work is inside readiness.
+        let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 60 } else { 30 });
         let ready: Value = loop {
             if root.join("ready.json").try_exists()? {
                 break serde_json::from_slice(&std::fs::read(root.join("ready.json"))?)?;
@@ -489,10 +500,14 @@ async fn exercise(mode: &'static str) -> TestResult {
                 "public owned host Job observation: {}",
                 json!({"case": mode, "snapshot": snapshot})
             );
-            if let Some(baseline) = &baseline {
-                let observed = managed_ui::observe(Some(pid), &root).await?;
-                managed_ui::assert_background(baseline, &observed)?;
-                println!("public owned host UI observation: {observed}");
+            if mode == "kill" {
+                let ui = &ready["ui"];
+                println!("public owned host UI observation: {ui}");
+                require(
+                    ui["baseline"].is_object() && ui["start"].is_object(),
+                    "actual host UI observation missing",
+                )?;
+                managed_ui::assert_background(&ui["baseline"], &ui["start"])?;
             }
         }
         if mode == "inherited" {

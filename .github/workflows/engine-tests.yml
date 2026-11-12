@@ -79,14 +79,14 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_instance --test-filter restart_preserves_identity_folders_settings_and_samples
           --evidence-dir "${{ runner.temp }}/vs-managed-ui-proxy"
-      - name: Exercise public managed startup, shutdown, restart and owned UI observations
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-managed-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_lifetime --evidence-dir "${{ runner.temp }}/vs-host-lifetime-proxy"
+      - name: Exercise public managed startup, shutdown, restart and owned UI observations
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-managed-proxy"
       - name: Run independent-engine fixture contracts
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
