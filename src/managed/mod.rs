@@ -5,6 +5,7 @@ mod instance;
 pub use instance::{ManagedExit, ManagedInstance};
 mod native;
 mod process;
+mod shutdown;
 mod state;
 
 use std::path::{Component, Path, PathBuf};

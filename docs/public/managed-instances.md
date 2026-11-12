@@ -69,7 +69,7 @@ alive. Await an explicit exit observation when completion matters.
 Do not independently launch or modify the same state while its library owner is
 active. The library lease coordinates SDK owners; handing the official lock back
 immediately before the core acquires it is not an atomic protocol with unrelated
-launchers. Normal typed shutdown/restart, startup cancellation/recovery, inherited
+launchers. Restart, startup cancellation/recovery, inherited
 signal/descriptor stress, intentional persistence and full platform UI/lifetime
 acceptance continue in the same development plan. Modern native runner evidence
 does not establish other architectures, minimum systems or cross-network scope.
@@ -82,3 +82,39 @@ Management requests default to a separate 10-second deadline, configurable with
 Private program diagnostics are read with a 64 KiB bound. The owner periodically
 resets its private core capture; output is never forwarded to a caller-global
 logger. Diagnostic bytes require explicit inspection/redaction.
+
+## Explicit shutdown and termination
+
+`shutdown(total_timeout)` first rechecks the selected identity, sends one typed
+normal-shutdown request, then waits for the exact process tree and state lease to
+finish. A successful HTTP response is only acknowledgement. Inspect the returned
+`ManagedExit` code/signal, `tree_stopped` and `forced`; an already observed exit is
+returned without a second request.
+
+```rust
+use std::time::Duration;
+use verysync_sidecar::{ManagedExit, ManagedInstance};
+
+async fn close_dedicated(instance: &mut ManagedInstance) -> verysync_sidecar::Result<ManagedExit> {
+    instance.shutdown(Duration::from_secs(10)).await
+}
+```
+
+The deadline covers the identity check, API request and exit wait together.
+Authentication/business failures retain the normal typed errors; a possible
+write without a conclusive response remains an unknown outcome. No request is
+retried automatically. Timing out or cancelling the wait leaves the owner intact
+and does not revoke a request the core may already have applied. Reconcile with
+`wait_for_exit()` before choosing another explicit action.
+
+`force_stop(total_timeout)` is a separate choice that signals the existing private
+owner thread to terminate only its retained group/Job and confirm actual exit.
+It bypasses management authentication, can interrupt work and cannot be undone
+by cancelling the wait. It is never selected implicitly by `shutdown`. Invalid
+zero deadlines are rejected before sending either action. Dropping the owner
+still follows its documented cleanup policy. Borrowed `Client` objects gain no
+implicit lifecycle responsibility from these methods.
+
+On macOS, exit observation queries native private-group membership and process
+state. Exited zombies are not treated as running members; an incomplete or denied
+inspection remains a failure to confirm exit. The retained direct child is reaped.

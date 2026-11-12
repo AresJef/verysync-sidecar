@@ -24,7 +24,7 @@ pub struct ManagedExit {
     pub signal: Option<i32>,
     /// Whether owner cancellation/drop requested forced cleanup.
     pub forced: bool,
-    /// Whether the private process group or Job was confirmed empty.
+    /// Whether the private process group or Job has no live members.
     pub tree_stopped: bool,
     /// Bounded private output, excluded from ordinary Debug text.
     pub diagnostic: ProcessDiagnostic,
@@ -56,6 +56,16 @@ struct ReadyContext {
 }
 
 impl ManagedInstance {
+    pub(super) fn exit_snapshot(&self) -> Option<ManagedExit> {
+        self.exit.borrow().as_ref().cloned()
+    }
+
+    pub(super) fn request_force_cleanup(&self) -> Result<()> {
+        self._owner.send(()).map_err(|_| Error::ManagedFailure {
+            reason: "owned control thread is no longer available",
+        })
+    }
+
     /// Start the selected official fixed-baseline program using private state.
     ///
     /// Requires a caller-owned Tokio runtime with I/O and timers. Preparation,

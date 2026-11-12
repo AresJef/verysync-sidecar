@@ -159,6 +159,22 @@ pub struct Client {
 }
 
 impl Client {
+    pub(crate) async fn request_owned_shutdown(&self) -> Result<()> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        self.connection
+            .request_bytes(
+                "request graceful owned shutdown",
+                reqwest::Method::POST,
+                self.connection
+                    .management_url("rest/system/shutdown", &[])?,
+                None,
+                true,
+            )
+            .await
+            .map(|_| ())
+    }
+
     /// Authenticate, apply the version policy, and read/optionally compare ID.
     ///
     /// Success means these management reads succeeded. It does not mean peers
