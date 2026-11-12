@@ -392,6 +392,22 @@ async fn run_tool(
             if output.stdout.len() > 64 * 1024 {
                 return Err("engine helper output limit exceeded".into());
             }
+            if args.first() == Some(&"version") {
+                // This read-only probe runs before state/credentials are generated.
+                // Keep both channels visible: GUI-subsystem builds may use a
+                // different output channel from the Unix command-line builds.
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "fixture_version_probe": {
+                            "stdout_bytes": output.stdout.len(),
+                            "stderr_bytes": output.stderr.len(),
+                            "stdout": String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(1024)]),
+                            "stderr": String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(1024)]),
+                        }
+                    })
+                );
+            }
             return Ok(String::from_utf8(output.stdout)?);
         }
         if Instant::now() >= deadline {
