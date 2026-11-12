@@ -55,7 +55,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
-      - name: Check archive extraction contracts
+      - name: Check extraction and exact process inventory contracts
         run: python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
       - name: Install native Rust toolchain
         run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal

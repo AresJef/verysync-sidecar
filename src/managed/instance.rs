@@ -74,6 +74,10 @@ impl ManagedInstance {
     /// thread. A dropped/failed startup closes its ownership channel so that
     /// thread cleans up only its exact processes. Partial private state remains
     /// available for diagnosis/retry; it is never cleared to conceal a failure.
+    /// Cleanup continues independently of the Tokio runtime, but dropping this
+    /// future does not synchronously wait for process exit. An immediate explicit
+    /// retry can return [`Error::ManagedStateInUse`] while cleanup owns the lease.
+    /// Dropping a Tokio task's JoinHandle alone does not cancel that task.
     pub async fn start(options: ManagedOptions) -> Result<Self> {
         tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
             reason: "managed startup requires a Tokio runtime with I/O and timers",

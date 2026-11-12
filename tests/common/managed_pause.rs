@@ -2,7 +2,10 @@
 #![allow(unsafe_code)]
 
 #[cfg(unix)]
-pub struct PausedRoot(u32);
+pub struct PausedRoot {
+    pid: u32,
+    resume: bool,
+}
 #[cfg(unix)]
 impl PausedRoot {
     pub fn new(pid: u32) -> std::io::Result<Self> {
@@ -11,7 +14,7 @@ impl PausedRoot {
         if unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let paused = Self(pid);
+        let paused = Self { pid, resume: true };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while !paused.is_paused()? {
             if std::time::Instant::now() >= deadline {
@@ -26,9 +29,15 @@ impl PausedRoot {
     }
     pub fn is_paused(&self) -> std::io::Result<bool> {
         let output = std::process::Command::new("ps")
-            .args(["-o", "state=", "-p", &self.0.to_string()])
+            .args(["-o", "state=", "-p", &self.pid.to_string()])
             .output()?;
         Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).contains('T'))
+    }
+
+    pub fn leave_paused(mut self) {
+        // The startup timeout must terminate this retained root itself. Do not
+        // later signal a PID that cleanup may already have reaped/recycled.
+        self.resume = false;
     }
 }
 #[cfg(unix)]
@@ -36,10 +45,33 @@ impl Drop for PausedRoot {
     fn drop(&mut self) {
         // SAFETY: Tests resume before stopping/reaping their retained exact root,
         // so its PID cannot be recycled. This never signals a global group.
-        unsafe {
-            libc::kill(self.0 as libc::pid_t, libc::SIGCONT);
+        if self.resume {
+            unsafe {
+                libc::kill(self.pid as libc::pid_t, libc::SIGCONT);
+            }
         }
     }
+}
+
+pub fn startup_root(pids: &[u32]) -> std::io::Result<u32> {
+    #[cfg(unix)]
+    let roots: Vec<_> = pids
+        .iter()
+        .copied()
+        .filter(|pid| {
+            // SAFETY: Read-only group lookup of PIDs just independently observed
+            // for this test's private executable. Startup creates a fresh session.
+            unsafe { libc::getpgid(*pid as libc::pid_t) == *pid as libc::pid_t }
+        })
+        .collect();
+    #[cfg(windows)]
+    let roots = pids.to_vec(); // Fixed Windows baseline uses one direct inner core.
+    if roots.len() != 1 {
+        return Err(std::io::Error::other(
+            "expected one actual private startup root",
+        ));
+    }
+    Ok(roots[0])
 }
 
 #[cfg(windows)]
@@ -59,6 +91,7 @@ mod windows {
     pub struct PausedRoot {
         process: OwnedHandle,
         threads: Vec<OwnedHandle>,
+        resume: bool,
     }
     impl PausedRoot {
         pub fn new(pid: u32) -> io::Result<Self> {
@@ -71,6 +104,7 @@ mod windows {
             let mut paused = Self {
                 process: unsafe { OwnedHandle::from_raw_handle(raw) },
                 threads: Vec::new(),
+                resume: true,
             };
             let mut seen = std::collections::HashSet::new();
             for _ in 0..10 {
@@ -124,9 +158,17 @@ mod windows {
             }
             Ok(code == 259 && !self.threads.is_empty())
         }
+        pub fn leave_paused(mut self) {
+            // Closing these query/thread handles does not resume the core.
+            // The SDK's retained Job must terminate it when startup times out.
+            self.resume = false;
+        }
     }
     impl Drop for PausedRoot {
         fn drop(&mut self) {
+            if !self.resume {
+                return;
+            }
             for thread in &self.threads {
                 // SAFETY: Each handle is retained from one successful SuspendThread;
                 // exactly one decrement restores the previous suspension count.

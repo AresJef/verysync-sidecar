@@ -84,10 +84,12 @@ impl StateLease {
                 .map_err(|e| io_error("persist state marker", e))?;
         }
         let engine_lock_path = path.join("verysync.lock");
-        let engine_lock = if engine_lock_path
-            .try_exists()
-            .map_err(|e| io_error("inspect upstream state lock", e))?
-        {
+        let engine_lock_exists = match fs::symlink_metadata(&engine_lock_path) {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(io_error("inspect upstream state lock", error)),
+        };
+        let engine_lock = if engine_lock_exists {
             let lock = native::open_owned_lock(&engine_lock_path)
                 .map_err(|e| io_error("open upstream state lock", e))?;
             lock.try_lock_exclusive().map_err(|error| {

@@ -217,7 +217,9 @@ fn options() -> OpenOptions {
     let mut options = OpenOptions::new();
     options
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        // Do not block opening a substituted FIFO before the regular-file
+        // check can reject it. O_NONBLOCK has no effect on ordinary files.
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
     options
 }
 

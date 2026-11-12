@@ -69,8 +69,7 @@ alive. Await an explicit exit observation when completion matters.
 Do not independently launch or modify the same state while its library owner is
 active. The library lease coordinates SDK owners; handing the official lock back
 immediately before the core acquires it is not an atomic protocol with unrelated
-launchers. Startup cancellation/recovery, inherited
-signal/descriptor stress, intentional persistence and full platform UI/lifetime
+launchers. Inherited signal/descriptor stress, intentional persistence and full platform UI/lifetime
 acceptance continue in the same development plan. Modern native runner evidence
 does not establish other architectures, minimum systems or cross-network scope.
 
@@ -82,6 +81,37 @@ Management requests default to a separate 10-second deadline, configurable with
 Private program diagnostics are read with a 64 KiB bound. The owner periodically
 resets its private core capture; output is never forwarded to a caller-global
 logger. Diagnostic bytes require explicit inspection/redaction.
+
+## Startup cancellation and partial state
+
+Dropping the actual `ManagedInstance::start` future, or allowing its configured
+startup deadline to expire, closes the startup ownership channel. The private
+native owner thread terminates and reaps only its retained processes, then
+releases the state lease. This cleanup does not require the Tokio runtime to
+continue running: shutting down a runtime drops its pending startup tasks too.
+Dropping a task's `JoinHandle` alone detaches the task and does **not** cancel its
+startup. Abort the task or retain and cancel the actual future when that is the
+intended action.
+
+Cancellation requests cleanup asynchronously; it is not a synchronous process
+exit acknowledgement. An immediate explicit retry can encounter `ManagedStateInUse`
+while cleanup completes. Do not remove the lease/state or assume that a free
+lease alone proves all processes exited. The native tests first observe the
+actual private core PID before cancellation, then independently enumerate that
+exact executable until no process remains, separately check lease release and
+authenticate an explicit retry using the original identity.
+
+The directory, identity, private key/certificate, configuration and caller files
+remain available after cancellation. A missing half of the key/certificate pair
+or existing configuration without a complete identity is rejected without
+silently generating a replacement identity or resetting configuration. Persisted
+key, certificate and configuration resources must remain private regular files;
+links/reparse resources, including dangling links and the persisted identity and
+completion markers, are rejected before any metadata helper or identity generation.
+A dangling link, including the official state lock, is never treated as an absent file. A missing configuration with
+retained keys, or malformed configuration, is also rejected. Preserve the original files and repair or
+restore them explicitly before retrying. The tests restore only their own
+synthetic fixture's original files and verify identity and sample hashes.
 
 ## Explicit shutdown and termination
 
