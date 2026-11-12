@@ -427,6 +427,11 @@ fn engine_command(program: &Path, home: &Path) -> TestResult<Command> {
     #[cfg(not(target_os = "macos"))]
     let mut c = command(program);
     c.current_dir(home).env("TMPDIR", home.join("tmp"));
+    #[cfg(unix)]
+    c.env("HOME", home.join("profile"))
+        .env("XDG_CONFIG_HOME", home.join("roaming"))
+        .env("XDG_CACHE_HOME", home.join("local"))
+        .env("XDG_DATA_HOME", home.join("profile").join("data"));
     #[cfg(windows)]
     c.env("APPDATA", home.join("roaming"))
         .env("LOCALAPPDATA", home.join("local"))

@@ -27,8 +27,8 @@ compares the generated identity before any mutation.
 
 The fixture also writes `auto_startup: false` in its own `appconf.yaml` and
 explicitly disables the tracker and tray options. Child processes use private
-working and temporary directories; Windows profile/data environment paths are
-scoped to that state. On macOS a child sandbox denies non-loopback IP traffic
+working, temporary and profile/cache directories; child HOME/XDG paths on Unix
+and Windows profile/data environment paths are scoped to that state. On macOS a child sandbox denies non-loopback IP traffic
 and file writes outside the fixture. These controls apply to helpers as well as
 the serving process, and never change host startup settings or a firewall.
 On Windows, fixture engines start suspended and join a private Job Object before
@@ -42,8 +42,19 @@ that the permission check rejects it. These are test-harness controls, not publi
 library lifecycle guarantees.
 
 ```sh
-cargo test --features engine-tests --test engine_control --locked -- --test-threads=1
+python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \
+  --test-target engine_control --evidence-dir "<absolute-new-private-evidence-dir>"
 ```
+
+The explicit runner also accepts `managed_instance`, `example_control` and the
+native Unix `managed_lifetime` target. It starts a test-only loopback HTTP proxy
+that returns 403 without forwarding. Only hostnames/method counts are recorded;
+credentials, query values and headers are excluded. A separate loopback canary
+tests that neither HTTP nor CONNECT reaches a forwarding destination. The core
+can attempt maintenance/NAT HTTP requests despite disabled discovery/relays;
+this wrapper blocks the observed requests without installing a global proxy,
+firewall or persistent process. It is not an OS-wide no-egress proof. Runtime
+dependencies are prepared first; the runner uses offline Cargo execution.
 
 The `engine-tests` feature selects tests that require this explicit environment;
 it does not download or launch an engine when the crate is built or imported.
@@ -72,7 +83,7 @@ path and reports lingering processes; it does not kill by name.
 
 The optional `lifetime_probes` target investigates native process mechanisms;
 it is not the production managed-instance implementation. On macOS its explicit
-runner is `scripts/run-macos-lifetime-probes.py`, which requires the prepared
+underlying runner is `scripts/run-macos-lifetime-probes.py`, which requires the prepared
 engine environment, a Rust toolchain, and a new absolute evidence directory.
 It compiles a standalone Rust test host into a private temporary directory and
 tests only its own processes, groups and PTY. Host SIGKILL, native exit and
@@ -91,6 +102,15 @@ Job handle. Ancestor Job restrictions remain applicable to persistence; modern
 runner results do not establish Windows 7/legacy support.
 Only sanitized result JSON enters CI logs; upstream programs, raw state, keys
 and private logs are not uploaded.
+
+Use `run-isolated-engine-tests.py --mechanism macos` (or `linux`/`windows` on the
+matching native system) with the same toolchain/evidence arguments to wrap these
+investigations too. The public `managed_lifetime` target is separate: dedicated
+hosts call `ManagedInstance`, then actually return, exit without destructors or
+undergo SIGKILL. Native process observations must confirm core exit before any
+fallback. An unrelated exec case verifies its process identity/start time while
+the core exits, then explicitly stops and observes that test process as well.
+Do not rename successful mechanism probes as public-library acceptance.
 
 Use synthetic files. Disable discovery, trackers, relay, NAT and external
 connections unless the particular network case requires them. Await only owned

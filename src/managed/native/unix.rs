@@ -3,12 +3,86 @@
 
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::FromRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::ptr;
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    // Darwin exports this reentrant function, but libc 0.2.191 does not declare it.
+    fn ptsname_r(fd: libc::c_int, buffer: *mut libc::c_char, length: libc::size_t) -> libc::c_int;
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn private_pty() -> io::Result<(File, File)> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    // SAFETY: Native flags open one new private PTY master. CLOEXEC is atomic
+    // with allocation; there is no openpty-to-fcntl inheritance interval.
+    let fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: The successful native open returned one uniquely owned descriptor.
+    let master = unsafe { File::from_raw_fd(fd) };
+    // SAFETY: Both functions operate only on this live private master.
+    if unsafe { libc::grantpt(fd) } != 0 || unsafe { libc::unlockpt(fd) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut name = [0 as libc::c_char; 1024];
+    // SAFETY: The writable buffer has the exact supplied capacity. Successful
+    // ptsname_r writes a NUL-terminated native path in this caller-owned buffer.
+    #[cfg(target_os = "macos")]
+    let result = unsafe { ptsname_r(fd, name.as_mut_ptr(), name.len()) };
+    #[cfg(target_os = "linux")]
+    let result = unsafe { libc::ptsname_r(fd, name.as_mut_ptr(), name.len()) };
+    if result != 0 {
+        #[cfg(target_os = "macos")]
+        return Err(io::Error::last_os_error()); // Darwin returns -1 and sets errno.
+        #[cfg(target_os = "linux")]
+        return Err(io::Error::from_raw_os_error(result)); // glibc/musl return errno.
+    }
+    // SAFETY: The successful reentrant native call guaranteed termination.
+    let path = unsafe { CStr::from_ptr(name.as_ptr()) };
+    let slave = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY | libc::O_CLOEXEC)
+        .open(Path::new(OsStr::from_bytes(path.to_bytes())))?;
+    Ok((master, slave))
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod pty_tests {
+    use super::*;
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn private_pty_descriptors_are_close_on_exec() -> io::Result<()> {
+        let (master, slave) = private_pty()?;
+        for file in [&master, &slave] {
+            // SAFETY: Read flags only on each retained live private descriptor.
+            let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
+            if flags < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn private_pty() -> io::Result<(File, File)> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "managed PTY ownership is not verified on this Unix platform",
+    ))
+}
 
 pub(in crate::managed) struct ProcessGuard {
     master: Option<File>,
@@ -19,33 +93,7 @@ pub(in crate::managed) fn spawn(
     mut command: Command,
     helper: bool,
 ) -> io::Result<(Child, ProcessGuard)> {
-    let (mut master, mut slave) = (-1, -1);
-    // SAFETY: Valid writable descriptor outputs and null optional terminal
-    // parameters. Successful descriptors immediately receive unique owners.
-    if unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-        )
-    } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: openpty succeeded and returned two independently owned descriptors.
-    let master = unsafe { File::from_raw_fd(master) };
-    let slave = unsafe { File::from_raw_fd(slave) };
-    for file in [&master, &slave] {
-        // SAFETY: Each descriptor is live; F_GETFD/F_SETFD use native constants.
-        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
-        if flags < 0
-            || unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-    }
+    let (master, slave) = private_pty()?;
     // Helpers retain pipe stdin for a private generated password. Their stderr
     // slave supplies the controlling terminal; the long-running core uses stdin.
     let terminal = if helper { 2 } else { 0 };
