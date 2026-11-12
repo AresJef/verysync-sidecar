@@ -1,0 +1,36 @@
+# Public-source allowlist. Internal plans, research and machine state stay local.
+/*
+!/.gitignore
+!/Cargo.toml
+!/Cargo.lock
+!/LICENSE-MIT
+!/LICENSE-APACHE
+!/README.md
+!/CONTRIBUTING.md
+!/CHANGELOG.md
+!/src/
+!/tests/
+!/examples/
+!/releases/
+!/scripts/
+!/.github/
+!/docs/
+/docs/*
+!/docs/capabilities.csv
+!/docs/platforms.csv
+!/docs/public/
+
+# Never track runtime resources or vendored official binaries.
+**/target/
+**/.DS_Store
+**/.env
+**/.env.*
+**/credentials*
+**/*.pem
+**/*.key
+**/setting.dat*
+**/*.sock
+**/verysync
+**/verysync.exe
+**/*.zip
+**/*.tar.gz

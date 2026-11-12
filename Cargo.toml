@@ -1,0 +1,37 @@
+[package]
+name = "verysync-sidecar"
+version = "0.1.0-alpha.1"
+edition = "2021"
+rust-version = "1.85"
+resolver = "3"
+description = "Async Rust control library for the official VerySync program"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["verysync", "sync", "sidecar", "async"]
+categories = ["api-bindings", "asynchronous"]
+publish = false
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "src/**",
+    "examples/**",
+    "tests/**",
+    "docs/public/**",
+    "docs/capabilities.csv",
+    "docs/platforms.csv",
+    "releases/*.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+]
+
+[dependencies]
+tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
