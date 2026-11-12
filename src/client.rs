@@ -11,8 +11,8 @@ use url::Url;
 
 use crate::{
     ApiKey, CreateFolderOptions, DeviceId, Error, FolderConfig, FolderId, FolderPatch,
-    FolderStatus, FolderUpdate, ManagementEndpoint, PathStyle, ResponseDiagnostic, Result,
-    SystemStatus, BASELINE_ENGINE_VERSION,
+    FolderRemoval, FolderStatus, FolderUpdate, ManagementEndpoint, PathStyle, ResponseDiagnostic,
+    Result, SystemStatus, BASELINE_ENGINE_VERSION,
 };
 
 /// The policy applied to an engine version during connection.
@@ -459,6 +459,41 @@ impl Client {
     pub async fn resume_folder(&self, id: &FolderId) -> Result<FolderUpdate> {
         self.update_folder(id, &FolderPatch::default().paused(false))
             .await
+    }
+
+    /// Unregister one exact folder ID without requesting deletion of its files.
+    ///
+    /// Only the configuration DELETE is sent, with no file-deletion parameter
+    /// or body. The target and identity must still exist before the write.
+    /// Inspect `configuration_absent` on the returned snapshot; another writer
+    /// can change the ID again. The controller does not inspect or remove local
+    /// paths. Unknown outcomes and cancellation require reconciliation before
+    /// retrying; no modifying request is retried automatically.
+    pub async fn remove_folder_keep_files(&self, id: &FolderId) -> Result<FolderRemoval> {
+        let url = self.connection.folder_url(id)?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let previous_configuration = self.folder(id).await?;
+        self.connection
+            .request_bytes(
+                "unregister folder",
+                reqwest::Method::DELETE,
+                url,
+                None,
+                true,
+            )
+            .await?;
+        let configured = self
+            .folders()
+            .await
+            .map_err(|source| Error::MutationOutcomeUnknown {
+                operation: "read back unregistered folder",
+                source: Box::new(source),
+            })?;
+        Ok(FolderRemoval {
+            previous_configuration,
+            configuration_absent: !configured.iter().any(|folder| folder.id == *id),
+        })
     }
 
     /// Borrow the authenticated identity/version snapshot captured on connect.

@@ -97,6 +97,18 @@ pub struct FolderUpdate {
     pub requested_fields_match: bool,
 }
 
+/// Readback after unregistering a folder without requesting file deletion.
+#[derive(Clone, Debug)]
+pub struct FolderRemoval {
+    /// The configuration observed immediately before the DELETE request.
+    pub previous_configuration: FolderConfig,
+    /// Whether the ID is absent from the subsequent configuration snapshot.
+    ///
+    /// False can indicate pending application or an independent writer. This
+    /// observes configuration only; the library never inspects/deletes paths.
+    pub configuration_absent: bool,
+}
+
 /// Current configuration of one folder, not a directory/transfer readiness receipt.
 ///
 /// Paths returned by the target retain its syntax. Unknown fields can include
