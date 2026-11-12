@@ -197,3 +197,94 @@ async fn two_private_instances_have_separate_identity_authentication_and_cleanup
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn status_queries_report_real_synthetic_folder_counts_through_public_api() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use std::fs;
+    use std::time::{Duration, Instant};
+    use verysync_sidecar::{FolderId, FolderState, TargetPath};
+    let mut instance = EngineFixture::start().await?;
+    let client = Client::connect(
+        ConnectOptions::new(endpoint(&instance)?, ApiKey::new(instance.api_key())?)
+            .expected_device_id(DeviceId::parse(instance.device_id())?),
+    )
+    .await?;
+    let version = client.version().await?;
+    assert_eq!(version.version, verysync_sidecar::BASELINE_ENGINE_VERSION);
+    let system = client.system_status().await?;
+    assert_eq!(system.device_id.as_str(), instance.device_id());
+    assert!(system.uptime_seconds.is_some());
+    assert!(system.goroutines.is_some_and(|value| value > 0));
+    assert!(system.memory_allocated_bytes.is_some_and(|value| value > 0));
+
+    // This raw fixture operation only arranges an existing configured folder
+    // for a read test. It is not acceptance of a public create-folder API.
+    let folder_path = instance.state_dir().join("status folder 中文");
+    fs::create_dir(&folder_path)?;
+    let file = folder_path.join("synthetic.txt");
+    let payload = b"synthetic status payload\n";
+    fs::write(&file, payload)?;
+    let before = Sha256::digest(fs::read(&file)?);
+    let id = FolderId::parse("sidecar-status-fixture")?;
+    let mut configuration = instance.read_json("/rest/config/defaults/folder").await?;
+    let marker = configuration["markerName"]
+        .as_str()
+        .ok_or("baseline folder marker missing")?;
+    if std::path::Path::new(marker)
+        .components()
+        .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err("fixture marker must be a single native relative component".into());
+    }
+    fs::create_dir(folder_path.join(marker))?;
+    configuration["id"] = serde_json::json!(id.as_str());
+    configuration["label"] = serde_json::json!("Synthetic status fixture");
+    configuration["path"] =
+        serde_json::json!(TargetPath::local(folder_path.clone()).to_protocol()?);
+    configuration["paused"] = serde_json::json!(false);
+    let created = instance
+        .request(Method::POST, "/rest/config/folders")?
+        .json(&configuration)
+        .send()
+        .await?;
+    assert!(
+        created.status().is_success(),
+        "isolated fixture folder setup must succeed"
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let folder = loop {
+        match client.folder_status(&id).await {
+            Ok(status)
+                if status.state == Some(FolderState::Idle)
+                    && status.local_files == Some(1)
+                    && status.local_bytes == Some(payload.len() as u64) =>
+            {
+                break status
+            }
+            Ok(status) if Instant::now() >= deadline => {
+                return Err(format!(
+                    "synthetic folder never reached the expected indexed snapshot: {status:?}"
+                )
+                .into())
+            }
+            Err(error) if Instant::now() >= deadline => return Err(error.into()),
+            _ => tokio::time::sleep(Duration::from_millis(50)).await,
+        }
+    };
+    assert_eq!(folder.global_files, Some(1));
+    assert_eq!(folder.global_bytes, Some(payload.len() as u64));
+    assert_eq!(folder.need_files, Some(0));
+    assert_eq!(folder.need_bytes, Some(0));
+    assert_eq!(Sha256::digest(fs::read(&file)?), before);
+    let missing = client
+        .folder_status(&FolderId::parse("sidecar-no-such-folder")?)
+        .await;
+    assert!(
+        matches!(missing, Err(Error::Http { .. })),
+        "missing upstream folder is not fabricated as idle/zero"
+    );
+    println!("public status evidence: version={}, uptime_known={}, goroutines_known={}, local_files={:?}, local_bytes={:?}, need_files={:?}, state={:?}, synthetic_hash_unchanged=true",version.version,system.uptime_seconds.is_some(),system.goroutines.is_some(),folder.local_files,folder.local_bytes,folder.need_files,folder.state);
+    assert!(instance.shutdown().await?.success());
+    Ok(())
+}

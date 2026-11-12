@@ -2,7 +2,7 @@
 
 A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
 
-The project is under active development. The current API provides explicit endpoints, target paths, and authenticated connections with version and identity checks. Further management operations are being implemented and tested. No crate has been published yet. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
+The project is under active development. The current API provides explicit endpoints, target paths, and authenticated connections with version/identity checks, and fresh typed system/folder status reads. Further management operations are being implemented and tested. No crate has been published yet. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
 
 The development plan runs through full delivery. Alpha releases are intermediate milestones: after publishing an alpha, development continues in the same project until the complete agreed functionality, platforms, documentation, and examples pass acceptance and the full release is delivered.
 
@@ -36,10 +36,33 @@ build. Engine connection tests currently exercise private Unix sockets and
 loopback HTTP; HTTPS engine acceptance is separate from enabling its transport.
 
 The [connection example](examples/connect_existing.rs) accepts an explicit
-`http` or `socket` address and an optional expected device ID. It reads the key
+`http` or `socket` address, an optional expected device ID, and then an optional folder ID. It reads the key
 from `VERYSYNC_EXAMPLE_API_KEY`, never from command-line arguments. Use a
 dedicated instance when trying examples. No endpoint is discovered or selected
 automatically.
+
+`client.instance()` is the immutable handshake snapshot. `client.version()` and
+`client.system_status()` issue new authenticated reads; system status must match
+the connected identity. `client.folder_status(&FolderId)` reads one configured
+folder, encoding its opaque ID as one query value. Reconnect after replacing or
+upgrading an engine to apply connection version/identity policy again.
+
+Missing or null status metrics remain `None`, while a reported zero is
+`Some(0)`. Unknown fields remain available in `extra`; unrecognized activity
+states remain `FolderState::Unknown`. Unknown account/license values in system
+status are data for explicit inspection, and ordinary status debug output omits
+those extra values. An idle folder or zero reported need count does not certify
+completion of an arbitrary file batch, every peer, or a business transaction.
+A missing upstream folder is an error rather than a fabricated idle snapshot.
+
+```rust
+use verysync_sidecar::{Client, FolderId, FolderStatus};
+
+async fn read_folder(client: &Client, id: &str) -> verysync_sidecar::Result<FolderStatus> {
+    let id = FolderId::parse(id)?;
+    client.folder_status(&id).await
+}
+```
 
 Endpoint construction performs no I/O and never discovers an existing instance.
 Supply an explicit Unix socket path or HTTP(S) base URL. Private LAN addresses

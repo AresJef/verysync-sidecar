@@ -260,3 +260,72 @@ async fn management_reads_enforce_response_size_and_deadlines() -> TestResult {
     server.finish().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn status_reads_are_fresh_preserve_unknowns_and_encode_folder_ids() -> TestResult {
+    use verysync_sidecar::{FolderId, FolderState};
+    let server=ScriptedServer::start(vec![
+        version(verysync_sidecar::BASELINE_ENGINE_VERSION),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"synthetic-os","arch":"synthetic-arch","freshVendor":true})),
+        Reply::json(serde_json::json!({"myID":ID,"vendorStatus":{"value":"sensitive-vendor-status"}})),
+        Reply::json(serde_json::json!({"myID":ID,"uptime":7,"alloc":0,"cpuPercent":0,"goroutines":4})),
+        Reply::json(serde_json::json!({"state":"future-hashing","localBytes":5,"vendorFolder":{"retained":true}})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let fresh_version = client.version().await?;
+    assert_eq!(fresh_version.extra["freshVendor"], true);
+    assert!(!client.instance().version.extra.contains_key("freshVendor"));
+    let unknown = client.system_status().await?;
+    assert_eq!(unknown.device_id.as_str(), ID);
+    assert_eq!(unknown.uptime_seconds, None);
+    assert_eq!(unknown.memory_allocated_bytes, None);
+    assert_eq!(unknown.cpu_percent, None);
+    assert_eq!(
+        unknown.extra["vendorStatus"]["value"],
+        "sensitive-vendor-status"
+    );
+    assert!(!format!("{unknown:?}").contains("sensitive-vendor-status"));
+    let reported_zero = client.system_status().await?;
+    assert_eq!(reported_zero.uptime_seconds, Some(7));
+    assert_eq!(reported_zero.memory_allocated_bytes, Some(0));
+    assert_eq!(reported_zero.cpu_percent, Some(0.0));
+    let id = FolderId::parse("folder /?&中文")?;
+    let status = client.folder_status(&id).await?;
+    assert_eq!(
+        status.state,
+        Some(FolderState::Unknown("future-hashing".to_owned()))
+    );
+    assert_eq!(status.local_bytes, Some(5));
+    assert_eq!(status.need_bytes, None);
+    assert_eq!(status.extra["vendorFolder"]["retained"], true);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    let path = requests[5].lines().next().ok_or("missing request line")?;
+    assert!(path.starts_with("GET /prefix/rest/db/status?folder="));
+    assert!(path.contains("folder+%2F%3F%26%E4%B8%AD%E6%96%87"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn fresh_status_rejects_invalid_metrics_and_changed_identity() -> TestResult {
+    let other = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let server = ScriptedServer::start(vec![
+        version(verysync_sidecar::BASELINE_ENGINE_VERSION),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID,"alloc":-1})),
+        Reply::json(serde_json::json!({"myID":other,"uptime":9})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.system_status().await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    assert!(matches!(
+        client.system_status().await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    server.finish().await?;
+    Ok(())
+}
