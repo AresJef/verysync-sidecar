@@ -87,6 +87,25 @@ instance, expected identity, new ID and absolute native path, and registers the
 folder paused. It does not start or stop an engine. Remote paths should use the
 target's explicit `PathStyle`, independently of the controller's host.
 
+Use `FolderPatch::default().label("New label")` with
+`client.update_folder(&id, &patch)` for a partial update. Only the requested
+fields are sent; paths, device associations and other upstream settings are not
+rewritten. `client.pause_folder(&id)` and `client.resume_folder(&id)` change
+only that folder's configured pause setting. Check the returned
+`FolderUpdate::requested_fields_match` and actual `configuration`: a false
+match can reflect pending application or another writer's change. A readback
+failure after PATCH is an unknown mutation outcome and is not retried.
+
+Configuration readback and runtime activity are separate. In the fixed baseline,
+a paused folder can report an empty activity string and zero counters; the
+library retains `FolderState::Unknown("")` rather than interpreting this as idle
+or complete. Dedicated-instance tests separately observe scan rejection while
+paused and actual indexing of a newly added file after resumption. Other pause
+layers, peer transfers and business batches require their own observations.
+Folder item URLs encode IDs as one path segment. Literal `.` and `..` IDs are
+rejected for updates before network I/O because URL normalization would change
+the target. Configuration reads continue to use exact ID lookup.
+
 Endpoint construction performs no I/O and never discovers an existing instance.
 Supply an explicit Unix socket path or HTTP(S) base URL. Private LAN addresses
 are accepted; URL user information, queries and fragments are rejected. Keep

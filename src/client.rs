@@ -10,9 +10,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
 
 use crate::{
-    ApiKey, CreateFolderOptions, DeviceId, Error, FolderConfig, FolderId, FolderStatus,
-    ManagementEndpoint, PathStyle, ResponseDiagnostic, Result, SystemStatus,
-    BASELINE_ENGINE_VERSION,
+    ApiKey, CreateFolderOptions, DeviceId, Error, FolderConfig, FolderId, FolderPatch,
+    FolderStatus, FolderUpdate, ManagementEndpoint, PathStyle, ResponseDiagnostic, Result,
+    SystemStatus, BASELINE_ENGINE_VERSION,
 };
 
 /// The policy applied to an engine version during connection.
@@ -399,6 +399,68 @@ impl Client {
             })
     }
 
+    /// Change only the requested fields, then return actual configuration readback.
+    ///
+    /// Check `requested_fields_match`; a successful HTTP acknowledgment is not
+    /// treated as proof that every requested value is already visible. Runtime
+    /// activity remains a separate observation through [`Self::folder_status`].
+    /// Clones serialize modifications and recheck identity before writing, but
+    /// independent writers still need coordination. No mutation is retried.
+    /// Empty patches and literal dot-segment IDs are rejected before requests;
+    /// the latter cannot be addressed without URL path normalization.
+    pub async fn update_folder(&self, id: &FolderId, patch: &FolderPatch) -> Result<FolderUpdate> {
+        if patch.is_empty() {
+            return Err(Error::InvalidConfiguration {
+                reason: "folder patch must contain at least one field",
+            });
+        }
+        let url = self.connection.folder_url(id)?;
+        let body = serde_json::to_value(patch).map_err(|_| Error::InvalidConfiguration {
+            reason: "folder patch cannot be encoded",
+        })?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        self.folder(id).await?;
+        self.connection
+            .request_bytes(
+                "update folder",
+                reqwest::Method::PATCH,
+                url,
+                Some(&body),
+                true,
+            )
+            .await?;
+        let configuration =
+            self.folder(id)
+                .await
+                .map_err(|source| Error::MutationOutcomeUnknown {
+                    operation: "read back updated folder",
+                    source: Box::new(source),
+                })?;
+        Ok(FolderUpdate {
+            requested_fields_match: patch.matches(&configuration),
+            configuration,
+        })
+    }
+
+    /// Request folder-level pause and return configuration readback.
+    ///
+    /// This does not pause the instance or its devices. Runtime shutdown of
+    /// folder activity can follow configuration application asynchronously.
+    pub async fn pause_folder(&self, id: &FolderId) -> Result<FolderUpdate> {
+        self.update_folder(id, &FolderPatch::default().paused(true))
+            .await
+    }
+
+    /// Clear this folder's pause setting and return configuration readback.
+    ///
+    /// Other pause layers or errors may still prevent synchronization. Inspect
+    /// the returned configuration and current activity rather than assuming it.
+    pub async fn resume_folder(&self, id: &FolderId) -> Result<FolderUpdate> {
+        self.update_folder(id, &FolderPatch::default().paused(false))
+            .await
+    }
+
     /// Borrow the authenticated identity/version snapshot captured on connect.
     pub fn instance(&self) -> &InstanceInfo {
         &self.instance
@@ -440,8 +502,9 @@ impl Connection {
         route: &'static str,
         query: &[(&str, &str)],
     ) -> Result<T> {
+        let url = self.management_url(route, query)?;
         let (status, bytes) = self
-            .request_bytes(operation, reqwest::Method::GET, route, query, None, false)
+            .request_bytes(operation, reqwest::Method::GET, url, None, false)
             .await?;
         serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse {
             operation,
@@ -457,29 +520,47 @@ impl Connection {
         self.request_bytes(
             operation,
             reqwest::Method::POST,
-            route,
-            &[],
+            self.management_url(route, &[])?,
             Some(body),
             true,
         )
         .await
         .map(|_| ())
     }
-    async fn request_bytes(
-        &self,
-        operation: &'static str,
-        method: reqwest::Method,
-        route: &'static str,
-        query: &[(&str, &str)],
-        body: Option<&serde_json::Value>,
-        mutation: bool,
-    ) -> Result<(u16, Vec<u8>)> {
+    fn management_url(&self, route: &str, query: &[(&str, &str)]) -> Result<Url> {
         let mut url = self.base.join(route).map_err(|_| Error::InvalidEndpoint {
             reason: "management route cannot be joined to base URL",
         })?;
         if !query.is_empty() {
             url.query_pairs_mut().extend_pairs(query.iter().copied());
         }
+        Ok(url)
+    }
+
+    fn folder_url(&self, id: &FolderId) -> Result<Url> {
+        if matches!(id.as_str(), "." | "..") {
+            return Err(Error::InvalidConfiguration {
+                reason: "dot-segment folder IDs cannot be addressed by an item URL",
+            });
+        }
+        let mut url = self.management_url("rest/config/folders/", &[])?;
+        url.path_segments_mut()
+            .map_err(|_| Error::InvalidEndpoint {
+                reason: "management URL cannot contain path segments",
+            })?
+            .pop_if_empty()
+            .push(id.as_str());
+        Ok(url)
+    }
+
+    async fn request_bytes(
+        &self,
+        operation: &'static str,
+        method: reqwest::Method,
+        url: Url,
+        body: Option<&serde_json::Value>,
+        mutation: bool,
+    ) -> Result<(u16, Vec<u8>)> {
         let mut request = self
             .http
             .request(method, url)

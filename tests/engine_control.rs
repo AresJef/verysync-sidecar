@@ -436,3 +436,111 @@ async fn folder_create_read_conflicts_and_existing_data_through_public_api() -> 
     println!("public folder create evidence: {report}");
     Ok(())
 }
+
+#[tokio::test]
+async fn folder_update_pause_preserves_fields_and_resumes_actual_indexing() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use std::{
+        fs,
+        time::{Duration, Instant},
+    };
+    use verysync_sidecar::{CreateFolderOptions, FolderId, FolderPatch, FolderState, TargetPath};
+    let mut instance = EngineFixture::start().await?;
+    let client = Client::connect(
+        ConnectOptions::new(endpoint(&instance)?, ApiKey::new(instance.api_key())?)
+            .expected_device_id(DeviceId::parse(instance.device_id())?),
+    )
+    .await?;
+    let verified: TestResult<serde_json::Value> = async {
+        let path = instance.state_dir().join("update pause 中文");
+        fs::create_dir(&path)?;
+        let file = path.join("original.txt");
+        fs::write(&file, b"synthetic before pause\n")?;
+        let before_hash = Sha256::digest(fs::read(&file)?);
+        let id = FolderId::parse("sidecar-update 中文?#%")?;
+        let original = client.create_folder(&CreateFolderOptions::new(id.clone(),TargetPath::local(path.clone()))
+            .label("Before").paused(false)).await?;
+        let other_id = FolderId::parse("sidecar-unaffected-folder")?;
+        let other = client.create_folder(&CreateFolderOptions::new(other_id.clone(),TargetPath::local(instance.state_dir().join("other folder")))
+            .label("Untouched").paused(true)).await?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if client.folder_status(&id).await.is_ok_and(|s|s.local_files == Some(1) && s.state == Some(FolderState::Idle)) {break;}
+            if Instant::now() >= deadline { return Err("initial synthetic index did not become ready".into()); }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let config_before = instance.read_json("/rest/config").await?;
+        let updated = client.update_folder(&id,&FolderPatch::default().label("After 中文")).await?;
+        let label_only = updated.requested_fields_match && updated.configuration.label == "After 中文"
+            && updated.configuration.extra == original.extra && updated.configuration.paused == original.paused
+            && updated.configuration.path.to_protocol()? == original.path.to_protocol()?;
+        let paused = client.pause_folder(&id).await?;
+        // An explicit fixture request probes runtime behavior; this does not
+        // constitute acceptance of a public scan/task API.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let scan_rejected_paused = loop {
+            let (fixture_http, request) = instance.request(Method::POST,"/rest/db/scan")?.build_split();
+            let mut request = request?;
+            request.url_mut().query_pairs_mut().append_pair("folder", id.as_str());
+            let response = fixture_http.execute(request).await?;
+            let scan_status = response.status().as_u16();
+            let scan_body = response.text().await?;
+            if !(200..300).contains(&scan_status) && scan_body.to_ascii_lowercase().contains("paused") { break true; }
+            if Instant::now() >= deadline { return Err("runtime never rejected scanning as paused".into()); }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let status_while_paused = client.folder_status(&id).await?;
+        let added = path.join("added while paused.txt");
+        fs::write(&added,b"synthetic while paused\n")?;
+        let resumed = client.resume_folder(&id).await?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let indexed = loop {
+            match client.folder_status(&id).await {
+                Ok(status) if status.state == Some(FolderState::Idle) && status.local_files == Some(2) => break status,
+                _ if Instant::now() >= deadline => return Err("resumed folder did not index the added sample".into()),
+                _ => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        };
+        let final_folder = client.folder(&id).await?;
+        let other_after = client.folder(&other_id).await?;
+        let config_after = instance.read_json("/rest/config").await?;
+        let missing = client.pause_folder(&FolderId::parse("sidecar-missing-update")?).await;
+        Ok(serde_json::json!({
+            "label_only_fields_preserved":label_only,
+            "pause_config_observed":paused.requested_fields_match && paused.configuration.paused,
+            "runtime_paused_observed":scan_rejected_paused,
+            "paused_status_remains_unknown":status_while_paused.state == Some(FolderState::Unknown(String::new())),
+            "scan_rejected_while_paused":scan_rejected_paused,
+            "resume_config_observed":resumed.requested_fields_match && !resumed.configuration.paused,
+            "resumed_actual_file_count":indexed.local_files,
+            "original_file_sha_unchanged":Sha256::digest(fs::read(file)?)==before_hash,
+            "added_file_bytes_preserved":fs::read(added)?==b"synthetic while paused\n",
+            "unknown_fields_preserved":final_folder.extra==original.extra,
+            "unrelated_folder_preserved":other_after.id==other.id && other_after.label==other.label && other_after.paused==other.paused && other_after.extra==other.extra,
+            "device_pause_and_options_unchanged":config_before["devices"]==config_after["devices"] && config_before["options"]==config_after["options"],
+            "missing_target_rejected":matches!(missing,Err(Error::FolderNotFound{..}))
+        }))
+    }.await;
+    let stopped = instance.shutdown().await;
+    let report = verified?;
+    println!("public folder update evidence: {report}");
+    assert!(stopped?.success());
+    for name in [
+        "label_only_fields_preserved",
+        "pause_config_observed",
+        "runtime_paused_observed",
+        "paused_status_remains_unknown",
+        "scan_rejected_while_paused",
+        "resume_config_observed",
+        "original_file_sha_unchanged",
+        "added_file_bytes_preserved",
+        "unknown_fields_preserved",
+        "unrelated_folder_preserved",
+        "device_pause_and_options_unchanged",
+        "missing_target_rejected",
+    ] {
+        assert_eq!(report[name], true, "{name}");
+    }
+    assert_eq!(report["resumed_actual_file_count"], 2);
+    Ok(())
+}

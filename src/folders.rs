@@ -1,7 +1,7 @@
 //! Folder configuration inputs and readback, preserving upstream defaults.
 
 use crate::{FolderId, PathStyle, Result, TargetPath};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -50,6 +50,51 @@ impl CreateFolderOptions {
     pub fn id(&self) -> &FolderId {
         &self.id
     }
+}
+
+/// A partial folder update. Unspecified fields are never sent or replaced.
+///
+/// This initial typed surface changes the display label and folder-level pause
+/// setting. It does not change device-level or instance-level state.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct FolderPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) paused: Option<bool>,
+}
+impl FolderPatch {
+    /// Set the display label, including an explicitly empty label.
+    pub fn label(mut self, value: impl Into<String>) -> Self {
+        self.label = Some(value.into());
+        self
+    }
+    /// Request this folder's pause setting without changing other pause layers.
+    pub fn paused(mut self, value: bool) -> Self {
+        self.paused = Some(value);
+        self
+    }
+    pub(crate) fn is_empty(&self) -> bool {
+        self.label.is_none() && self.paused.is_none()
+    }
+    pub(crate) fn matches(&self, config: &FolderConfig) -> bool {
+        self.label
+            .as_ref()
+            .is_none_or(|label| label == &config.label)
+            && self.paused.is_none_or(|paused| paused == config.paused)
+    }
+}
+
+/// Configuration observed after one PATCH, separate from runtime activity.
+#[derive(Clone, Debug)]
+pub struct FolderUpdate {
+    /// The actual configuration read back after the modifying request.
+    pub configuration: FolderConfig,
+    /// Whether every requested field equals the readback at this instant.
+    ///
+    /// False can mean pending application or another writer's change. True
+    /// confirms configuration only, not that transfers stopped or completed.
+    pub requested_fields_match: bool,
 }
 
 /// Current configuration of one folder, not a directory/transfer readiness receipt.
