@@ -11,7 +11,7 @@ documentation = "https://github.com/AresJef/verysync-sidecar#readme"
 readme = "README.md"
 keywords = ["verysync", "sync", "sidecar", "async"]
 categories = ["api-bindings", "asynchronous"]
-publish = false
+publish = ["crates-io"]
 include = [
     "/Cargo.toml",
     "/Cargo.lock",

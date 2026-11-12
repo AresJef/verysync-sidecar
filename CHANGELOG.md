@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-alpha.1
 
 - Establish the single Tokio crate, fixed VerySync v2.33.2 baseline, dual source
   license and explicit capability/platform inventories.
@@ -23,5 +23,5 @@
   fixed-engine evidence; owned program management and the remaining full-project
   families continue after the initial alpha milestone.
 
-All public interfaces are unstable during alpha. There is no published package
-or reserved crates.io name yet.
+All public interfaces are unstable during alpha. This initial release is an
+intermediate milestone; the same development plan continues through full delivery.
