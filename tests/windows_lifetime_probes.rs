@@ -350,7 +350,9 @@ mod windows {
             .request_timeout(Duration::from_millis(500))?;
             match Client::connect(options).await {
                 Ok(_) if !wrong => return Ok(()),
-                Err(Error::Authentication { status: 403 }) if wrong => return Ok(()),
+                Err(Error::AccessDenied { response }) if wrong && response.status() == 403 => {
+                    return Ok(())
+                }
                 Ok(_) => return Err("wrong Windows probe key unexpectedly accepted".into()),
                 Err(error) => {
                     if Instant::now() >= deadline {

@@ -141,6 +141,28 @@ normalization. These values do not access files or start a management request.
 
 Rust 1.85 or later is required. APIs use the caller's Tokio runtime. Adding this crate as a dependency and building it does not download or start VerySync, install a service, or configure global logging or signals.
 
+Management failures retain their meaning. `Authentication` identifies HTTP 401;
+`AccessDenied` retains bounded HTTP 403 diagnostics without guessing whether
+the cause is a key, permission or license. `Http`, `InvalidResponse` and `Api`
+distinguish non-success HTTP statuses, malformed typed responses, and a nonempty
+error-only JSON envelope under a successful status. An ordinary state object
+that also contains an error description remains status data. Other upstream
+error shapes retain their operation's HTTP/schema behavior until verified.
+
+`request_timeout` applies separately to each complete request and response body;
+a multi-request operation can take longer than one deadline. A modifying
+transport failure, timeout or failed readback returns `MutationOutcomeUnknown`
+with its cause. Dropping a future stops waiting and yields no result; it does
+not roll back an already sent request. Reconcile the exact ID before choosing
+to retry. No modifying request is retried automatically. Dedicated-engine tests
+apply a real creation before dropping/holding its response and verify the
+applied configuration after lost response, deadline and cancellation.
+
+Ordinary error Debug/Display excludes response bodies and credential-bearing
+arguments. `ResponseDiagnostic::body_bytes()` explicitly exposes bounded
+upstream data that may contain secrets; review it before logging. The crate
+does not install a logger, signal handler or process-exit policy.
+
 ```sh
 cargo fmt --all -- --check
 cargo check --all-targets --locked

@@ -75,10 +75,19 @@ pub enum Error {
         /// The unavailable transport, without an address or credential.
         transport: &'static str,
     },
-    /// Management authentication was rejected by a handshake endpoint.
+    /// The endpoint explicitly requires authentication (HTTP 401).
     Authentication {
-        /// The HTTP rejection status, normally 401 or 403.
+        /// The HTTP authentication status.
         status: u16,
+    },
+    /// The endpoint denied access (HTTP 403).
+    ///
+    /// This alone does not distinguish an invalid key from permission or
+    /// feature-license restrictions. Inspect bounded diagnostics explicitly;
+    /// the library does not infer a commercial-license requirement from 403.
+    AccessDenied {
+        /// Exact status and bounded body, omitted from ordinary Debug/Display.
+        response: ResponseDiagnostic,
     },
     /// A bounded management request did not finish before its deadline.
     Timeout {
@@ -93,6 +102,16 @@ pub enum Error {
     /// A non-success HTTP response, with bounded diagnostics available explicitly.
     Http {
         /// Status and body, with the body excluded from debug output.
+        response: ResponseDiagnostic,
+    },
+    /// A successful HTTP status carried a nonempty error-only JSON envelope.
+    ///
+    /// An ordinary status object that also contains an error description is
+    /// preserved as data. This classification does not guess feature codes.
+    Api {
+        /// The operation whose response contained the failure envelope.
+        operation: &'static str,
+        /// Exact status and bounded error body, omitted from ordinary logs.
         response: ResponseDiagnostic,
     },
     /// A success response did not match the operation's expected JSON schema.
@@ -187,6 +206,7 @@ impl fmt::Display for Error {
                 formatter,
                 "management authentication rejected (HTTP {status})"
             ),
+            Self::AccessDenied { .. } => formatter.write_str("management access denied (HTTP 403); authentication or permissions require inspection"),
             Self::Timeout { operation } => write!(
                 formatter,
                 "management deadline exceeded while attempting to {operation}"
@@ -199,6 +219,7 @@ impl fmt::Display for Error {
                 "management endpoint returned HTTP {}",
                 response.status
             ),
+            Self::Api { operation, .. } => write!(formatter, "management API reported a body failure while attempting to {operation}"),
             Self::InvalidResponse { operation, .. } => write!(
                 formatter,
                 "invalid management response while attempting to {operation}"

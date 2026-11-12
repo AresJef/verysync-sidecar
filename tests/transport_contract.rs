@@ -590,3 +590,104 @@ async fn unregister_acknowledgment_does_not_invent_absence_when_id_is_still_visi
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn error_contract_distinguishes_authentication_forbidden_and_body_failure() -> TestResult {
+    for status in [401, 403] {
+        let server = ScriptedServer::start(vec![Reply {
+            status,
+            body: KEY.as_bytes().to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        }])
+        .await?;
+        let error = Client::connect(server.options()?).await.unwrap_err();
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        match (status, error) {
+            (401, Error::Authentication { status: 401 }) => (),
+            (403, Error::AccessDenied { response }) => {
+                assert_eq!(response.status(), 403);
+                assert_eq!(response.body_bytes(), KEY.as_bytes());
+            }
+            _ => return Err("access denial classification was incorrect".into()),
+        }
+        server.finish().await?;
+    }
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"error":KEY})),
+        Reply::json(
+            serde_json::json!({"state":"error","error":"legitimate status detail","localFiles":0}),
+        ),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let id = verysync_sidecar::FolderId::parse("synthetic-error-folder")?;
+    let error = client.folder_status(&id).await.unwrap_err();
+    assert!(matches!(error, Error::Api { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    let status = client.folder_status(&id).await?;
+    assert_eq!(status.state, Some(verysync_sidecar::FolderState::Error));
+    assert_eq!(status.extra["error"], "legitimate status detail");
+    server.finish().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn body_deadline_and_post_write_readback_failure_are_not_success_or_retry() -> TestResult {
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let base = format!("http://{}/", listener.local_addr()?);
+    let task = tokio::spawn(async move {
+        let (mut stream, _) =
+            tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
+        let mut request = [0; 4096];
+        let _ = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request)).await??;
+        stream
+            .write_all(b"HTTP/1.1 200 Test\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{")
+            .await?;
+        let mut tail = [0; 1];
+        let closed =
+            tokio::time::timeout(Duration::from_secs(5), stream.read(&mut tail)).await?? == 0;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(closed)
+    });
+    let options = ConnectOptions::new(ManagementEndpoint::http(&base)?, ApiKey::new(KEY)?)
+        .request_timeout(Duration::from_secs(1))?;
+    assert!(matches!(
+        Client::connect(options).await,
+        Err(Error::Timeout { .. })
+    ));
+    assert!(task.await??, "timed-out response connection must close");
+
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[]})),
+        Reply::json(serde_json::json!({"vendorDefault":true})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"unexpected":"instead of folders"})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let options = verysync_sidecar::CreateFolderOptions::new(
+        verysync_sidecar::FolderId::parse("uncertain-readback")?,
+        verysync_sidecar::TargetPath::remote(
+            verysync_sidecar::PathStyle::Unix,
+            "/synthetic/readback",
+        )?,
+    );
+    assert!(
+        matches!(client.create_folder(&options).await,Err(Error::MutationOutcomeUnknown { source,.. }) if matches!(*source,Error::InvalidResponse{..}))
+    );
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("POST "))
+            .count(),
+        1
+    );
+    Ok(())
+}

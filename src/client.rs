@@ -618,7 +618,7 @@ impl Connection {
             .await
             .map_err(|e| uncertain(transport_error(operation, e)))?;
         let status = response.status().as_u16();
-        if matches!(status, 401 | 403) {
+        if status == 401 {
             return Err(Error::Authentication { status });
         }
         let mut bytes = Vec::new();
@@ -634,8 +634,26 @@ impl Connection {
             }
             bytes.extend_from_slice(&chunk);
         }
+        if status == 403 {
+            return Err(Error::AccessDenied {
+                response: ResponseDiagnostic::new(status, bytes),
+            });
+        }
         if !(200..300).contains(&status) {
             return Err(uncertain(Error::Http {
+                response: ResponseDiagnostic::new(status, bytes),
+            }));
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ErrorEnvelope {
+            error: String,
+        }
+        if serde_json::from_slice::<ErrorEnvelope>(&bytes)
+            .is_ok_and(|envelope| !envelope.error.is_empty())
+        {
+            return Err(uncertain(Error::Api {
+                operation,
                 response: ResponseDiagnostic::new(status, bytes),
             }));
         }
