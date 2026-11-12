@@ -1,7 +1,7 @@
 //! Asynchronous management of the official VerySync program.
 //!
-//! This crate is under development. It provides explicit endpoint and path
-//! values; management operations are added with their tests and documentation.
+//! This crate is under development. It provides explicit endpoint/path values
+//! and authenticated management connections with version and identity checks.
 //! Adding this dependency or compiling it does not download or
 //! start VerySync, install services, or configure global logging or signals.
 //!
@@ -17,12 +17,18 @@
 //! # Ok::<(), verysync_sidecar::Error>(())
 //! ```
 
+mod auth;
+mod client;
 mod endpoint;
 mod error;
 mod path;
 
+pub use auth::{ApiKey, DeviceId};
+pub use client::{
+    Client, ConnectOptions, EngineVersion, InstanceInfo, VersionCompatibility, VersionPolicy,
+};
 pub use endpoint::{EndpointKind, ManagementEndpoint};
-pub use error::{Error, Result};
+pub use error::{Error, ResponseDiagnostic, Result};
 pub use path::{PathStyle, TargetPath};
 
 /// The fixed upstream version selected for initial compatibility acceptance.

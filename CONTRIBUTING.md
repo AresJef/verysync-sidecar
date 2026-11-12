@@ -42,7 +42,7 @@ that the permission check rejects it. These are test-harness controls, not publi
 library lifecycle guarantees.
 
 ```sh
-cargo test --features engine-tests --test fixture_contract --locked -- --test-threads=1
+cargo test --features engine-tests --test engine_control --locked -- --test-threads=1
 ```
 
 The `engine-tests` feature selects tests that require this explicit environment;
@@ -62,8 +62,11 @@ using the helper. No official program archive, executable or raw state is
 uploaded as an artifact.
 
 The `Engine fixture` workflow runs matching official engines and native Rust
-toolchains on six standard hosted runners. Its results establish fixture
-infrastructure, not public control API support or complete lifecycle behavior.
+1.85 toolchains on six standard hosted runners, while quality checks also use
+the current compiler. The `engine_control` target combines the earlier fixture
+contracts with public API acceptance so shared harness checks run only once.
+Tests are named to distinguish fixture evidence from public control behavior;
+fixture success alone is not complete lifecycle acceptance.
 The helper's explicit `check-cleanup` command inspects only the exact test binary
 path and reports lingering processes; it does not kill by name.
 

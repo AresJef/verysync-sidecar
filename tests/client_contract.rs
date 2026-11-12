@@ -1,6 +1,49 @@
 //! Public value-type contracts; these do not establish engine functionality.
 
-use verysync_sidecar::{EndpointKind, Error, ManagementEndpoint, PathStyle, TargetPath};
+use verysync_sidecar::{
+    ApiKey, Client, ConnectOptions, DeviceId, EndpointKind, Error, ManagementEndpoint, PathStyle,
+    TargetPath,
+};
+
+#[test]
+fn connection_without_a_tokio_runtime_returns_an_error() -> Result<(), Box<dyn std::error::Error>> {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let endpoint = ManagementEndpoint::http(&format!("http://{}", listener.local_addr()?))?;
+    let mut future = Box::pin(Client::connect(ConnectOptions::new(
+        endpoint,
+        ApiKey::new("synthetic-key")?,
+    )));
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(matches!(
+        std::future::Future::poll(future.as_mut(), &mut context),
+        std::task::Poll::Ready(Err(Error::InvalidConfiguration { .. }))
+    ));
+    Ok(())
+}
+
+#[test]
+fn credential_debug_and_invalid_input_errors_do_not_echo_secrets() {
+    let secret = "synthetic-api-key-value";
+    let key = ApiKey::new(secret).unwrap();
+    let options = ConnectOptions::new(
+        ManagementEndpoint::http("http://127.0.0.1:53841").unwrap(),
+        key.clone(),
+    );
+    assert!(!format!("{key:?} {options:?}").contains(secret));
+    for invalid in ["", "synthetic-api-key\nvalue", "合成密钥"] {
+        let error = ApiKey::new(invalid).unwrap_err();
+        assert!(matches!(error, Error::InvalidCredential { .. }));
+        if !invalid.is_empty() {
+            assert!(!format!("{error:?} {error}").contains(invalid));
+        }
+    }
+    assert!(options
+        .clone()
+        .request_timeout(std::time::Duration::ZERO)
+        .is_err());
+    assert!(options.response_limit(0).is_err());
+    assert!(DeviceId::parse("not-an-identity").is_err());
+}
 
 #[test]
 fn endpoint_classifies_explicit_loopback_and_remote_http_without_discovery() {

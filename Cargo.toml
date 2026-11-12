@@ -6,46 +6,52 @@ rust-version = "1.85"
 resolver = "3"
 description = "Async Rust control library for the official VerySync program"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/AresJef/verysync-sidecar"
+documentation = "https://github.com/AresJef/verysync-sidecar#readme"
 readme = "README.md"
 keywords = ["verysync", "sync", "sidecar", "async"]
 categories = ["api-bindings", "asynchronous"]
 publish = false
 include = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "src/**",
-    "examples/**",
-    "tests/**",
-    "docs/public/**",
-    "docs/capabilities.csv",
-    "docs/platforms.csv",
-    "releases/*.json",
-    "README.md",
-    "CONTRIBUTING.md",
-    "CHANGELOG.md",
-    "LICENSE-MIT",
-    "LICENSE-APACHE",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/src/**/*.rs",
+    "/examples/**/*.rs",
+    "/tests/**/*.rs",
+    "/scripts/**/*.py",
+    "/docs/public/**/*.md",
+    "/docs/capabilities.csv",
+    "/docs/platforms.csv",
+    "/releases/*.json",
+    "/README.md",
+    "/CONTRIBUTING.md",
+    "/CHANGELOG.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
 ]
 
 [dependencies]
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
 url = "2.5.8"
 
 [features]
+default = ["tls"]
+tls = ["reqwest/rustls"]
 engine-tests = []
 
 [dev-dependencies]
 getrandom = "0.4.3"
-reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 rmpv = "1.3.1"
-serde_json = "1.0.154"
 sha2 = "0.10.9"
 tempfile = "3.27.0"
-tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
 
 [[test]]
-name = "fixture_contract"
-path = "tests/fixture_contract.rs"
+name = "engine_control"
+path = "tests/engine_control.rs"
 required-features = ["engine-tests"]
 
 [target.'cfg(windows)'.dev-dependencies]

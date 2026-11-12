@@ -36,3 +36,5 @@
 **/*.tar.gz
 **/__pycache__/
 **/*.pyc
+**/*.rsls
+**/*.rslsd

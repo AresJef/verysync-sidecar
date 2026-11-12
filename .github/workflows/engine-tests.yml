@@ -46,7 +46,7 @@ jobs:
       run:
         shell: bash
     env:
-      TEST_TOOLCHAIN: 1.99.1-${{ matrix.rust }}
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -66,10 +66,10 @@ jobs:
           --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}"
           --github-env "${{ github.env }}"
-      - name: Run public endpoint and path contracts
-        run: cargo +"$TEST_TOOLCHAIN" test --test client_contract --locked
+      - name: Run public input and synthetic transport contracts
+        run: cargo +"$TEST_TOOLCHAIN" test --test client_contract --test transport_contract --locked
       - name: Run independent-engine fixture contracts
-        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test fixture_contract --locked -- --test-threads=1 --nocapture
+        run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test engine_control --locked -- --test-threads=1 --nocapture
       - name: Confirm no task-owned engine remains
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup

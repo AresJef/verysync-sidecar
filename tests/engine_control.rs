@@ -1,10 +1,89 @@
-//! Test infrastructure contracts, not public-library functionality acceptance.
+//! Public management API tests and explicitly separated fixture contracts.
 
 #[path = "common/engine_fixture.rs"]
 mod engine_fixture;
 
 use engine_fixture::{EngineFixture, TestBinary, TestResult};
 use reqwest::{Method, StatusCode};
+use verysync_sidecar::{ApiKey, Client, ConnectOptions, DeviceId, Error, ManagementEndpoint};
+
+fn endpoint(instance: &EngineFixture) -> verysync_sidecar::Result<ManagementEndpoint> {
+    #[cfg(unix)]
+    {
+        ManagementEndpoint::unix_socket(instance.state_dir().join("gui.sock"))
+    }
+    #[cfg(windows)]
+    {
+        ManagementEndpoint::http(&format!("http://{}", instance.management_address()))
+    }
+}
+
+#[tokio::test]
+async fn connect_auth_version_and_identity_through_the_public_api() -> TestResult {
+    let mut instance = EngineFixture::start().await?;
+    let identity = DeviceId::parse(instance.device_id())?;
+    let options = ConnectOptions::new(endpoint(&instance)?, ApiKey::new(instance.api_key())?)
+        .expected_device_id(identity.clone());
+    let client = Client::connect(options).await?;
+    let info = client.instance();
+    assert_eq!(info.device_id, identity);
+    assert_eq!(
+        info.compatibility,
+        verysync_sidecar::VersionCompatibility::ValidatedBaseline
+    );
+    assert_eq!(
+        info.version.os,
+        if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            std::env::consts::OS
+        }
+    );
+    assert_eq!(
+        info.version.arch,
+        if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "amd64"
+        }
+    );
+    assert_eq!(
+        info.version.version,
+        verysync_sidecar::BASELINE_ENGINE_VERSION
+    );
+    assert!(!format!("{client:?}").contains(instance.api_key()));
+    drop(client);
+    // A management connection does not own the serving process.
+    assert_eq!(
+        instance.read_json("/rest/system/status").await?["myID"],
+        instance.device_id()
+    );
+
+    let wrong_key =
+        ConnectOptions::new(endpoint(&instance)?, ApiKey::new("synthetic-invalid-key")?);
+    assert!(matches!(
+        Client::connect(wrong_key).await,
+        Err(Error::Authentication { status: 403 })
+    ));
+
+    let wrong_id =
+        DeviceId::parse("AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA")?;
+    assert_ne!(wrong_id.as_str(), instance.device_id());
+    let wrong_identity =
+        ConnectOptions::new(endpoint(&instance)?, ApiKey::new(instance.api_key())?)
+            .expected_device_id(wrong_id);
+    assert!(matches!(
+        Client::connect(wrong_identity).await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert_eq!(
+        instance.read_json("/rest/system/status").await?["myID"],
+        instance.device_id()
+    );
+    assert!(instance.shutdown().await?.success());
+    assert!(instance.has_reaped_process());
+    Ok(())
+}
 
 #[test]
 fn missing_test_program_or_checksum_is_an_error() -> TestResult {

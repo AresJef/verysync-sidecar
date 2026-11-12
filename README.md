@@ -2,7 +2,7 @@
 
 A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
 
-The project is under active development. Explicit management endpoint and target path types are available; management operations are being implemented and tested. No crate has been published yet, and no engine management or platform support is claimed by this source snapshot. Successful engine fixture tests establish the test harness, not control-library functionality.
+The project is under active development. The current API provides explicit endpoints, target paths, and authenticated connections with version and identity checks. Further management operations are being implemented and tested. No crate has been published yet. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
 
 The development plan runs through full delivery. Alpha releases are intermediate milestones: after publishing an alpha, development continues in the same project until the complete agreed functionality, platforms, documentation, and examples pass acceptance and the full release is delivered.
 
@@ -19,6 +19,27 @@ The library remains independent of application frameworks and business workflows
 The [capability inventory](docs/capabilities.csv) separates behavior candidates, aliases, resources and unresolved entries. The [platform inventory](docs/platforms.csv) records the official package mapping and planned execution paths. An inventory entry is not a support claim. The fixed baseline is VerySync **v2.33.2**; there is no implicit update to the latest engine.
 
 ## Development
+
+`Client::connect(ConnectOptions)` reads the target's version and device identity
+using an explicitly supplied `ApiKey`. It defaults to the fixed v2.33.2 version
+policy. `expected_device_id` adds an exact out-of-band identity check; without
+it, the authenticated identity is returned for inspection. An explicit
+`VersionPolicy::AllowUnverified` permits experiments and marks the resulting
+snapshot `Unverified`.
+
+Run the future inside your Tokio runtime with I/O and timers enabled. Connecting
+does not launch an engine or change its settings, and dropping a `Client` does
+not stop it. Reads have deadlines and response-size limits. Automatic retries,
+redirects and ambient proxies are disabled. The default `tls` feature enables
+normal HTTPS certificate verification; it can be disabled for an HTTP/socket
+build. Engine connection tests currently exercise private Unix sockets and
+loopback HTTP; HTTPS engine acceptance is separate from enabling its transport.
+
+The [connection example](examples/connect_existing.rs) accepts an explicit
+`http` or `socket` address and an optional expected device ID. It reads the key
+from `VERYSYNC_EXAMPLE_API_KEY`, never from command-line arguments. Use a
+dedicated instance when trying examples. No endpoint is discovered or selected
+automatically.
 
 Endpoint construction performs no I/O and never discovers an existing instance.
 Supply an explicit Unix socket path or HTTP(S) base URL. Private LAN addresses
@@ -50,6 +71,7 @@ cargo fmt --all -- --check
 cargo check --all-targets --locked
 cargo test --lib --locked
 cargo test --test client_contract --locked
+cargo test --test transport_contract --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo doc --no-deps --all-features --locked
 ```
