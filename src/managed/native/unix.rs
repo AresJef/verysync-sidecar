@@ -110,18 +110,92 @@ impl ProcessGuard {
     }
 
     pub(in crate::managed) fn tree_stopped(&self) -> io::Result<bool> {
-        // SAFETY: Signal zero only observes the private group. A recycled ID can
-        // cause conservative failure, never a signal to another process group.
-        if unsafe { libc::kill(-self.group, 0) } == 0 {
-            return Ok(false);
+        #[cfg(target_os = "macos")]
+        return macos_group_stopped(self.group);
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // SAFETY: Signal zero only observes the private group. A recycled ID can
+            // cause conservative failure, never a signal to another process group.
+            if unsafe { libc::kill(-self.group, 0) } == 0 {
+                return Ok(false);
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                Ok(true)
+            } else {
+                Err(error)
+            }
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_group_stopped(group: libc::pid_t) -> io::Result<bool> {
+    // Signal zero does not distinguish live members from exited kernel entries.
+    // Query only this private group; zombies cannot execute or hold state files.
+    // Treat incomplete/denied observations as errors, never as successful exit.
+    const PROC_PGRP_ONLY: u32 = 2; // sys/proc_info.h
+    let mut pids = [0_i32; 4096];
+    let capacity = std::mem::size_of_val(&pids) as i32;
+    // SAFETY: errno is thread-local; the initialized writable buffer is sized in
+    // bytes as required by libproc. A zero result can otherwise mask an error.
+    let bytes = unsafe {
+        *libc::__error() = 0;
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            group as u32,
+            pids.as_mut_ptr().cast(),
+            capacity,
+        )
+    };
+    if bytes == 0 {
         let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
+        return if error.raw_os_error() == Some(0) {
             Ok(true)
         } else {
             Err(error)
+        };
+    }
+    if bytes < 0 || bytes >= capacity || bytes as usize % std::mem::size_of::<i32>() != 0 {
+        return Err(io::Error::other("private group observation was incomplete"));
+    }
+    for pid in pids
+        .iter()
+        .take(bytes as usize / std::mem::size_of::<i32>())
+        .copied()
+        .filter(|pid| *pid > 0)
+    {
+        // SAFETY: proc_bsdinfo is a plain C output struct; its full byte size and
+        // flavor match the native SDK. Inspect fields only on a complete result.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of_val(&info) as i32;
+        let read = unsafe {
+            *libc::__error() = 0;
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        };
+        if read != size {
+            let error = io::Error::last_os_error();
+            if read == 0 && error.raw_os_error() == Some(libc::ESRCH) {
+                continue;
+            }
+            return Err(if read == 0 && error.raw_os_error() != Some(0) {
+                error
+            } else {
+                io::Error::other("private member observation was incomplete")
+            });
+        }
+        if info.pbi_pgid == group as u32 && info.pbi_status != libc::SZOMB {
+            return Ok(false);
         }
     }
+    Ok(true)
 }
 
 pub(in crate::managed) fn private_directory(_path: &Path, metadata: &Metadata) -> io::Result<()> {

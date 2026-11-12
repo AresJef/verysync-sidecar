@@ -258,3 +258,176 @@ async fn start_refuses_existing_application_state_without_rewriting_files() -> T
     assert!(!path.join("key.pem").exists());
     Ok(())
 }
+
+#[path = "common/managed_pause.rs"]
+mod managed_pause;
+
+fn lifecycle_root() -> TestResult<tempfile::TempDir> {
+    #[cfg(unix)]
+    {
+        Ok(tempfile::Builder::new().prefix("vss-").tempdir_in("/tmp")?)
+    }
+    #[cfg(windows)]
+    {
+        Ok(tempfile::Builder::new().prefix("vss-").tempdir()?)
+    }
+}
+
+#[tokio::test]
+async fn shutdown_confirms_exit_keeps_files_and_another_instance() -> TestResult {
+    let root = lifecycle_root()?;
+    let path_a = root.path().join("a");
+    let path_b = root.path().join("b");
+    let settings_a = options(source()?, &path_a)?;
+    let mut first = start_checked(settings_a.clone()).await?;
+    let mut other = start_checked(options(source()?, &path_b)?).await?;
+    std::fs::write(path_a.join("retained.bin"), b"synthetic shutdown sample")?;
+    let before = Sha256::digest(std::fs::read(path_a.join("retained.bin"))?);
+    let identity = first.client().instance().device_id.clone();
+    let exit = match first.shutdown(Duration::from_secs(10)).await {
+        Ok(exit) => exit,
+        Err(error) => {
+            print_owned_group(first.process_id());
+            return Err(error.into());
+        }
+    };
+    assert_eq!(exit.code, Some(0));
+    assert!(!exit.forced);
+    assert!(exit.tree_stopped);
+    assert_eq!(
+        Sha256::digest(std::fs::read(path_a.join("retained.bin"))?),
+        before
+    );
+    other.client().system_status().await?;
+    let already = first.shutdown(Duration::from_secs(1)).await?;
+    assert_eq!(already.code, Some(0));
+    let mut reused = start_checked(settings_a).await?;
+    assert_eq!(reused.client().instance().device_id, identity);
+    if let Err(error) = reused.shutdown(Duration::from_secs(10)).await {
+        print_owned_group(reused.process_id());
+        return Err(error.into());
+    }
+    let other_pid = other.process_id();
+    let forced = match other.force_stop(Duration::from_secs(10)).await {
+        Ok(exit) => exit,
+        Err(error) => {
+            print_owned_group(other_pid);
+            return Err(error.into());
+        }
+    };
+    assert!(forced.forced && forced.tree_stopped);
+    println!("public managed shutdown evidence: {{\"api_then_actual_zero_exit\":true,\"sample_sha_unchanged\":true,\"other_instance_untouched\":true,\"already_exited_observed\":true,\"state_lease_released\":true,\"identity_reused\":true,\"explicit_force_confirmed\":true}}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_timeout_retains_owner_until_the_real_root_resumes() -> TestResult {
+    let root = lifecycle_root()?;
+    let settings = options(source()?, &root.path().join("state"))?;
+    let mut instance = start_checked(settings.clone()).await?;
+    let paused = managed_pause::PausedRoot::new(instance.process_id())?;
+    let start = std::time::Instant::now();
+    let result = instance.shutdown(Duration::from_millis(300)).await;
+    assert!(matches!(result, Err(Error::Timeout { .. })), "{result:?}");
+    assert!(start.elapsed() < Duration::from_secs(3));
+    assert!(paused.is_paused()?);
+    assert!(matches!(
+        ManagedInstance::start(settings).await,
+        Err(Error::ManagedStateInUse)
+    ));
+    drop(paused);
+    // Linux's validated inner-process mode freezes the API itself. The other
+    // baselines freeze the monitor while its worker acknowledges shutdown.
+    #[cfg(target_os = "linux")]
+    let exit = instance.shutdown(Duration::from_secs(10)).await?;
+    #[cfg(not(target_os = "linux"))]
+    let exit = tokio::time::timeout(Duration::from_secs(10), instance.wait_for_exit()).await??;
+    assert_eq!(exit.code, Some(0));
+    assert!(!exit.forced && exit.tree_stopped);
+    println!("public managed shutdown timeout evidence: {{\"real_root_suspended\":true,\"deadline_returned\":true,\"no_implicit_force\":true,\"state_still_exclusive\":true,\"resume_then_actual_zero_exit\":true}}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_transport_failure_does_not_force_the_owned_instance() -> TestResult {
+    let root = lifecycle_root()?;
+    let settings = options(source()?, &root.path().join("state"))?;
+    let mut instance = start_checked(settings.clone()).await?;
+    let query = RawRequest::new(
+        RawMethod::Get,
+        ["rest", "config", "gui"],
+        RequestEffect::ReadOnly,
+    )?;
+    let response = instance.client().raw_request(&query).await?;
+    assert!((200..300).contains(&response.status()));
+    let mut gui: serde_json::Value = serde_json::from_slice(response.body_bytes())?;
+    assert_eq!(gui["enabled"], true);
+    // Deliberately remove this test instance's management endpoint, then prove
+    // a failed normal shutdown cannot silently acquire permission to kill it.
+    gui["enabled"] = false.into();
+    let patch = RawRequest::new(
+        RawMethod::Patch,
+        ["rest", "config", "gui"],
+        RequestEffect::MayModify,
+    )?
+    .json_body(&gui)?;
+    let response = instance.client().raw_request(&patch).await?;
+    assert!((200..300).contains(&response.status()));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match instance.client().version().await {
+            Err(Error::Transport { .. }) => break,
+            Ok(_) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(20)).await
+            }
+            other => {
+                return Err(
+                    format!("management endpoint did not become unavailable: {other:?}").into(),
+                )
+            }
+        }
+    }
+    let paused = managed_pause::PausedRoot::new(instance.process_id())?;
+    let result = instance.shutdown(Duration::from_secs(2)).await;
+    assert!(matches!(result, Err(Error::Transport { .. })), "{result:?}");
+    assert!(paused.is_paused()?);
+    assert!(matches!(
+        ManagedInstance::start(settings).await,
+        Err(Error::ManagedStateInUse)
+    ));
+    assert!(instance.force_stop(Duration::ZERO).await.is_err());
+    assert!(paused.is_paused()?);
+    drop(paused);
+    let exit = instance.force_stop(Duration::from_secs(10)).await?;
+    assert!(exit.forced && exit.tree_stopped);
+    println!("public managed shutdown failure evidence: {{\"actual_management_endpoint_disabled\":true,\"typed_transport_failure\":true,\"retained_root_still_alive\":true,\"state_still_exclusive\":true,\"invalid_deadline_did_not_stop\":true,\"force_requires_explicit_call\":true}}");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn print_owned_group(pid: u32) {
+    if let Ok(output) = std::process::Command::new("/bin/ps")
+        .args(["-A", "-o", "pid=,ppid=,pgid=,stat=,comm="])
+        .output()
+    {
+        if !output.status.success() {
+            eprintln!(
+                "own ps observation failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        for row in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| {
+                line.split_whitespace()
+                    .nth(2)
+                    .and_then(|value| value.parse::<u32>().ok())
+                    == Some(pid)
+            })
+        {
+            eprintln!("owned exit group observation: {row}");
+        }
+    }
+}
+#[cfg(not(unix))]
+fn print_owned_group(_pid: u32) {}
