@@ -141,7 +141,7 @@ normalization. These values do not access files or start a management request.
 
 Rust 1.85 or later is required. APIs use the caller's Tokio runtime. Adding this crate as a dependency and building it does not download or start VerySync, install a service, or configure global logging or signals.
 
-Management failures retain their meaning. `Authentication` identifies HTTP 401;
+Typed management failures retain their meaning. `Authentication` identifies HTTP 401;
 `AccessDenied` retains bounded HTTP 403 diagnostics without guessing whether
 the cause is a key, permission or license. `Http`, `InvalidResponse` and `Api`
 distinguish non-success HTTP statuses, malformed typed responses, and a nonempty
@@ -162,6 +162,35 @@ Ordinary error Debug/Display excludes response bodies and credential-bearing
 arguments. `ResponseDiagnostic::body_bytes()` explicitly exposes bounded
 upstream data that may contain secrets; review it before logging. The crate
 does not install a logger, signal handler or process-exit policy.
+
+For an unmodeled operation, `client.raw_request(&request)` uses the same selected
+endpoint, authentication, per-request deadline, response-body bound and disabled
+redirect/retry policy. Build a `RawRequest` from `RawMethod`, path components and
+an explicit `RequestEffect`; components and query values are encoded under the
+configured base path. Host, authentication and framing headers cannot be
+overridden. Bodies are explicitly buffered bytes or JSON, with no implicit file I/O.
+
+```rust
+use verysync_sidecar::{Client, RawMethod, RawRequest, RawResponse, RequestEffect};
+
+async fn read_raw_version(client: &Client) -> verysync_sidecar::Result<RawResponse> {
+    let request = RawRequest::new(
+        RawMethod::Get,
+        ["rest", "system", "version"],
+        RequestEffect::ReadOnly,
+    )?;
+    client.raw_request(&request).await
+}
+```
+
+Raw responses retain every HTTP status, duplicate headers and exact bounded body
+bytes, including binary data and error-only JSON. A returned raw response means
+the HTTP response was received, so inspect its status/body and reconcile effects;
+it does not establish business success or typed support for that operation.
+`MayModify` rechecks instance identity and serializes with typed modifications.
+Declare effects correctly: some upstream GET routes change state. Transport or
+body failures after a possible write remain unknown outcomes. Header/body values
+are sensitive opt-in data, omitted from raw request/response Debug.
 
 ```sh
 cargo fmt --all -- --check

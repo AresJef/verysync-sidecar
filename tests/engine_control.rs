@@ -695,3 +695,36 @@ async fn error_timeout_and_cancellation_preserve_actual_applied_mutation() -> Te
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn raw_request_uses_owned_management_connection_and_preserves_actual_results() -> TestResult {
+    use verysync_sidecar::{
+        CreateFolderOptions, FolderId, RawMethod, RawRequest, RequestEffect, TargetPath,
+    };
+    let mut instance = EngineFixture::start().await?;
+    let client = Client::connect(
+        ConnectOptions::new(endpoint(&instance)?, ApiKey::new(instance.api_key())?)
+            .expected_device_id(DeviceId::parse(instance.device_id())?),
+    )
+    .await?;
+    let verified:TestResult<serde_json::Value>=async {
+        let version=client.raw_request(&RawRequest::new(RawMethod::Get,["rest","system","version"],RequestEffect::ReadOnly)?).await?;
+        let decoded:serde_json::Value=serde_json::from_slice(version.body_bytes())?;
+        let id=FolderId::parse("sidecar-raw 中文?#%")?;
+        client.create_folder(&CreateFolderOptions::new(id.clone(),TargetPath::local(instance.state_dir().join("raw request synthetic folder"))).label("Before raw").paused(true)).await?;
+        let updated=client.raw_request(&RawRequest::new(RawMethod::Patch,["rest","config","folders",id.as_str()],RequestEffect::MayModify)?
+            .json_body(&serde_json::json!({"label":"Updated through raw"}))?).await?;
+        let after=client.folder(&id).await?;
+        let missing=client.raw_request(&RawRequest::new(RawMethod::Get,["rest","sidecar-no-such-route"],RequestEffect::ReadOnly)?).await?;
+        let status=client.system_status().await?;
+        Ok(serde_json::json!({"raw_version_status":version.status()==200,"raw_version_body":decoded["version"]==verysync_sidecar::BASELINE_ENGINE_VERSION,"raw_headers_retained":version.headers().any(|(name,_)|name=="content-type"),"explicit_raw_mutation_ack":(200..300).contains(&updated.status()),"actual_label_read_back":after.label=="Updated through raw" && after.paused,"unknown_route_status_retained":missing.status()==404,"unknown_route_body_retained":!missing.body_bytes().is_empty(),"same_selected_identity":status.device_id.as_str()==instance.device_id(),"debug_omits_key":!format!("{version:?} {updated:?} {missing:?}").contains(instance.api_key())}))
+    }.await;
+    let stopped = instance.shutdown().await;
+    let report = verified?;
+    println!("public raw request evidence: {report}");
+    assert!(stopped?.success());
+    for (name, value) in report.as_object().ok_or("missing raw evidence")? {
+        assert_eq!(value, &serde_json::json!(true), "{name}");
+    }
+    Ok(())
+}
