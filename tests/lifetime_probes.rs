@@ -5,6 +5,9 @@
 #[allow(dead_code)] // Only the shared fixture methods needed by this probe run.
 #[path = "common/engine_fixture.rs"]
 mod engine_fixture;
+#[cfg(target_os = "linux")]
+#[path = "probes/linux_process_ownership.rs"]
+mod linux_process_ownership;
 
 #[cfg(not(target_os = "macos"))]
 #[test]
@@ -41,9 +44,13 @@ mod unix {
         state: PathBuf,
         engine: Option<u32>,
         binary: PathBuf,
+        #[cfg(target_os = "linux")]
+        state_cleanup_allowed: bool,
     }
     impl ProbeOwner {
         async fn start(helper: &Path, binary: &Path, state: &Path, mode: &str) -> TestResult<Self> {
+            let state_cleanup_allowed = mode != "conflict-secondary";
+            let mode = if state_cleanup_allowed { mode } else { "base" };
             let mut command = Command::new(helper);
             command.env_remove("VERYSYNC_PROBE_HOST_SIGNAL_STATE");
             if std::env::var("VERYSYNC_LIFETIME_CASE").ok().as_deref() == Some("inherited-pty") {
@@ -60,6 +67,8 @@ mod unix {
                 state: state.to_owned(),
                 engine: None,
                 binary: binary.to_owned(),
+                #[cfg(target_os = "linux")]
+                state_cleanup_allowed,
             };
             let marker = state.join(format!("owner-{}.pid", owner.child.id()));
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -115,29 +124,58 @@ mod unix {
             Ok(String::from_utf8(output.stdout)?.trim().to_owned())
         }
         fn live_group(&self) -> TestResult<Vec<String>> {
-            let pid = self.engine.ok_or("no recorded engine PID")?.to_string();
-            let output = Command::new("/usr/bin/pgrep").args(["-g", &pid]).output()?;
-            if !matches!(output.status.code(), Some(0 | 1)) {
-                return Err("native private-group observation failed".into());
-            }
-            let mut members = Vec::new();
-            for member in String::from_utf8(output.stdout)?.lines() {
-                let output = Command::new("/bin/ps")
-                    .args(["-p", member, "-o", "pid=,ppid=,pgid=,tpgid=,tty=,stat="])
-                    .output()?;
-                if !output.status.success() && !output.stderr.is_empty() {
-                    return Err("native private-group member observation failed".into());
+            #[cfg(target_os = "linux")]
+            {
+                let mut rows = Vec::new();
+                for pid in super::linux_process_ownership::owned_pids(&self.binary, &self.state)? {
+                    let output = Command::new("/bin/ps")
+                        .args([
+                            "-p",
+                            &pid.to_string(),
+                            "-o",
+                            "pid=,ppid=,pgid=,tpgid=,tty=,stat=",
+                        ])
+                        .output()?;
+                    if !output.status.success() && !output.stderr.is_empty() {
+                        return Err("private Linux process observation failed".into());
+                    }
+                    let row = String::from_utf8(output.stdout)?;
+                    if row
+                        .split_whitespace()
+                        .last()
+                        .is_some_and(|s| !s.starts_with('Z'))
+                    {
+                        rows.push(row.trim().to_owned());
+                    }
                 }
-                let text = String::from_utf8(output.stdout)?;
-                if text
-                    .split_whitespace()
-                    .last()
-                    .is_some_and(|s| !s.starts_with('Z'))
-                {
-                    members.push(text.trim().to_owned());
-                }
+                return Ok(rows);
             }
-            Ok(members)
+            #[cfg(target_os = "macos")]
+            {
+                let pid = self.engine.ok_or("no recorded engine PID")?.to_string();
+                let output = Command::new("/usr/bin/pgrep").args(["-g", &pid]).output()?;
+                if !matches!(output.status.code(), Some(0 | 1)) {
+                    return Err("native private-group observation failed".into());
+                }
+                let mut members = Vec::new();
+                for member in String::from_utf8(output.stdout)?.lines() {
+                    let output = Command::new("/bin/ps")
+                        .args(["-p", member, "-o", "pid=,ppid=,pgid=,tpgid=,tty=,stat="])
+                        .output()?;
+                    if !output.status.success() && !output.stderr.is_empty() {
+                        return Err("native private-group member observation failed".into());
+                    }
+                    let text = String::from_utf8(output.stdout)?;
+                    if text
+                        .split_whitespace()
+                        .last()
+                        .is_some_and(|s| !s.starts_with('Z'))
+                    {
+                        members.push(text.trim().to_owned());
+                    }
+                }
+                Ok(members)
+            }
         }
         fn engine_live(&self) -> TestResult<bool> {
             Ok(self
@@ -164,6 +202,15 @@ mod unix {
                 }
             }
             let _ = self.child.wait();
+            #[cfg(target_os = "linux")]
+            if self.state_cleanup_allowed {
+                if let Err(error) =
+                    super::linux_process_ownership::terminate_owned(&self.binary, &self.state)
+                {
+                    eprintln!("exact private Linux instance fallback failed: {error}");
+                }
+                return;
+            }
             if let Some(pid) = self.engine {
                 // A fallback is reported separately. Verify every surviving
                 // member's explicit binary/state before signalling this group.
@@ -359,10 +406,20 @@ mod unix {
                 .join(format!("owner-{}.meta.json", owner.child.id())),
         )?)?;
         let mut report = json!({"scope":"native mechanism investigation, not product managed-runtime acceptance","case":case,"engine":"v2.33.2","identity_sha256":identity_hash,"before":before,"before_live_group_members":owner.live_group()?,"authenticated_expected_identity":connected.as_ref().map(|client|client.instance().device_id.as_str()==fixture.device_id()),"helper_source_sha256":format!("{:x}",Sha256::digest(fs::read(&source)?)),"controller_source_sha256":format!("{:x}",Sha256::digest(fs::read(Path::new(file!()))?)),"host_descriptor_and_signal_state":host_meta,"native_observation_seconds":5,"expected_authentication_rejection":case=="auth-failure-pty","readiness_not_requested":case=="early-pty"});
+        if cfg!(target_os = "linux") {
+            report["observation_scope"] = json!(
+                "all exact private executable/--home processes, including groups outside root"
+            );
+        }
         drop(connected);
         if case == "conflict" {
-            let mut second =
-                ProbeOwner::start(&helper, binary.path(), fixture.state_dir(), "base").await?;
+            let mut second = ProbeOwner::start(
+                &helper,
+                binary.path(),
+                fixture.state_dir(),
+                "conflict-secondary",
+            )
+            .await?;
             second.instruction("wait")?;
             second.wait().await?;
             let timeout = fixture
@@ -537,6 +594,7 @@ mod unix {
                 state: fixture.state_dir().to_owned(),
                 engine: None,
                 binary: helper.to_owned(),
+                state_cleanup_allowed: false,
             };
             let marker = fixture.state_dir().join("race-child.pid.bin");
             let deadline = Instant::now() + Duration::from_secs(5);

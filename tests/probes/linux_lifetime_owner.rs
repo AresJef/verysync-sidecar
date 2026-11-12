@@ -203,9 +203,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // Fixed-version candidate: bypass the upstream restart monitor explicitly.
+    // Its ordinary Linux worker can leave the monitor process group.
     let log = File::create(state.join(format!("owner-{}.engine.log", std::process::id())))?;
     let mut command = Command::new(&binary);
     command
+        .env("VSMONITORED", "yes")
         .args(["serve", "--home"])
         .arg(&state)
         .args(["--no-browser", "--no-restart", "--no-upgrade"])
@@ -305,7 +308,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(
         state.join(format!("owner-{}.meta.json", std::process::id())),
         format!(
-            "{{\"master_cloexec\":{},\"host_hup_ignored_and_blocked\":{},\"creator_tid\":{},\"host_pid\":{},\"pdeath_signal\":{}}}",
+            "{{\"master_cloexec\":{},\"host_hup_ignored_and_blocked\":{},\"creator_tid\":{},\"host_pid\":{},\"pdeath_signal\":{},\"monitor_environment\":\"VSMONITORED=yes\"}}",
             master_cloexec.map_or("null".to_owned(), |v| v.to_string()),
             inherited_hup, creator_tid, std::process::id(), if pdeath { death_signal } else { 0 }
         ),
