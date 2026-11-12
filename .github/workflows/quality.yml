@@ -34,6 +34,8 @@ jobs:
       - run: cargo +1.99.1 clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo +1.99.1 doc --no-deps --all-features --locked
       - run: cargo +1.99.1 test --doc --locked
+      - name: Audit locked dependencies against current RustSec advisories
+        run: python3 scripts/run-dependency-audit.py --toolchain 1.99.1
 
   msrv:
     name: Minimum Rust 1.85

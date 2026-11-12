@@ -6,10 +6,16 @@ program with its own license. The crate does not download or start it when added
 as a dependency or compiled. This release's `Client` borrows a running instance;
 dropping it leaves that instance running.
 
-The development version has not been published yet. Use a local path dependency
-or pin a reviewed Git revision during development. Once an alpha is published,
-pin its exact version: all alpha interfaces can change without compatibility
-layers. Rust 1.85 or later and a caller-owned Tokio runtime with I/O and timers
+For the initial alpha, pin the exact registry version:
+
+```toml
+[dependencies]
+verysync-sidecar = "=0.1.0-alpha.1"
+```
+
+During local development a path dependency or reviewed pinned Git revision can
+be used. All alpha interfaces can change without compatibility layers. Rust 1.85
+or later and a caller-owned Tokio runtime with I/O and timers
 are required. The validated engine baseline is exactly **v2.33.2**; changing it
 requires an explicit `VersionPolicy::AllowUnverified` choice.
 
