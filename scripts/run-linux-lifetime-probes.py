@@ -22,6 +22,7 @@ def verify(case: str, report: dict) -> None:
         assert report["primitive"] == {"pdeathsig_after_exec": 1, "pdeathsig_after_fork": 0}
         return
     if case == "install-race":
+        assert report["parent_changed_before_signal_installation"]
         assert report["parent_changed_rejected_before_exec"]
         assert report["child_stopped_before_external_cleanup"]
         assert report["live_group_before_cleanup"] == []
@@ -85,10 +86,11 @@ def verify_native_abi(evidence_dir: Path) -> None:
 #include <sys/prctl.h>
 #include <stdio.h>
 #include <sys/syscall.h>
+#include <time.h>
 int main(void) {
- printf("{\"sigset_size\":%zu,\"setmask\":%d,\"block\":%d,\"ctty\":%lu,\"getfd\":%d,\"setfd\":%d,\"cloexec\":%d,\"open_cloexec\":%d,\"set_pdeath\":%d,\"get_pdeath\":%d,\"pidfd_open\":%ld,\"pidfd_send_signal\":%ld}\n",
+ printf("{\"sigset_size\":%zu,\"setmask\":%d,\"block\":%d,\"ctty\":%lu,\"getfd\":%d,\"setfd\":%d,\"cloexec\":%d,\"open_cloexec\":%d,\"set_pdeath\":%d,\"get_pdeath\":%d,\"pidfd_open\":%ld,\"pidfd_send_signal\":%ld,\"timespec_size\":%zu,\"timespec_align\":%zu}\n",
  sizeof(sigset_t), SIG_SETMASK, SIG_BLOCK, (unsigned long)TIOCSCTTY,
- F_GETFD, F_SETFD, FD_CLOEXEC, O_CLOEXEC, PR_SET_PDEATHSIG, PR_GET_PDEATHSIG, (long)SYS_pidfd_open, (long)SYS_pidfd_send_signal);
+ F_GETFD, F_SETFD, FD_CLOEXEC, O_CLOEXEC, PR_SET_PDEATHSIG, PR_GET_PDEATHSIG, (long)SYS_pidfd_open, (long)SYS_pidfd_send_signal, sizeof(struct timespec), _Alignof(struct timespec));
  return 0;
 }
 '''
@@ -102,7 +104,7 @@ int main(void) {
         report = json.loads(subprocess.check_output([str(executable)], text=True))
     assert report == {"sigset_size": 128, "setmask": 2, "block": 0, "ctty": 0x540e,
                       "getfd": 1, "setfd": 2, "cloexec": 1, "open_cloexec": 0o2000000,
-                      "set_pdeath": 1, "get_pdeath": 2, "pidfd_open": 434, "pidfd_send_signal": 424}
+                      "set_pdeath": 1, "get_pdeath": 2, "pidfd_open": 434, "pidfd_send_signal": 424, "timespec_size": 16, "timespec_align": 8}
     (evidence_dir / "native-abi.json").write_text(json.dumps(report, sort_keys=True) + "\n")
     print("Native Linux FFI ABI verified: " + json.dumps(report, sort_keys=True), flush=True)
 

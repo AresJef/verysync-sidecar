@@ -28,6 +28,12 @@ const F_GETFD: c_int = 1;
 const F_SETFD: c_int = 2;
 const FD_CLOEXEC: c_int = 1;
 const SIG_SETMASK: c_int = 2;
+#[repr(C)]
+struct Timespec {
+    sec: c_long,
+    nsec: c_long,
+}
+
 unsafe extern "C" {
     fn prctl(option: c_int, ...) -> c_int;
     fn getppid() -> c_int;
@@ -38,6 +44,7 @@ unsafe extern "C" {
     fn pipe2(descriptors: *mut c_int, flags: c_int) -> c_int;
     fn close(fd: c_int) -> c_int;
     fn read(fd: c_int, bytes: *mut u8, count: usize) -> isize;
+    fn nanosleep(request: *const Timespec, remaining: *mut Timespec) -> c_int;
     fn _exit(status: c_int) -> !;
     fn openpty(
         master: *mut c_int,
@@ -134,6 +141,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let race_result = File::create(state.join("race-rejected.bin"))?;
     let race_pid_fd = race_pid.as_raw_fd();
     let race_result_fd = race_result.as_raw_fd();
+    let race_preinstall = File::create(state.join("race-parent-changed-before-install.bin"))?;
+    let race_preinstall_fd = race_preinstall.as_raw_fd();
     let mut race_pipe = [-1; 2];
     let race_pipe_owner = if race {
         // SAFETY: Two writable descriptor slots; Linux O_CLOEXEC is 02000000.
@@ -246,6 +255,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut byte = 0u8;
                 if read(race_pipe[0], &mut byte, 1) != 0 {
                     _exit(123);
+                }
+                // EOF can precede exit_notify/reparenting on another CPU.
+                // Wait for the actual parent transition before installing the
+                // signal; the sleep is bounded polling, not an ordering guess.
+                let pause = Timespec {
+                    sec: 0,
+                    nsec: 1_000_000,
+                };
+                let mut attempts = 0;
+                while getppid() == expected_parent && attempts < 5000 {
+                    nanosleep(&pause, ptr::null_mut());
+                    attempts += 1;
+                }
+                if getppid() == expected_parent {
+                    _exit(122);
+                }
+                if write(
+                    race_preinstall_fd,
+                    b"parent-changed-before-install".as_ptr(),
+                    29,
+                ) != 29
+                {
+                    _exit(121);
                 }
             }
             if pdeath {

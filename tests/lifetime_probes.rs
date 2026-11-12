@@ -619,6 +619,13 @@ mod unix {
             {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
+            report["parent_changed_before_signal_installation"] = json!(
+                fs::read(
+                    fixture
+                        .state_dir()
+                        .join("race-parent-changed-before-install.bin")
+                )? == b"parent-changed-before-install"
+            );
             report["parent_changed_rejected_before_exec"] = json!(
                 fs::read(fixture.state_dir().join("race-rejected.bin"))? == b"rejected-before-exec"
             );
