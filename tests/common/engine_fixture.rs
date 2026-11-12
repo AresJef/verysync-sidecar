@@ -4,7 +4,7 @@
 //! test invocation with a supplied executable and digest can start an engine.
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -184,15 +184,18 @@ impl EngineFixture {
         };
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            if fixture
+            if let Some(status) = fixture
                 .child
                 .0
                 .as_mut()
                 .ok_or("lost fixture process ownership")?
                 .try_wait()?
-                .is_some()
             {
-                return Err("isolated engine exited before authenticated readiness".into());
+                return Err(format!(
+                    "isolated engine exited before authenticated readiness ({status}): {}",
+                    fixture.startup_diagnostic(&password)
+                )
+                .into());
             }
             if let Ok(status) = fixture.read_json("/rest/system/status").await {
                 if status["myID"].as_str() != Some(fixture.device_id.as_str()) {
@@ -203,10 +206,7 @@ impl EngineFixture {
                 break;
             }
             if Instant::now() >= deadline {
-                return Err(
-                    "isolated engine did not become authenticated and ready before its deadline"
-                        .into(),
-                );
+                return Err(format!("isolated engine did not become authenticated and ready before its deadline: {}", fixture.startup_diagnostic(&password)).into());
             }
             tokio::time::sleep(Duration::from_millis(40)).await;
         }
@@ -230,6 +230,37 @@ impl EngineFixture {
     }
     pub fn has_reaped_process(&self) -> bool {
         self.reaped
+    }
+
+    fn startup_diagnostic(&self, password: &str) -> String {
+        let read_tail = || -> io::Result<Vec<u8>> {
+            let mut file = File::open(self.state.path().join("engine.log"))?;
+            let length = file.metadata()?.len();
+            file.seek(SeekFrom::Start(length.saturating_sub(8192)))?;
+            let mut bytes = Vec::new();
+            file.take(8192).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        };
+        let Ok(bytes) = read_tail() else {
+            return "private startup log unavailable".to_owned();
+        };
+        let mut text = String::from_utf8_lossy(&bytes).into_owned();
+        if text.contains("PRIVATE KEY") {
+            return "private key material suppressed".to_owned();
+        }
+        for secret in [&self.api_key, password] {
+            if !secret.is_empty() {
+                text = text.replace(secret, "[REDACTED]");
+            }
+        }
+        if let Ok(bytes) = fs::read(self.state.path().join("setting.dat")) {
+            if let Ok(value) = rmpv::decode::read_value(&mut io::Cursor::new(bytes)) {
+                if let Some(hash) = value["4"]["4"].as_str().filter(|s| !s.is_empty()) {
+                    text = text.replace(hash, "[REDACTED]");
+                }
+            }
+        }
+        text
     }
 
     pub fn request_with_key(
