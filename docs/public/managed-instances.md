@@ -52,8 +52,7 @@ replacement; malformed or partial identity/configuration is not silently reset.
 
 The private owner thread retains the native child/containment and state lease.
 Unix uses a separate session and private PTY; Windows assigns a suspended,
-console-detached child to a noninheritable kill-on-close Job before resuming it.
-Console detachment does not detach lifecycle ownership. Direct
+hidden child to a noninheritable kill-on-close Job before resuming it. Direct
 inner-process mode on Linux/Windows is specific to the fixed program baseline.
 There is no production supervisor executable, installed service, caller-global logger,
 signal handler or exit hook. Dedicated startup helpers are temporary invocations
@@ -169,3 +168,13 @@ window titles or contents. These observations are scoped to the runner's current
 session, do not visually inspect every menu/tray icon, and do not establish a
 minimum OS or every possible browser. Further host-exit and platform UI/lifetime
 gates remain in the same full-delivery plan.
+
+
+Windows console association is recorded separately from an **additional** console.
+The official core can share its caller's existing console. Native mutual process
+membership verifies that sharing; it is not classified as a new console/window.
+The independent test probe calibrates absent and newly allocated console cases
+inside its own temporary process, then frees its calibration console. Acceptance
+rejects an additional/unverified owned console or a newly visible console window,
+while preserving the raw association/member observations. It does not detach or
+hide the caller's existing console.

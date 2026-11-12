@@ -1,4 +1,4 @@
-//! Read-only native UI observations for explicitly owned test process trees.
+//! Native UI observations with calibration inside a separate test probe.
 
 use serde_json::Value;
 use std::path::Path;
@@ -105,7 +105,9 @@ pub fn observe(root_pid: Option<u32>, scratch: &Path) -> TestResult<Value> {
         )
         .into());
     }
-    Ok(serde_json::from_slice(&output.stdout)?)
+    let mut report = serde_json::from_slice(&output.stdout)?;
+    calibrate_windows(&mut report)?;
+    Ok(report)
 }
 
 #[cfg(windows)]
@@ -123,7 +125,10 @@ public static class ManagedUiQuery {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AttachConsole(uint process);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AllocConsole();
   [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentProcessId();
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern uint GetConsoleProcessList([Out] uint[] processes, uint capacity);
   public static List<long[]> Windows() {
     var rows = new List<long[]>();
@@ -134,24 +139,39 @@ public static class ManagedUiQuery {
     }, IntPtr.Zero)) throw new System.ComponentModel.Win32Exception();
     return rows;
   }
-  public static long[] ConsoleInfo(uint process) {
-    FreeConsole();
-    bool attached = AttachConsole(process);
-    int error = Marshal.GetLastWin32Error();
-    if (attached) {
+  public static long[] CurrentConsoleInfo(uint process) {
       IntPtr window = GetConsoleWindow();
       bool visible = window != IntPtr.Zero && IsWindowVisible(window);
       var members = new uint[128];
       uint count = GetConsoleProcessList(members, (uint)members.Length);
       int listError = Marshal.GetLastWin32Error();
-      FreeConsole();
       if (count > members.Length) throw new InvalidOperationException("Console membership observation truncated");
       var result = new List<long> {process, 1, window.ToInt64(), visible ? 1 : 0, count == 0 ? listError : 0, count};
       for (uint i=0; i<count; i++) result.Add(members[i]);
       return result.ToArray();
+  }
+  public static long[] ConsoleInfo(uint process) {
+    FreeConsole();
+    bool attached = AttachConsole(process);
+    int error = Marshal.GetLastWin32Error();
+    if (attached) {
+      try { return CurrentConsoleInfo(process); }
+      finally { FreeConsole(); }
     }
     if (error == 6) return new long[] {process, 0, 0, 0, error, 0}; // Target has no console.
     throw new System.ComponentModel.Win32Exception(error);
+  }
+  public static long[][] Calibrate() {
+    uint self = GetCurrentProcessId();
+    var none = ConsoleInfo(self);
+    if (!AllocConsole()) throw new System.ComponentModel.Win32Exception();
+    long[] independent;
+    try {
+      IntPtr window = GetConsoleWindow();
+      if (window != IntPtr.Zero) ShowWindow(window, 0); // Only this probe's new console.
+      independent = CurrentConsoleInfo(self);
+    } finally { FreeConsole(); }
+    return new long[][] {none, independent};
   }
 }
 '@
@@ -174,9 +194,10 @@ foreach ($processId in $owned) { $consoleInfo += ,([ManagedUiQuery]::ConsoleInfo
 $consoles = @($consoleInfo | Where-Object { $_[1] -eq 1 }).Count
 $visibleConsoles = @($consoleInfo | Where-Object { $_[3] -eq 1 }).Count
 $callerConsole = [ManagedUiQuery]::ConsoleInfo($CallerPid)
+$controls = [ManagedUiQuery]::Calibrate()
 $browserIds = @($processes | Where-Object { $_.Name -match '^(msedge|chrome|chromium|firefox|brave|opera|arc)\.exe$' } | ForEach-Object { [uint32]$_.ProcessId })
 $browserWindows = @($rows | Where-Object { $_[2] -eq 1 -and $browserIds -contains [uint32]$_[1] } | ForEach-Object { $_[0] } | Sort-Object)
-@{platform='windows';current_desktop_enumerated=$true;interactive_session=[Environment]::UserInteractive;session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;caller_pid=$CallerPid;caller_console=$callerConsole;owned_root=$OwnedRoot;owned_processes=$owned.Count;owned_windows=$ownWindows.Count;owned_console_processes=$consoles;owned_visible_consoles=$visibleConsoles;console_observations=$consoleInfo;browser_windows=$browserWindows;scope='Current desktop EnumWindows, owned descendants and separate-probe AttachConsole; no titles collected'} | ConvertTo-Json -Compress -Depth 5
+@{platform='windows';current_desktop_enumerated=$true;interactive_session=[Environment]::UserInteractive;session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;caller_pid=$CallerPid;caller_console=$callerConsole;console_controls=@{without_console=$controls[0];independent_console=$controls[1]};owned_root=$OwnedRoot;owned_processes=$owned.Count;owned_windows=$ownWindows.Count;owned_console_processes=$consoles;owned_visible_consoles=$visibleConsoles;console_observations=$consoleInfo;browser_windows=$browserWindows;scope='Current desktop, owned descendants and separate-probe console membership/calibration; no titles collected'} | ConvertTo-Json -Compress -Depth 5
 "#;
 
 #[cfg(target_os = "linux")]
@@ -220,11 +241,86 @@ pub fn assert_background(baseline: &Value, observed: &Value) -> TestResult<()> {
                 "owned process registered as an ordinary/accessory AppKit application".into(),
             );
         }
-        if observed["platform"] == "windows" && observed["owned_console_processes"] != 0 {
-            return Err("owned process acquired a console".into());
+        if observed["platform"] == "windows" {
+            if observed["console_probe_calibrated"] != true
+                || observed["owned_additional_consoles"] != 0
+            {
+                return Err("owned process acquired an additional or unverified console".into());
+            }
+            for record in observed["console_observations"]
+                .as_array()
+                .ok_or("console observations unavailable")?
+            {
+                if record[3] == 1 && record[2] != baseline["caller_console"][2] {
+                    return Err("a new visible console window appeared".into());
+                }
+            }
         }
     } else if observed["headless"] != true || observed["owned_root_observed"] != true {
         return Err("Linux headless observation unavailable".into());
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn console_members(record: &Value) -> TestResult<Option<&[Value]>> {
+    let fields = record.as_array().ok_or("console record unavailable")?;
+    if fields.len() < 6 {
+        return Err("console record incomplete".into());
+    }
+    if fields[1] == 0 && fields[4] == 6 && fields[5] == 0 && fields.len() == 6 {
+        return Ok(None);
+    }
+    if fields[1] != 1 || fields[4] != 0 {
+        return Err("console membership was not observable".into());
+    }
+    let count = fields[5].as_u64().ok_or("console count invalid")? as usize;
+    if count == 0 || count > 128 || fields.len() != 6 + count || !fields[6..].contains(&fields[0]) {
+        return Err("console membership incomplete or subject absent".into());
+    }
+    Ok(Some(&fields[6..]))
+}
+
+#[cfg(windows)]
+fn shares_console(record: &Value, caller: &Value) -> TestResult<bool> {
+    let Some(members) = console_members(record)? else {
+        return Ok(false);
+    };
+    let Some(caller_members) = console_members(caller)? else {
+        return Ok(false);
+    };
+    // Each native process can belong to at most one console. Mutual membership
+    // proves sharing an existing caller console, not an additional allocation.
+    Ok(members.contains(&caller[0]) && caller_members.contains(&record[0]))
+}
+
+#[cfg(windows)]
+fn calibrate_windows(report: &mut Value) -> TestResult<()> {
+    let caller = &report["caller_console"];
+    let none = &report["console_controls"]["without_console"];
+    let independent = &report["console_controls"]["independent_console"];
+    if console_members(none)?.is_some()
+        || console_members(independent)?.is_none()
+        || shares_console(independent, caller)?
+    {
+        return Err("native absent/independent console controls failed".into());
+    }
+    let mut additional = 0_u64;
+    let mut shared = 0_u64;
+    for record in report["console_observations"]
+        .as_array()
+        .ok_or("console observations unavailable")?
+    {
+        if console_members(record)?.is_some() {
+            if shares_console(record, caller)? {
+                shared += 1;
+            } else {
+                additional += 1;
+            }
+        }
+    }
+    report["owned_additional_consoles"] = additional.into();
+    report["owned_shared_console_processes"] = shared.into();
+    report["console_probe_calibrated"] = true.into();
     Ok(())
 }

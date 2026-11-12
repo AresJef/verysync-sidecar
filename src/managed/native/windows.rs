@@ -37,7 +37,7 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcessToken, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
+    GetCurrentProcess, OpenProcessToken, CREATE_NO_WINDOW, CREATE_SUSPENDED,
 };
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
@@ -68,18 +68,11 @@ pub(in crate::managed) fn spawn(
     {
         return Err(io::Error::last_os_error());
     }
-    // Detach the core from console allocation, not from this owner's Job. Short
-    // metadata helpers retain their existing hidden-console invocation policy.
-    let console = if helper {
-        CREATE_NO_WINDOW
-    } else {
-        DETACHED_PROCESS
-    };
-    command.creation_flags(CREATE_SUSPENDED | console);
+    command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     if !helper {
-        // Keep the fixed-baseline core in the direct inner-process mode. The
-        // upstream monitor can otherwise create a worker with its own console;
-        // our suspended creation/Job ownership must apply to the actual core.
+        // The SDK owns monitoring/restart for this fixed baseline. Select the
+        // direct core so suspended creation and private Job ownership apply to
+        // that core, without another upstream monitoring generation.
         command.env("VSMONITORED", "yes");
     }
     let mut child = command.spawn()?;
