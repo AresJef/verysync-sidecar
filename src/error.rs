@@ -4,6 +4,30 @@ use std::fmt;
 
 use crate::{DeviceId, FolderId};
 
+/// Bounded private program output, available only through explicit inspection.
+///
+/// Upstream output may contain sensitive state. Ordinary Debug/Display never
+/// include its bytes; review and redact before copying it into logs.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ProcessDiagnostic(Vec<u8>);
+impl ProcessDiagnostic {
+    pub(crate) fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+    /// Inspect captured upstream bytes explicitly; these may contain secrets.
+    pub fn body_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl fmt::Debug for ProcessDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProcessDiagnostic")
+            .field("bytes", &self.0.len())
+            .finish()
+    }
+}
+
 /// Bounded upstream response bytes, excluded from ordinary debug/display output.
 ///
 /// Callers may explicitly inspect the body for diagnostics. It may contain
@@ -43,6 +67,36 @@ impl fmt::Debug for ResponseDiagnostic {
 /// change; callers should handle the cases relevant to their operation.
 #[non_exhaustive]
 pub enum Error {
+    /// The selected local executable failed a baseline or checksum check.
+    ProgramRejected {
+        /// A description excluding paths, arguments and captured program output.
+        reason: &'static str,
+    },
+    /// An owned program exited before the required managed operation completed.
+    ManagedProcessExited {
+        /// The credential-free stage that could not complete.
+        operation: &'static str,
+        /// Its actual normal exit code, absent for a signal termination.
+        code: Option<i32>,
+        /// Optional bounded private program output, omitted from Debug/Display.
+        diagnostic: Option<ProcessDiagnostic>,
+    },
+    /// A managed-state or lifecycle invariant could not be established.
+    ManagedFailure {
+        /// A description excluding credentials and captured output.
+        reason: &'static str,
+    },
+    /// The dedicated state already has an exclusive library owner.
+    ManagedStateInUse,
+    /// The supplied directory is not an admissible library-owned state.
+    UnmanagedState,
+    /// A native filesystem or process operation failed without echoing arguments.
+    LocalIo {
+        /// The credential-free operation name.
+        operation: &'static str,
+        /// The original I/O error, available for explicit diagnosis.
+        source: std::io::Error,
+    },
     /// A connection setting is invalid; no operation has started.
     InvalidConfiguration {
         /// A credential-free description of the setting.
@@ -184,6 +238,12 @@ impl fmt::Debug for Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ProgramRejected { reason } => write!(formatter, "selected program rejected: {reason}"),
+            Self::ManagedProcessExited { operation, code, .. } => write!(formatter, "owned program exited while attempting to {operation} (code {code:?})"),
+            Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),
+            Self::ManagedStateInUse => formatter.write_str("managed state already has an exclusive owner"),
+            Self::UnmanagedState => formatter.write_str("state is not an admissible private library-owned directory"),
+            Self::LocalIo { operation, .. } => write!(formatter, "native operation failed while attempting to {operation}"),
             Self::InvalidConfiguration { reason } => {
                 write!(formatter, "invalid configuration: {reason}")
             }
@@ -249,6 +309,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::LocalIo { source, .. } => Some(source),
             Self::Transport { source, .. } => Some(source),
             Self::MutationOutcomeUnknown { source, .. } => Some(source.as_ref()),
             _ => None,

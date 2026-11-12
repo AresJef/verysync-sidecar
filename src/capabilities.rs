@@ -26,7 +26,7 @@ pub enum Capability {
     ManagementErrors,
     /// Explicit constrained raw requests.
     RawManagement,
-    /// Owned program startup and lifecycle management.
+    /// Initial owned startup and observed exit; further lifecycle APIs are pending.
     ManagedRuntime,
     /// Resumable engine events.
     Events,
@@ -131,7 +131,11 @@ static CATALOG: &[LibraryCapability] = &[
             scope: NATIVE_SCOPE,
         },
     },
-    planned(Capability::ManagedRuntime),
+    LibraryCapability {
+        capability: Capability::ManagedRuntime,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::Events),
     planned(Capability::ObservableTasks),
     planned(Capability::PeerSharing),

@@ -19,13 +19,16 @@
 //! ```
 
 #![doc = include_str!("../docs/public/getting-started.md")]
+#![doc = include_str!("../docs/public/managed-instances.md")]
 
 mod auth;
 mod capabilities;
 mod client;
 mod endpoint;
+mod engine_source;
 mod error;
 mod folders;
+mod managed;
 mod path;
 mod raw;
 mod status;
@@ -39,8 +42,10 @@ pub use client::{
     Client, ConnectOptions, EngineVersion, InstanceInfo, VersionCompatibility, VersionPolicy,
 };
 pub use endpoint::{EndpointKind, ManagementEndpoint};
-pub use error::{Error, ResponseDiagnostic, Result};
+pub use engine_source::{LocalProgram, ProgramInfo};
+pub use error::{Error, ProcessDiagnostic, ResponseDiagnostic, Result};
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
+pub use managed::{ManagedExit, ManagedInstance, ManagedOptions};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};

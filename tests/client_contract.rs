@@ -15,8 +15,8 @@ fn capabilities_catalog_keeps_planned_work_separate_from_verified_interfaces() {
         .iter()
         .find(|entry| entry.capability == Capability::ManagedRuntime)
         .unwrap();
-    assert_eq!(runtime.implementation, ImplementationStatus::NotImplemented);
-    assert_eq!(runtime.verification, VerificationStatus::NotRun);
+    assert_eq!(runtime.implementation, ImplementationStatus::Typed);
+    assert_eq!(runtime.verification, VerificationStatus::Pending);
     let raw = catalog
         .iter()
         .find(|entry| entry.capability == Capability::RawManagement)
