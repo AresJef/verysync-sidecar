@@ -6,6 +6,10 @@ The project is under active development. The current API provides explicit endpo
 
 The working branch also develops explicit owned-program startup. See [managed instances](docs/public/managed-instances.md) for the unreleased API and its distinct lifetime/state responsibility; the published initial alpha still targets already running instances.
 
+The unreleased [event subscription API](docs/public/events.md) provides bounded
+queues, explicit continuity gaps and finite read-only recovery. Its task belongs
+to the subscription; closing it leaves the engine running.
+
 The development plan runs through full delivery. Alpha releases are intermediate milestones: after publishing an alpha, development continues in the same project until the complete agreed functionality, platforms, documentation, and examples pass acceptance and the full release is delivered.
 
 ## Development decisions

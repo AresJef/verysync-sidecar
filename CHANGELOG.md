@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add bounded caller-owned event subscriptions, preserved unknown events,
+  credential-safe Debug, explicit cursor gaps and finite read-only recovery.
+  Keep producer queue positions separate from consumed cursors; close/drop
+  cancels only the subscription, including pending HTTP/backpressure waits.
 - Exercise public Windows caller return, no-destructor exit and forced exit
   inside a retained outer Job, including an unrelated live child and native UI
   observations. Confirm core exit before any test cleanup or explicit retry.

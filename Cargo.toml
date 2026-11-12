@@ -76,6 +76,11 @@ path = "tests/managed_lifetime.rs"
 required-features = ["engine-tests"]
 
 [[test]]
+name = "events"
+path = "tests/events.rs"
+required-features = ["engine-tests"]
+
+[[test]]
 name = "example_control"
 path = "tests/example_control.rs"
 required-features = ["engine-tests"]

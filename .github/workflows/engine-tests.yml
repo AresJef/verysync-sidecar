@@ -72,7 +72,7 @@ jobs:
           --parent "${{ runner.temp }}"
           --github-env "${{ github.env }}"
       - name: Run public input and synthetic transport contracts
-        run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --locked
+        run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --locked
       - name: Validate the Windows UI probe before the complete lifecycle bundle
         if: startsWith(matrix.package, 'windows-')
         run: >-
@@ -91,6 +91,10 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-control-proxy"
+      - name: Exercise public bounded events, gaps, cancellation and actual restart recovery
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target events --evidence-dir "${{ runner.temp }}/vs-events-proxy"
       - name: Build public examples explicitly
         run: >-
           python scripts/prepare-test-examples.py
