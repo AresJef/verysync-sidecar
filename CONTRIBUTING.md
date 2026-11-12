@@ -70,6 +70,17 @@ fixture success alone is not complete lifecycle acceptance.
 The helper's explicit `check-cleanup` command inspects only the exact test binary
 path and reports lingering processes; it does not kill by name.
 
+The optional `lifetime_probes` target investigates native process mechanisms;
+it is not the production managed-instance implementation. On macOS its explicit
+runner is `scripts/run-macos-lifetime-probes.py`, which requires the prepared
+engine environment, a Rust toolchain, and a new absolute evidence directory.
+It compiles a standalone Rust test host into a private temporary directory and
+tests only its own processes, groups and PTY. Host SIGKILL, native exit and
+observer fallback are recorded separately. An unsupported platform or missing
+prerequisite fails the explicitly requested probe; it does not pass as skipped.
+Only sanitized result JSON enters CI logs; upstream programs, raw state, keys
+and private logs are not uploaded.
+
 Use synthetic files. Disable discovery, trackers, relay, NAT and external
 connections unless the particular network case requires them. Await only owned
 child processes when cleaning up; never kill by executable name. Keep private

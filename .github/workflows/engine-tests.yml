@@ -2,6 +2,7 @@ name: Engine fixture
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -70,6 +71,12 @@ jobs:
         run: cargo +"$TEST_TOOLCHAIN" test --test client_contract --test transport_contract --locked
       - name: Run independent-engine fixture contracts
         run: cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test engine_control --locked -- --test-threads=1 --nocapture
+      - name: Investigate native macOS lifetime mechanisms
+        if: startsWith(matrix.package, 'macos-')
+        run: >-
+          python scripts/run-macos-lifetime-probes.py
+          --toolchain "$TEST_TOOLCHAIN"
+          --evidence-dir "${{ runner.temp }}/verysync-lifetime-evidence"
       - name: Confirm no task-owned engine remains
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
