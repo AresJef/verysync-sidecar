@@ -1,7 +1,7 @@
 //! Explicit mechanism investigations, not production managed-runtime acceptance.
 #![allow(unsafe_code)]
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[allow(dead_code)] // Only the shared fixture methods needed by this probe run.
 #[path = "common/engine_fixture.rs"]
 mod engine_fixture;
@@ -12,8 +12,14 @@ fn macos_lifetime_case() -> Result<(), &'static str> {
     Err("this explicitly requested investigation requires native macOS")
 }
 
-#[cfg(target_os = "macos")]
-mod macos {
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn linux_lifetime_case() -> Result<(), &'static str> {
+    Err("this explicitly requested investigation requires native Linux")
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod unix {
     use std::fs::{self, File};
     use std::io::Write;
     use std::path::{Path, PathBuf};
@@ -161,13 +167,12 @@ mod macos {
             if let Some(pid) = self.engine {
                 // A fallback is reported separately. Verify every surviving
                 // member's explicit binary/state before signalling this group.
-                if let Ok(output) = Command::new("/usr/bin/pgrep")
-                    .args(["-g", &pid.to_string()])
-                    .output()
-                {
-                    let ids = String::from_utf8_lossy(&output.stdout);
+                if let Ok(members) = self.live_group() {
                     let mut verified = false;
-                    for member in ids.lines().filter(|v| !v.is_empty()) {
+                    for member in members
+                        .iter()
+                        .filter_map(|line| line.split_whitespace().next())
+                    {
                         let Ok(output) = Command::new("/bin/ps")
                             .args(["-ww", "-p", member, "-o", "command="])
                             .output()
@@ -247,11 +252,22 @@ mod macos {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn macos_lifetime_case() -> TestResult {
+        run_case().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_lifetime_case() -> TestResult {
+        run_case().await
+    }
+
+    async fn run_case() -> TestResult {
         let case = std::env::var("VERYSYNC_LIFETIME_CASE")
             .map_err(|_| "explicit VERYSYNC_LIFETIME_CASE is required")?;
-        if ![
+        let mut cases = vec![
             "normal",
             "conflict",
             "forced-base",
@@ -260,9 +276,18 @@ mod macos {
             "early-pty",
             "auth-failure-pty",
             "inherited-pty",
-        ]
-        .contains(&case.as_str())
-        {
+        ];
+        if cfg!(target_os = "linux") {
+            cases.extend([
+                "pdeath-hup",
+                "pdeath-kill",
+                "thread-pdeath",
+                "thread-pty",
+                "install-race",
+                "exec-fork",
+            ]);
+        }
+        if !cases.contains(&case.as_str()) {
             return Err("unknown explicit lifetime case".into());
         }
         let rustc = PathBuf::from(
@@ -286,11 +311,16 @@ mod macos {
         let identity_hash = format!("{:x}", Sha256::digest(fixture.device_id().as_bytes()));
         let key_hash = Sha256::digest(fs::read(fixture.state_dir().join("key.pem"))?);
         let helper_dir = tempfile::Builder::new().prefix("vs-owner-").tempdir()?;
-        let helper = helper_dir.path().join("macos-lifetime-owner");
+        let helper = helper_dir.path().join("unix-lifetime-owner");
+        let helper_name = if cfg!(target_os = "linux") {
+            "linux_lifetime_owner.rs"
+        } else {
+            "macos_lifetime_owner.rs"
+        };
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("probes")
-            .join("macos_lifetime_owner.rs");
+            .join(helper_name);
         let compiled = Command::new(&rustc)
             .args(["--edition=2021", "-Dwarnings"])
             .arg(&source)
@@ -302,7 +332,16 @@ mod macos {
                 "standalone Rust probe host failed compilation; no engine launched by it".into(),
             );
         }
-        let mode = if case.contains("pty") { "pty" } else { "base" };
+        #[cfg(target_os = "linux")]
+        if ["install-race", "exec-fork"].contains(&case.as_str()) {
+            return linux_primitives(&case, &helper, &source, &binary, &fixture, &mut artifact)
+                .await;
+        }
+        let mode = match case.as_str() {
+            "pdeath-hup" | "pdeath-kill" | "thread-pdeath" | "thread-pty" => case.as_str(),
+            _ if case.contains("pty") => "pty",
+            _ => "base",
+        };
         let mut owner =
             ProbeOwner::start(&helper, binary.path(), fixture.state_dir(), mode).await?;
         let connected = if ["early-pty", "auth-failure-pty"].contains(&case.as_str()) {
@@ -402,7 +441,37 @@ mod macos {
             report["explicit_shutdown_child_stopped"] = json!(!restarted.engine_live()?);
             report["explicit_shutdown_live_group_members"] = json!(restarted.live_group()?);
         } else {
-            if ["close-pty", "early-pty", "auth-failure-pty"].contains(&case.as_str()) {
+            if case == "thread-pty" {
+                owner.instruction("thread-exit")?;
+                let marker = fixture
+                    .state_dir()
+                    .join(format!("owner-{}.thread-ended", owner.child.id()));
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while !marker.exists() && Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                report["creator_thread_exited"] = json!(marker.exists());
+                report["host_still_live_after_creator_thread_exit"] =
+                    json!(owner.child.try_wait()?.is_none());
+                report["engine_still_authenticated_after_creator_thread_exit"] =
+                    json!(ready(&fixture).await.is_ok());
+                owner.child.kill()?;
+                owner.child.wait()?;
+            } else if case == "thread-pdeath" {
+                owner.instruction("thread-exit")?;
+                let marker = fixture
+                    .state_dir()
+                    .join(format!("owner-{}.thread-ended", owner.child.id()));
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while !marker.exists() && Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                report["creator_thread_exited"] = json!(marker.exists());
+                report["host_recorded_after_creator_thread_exit"] = json!(marker.exists());
+                report["host_still_live_at_observer_snapshot"] =
+                    json!(owner.child.try_wait()?.is_none());
+                // Leave the host alive while observing its exact child below.
+            } else if ["close-pty", "early-pty", "auth-failure-pty"].contains(&case.as_str()) {
                 owner.instruction("close-pty")?;
                 owner.wait().await?;
                 report["native_child_exit"] = owner.exit_metadata().unwrap_or(Value::Null);
@@ -411,7 +480,9 @@ mod macos {
                 owner.child.wait()?;
             }
             let deadline = Instant::now() + Duration::from_secs(5);
-            while owner.engine_live()? && Instant::now() < deadline {
+            while (owner.engine_live()? || !owner.live_group()?.is_empty())
+                && Instant::now() < deadline
+            {
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
             let alive = owner.engine_live()?;
@@ -433,6 +504,72 @@ mod macos {
             json!(Sha256::digest(fs::read(fixture.state_dir().join("key.pem"))?) == key_hash);
         writeln!(artifact, "{}", serde_json::to_string_pretty(&report)?)?;
         println!("recorded native lifetime investigation case {case}; mechanism result is in the explicit evidence file");
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    async fn linux_primitives(
+        case: &str,
+        helper: &Path,
+        source: &Path,
+        binary: &TestBinary,
+        fixture: &EngineFixture,
+        artifact: &mut File,
+    ) -> TestResult {
+        let mut report = json!({"scope":"Linux primitive investigation, not product managed-runtime acceptance","case":case,"helper_source_sha256":format!("{:x}",Sha256::digest(fs::read(source)?))});
+        if case == "exec-fork" {
+            let result = Command::new(helper)
+                .args([binary.path(), fixture.state_dir(), Path::new("primitive")])
+                .output()?;
+            if !result.status.success() {
+                return Err("explicit exec/fork primitive failed".into());
+            }
+            report["primitive"] =
+                serde_json::from_slice(&fs::read(fixture.state_dir().join("primitive.json"))?)?;
+        } else {
+            let child = Command::new(helper)
+                .args([binary.path(), fixture.state_dir(), Path::new("race")])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?;
+            let mut owner = ProbeOwner {
+                child,
+                state: fixture.state_dir().to_owned(),
+                engine: None,
+                binary: helper.to_owned(),
+            };
+            let marker = fixture.state_dir().join("race-child.pid.bin");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(bytes) = fs::read(&marker) {
+                    if let Ok(bytes) = <[u8; 4]>::try_from(bytes) {
+                        owner.engine = Some(i32::from_ne_bytes(bytes).try_into()?);
+                        break;
+                    }
+                }
+                if owner.child.try_wait()?.is_some() || Instant::now() >= deadline {
+                    return Err("pre-install child ownership marker unavailable".into());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            report["before"] = json!(owner.native_snapshot()?);
+            owner.child.kill()?;
+            owner.child.wait()?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while (owner.engine_live()? || !owner.live_group()?.is_empty())
+                && Instant::now() < deadline
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            report["parent_changed_rejected_before_exec"] = json!(
+                fs::read(fixture.state_dir().join("race-rejected.bin"))? == b"rejected-before-exec"
+            );
+            report["child_stopped_before_external_cleanup"] =
+                json!(!owner.engine_live()? && owner.live_group()?.is_empty());
+            report["live_group_before_cleanup"] = json!(owner.live_group()?);
+            owner.fallback_cleanup();
+        }
+        writeln!(artifact, "{}", serde_json::to_string_pretty(&report)?)?;
         Ok(())
     }
 }
