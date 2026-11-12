@@ -83,6 +83,12 @@ jobs:
           python scripts/run-linux-lifetime-probes.py
           --toolchain "$TEST_TOOLCHAIN"
           --evidence-dir "${{ runner.temp }}/verysync-linux-lifetime-evidence"
+      - name: Investigate native Windows Job lifetime mechanisms
+        if: startsWith(matrix.package, 'windows-')
+        run: >-
+          python scripts/run-windows-lifetime-probes.py
+          --toolchain "$TEST_TOOLCHAIN"
+          --evidence-dir "${{ runner.temp }}/verysync-windows-lifetime-evidence"
       - name: Confirm no task-owned engine remains
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
