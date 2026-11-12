@@ -32,7 +32,7 @@ pub use client::{
 };
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use error::{Error, ResponseDiagnostic, Result};
-pub use folders::{CreateFolderOptions, FolderConfig};
+pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderUpdate};
 pub use path::{PathStyle, TargetPath};
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
 

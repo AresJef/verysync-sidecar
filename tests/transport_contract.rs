@@ -438,3 +438,71 @@ async fn modifying_request_failure_has_an_explicit_unknown_outcome_without_retry
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn folder_update_sends_only_requested_fields_and_reports_stale_readback() -> TestResult {
+    use verysync_sidecar::{FolderId, FolderPatch};
+    let id = FolderId::parse("folder 中文 /?#%")?;
+    let before = serde_json::json!({"id":id.as_str(),"label":"Before","path":"/synthetic","paused":false,"unknown":{"keep":[1,2]},"secret":"synthetic-folder-key"});
+    let mut after = before.clone();
+    after["label"] = serde_json::json!("After");
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[before]})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"folders":[after.clone()]})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[after.clone()]})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"folders":[after]})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let result = client
+        .update_folder(&id, &FolderPatch::default().label("After"))
+        .await?;
+    assert!(result.requested_fields_match);
+    assert_eq!(
+        result.configuration.extra["unknown"]["keep"],
+        serde_json::json!([1, 2])
+    );
+    assert!(!format!("{result:?}").contains("synthetic-folder-key"));
+    let pending = client.pause_folder(&id).await?;
+    assert!(!pending.requested_fields_match);
+    assert!(!pending.configuration.paused);
+    assert!(matches!(
+        client.resume_folder(&id).await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert!(matches!(
+        client.update_folder(&id, &FolderPatch::default()).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    for unsafe_segment in [".", ".."] {
+        assert!(matches!(
+            client.pause_folder(&FolderId::parse(unsafe_segment)?).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let requests = server.finish().await?;
+    let patches: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(patches.len(), 2);
+    let target = patches[0].lines().next().ok_or("missing request target")?;
+    assert!(target.starts_with("PATCH /prefix/rest/config/folders/folder%20"));
+    assert!(target.contains("%2F%3F%23%25"));
+    let body = |r: &str| -> TestResult<serde_json::Value> {
+        Ok(serde_json::from_str(
+            r.split_once("\r\n\r\n").ok_or("missing body")?.1,
+        )?)
+    };
+    assert_eq!(body(patches[0])?, serde_json::json!({"label":"After"}));
+    assert_eq!(body(patches[1])?, serde_json::json!({"paused":true}));
+    Ok(())
+}
