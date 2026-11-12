@@ -6,6 +6,33 @@ use verysync_sidecar::{
 };
 
 #[test]
+fn capabilities_catalog_keeps_planned_work_separate_from_verified_interfaces() {
+    use verysync_sidecar::{
+        library_capabilities, Capability, ImplementationStatus, VerificationStatus,
+    };
+    let catalog = library_capabilities();
+    let runtime = catalog
+        .iter()
+        .find(|entry| entry.capability == Capability::ManagedRuntime)
+        .unwrap();
+    assert_eq!(runtime.implementation, ImplementationStatus::NotImplemented);
+    assert_eq!(runtime.verification, VerificationStatus::NotRun);
+    let raw = catalog
+        .iter()
+        .find(|entry| entry.capability == Capability::RawManagement)
+        .unwrap();
+    assert_eq!(raw.implementation, ImplementationStatus::RawTransport);
+    let connection = catalog
+        .iter()
+        .find(|entry| entry.capability == Capability::Connection)
+        .unwrap();
+    assert_eq!(connection.implementation, ImplementationStatus::Typed);
+    assert!(
+        matches!(connection.verification,VerificationStatus::NativeEvidence { engine_version,.. } if engine_version==verysync_sidecar::BASELINE_ENGINE_VERSION)
+    );
+}
+
+#[test]
 fn connection_without_a_tokio_runtime_returns_an_error() -> Result<(), Box<dyn std::error::Error>> {
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     let endpoint = ManagementEndpoint::http(&format!("http://{}", listener.local_addr()?))?;

@@ -192,6 +192,21 @@ Declare effects correctly: some upstream GET routes change state. Transport or
 body failures after a possible write remain unknown outcomes. Header/body values
 are sensitive opt-in data, omitted from raw request/response Debug.
 
+`library_capabilities()` exposes each narrow family's implementation and
+recorded validation independently. `client.capabilities()` adds the handshake
+target/controller coordinates and instance observations without sending requests.
+Authentication is recorded at handshake time; unprobed operation permissions
+and commercial licenses remain `Unknown`. Reconnect after replacing the engine
+to obtain a new snapshot.
+
+`MatchesRecordedCoordinates` checks the recorded version, OS/architecture pair,
+transport and TLS build feature. It does not certify the current OS version,
+translation environment or network. The evidence specifies modern native runners,
+Unix sockets on macOS/Linux, and loopback HTTP on Windows with the default TLS
+feature. Other combinations are outside that evidence, rather than declared
+unsupported. Planned families stay `NotImplemented` / `NotRun`, and raw transport
+retains its own status separately from typed feature coverage.
+
 ```sh
 cargo fmt --all -- --check
 cargo check --all-targets --locked

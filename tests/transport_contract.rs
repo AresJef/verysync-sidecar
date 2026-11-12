@@ -804,3 +804,40 @@ async fn raw_state_changing_get_requires_fresh_identity_before_sending() -> Test
         .any(|request| request.contains("account/logout")));
     Ok(())
 }
+
+#[tokio::test]
+async fn capabilities_report_is_a_snapshot_without_optional_feature_probes() -> TestResult {
+    use verysync_sidecar::{InstanceObservation, TargetValidation};
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"arm64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let report = client.capabilities();
+    assert_eq!(report.target.engine_os, "linux");
+    assert_eq!(report.target.engine_arch, "arm64");
+    assert_eq!(
+        report.target_validation,
+        TargetValidation::OutsideNativeEvidence
+    );
+    assert_eq!(
+        report.instance.authentication,
+        InstanceObservation::ObservedAtHandshake
+    );
+    assert_eq!(
+        report.instance.commercial_license,
+        InstanceObservation::Unknown
+    );
+    assert_eq!(
+        report.instance.operation_authorization,
+        InstanceObservation::Unknown
+    );
+    assert!(!format!("{report:?}").contains(KEY));
+    assert_eq!(
+        server.finish().await?.len(),
+        2,
+        "report must not add management or license probes"
+    );
+    Ok(())
+}

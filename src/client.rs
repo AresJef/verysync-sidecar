@@ -144,6 +144,7 @@ struct Connection {
     key: ApiKey,
     response_limit: usize,
     mutation_lock: Arc<tokio::sync::Mutex<()>>,
+    endpoint_kind: crate::EndpointKind,
 }
 
 /// An authenticated connection that does not own the engine process.
@@ -165,6 +166,7 @@ impl Client {
     /// Poll this future inside a Tokio runtime with I/O and timers enabled.
     /// A missing runtime is reported before any request is attempted.
     pub async fn connect(options: ConnectOptions) -> Result<Self> {
+        let endpoint_kind = options.endpoint.kind();
         tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
             reason: "a Tokio runtime with I/O and timers enabled is required",
         })?;
@@ -217,6 +219,7 @@ impl Client {
             key: options.api_key,
             response_limit: options.response_limit,
             mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            endpoint_kind,
         };
         let version: EngineVersion = connection
             .get_json("read version", "rest/system/version")
@@ -550,6 +553,19 @@ impl Client {
         self.connection
             .receive_response("raw management request", outgoing, mutation)
             .await
+    }
+
+    /// Inspect code/evidence, target-scope match and unprobed instance conditions.
+    ///
+    /// This uses the handshake snapshot and performs no I/O. Reconnect after
+    /// changing the engine. Library implementation and historical validation
+    /// do not establish this instance's optional authorization or license.
+    pub fn capabilities(&self) -> crate::CapabilityReport {
+        crate::CapabilityReport::build(
+            &self.instance,
+            self.connection.endpoint_kind,
+            self.connection.base.scheme() == "https",
+        )
     }
 
     /// Borrow the authenticated identity/version snapshot captured on connect.
