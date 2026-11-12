@@ -102,7 +102,7 @@ impl EngineFixture {
         let state = tempfile::Builder::new().prefix("vs-test-").tempdir()?;
         protect_directory(state.path())?;
         let version = run_tool(&binary.path, state.path(), &["version"], None).await?;
-        if !version.starts_with("verysync v2.33.2 ") {
+        if !baseline_version_output(&version) {
             return Err("fixture requires the verified VerySync v2.33.2 baseline".into());
         }
         let mut entropy = [0; 32];
@@ -122,13 +122,10 @@ impl EngineFixture {
             Some(&password),
         )
         .await?;
-        let device_id = run_tool(&binary.path, state.path(), &["device-id"], None)
-            .await?
-            .trim()
+        let device_output = run_tool(&binary.path, state.path(), &["device-id"], None).await?;
+        let device_id = device_id_output(&device_output)
+            .ok_or("fixture generated no unambiguous device identity")?
             .to_owned();
-        if device_id.len() < 20 {
-            return Err("fixture generated an invalid device identity".into());
-        }
 
         let builder = reqwest::Client::builder()
             .no_proxy()
@@ -392,22 +389,6 @@ async fn run_tool(
             if output.stdout.len() > 64 * 1024 {
                 return Err("engine helper output limit exceeded".into());
             }
-            if args.first() == Some(&"version") {
-                // This read-only probe runs before state/credentials are generated.
-                // Keep both channels visible: GUI-subsystem builds may use a
-                // different output channel from the Unix command-line builds.
-                eprintln!(
-                    "{}",
-                    serde_json::json!({
-                        "fixture_version_probe": {
-                            "stdout_bytes": output.stdout.len(),
-                            "stderr_bytes": output.stderr.len(),
-                            "stdout": String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(1024)]),
-                            "stderr": String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(1024)]),
-                        }
-                    })
-                );
-            }
             return Ok(String::from_utf8(output.stdout)?);
         }
         if Instant::now() >= deadline {
@@ -602,8 +583,64 @@ fn protected_windows_acl(path: &Path) -> TestResult<bool> {
         }))
 }
 
+fn baseline_version_output(text: &str) -> bool {
+    // The verified Windows build emits console-init logs before the result.
+    let mut versions = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("verysync "));
+    let version = versions
+        .next()
+        .and_then(|line| line.split_whitespace().next());
+    version == Some(verysync_sidecar::BASELINE_ENGINE_VERSION) && versions.next().is_none()
+}
+
+fn device_id_output(text: &str) -> Option<&str> {
+    let mut candidates = text.lines().map(str::trim).filter(|line| {
+        let parts: Vec<_> = line.split('-').collect();
+        parts.len() == 8
+            && parts.iter().all(|part| {
+                part.len() == 7
+                    && part
+                        .bytes()
+                        .all(|c| c.is_ascii_uppercase() || (b'2'..=b'7').contains(&c))
+            })
+    });
+    let id = candidates.next()?;
+    if candidates.next().is_some() {
+        None
+    } else {
+        Some(id)
+    }
+}
+
 #[cfg(test)]
 mod fixture_unit_tests {
+    #[test]
+    fn device_id_probe_accepts_preamble_and_requires_a_unique_canonical_line() {
+        let id = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
+        assert_eq!(
+            super::device_id_output(&format!("INF console initialization\n{id}\n")),
+            Some(id)
+        );
+        assert_eq!(super::device_id_output(&format!("{id}\n{id}\n")), None);
+        assert_eq!(
+            super::device_id_output("console output is not an identity"),
+            None
+        );
+    }
+
+    #[test]
+    fn version_probe_accepts_preamble_but_rejects_other_or_ambiguous_versions() {
+        let text = "2026-11-12 INF Failed allocConsole\n2026-11-12 WRN fixConsole\nverysync v2.33.2 \"Pigeon\" (go1.23.10 windows-amd64)\n";
+        assert!(super::baseline_version_output(text));
+        assert!(!super::baseline_version_output(
+            "verysync v2.33.20 \"Other\"\n"
+        ));
+        assert!(!super::baseline_version_output(
+            "verysync v2.33.2 x\nverysync v2.34.0 y\n"
+        ));
+    }
+
     #[test]
     fn windows_sid_csv_accepts_quoted_and_unquoted_fields() {
         for text in [
