@@ -167,6 +167,24 @@ pub(super) fn prepare(
     }
     let fresh = !key_exists;
     if fresh {
+        if state
+            .join("setting.dat")
+            .try_exists()
+            .map_err(|e| io_error("inspect partial configuration", e))?
+        {
+            return Err(Error::ManagedFailure {
+                reason: "configuration exists without a complete identity; it was not reset",
+            });
+        }
+    } else {
+        // Reject aliases/unprotected control resources before the official
+        // identity helper can read them. Keep every existing byte for repair.
+        for name in ["key.pem", "cert.pem", "setting.dat"] {
+            native::open_private(&state.join(name), true)
+                .map_err(|e| io_error("check persisted private resource", e))?;
+        }
+    }
+    if fresh {
         let mut entropy = [0; 32];
         getrandom::fill(&mut entropy).map_err(|_| Error::ManagedFailure {
             reason: "secure credential generation failed",

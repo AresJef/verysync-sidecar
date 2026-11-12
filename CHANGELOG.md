@@ -12,6 +12,8 @@
 - Validate startup cancellation after actual core creation, caller/SDK deadlines
   and Tokio runtime shutdown. Preserve incomplete identity/configuration for
   explicit repair; confirm exact private process exit before successful retry.
+- Reject linked/unprotected persisted identity resources and configuration left
+  without a complete identity before invoking identity generation/read helpers.
 - Keep further lifecycle policy gates
   in the same full-delivery development plan. This development version has not
   been published.

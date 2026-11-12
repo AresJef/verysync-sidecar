@@ -344,8 +344,71 @@ async fn cancelled_start_partial_identity_and_configuration_require_explicit_rep
     // not silently invent another identity to conceal the incomplete state.
     std::fs::write(&cert_path, certificate)?;
     std::fs::set_permissions(&cert_path, permissions)?;
+    #[cfg(unix)]
+    {
+        let original = case.root.join("original-test-certificate");
+        std::fs::rename(&cert_path, &original)?;
+        let original_sha = Sha256::digest(std::fs::read(&original)?);
+        std::os::unix::fs::symlink(&original, &cert_path)?;
+        let aliased = ManagedInstance::start(case.settings.clone()).await;
+        assert!(
+            matches!(aliased, Err(verysync_sidecar::Error::LocalIo { .. })),
+            "{aliased:?}"
+        );
+        wait_no_processes(&case.binary).await?;
+        assert_eq!(Sha256::digest(std::fs::read(&original)?), original_sha);
+        assert!(std::fs::symlink_metadata(&cert_path)?
+            .file_type()
+            .is_symlink());
+        std::fs::remove_file(&cert_path)?;
+        std::fs::rename(&original, &cert_path)?;
+    }
     let config_path = case.state.join("setting.dat");
     let original_config = std::fs::read(&config_path)?;
+    #[cfg(unix)]
+    {
+        let original = case.root.join("original-test-configuration");
+        std::fs::rename(&config_path, &original)?;
+        assert!(Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(&config_path)
+            .status()?
+            .success());
+        let special = tokio::time::timeout(
+            Duration::from_secs(5),
+            ManagedInstance::start(case.settings.clone()),
+        )
+        .await?;
+        assert!(
+            matches!(special, Err(verysync_sidecar::Error::LocalIo { .. })),
+            "{special:?}"
+        );
+        wait_no_processes(&case.binary).await?;
+        assert_eq!(std::fs::read(&original)?, original_config);
+        std::fs::remove_file(&config_path)?;
+        std::fs::rename(&original, &config_path)?;
+    }
+    let backup = case.root.join("explicit-identity-backup");
+    std::fs::create_dir(&backup)?;
+    let names = ["key.pem", "cert.pem", ".verysync-sidecar-identity"];
+    for name in names {
+        std::fs::rename(case.state.join(name), backup.join(name))?;
+    }
+    let orphaned = ManagedInstance::start(case.settings.clone()).await;
+    assert!(
+        matches!(
+            orphaned,
+            Err(verysync_sidecar::Error::ManagedFailure { .. })
+        ),
+        "{orphaned:?}"
+    );
+    wait_no_processes(&case.binary).await?;
+    assert_eq!(std::fs::read(&config_path)?, original_config);
+    for name in names {
+        assert!(!case.state.join(name).exists());
+        std::fs::rename(backup.join(name), case.state.join(name))?;
+    }
+    assert_eq!(private_identity(&case.state)?, identity);
     std::fs::write(&config_path, b"synthetic invalid MessagePack configuration")?;
     let malformed = ManagedInstance::start(case.settings.clone()).await;
     assert!(
@@ -370,6 +433,8 @@ async fn cancelled_start_partial_identity_and_configuration_require_explicit_rep
         .contains(&restored.process_id()));
     restored.shutdown(Duration::from_secs(10)).await?;
     case.cleanup().await?;
-    println!("public partial startup state evidence: {{\"missing_certificate_not_regenerated\":true,\"private_key_identity_retained\":true,\"malformed_config_not_reset\":true,\"sample_sha_unchanged\":true,\"explicit_repair_same_identity_ready\":true,\"independent_process_cleanup\":true}}");
+    #[cfg(unix)]
+    println!("public private resource admission evidence: {{\"certificate_alias_rejected\":true,\"external_synthetic_target_unchanged\":true,\"link_preserved_for_explicit_repair\":true,\"fifo_configuration_rejected_without_blocking\":true}}");
+    println!("public partial startup state evidence: {{\"missing_certificate_not_regenerated\":true,\"orphan_configuration_not_reset\":true,\"missing_identity_not_regenerated_over_configuration\":true,\"private_key_identity_retained\":true,\"malformed_config_not_reset\":true,\"sample_sha_unchanged\":true,\"explicit_repair_same_identity_ready\":true,\"independent_process_cleanup\":true}}");
     Ok(())
 }

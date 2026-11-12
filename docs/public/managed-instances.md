@@ -103,8 +103,11 @@ authenticate an explicit retry using the original identity.
 
 The directory, identity, private key/certificate, configuration and caller files
 remain available after cancellation. A missing half of the key/certificate pair
-or malformed configuration is rejected without silently generating a replacement
-identity or resetting configuration. Preserve the original files and repair or
+or existing configuration without a complete identity is rejected without
+silently generating a replacement identity or resetting configuration. Persisted
+key, certificate and configuration resources must remain private regular files;
+links/reparse resources are rejected before reading the identity through the
+official helper. Malformed configuration is also rejected. Preserve the original files and repair or
 restore them explicitly before retrying. The tests restore only their own
 synthetic fixture's original files and verify identity and sample hashes.
 
