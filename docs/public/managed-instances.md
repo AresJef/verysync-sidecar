@@ -106,8 +106,10 @@ remain available after cancellation. A missing half of the key/certificate pair
 or existing configuration without a complete identity is rejected without
 silently generating a replacement identity or resetting configuration. Persisted
 key, certificate and configuration resources must remain private regular files;
-links/reparse resources are rejected before reading the identity through the
-official helper. Malformed configuration is also rejected. Preserve the original files and repair or
+links/reparse resources, including dangling links and the persisted identity and
+completion markers, are rejected before any metadata helper or identity generation.
+A dangling link, including the official state lock, is never treated as an absent file. A missing configuration with
+retained keys, or malformed configuration, is also rejected. Preserve the original files and repair or
 restore them explicitly before retrying. The tests restore only their own
 synthetic fixture's original files and verify identity and sample hashes.
 

@@ -365,6 +365,21 @@ async fn cancelled_start_partial_identity_and_configuration_require_explicit_rep
     }
     let config_path = case.state.join("setting.dat");
     let original_config = std::fs::read(&config_path)?;
+    let saved = case.root.join("explicit-configuration-backup");
+    std::fs::rename(&config_path, &saved)?;
+    let missing_config = ManagedInstance::start(case.settings.clone()).await;
+    assert!(
+        matches!(
+            missing_config,
+            Err(verysync_sidecar::Error::ManagedFailure { .. })
+        ),
+        "{missing_config:?}"
+    );
+    wait_no_processes(&case.binary).await?;
+    assert!(!config_path.exists());
+    assert_eq!(private_identity(&case.state)?, identity);
+    assert_eq!(std::fs::read(&saved)?, original_config);
+    std::fs::rename(&saved, &config_path)?;
     #[cfg(unix)]
     {
         let original = case.root.join("original-test-configuration");
@@ -390,7 +405,12 @@ async fn cancelled_start_partial_identity_and_configuration_require_explicit_rep
     }
     let backup = case.root.join("explicit-identity-backup");
     std::fs::create_dir(&backup)?;
-    let names = ["key.pem", "cert.pem", ".verysync-sidecar-identity"];
+    let names = [
+        "key.pem",
+        "cert.pem",
+        ".verysync-sidecar-identity",
+        ".verysync-sidecar-configured",
+    ];
     for name in names {
         std::fs::rename(case.state.join(name), backup.join(name))?;
     }
@@ -435,6 +455,76 @@ async fn cancelled_start_partial_identity_and_configuration_require_explicit_rep
     case.cleanup().await?;
     #[cfg(unix)]
     println!("public private resource admission evidence: {{\"certificate_alias_rejected\":true,\"external_synthetic_target_unchanged\":true,\"link_preserved_for_explicit_repair\":true,\"fifo_configuration_rejected_without_blocking\":true}}");
-    println!("public partial startup state evidence: {{\"missing_certificate_not_regenerated\":true,\"orphan_configuration_not_reset\":true,\"missing_identity_not_regenerated_over_configuration\":true,\"private_key_identity_retained\":true,\"malformed_config_not_reset\":true,\"sample_sha_unchanged\":true,\"explicit_repair_same_identity_ready\":true,\"independent_process_cleanup\":true}}");
+    println!("public partial startup state evidence: {{\"missing_certificate_not_regenerated\":true,\"missing_configuration_not_regenerated\":true,\"orphan_configuration_not_reset\":true,\"missing_identity_not_regenerated_over_configuration\":true,\"private_key_identity_retained\":true,\"malformed_config_not_reset\":true,\"sample_sha_unchanged\":true,\"explicit_repair_same_identity_ready\":true,\"independent_process_cleanup\":true}}");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelled_start_dangling_control_links_are_not_fresh_state() -> TestResult {
+    for (index, name) in [
+        "verysync.lock",
+        "setting.dat",
+        "key.pem",
+        "cert.pem",
+        ".verysync-sidecar-identity",
+        ".verysync-sidecar-configured",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut case = StartupCase::blocked()?;
+        case.unblock();
+        // Public checksum rejection admits a new private state but executes no
+        // helper or identity generation. This models an interrupted early start.
+        let seed = ManagedOptions::new(
+            LocalProgram::new(&case.binary)?.expected_sha256([0; 32]),
+            &case.state,
+            case.settings.management_endpoint().clone(),
+        )?;
+        assert!(matches!(
+            ManagedInstance::start(seed).await,
+            Err(verysync_sidecar::Error::ProgramRejected { .. })
+        ));
+        wait_state_available(&case.state).await?;
+        let sample = case.state.join("retained.bin");
+        std::fs::write(&sample, b"synthetic cold-state sample")?;
+        let target = case.root.join("must-not-be-created");
+        let alias = case.state.join(name);
+        std::os::unix::fs::symlink(&target, &alias)?;
+        let result = ManagedInstance::start(case.settings.clone()).await;
+        let kind = match result {
+            Err(verysync_sidecar::Error::LocalIo { .. }) => "local_io",
+            Err(_) => "other_error",
+            Ok(mut instance) => {
+                instance.force_stop(Duration::from_secs(10)).await?;
+                "accepted"
+            }
+        };
+        wait_no_processes(&case.binary).await?;
+        println!(
+            "private cold-link control: name={name} result={kind} target_created={} key_created={}",
+            target.exists(),
+            case.state.join("key.pem").is_file()
+        );
+        assert_eq!(kind, "local_io");
+        assert!(!target.exists());
+        for resource in ["key.pem", "cert.pem", ".verysync-sidecar-identity"] {
+            assert!(!case.state.join(resource).is_file());
+        }
+        assert!(std::fs::symlink_metadata(&alias)?.file_type().is_symlink());
+        assert_eq!(std::fs::read(&sample)?, b"synthetic cold-state sample");
+        std::fs::remove_file(&alias)?;
+        if index == 0 {
+            let mut repaired = start_checked(case.settings.clone()).await?;
+            assert!(inventory(&case.binary)
+                .await?
+                .contains(&repaired.process_id()));
+            assert_eq!(std::fs::read(&sample)?, b"synthetic cold-state sample");
+            repaired.shutdown(Duration::from_secs(10)).await?;
+        }
+        case.cleanup().await?;
+    }
+    println!("public dangling private resource evidence: {{\"six_control_aliases_exercised\":true,\"typed_rejection_before_generation\":true,\"external_synthetic_targets_not_created\":true,\"identity_not_regenerated\":true,\"sample_unchanged\":true,\"explicit_repair_ready\":true,\"independent_process_exit\":true}}");
     Ok(())
 }

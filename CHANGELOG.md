@@ -14,6 +14,8 @@
   explicit repair; confirm exact private process exit before successful retry.
 - Reject linked/unprotected persisted identity resources and configuration left
   without a complete identity before invoking identity generation/read helpers.
+  Inspect dangling control-file aliases before treating state as new, and retain
+  keys when configuration is missing instead of silently rebuilding it.
 - Keep further lifecycle policy gates
   in the same full-delivery development plan. This development version has not
   been published.

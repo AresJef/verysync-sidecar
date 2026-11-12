@@ -48,6 +48,21 @@ pub(super) fn command(binary: &Path, state: &Path) -> Command {
     command
 }
 
+fn persisted_file(state: &Path, name: &str) -> Result<bool> {
+    let path = state.join(name);
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {
+            // Inspect the entry itself, including dangling aliases. A followed
+            // existence check must not turn a broken link into fresh state.
+            native::open_private(&path, true)
+                .map_err(|e| io_error("check persisted private resource", e))?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(io_error("inspect persisted private resource", error)),
+    }
+}
+
 pub(super) fn prepare(
     options: &ManagedOptions,
     cancel: &Receiver<()>,
@@ -56,6 +71,28 @@ pub(super) fn prepare(
     check_active(cancel, deadline)?;
     let lease = StateLease::acquire(&options.state)?;
     let state = lease.path();
+    let key_exists = persisted_file(state, "key.pem")?;
+    let cert_exists = persisted_file(state, "cert.pem")?;
+    let config_exists = persisted_file(state, "setting.dat")?;
+    let identity_exists = persisted_file(state, ".verysync-sidecar-identity")?;
+    let configured_exists = persisted_file(state, ".verysync-sidecar-configured")?;
+    if key_exists != cert_exists || (!key_exists && (identity_exists || configured_exists)) {
+        return Err(Error::ManagedFailure {
+            reason: "persistent identity is incomplete; it was not regenerated",
+        });
+    }
+    let fresh = !key_exists;
+    if fresh && config_exists {
+        return Err(Error::ManagedFailure {
+            reason: "configuration exists without a complete identity; it was not reset",
+        });
+    }
+    if !fresh && !config_exists {
+        return Err(Error::ManagedFailure {
+            reason: "persistent configuration is missing; it was not regenerated",
+        });
+    }
+    let expected_id = state.join(".verysync-sidecar-identity");
     for name in ["tmp", "roaming", "local", "profile"] {
         let path = state.join(name);
         if path
@@ -151,39 +188,6 @@ pub(super) fn prepare(
             reason: "the program does not report the exact v2.33.2 baseline",
         });
     }
-    let expected_id = state.join(".verysync-sidecar-identity");
-    let key_exists = state
-        .join("key.pem")
-        .try_exists()
-        .map_err(|e| io_error("inspect private identity", e))?;
-    let cert_exists = state
-        .join("cert.pem")
-        .try_exists()
-        .map_err(|e| io_error("inspect private certificate", e))?;
-    if key_exists != cert_exists || (!key_exists && expected_id.exists()) {
-        return Err(Error::ManagedFailure {
-            reason: "persistent identity is incomplete; it was not regenerated",
-        });
-    }
-    let fresh = !key_exists;
-    if fresh {
-        if state
-            .join("setting.dat")
-            .try_exists()
-            .map_err(|e| io_error("inspect partial configuration", e))?
-        {
-            return Err(Error::ManagedFailure {
-                reason: "configuration exists without a complete identity; it was not reset",
-            });
-        }
-    } else {
-        // Reject aliases/unprotected control resources before the official
-        // identity helper can read them. Keep every existing byte for repair.
-        for name in ["key.pem", "cert.pem", "setting.dat"] {
-            native::open_private(&state.join(name), true)
-                .map_err(|e| io_error("check persisted private resource", e))?;
-        }
-    }
     if fresh {
         let mut entropy = [0; 32];
         getrandom::fill(&mut entropy).map_err(|_| Error::ManagedFailure {
@@ -223,10 +227,7 @@ pub(super) fn prepare(
     let identity = identities.into_iter().next().ok_or(Error::ManagedFailure {
         reason: "identity missing",
     })?;
-    if expected_id
-        .try_exists()
-        .map_err(|e| io_error("inspect persisted identity", e))?
-    {
+    if identity_exists {
         let mut text = String::new();
         native::open_private(&expected_id, true)
             .map_err(|e| io_error("read persisted identity", e))?
@@ -247,9 +248,7 @@ pub(super) fn prepare(
             .map_err(|e| io_error("persist identity record", e))?;
     }
     let ready = state.join(".verysync-sidecar-configured");
-    let first_configuration = !ready
-        .try_exists()
-        .map_err(|e| io_error("inspect startup completion", e))?;
+    let first_configuration = !configured_exists;
     if !first_configuration {
         let mut mark = Vec::new();
         native::open_private(&ready, true)
