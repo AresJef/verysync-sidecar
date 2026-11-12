@@ -37,6 +37,53 @@ fn options(program: LocalProgram, path: &std::path::Path) -> TestResult<ManagedO
     Ok(ManagedOptions::new(program, path, endpoint)?.startup_timeout(Duration::from_secs(25))?)
 }
 
+async fn start_checked(settings: ManagedOptions) -> verysync_sidecar::Result<ManagedInstance> {
+    let state = settings.state_directory().to_owned();
+    match ManagedInstance::start(settings).await {
+        Ok(instance) => Ok(instance),
+        Err(error) => {
+            if let Error::ManagedProcessExited {
+                operation,
+                diagnostic: Some(diagnostic),
+                ..
+            } = &error
+            {
+                let mut text = String::from_utf8_lossy(diagnostic.body_bytes()).into_owned();
+                if let Ok(bytes) = std::fs::read(state.join("setting.dat")) {
+                    if let Ok(config) = rmpv::decode::read_value(&mut std::io::Cursor::new(bytes)) {
+                        for field in ["4", "6"] {
+                            if let Some(secret) = config["4"][field]
+                                .as_str()
+                                .filter(|value| !value.is_empty())
+                            {
+                                text = text.replace(secret, "[REDACTED]");
+                            }
+                        }
+                    }
+                }
+                // This fixture owns only synthetic state. Mask long opaque tokens
+                // as well as known GUI credentials before CI diagnostics appear.
+                let safe = text
+                    .split_whitespace()
+                    .map(|part| {
+                        if part.len() > 24 {
+                            "[REDACTED-TOKEN]"
+                        } else {
+                            part
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                eprintln!(
+                    "private test startup stage {operation}: {}",
+                    safe.chars().take(8192).collect::<String>()
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
 async fn stop_via_explicit_management(instance: &mut ManagedInstance) -> TestResult {
     let request = RawRequest::new(
         RawMethod::Post,
@@ -60,7 +107,7 @@ async fn start_authenticate_reuse_identity_and_reject_state_conflict() -> TestRe
     let root = tempfile::Builder::new().prefix("vsm-").tempdir()?;
     let path = root.path().join("state");
     let settings = options(binary, &path)?;
-    let mut instance = ManagedInstance::start(settings.clone()).await?;
+    let mut instance = start_checked(settings.clone()).await?;
     let identity = instance.client().instance().device_id.clone();
     assert_eq!(instance.client().version().await?.version, "v2.33.2");
     assert_eq!(instance.program_info().version, "v2.33.2");
@@ -140,7 +187,7 @@ async fn start_authenticate_reuse_identity_and_reject_state_conflict() -> TestRe
     );
     fs2::FileExt::unlock(&upstream_lock)?;
     drop(upstream_lock);
-    let mut second = ManagedInstance::start(settings).await?;
+    let mut second = start_checked(settings).await?;
     assert_eq!(second.client().instance().device_id, identity);
     assert_eq!(
         Sha256::digest(std::fs::read(path.join("key.pem"))?),

@@ -100,8 +100,11 @@ pub(super) fn prepare(
                 .map_err(|e| io_error("persist app settings", e))?;
         }
     }
-    let binary = fs::canonicalize(&options.program.path)
-        .map_err(|e| io_error("resolve selected executable", e))?;
+    #[cfg(windows)]
+    let resolved = dunce::canonicalize(&options.program.path);
+    #[cfg(not(windows))]
+    let resolved = fs::canonicalize(&options.program.path);
+    let binary = resolved.map_err(|e| io_error("resolve selected executable", e))?;
     let mut input = File::open(&binary).map_err(|e| io_error("open selected executable", e))?;
     if !input
         .metadata()
@@ -300,6 +303,12 @@ fn cli(
                 .map_err(|e| io_error("attach private CLI capture", e))?,
         )
         .stderr(Stdio::null());
+    #[cfg(windows)]
+    command.stderr(
+        capture
+            .try_clone()
+            .map_err(|e| io_error("attach private CLI diagnostics", e))?,
+    );
     let mut process =
         OwnedProcess::spawn(command, true).map_err(|e| io_error("spawn metadata helper", e))?;
     if let Some(password) = password {
@@ -336,11 +345,6 @@ fn cli(
     process
         .finish()
         .map_err(|e| io_error("confirm helper tree exit", e))?;
-    if !status.success() {
-        return Err(Error::ManagedProcessExited {
-            code: status.code(),
-        });
-    }
     let mut bytes = Vec::new();
     native::open_private(&scratch.0, true)
         .map_err(|e| io_error("read private CLI result", e))?
@@ -350,6 +354,24 @@ fn cli(
     if bytes.len() > 65536 {
         return Err(Error::ProgramRejected {
             reason: "CLI metadata exceeds its bound",
+        });
+    }
+    if !status.success() {
+        let operation = match args.first().copied() {
+            Some("version") => "inspect executable version",
+            Some("generate") => "generate private identity",
+            Some("device-id") => "read persistent device identity",
+            _ => "run metadata helper",
+        };
+        if let Some(password) = password {
+            bytes = String::from_utf8_lossy(&bytes)
+                .replace(password, "[REDACTED]")
+                .into_bytes();
+        }
+        return Err(Error::ManagedProcessExited {
+            operation,
+            code: status.code(),
+            diagnostic: Some(crate::ProcessDiagnostic::new(bytes)),
         });
     }
     String::from_utf8(bytes).map_err(|_| Error::ProgramRejected {

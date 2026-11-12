@@ -43,7 +43,7 @@ pub use client::{
 };
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use engine_source::{LocalProgram, ProgramInfo};
-pub use error::{Error, ResponseDiagnostic, Result};
+pub use error::{Error, ProcessDiagnostic, ResponseDiagnostic, Result};
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
 pub use managed::{ManagedExit, ManagedInstance, ManagedOptions};
 pub use path::{PathStyle, TargetPath};

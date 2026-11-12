@@ -42,7 +42,7 @@ impl StateLease {
             }
             Err(error) => return Err(io_error("inspect state", error)),
         }
-        let path = fs::canonicalize(path).map_err(|e| io_error("resolve private state", e))?;
+        let path = canonical(path).map_err(|e| io_error("resolve private state", e))?;
         let file = native::open_private(&path.join(LEASE), false)
             .map_err(|e| io_error("open state lease", e))?;
         file.try_lock_exclusive().map_err(|error| {
@@ -117,6 +117,17 @@ impl StateLease {
     }
 }
 
+fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        dunce::canonicalize(path)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::canonicalize(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,7 +139,7 @@ mod tests {
         let lease = StateLease::acquire(&path)?;
         assert_eq!(
             lease.path(),
-            fs::canonicalize(&path).map_err(|e| io_error("resolve test root", e))?
+            canonical(&path).map_err(|e| io_error("resolve test root", e))?
         );
         fs::write(path.join("synthetic"), b"retained").map_err(|e| io_error("write sample", e))?;
         assert!(matches!(

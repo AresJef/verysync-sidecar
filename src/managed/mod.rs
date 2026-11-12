@@ -25,6 +25,7 @@ pub struct ManagedOptions {
     pub(crate) state: PathBuf,
     pub(crate) endpoint: ManagementEndpoint,
     pub(crate) timeout: Duration,
+    pub(crate) request_timeout: Duration,
 }
 
 impl ManagedOptions {
@@ -86,6 +87,7 @@ impl ManagedOptions {
             state,
             endpoint,
             timeout: Duration::from_secs(30),
+            request_timeout: Duration::from_secs(10),
         })
     }
 
@@ -97,6 +99,18 @@ impl ManagedOptions {
             });
         }
         self.timeout = timeout;
+        Ok(self)
+    }
+
+    /// Set the retained management Client's per-request deadline (default 10s).
+    /// The total startup deadline remains independently enforced.
+    pub fn management_request_timeout(mut self, timeout: Duration) -> Result<Self> {
+        if timeout.is_zero() {
+            return Err(Error::InvalidConfiguration {
+                reason: "management request deadline must be nonzero",
+            });
+        }
+        self.request_timeout = timeout;
         Ok(self)
     }
 

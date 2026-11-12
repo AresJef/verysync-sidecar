@@ -1,6 +1,8 @@
 //! One private owner thread holds native process containment and the state lease.
 
 use std::fmt;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -9,10 +11,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, watch};
 
 use super::{bootstrap, io_error, process::OwnedProcess, ManagedOptions};
-use crate::{ApiKey, Client, ConnectOptions, DeviceId, Error, ProgramInfo, Result};
+use crate::{
+    ApiKey, Client, ConnectOptions, DeviceId, Error, ProcessDiagnostic, ProgramInfo, Result,
+};
 
 /// Observed exit of this managed program and its native containment.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ManagedExit {
     /// Actual normal exit code, absent when terminated by a Unix signal.
     pub code: Option<i32>,
@@ -22,6 +26,8 @@ pub struct ManagedExit {
     pub forced: bool,
     /// Whether the private process group or Job was confirmed empty.
     pub tree_stopped: bool,
+    /// Bounded private output, excluded from ordinary Debug text.
+    pub diagnostic: ProcessDiagnostic,
 }
 
 /// A library-owned local program, distinct from a borrowed management `Client`.
@@ -82,12 +88,16 @@ impl ManagedInstance {
                 reason: "owner ended before startup metadata",
             })??;
             let client = loop {
-                if let Some(report) = *exit.borrow() {
-                    return Err(Error::ManagedProcessExited { code: report.code });
+                if let Some(report) = exit.borrow().as_ref().cloned() {
+                    return Err(Error::ManagedProcessExited {
+                        operation: "reach authenticated managed readiness",
+                        code: report.code,
+                        diagnostic: Some(report.diagnostic),
+                    });
                 }
                 let connection = ConnectOptions::new(options.endpoint.clone(), context.key.clone())
                     .expected_device_id(context.identity.clone())
-                    .request_timeout(Duration::from_secs(1))?;
+                    .request_timeout(options.request_timeout)?;
                 match Client::connect(connection).await {
                     Ok(client) => break client,
                     Err(Error::Transport { .. } | Error::Timeout { .. }) => {
@@ -96,8 +106,12 @@ impl ManagedInstance {
                     Err(error) => return Err(error),
                 }
             };
-            if let Some(report) = *exit.borrow() {
-                return Err(Error::ManagedProcessExited { code: report.code });
+            if let Some(report) = exit.borrow().as_ref().cloned() {
+                return Err(Error::ManagedProcessExited {
+                    operation: "reach authenticated managed readiness",
+                    code: report.code,
+                    diagnostic: Some(report.diagnostic),
+                });
             }
             Ok(Self {
                 client,
@@ -141,7 +155,7 @@ impl ManagedInstance {
     /// around this future if needed; cancelling the wait does not stop the owner.
     pub async fn wait_for_exit(&mut self) -> Result<ManagedExit> {
         loop {
-            if let Some(report) = *self.exit.borrow() {
+            if let Some(report) = self.exit.borrow().as_ref().cloned() {
                 if !report.tree_stopped {
                     return Err(Error::ManagedFailure {
                         reason: "owned process-tree cleanup could not be confirmed",
@@ -184,24 +198,12 @@ fn owner_thread(
         }
     };
     let state = prepared.lease.path().to_owned();
-    let mut command = bootstrap::command(&prepared.binary, &state);
-    command
-        .arg("serve")
-        .arg("--home")
-        .arg(&state)
-        .args(["--no-browser", "--no-restart", "--no-upgrade"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // Keep the library lease. Only the official lock is handed back just before
-    // spawn so the official process can acquire it itself. External launchers
-    // of the same private state must coordinate this non-atomic handoff.
-    prepared.lease.release_engine_lock_for_spawn();
-    let mut process = match OwnedProcess::spawn(command, false) {
-        Ok(process) => process,
+    let spawned = spawn_core(&prepared.binary, &state, &mut prepared.lease);
+    let (mut process, mut capture) = match spawned {
+        Ok(pair) => pair,
         Err(error) => {
             drop(prepared.lease);
-            let _ = ready.send(Err(io_error("spawn owned program", error)));
+            let _ = ready.send(Err(error));
             return;
         }
     };
@@ -220,6 +222,15 @@ fn owner_thread(
     }
     let mut forced = false;
     let status = loop {
+        // Periodically reset the private capture; bounded reads never expose
+        // more than 64 KiB. Output is never forwarded to a global logger.
+        if capture
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 65536)
+        {
+            let _ = capture.set_len(0);
+            let _ = capture.seek(SeekFrom::Start(0));
+        }
         match process.try_wait() {
             Ok(Some(status)) => break Some(status),
             Err(_) => {
@@ -239,15 +250,58 @@ fn owner_thread(
         }
     };
     let tree_stopped = process.finish().is_ok() && process.tree_stopped().unwrap_or(false);
+    let _ = capture.seek(SeekFrom::Start(0));
+    let mut diagnostic = Vec::new();
+    let _ = Read::by_ref(&mut capture)
+        .take(65536)
+        .read_to_end(&mut diagnostic);
     let report = ManagedExit {
         code: status.as_ref().and_then(ExitStatus::code),
         signal: exit_signal(status.as_ref()),
         forced,
         tree_stopped,
+        diagnostic: ProcessDiagnostic::new(diagnostic),
     };
     drop(process);
     drop(lease);
     let _ = exit.send(Some(report));
+}
+
+fn spawn_core(
+    binary: &Path,
+    state: &Path,
+    lease: &mut super::state::StateLease,
+) -> Result<(OwnedProcess, File)> {
+    let mut capture = super::native::open_private(&state.join(".verysync-sidecar-core.log"), false)
+        .map_err(|e| io_error("open private core diagnostics", e))?;
+    capture
+        .set_len(0)
+        .map_err(|e| io_error("reset private core diagnostics", e))?;
+    capture
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| io_error("position private core diagnostics", e))?;
+    let mut command = bootstrap::command(binary, state);
+    command
+        .arg("serve")
+        .arg("--home")
+        .arg(state)
+        .args(["--no-browser", "--no-restart", "--no-upgrade"])
+        .stdin(Stdio::null())
+        .stdout(
+            capture
+                .try_clone()
+                .map_err(|e| io_error("capture core output", e))?,
+        )
+        .stderr(
+            capture
+                .try_clone()
+                .map_err(|e| io_error("capture core errors", e))?,
+        );
+    lease.release_engine_lock_for_spawn();
+    Ok((
+        OwnedProcess::spawn(command, false).map_err(|e| io_error("spawn owned program", e))?,
+        capture,
+    ))
 }
 
 fn exit_signal(status: Option<&ExitStatus>) -> Option<i32> {

@@ -76,3 +76,9 @@ does not establish other architectures, minimum systems or cross-network scope.
 
 The capability catalog reports this initial runtime subset as `Typed/Pending`
 while the remaining lifecycle and platform gates are under development.
+
+Management requests default to a separate 10-second deadline, configurable with
+`management_request_timeout`; the total startup deadline remains independent.
+Private program diagnostics are read with a 64 KiB bound. The owner periodically
+resets its private core capture; output is never forwarded to a caller-global
+logger. Diagnostic bytes require explicit inspection/redaction.
