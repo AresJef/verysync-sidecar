@@ -14,6 +14,69 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn sync_missing_folder_and_changed_target_do_not_return_empty_data() -> TestResult {
+    use verysync_sidecar::{FolderId, ListPage};
+    let different = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[]})),
+        Reply::json(serde_json::json!({"myID":different})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client
+            .folder_need(&FolderId::parse("missing")?, ListPage::new(1, 2)?)
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert!(matches!(
+        client.batch_folder_status().await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    let requests = server.finish().await?;
+    assert!(!requests
+        .iter()
+        .any(|r| r.contains("/db/need") || r.contains("/batch/db/status")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sync_pages_encode_exact_scope_and_reject_wrong_folder_or_malformed_lists() -> TestResult {
+    use verysync_sidecar::{FolderId, ListPage};
+    let id = FolderId::parse(&format!("scope 中文 /?% {KEY}"))?;
+    let folder = serde_json::json!({"id":id.as_str(),"label":"synthetic","path":"/synthetic","paused":false});
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(serde_json::json!({"folder":format!("different-{KEY}"),"errors":[],"page":2,"perpage":3})),
+        Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(serde_json::json!({"progress":null,"queued":[],"rest":[]})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .folder_errors(&id, ListPage::new(2, 3)?)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::FolderIdentityMismatch { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(matches!(
+        client.folder_need(&id, ListPage::new(1, 2)?).await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    let target = requests[4].lines().next().ok_or("missing encoded target")?;
+    assert!(target.starts_with("GET /prefix/rest/folder/errors?folder="));
+    assert!(target.contains("%E4%B8%AD%E6%96%87") && target.contains("%2F%3F%25"));
+    assert!(target.contains("&page=2&perpage=3"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn transport_partial_settings_and_relay_unknown_write_are_separate_receipts() -> TestResult {
     use verysync_sidecar::{RelayServerPatch, TransportPatch};
     let options = serde_json::json!({"trackerEnabled":false,"udpEnabled":false,"udpPort":12345,"natEnabled":false,"relaysEnabled":false,"tcpPunchEnabled":false,"stunServers":[],"customRelayAddresses":[],"natLeaseMinutes":60,"natRenewalMinutes":30,"natTimeoutSeconds":10,"futureSecret":KEY});

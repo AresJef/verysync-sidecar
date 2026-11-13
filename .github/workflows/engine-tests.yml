@@ -83,7 +83,7 @@ jobs:
           --parent "${{ runner.temp }}"
           --github-env "${{ github.env }}"
       - name: Run public input and synthetic transport contracts
-        run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test devices_contract --test invitations_contract --test network_contract --test releases --locked
+        run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test devices_contract --test invitations_contract --test network_contract --test sync_observation_contract --test releases --locked
       - name: Check explicit preparation and bounded archive contracts
         run: cargo +"$TEST_TOOLCHAIN" test --features download --lib --test download --test cache --locked
       - name: Build public examples explicitly
@@ -122,6 +122,11 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target network --allow-private-discovery
           --evidence-dir "${{ runner.temp }}/vs-network-proxy"
+      - name: Verify actual synchronization snapshots, pages, file errors and local edits
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target sync_observation
+          --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
       - name: Run independent-engine fixture contracts
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"

@@ -46,7 +46,7 @@ directory, symlink/reparse control resource, unprotected state or busy lease is
 rejected. The new directory is private from creation: owner-only on Unix, and a
 protected owner/SYSTEM DACL on Windows. The program's identity, GUI/API credential,
 folders and unrelated settings persist across subsequent starts. Fresh state
-disables discovery, trackers, relays, NAT, automatic upgrades and tray/browser
+disables discovery, trackers, relays, NAT, TCP punching, automatic upgrades and tray/browser
 startup; explicitly configured later networking settings are retained.
 Unix child processes also receive state-local HOME and XDG profile/cache paths;
 the caller's environment is not changed. Windows retains its dedicated

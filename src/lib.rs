@@ -28,6 +28,7 @@
 #![doc = include_str!("../docs/public/network.md")]
 #![doc = include_str!("../docs/public/transports.md")]
 #![doc = include_str!("../docs/public/relay.md")]
+#![doc = include_str!("../docs/public/sync-observation.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -51,6 +52,7 @@ mod relay;
 mod releases;
 mod sharing;
 mod status;
+mod sync_observation;
 mod transports;
 
 pub use auth::{ApiKey, DeviceId};
@@ -102,6 +104,10 @@ pub use sharing::{
     SharePermission, ValidatedShare,
 };
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
+pub use sync_observation::{
+    CompletionSnapshot, DeviceStatistics, FolderErrorPage, FolderStatistics, FolderSyncError,
+    LastFileObservation, ListPage, NeedPage, SyncFile, SyncFileKind, SyncFilePage,
+};
 pub use transports::{
     TrackerStatus, TransportConfig, TransportPatch, TransportStatus, TransportUpdate,
 };

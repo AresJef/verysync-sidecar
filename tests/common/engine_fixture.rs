@@ -558,7 +558,7 @@ fn configure_state(home: &Path, address: &str) -> TestResult<String> {
         Value::Array(vec![Value::from("tcp://127.0.0.1:0")]),
     )?;
     set(options, "2", Value::Array(Vec::new()))?;
-    for key in ["3", "4", "10", "12", "13", "59", "74", "79"] {
+    for key in ["3", "4", "10", "12", "13", "59", "74", "79", "81"] {
         set(options, key, Value::Boolean(false))?;
     }
     set(options, "17", Value::from(-1))?;

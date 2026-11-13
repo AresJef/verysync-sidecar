@@ -50,6 +50,8 @@ pub enum Capability {
     TransportControl,
     /// Official relay server settings, runtime and explicit network probes.
     RelayServer,
+    /// Fresh completion, need/change pages, statistics and actual file errors.
+    SyncObservation,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -205,6 +207,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AdvancedFolderSettings),
+    LibraryCapability {
+        capability: Capability::SyncObservation,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::AccountLicense),
     planned(Capability::StorageProtocols),
     planned(Capability::LocalSync),
