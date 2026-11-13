@@ -33,6 +33,8 @@
 #![doc = include_str!("../docs/public/ignore-patterns.md")]
 #![doc = include_str!("../docs/public/scheduling.md")]
 #![doc = include_str!("../docs/public/selective-sync.md")]
+#![doc = include_str!("../docs/public/recovery.md")]
+#![doc = include_str!("../docs/public/three-node-relay.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -53,6 +55,7 @@ mod network;
 mod operations;
 mod path;
 mod raw;
+mod recovery;
 mod relay;
 mod releases;
 mod scans;
@@ -100,6 +103,7 @@ pub use network::{
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
+pub use recovery::MarkerRepairResult;
 pub use relay::{
     RelayProbe, RelayProbeResult, RelayRuntimeOptions, RelayServerConfig, RelayServerPatch,
     RelayServerStatus, RelayServerUpdate,

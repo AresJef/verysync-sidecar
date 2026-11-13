@@ -163,3 +163,8 @@ required-features = ["engine-tests"]
 name = "sync_observation"
 path = "tests/sync_observation.rs"
 required-features = ["engine-tests"]
+
+[[test]]
+name = "p2p_three_nodes"
+path = "tests/p2p_three_nodes.rs"
+required-features = ["engine-tests"]

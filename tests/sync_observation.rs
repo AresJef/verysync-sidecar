@@ -626,7 +626,7 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     a.client().request_scan(&af.configuration.id).await?;
     b.client().resume_folder(&bf.configuration.id).await?;
     let page = ListPage::new(1, 5)?;
-    let needed = tokio::time::timeout(Duration::from_secs(20), async {
+    let needed_observation = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let need = b.client().folder_need(&bf.configuration.id, page).await?;
             if need
@@ -641,7 +641,23 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??;
+    .await;
+    if needed_observation.is_err() {
+        let status = b.client().folder_status(&bf.configuration.id).await?;
+        let config = b.client().folder(&bf.configuration.id).await?;
+        eprintln!(
+            "active need preparation diagnostic: {}",
+            json!({
+                "state":status.state.as_ref().map(|s|s.as_str()),
+                "need_bytes":status.need_bytes,
+                "local_files":status.local_files,
+                "configured_paused":config.paused,
+                "fixture_rate":b.client().network_configuration().await?.extra.get("maxRecvKbps"),
+                "receiver_payload_exists":b_path.join("payload.bin").exists()
+            })
+        );
+    }
+    let needed = needed_observation??;
     assert!(!needed.progress.is_empty() || !needed.queued.is_empty() || !needed.rest.is_empty());
     assert!(b
         .client()
@@ -1430,6 +1446,401 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
     println!(
         "public selective browse and license evidence: {}",
         json!({"actual_selective_mode_readback":true,"actual_unselected_remote_tree":true,"actual_nested_child_metadata":true,"actual_file_sizes_and_absence_flags":true,"actual_relative_prefix_scope":true,"actual_directories_only_filter":true,"actual_search_match_and_path":true,"actual_full_last_page_continuation_flag_retained":true,"actual_opaque_cursor_next_page":true,"all_five_mutations_return_typed_license_refusal":true,"http_success_not_selection_success":true,"denied_selection_keeps_all_flags_and_receiver_empty":true,"missing_folder_and_invalid_scope_rejected":true,"tree_names_and_cursor_not_in_debug":true,"explicit_normal_mode_restored_after_restart":true,"actual_free_normal_sync_receives_all_three_files":true,"all_source_and_destination_bytes_match":true,"both_actual_normal_tree_exits":true})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_receiveonly_revert_and_marker_repair_restore_owned_data() -> TestResult {
+    use verysync_sidecar::{
+        DeviceTransport, JoinFolderOptions, RawMethod, RawRequest, RequestEffect,
+    };
+    let root = tempfile::Builder::new().prefix("vssrec-").tempdir()?.keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let a_address = private_tcp(a.client()).await?;
+    let b_address = private_tcp(b.client()).await?;
+    let keys = a.client().generate_share().await?;
+    let ak = a.client().validate_share_key(&keys.read_write_key).await?;
+    let bk = b.client().validate_share_key(&keys.read_only_key).await?;
+    let source = root.join("source");
+    let receiver = root.join("receiver");
+    std::fs::create_dir(&source)?;
+    let original = b"authoritative synthetic revert bytes";
+    std::fs::write(source.join("revert.bin"), original)?;
+    std::fs::write(
+        source.join("deleted.bin"),
+        b"original deleted synthetic bytes",
+    )?;
+    let af = a
+        .client()
+        .join_folder(&JoinFolderOptions::new(ak, TargetPath::local(&source)).paused(true))
+        .await?;
+    let bf = b
+        .client()
+        .join_folder(&JoinFolderOptions::new(bk, TargetPath::local(&receiver)).paused(true))
+        .await?;
+    let r = b
+        .client()
+        .raw_request(
+            &RawRequest::new(
+                RawMethod::Patch,
+                ["rest", "config", "folders", bf.configuration.id.as_str()],
+                RequestEffect::MayModify,
+            )?
+            .json_body(&json!({"type":"receiveonly"}))?,
+        )
+        .await?;
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        b.client().folder(&bf.configuration.id).await?.extra["type"],
+        "receiveonly"
+    );
+    for (client, folder, peer, address) in [
+        (a.client(), &af.configuration.id, &b_id, b_address),
+        (b.client(), &bf.configuration.id, &a_id, a_address),
+    ] {
+        client
+            .create_device(
+                &CreateDeviceOptions::new(peer.clone()).settings(
+                    DevicePatch::default()
+                        .addresses(vec![address])
+                        .allowed_transports(vec![DeviceTransport::Tcp]),
+                ),
+            )
+            .await?;
+        client.share_folder_with(folder, peer).await?;
+        client.resume_folder(folder).await?;
+    }
+    a.client().request_scan(&af.configuration.id).await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if std::fs::read(receiver.join("revert.bin")).is_ok_and(|v| v == original) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?;
+    assert!(matches!(
+        b.client()
+            .request_override_remote_changes(&bf.configuration.id)
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if std::fs::read(receiver.join("deleted.bin"))
+                .is_ok_and(|v| v == b"original deleted synthetic bytes")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?;
+    std::fs::remove_file(receiver.join("deleted.bin"))?;
+    std::fs::write(
+        receiver.join("local-only.bin"),
+        b"local addition to be reverted",
+    )?;
+    std::fs::write(
+        receiver.join("revert.bin"),
+        b"synthetic local edit to revert",
+    )?;
+    b.client().request_scan(&bf.configuration.id).await?;
+    let change_observation = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if b.client()
+                .local_changes(&bf.configuration.id, ListPage::new(1, 10)?)
+                .await?
+                .files
+                .iter()
+                .any(|f| f.name == "revert.bin")
+                && std::fs::read(receiver.join("deleted.bin"))
+                    .is_ok_and(|v| v == b"original deleted synthetic bytes")
+            {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    if change_observation.is_err() {
+        let page = b
+            .client()
+            .local_changes(&bf.configuration.id, ListPage::new(1, 10)?)
+            .await?;
+        eprintln!(
+            "receive-only local change preparation diagnostic: {}",
+            json!({
+                "edit_in_changes":page.files.iter().any(|f|f.name == "revert.bin"),
+                "deletion_in_changes":page.files.iter().any(|f|f.name == "deleted.bin"),
+                "addition_in_changes":page.files.iter().any(|f|f.name == "local-only.bin"),
+                "receiver_deleted_path_exists":receiver.join("deleted.bin").exists(),
+                "receiver_addition_exists":receiver.join("local-only.bin").exists(),
+                "receiver_edit_is_original":std::fs::read(receiver.join("revert.bin")).is_ok_and(|v|v==original)
+            })
+        );
+    }
+    change_observation??;
+    // The fixed engine derives receive-only mode from the RO key and repairs
+    // local deletion itself; establish that separately before explicit revert.
+    assert_eq!(
+        std::fs::read(receiver.join("deleted.bin"))?,
+        b"original deleted synthetic bytes"
+    );
+    assert!(!b
+        .client()
+        .local_changes(&bf.configuration.id, ListPage::new(1, 10)?)
+        .await?
+        .files
+        .iter()
+        .any(|f| f.name == "deleted.bin"));
+    b.client()
+        .request_revert_local_changes(&bf.configuration.id)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if std::fs::read(receiver.join("revert.bin")).is_ok_and(|v| v == original)
+                && b.client()
+                    .local_changes(&bf.configuration.id, ListPage::new(1, 10)?)
+                    .await?
+                    .files
+                    .is_empty()
+            {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    assert_eq!(std::fs::read(receiver.join("revert.bin"))?, original);
+    assert_eq!(
+        std::fs::read(receiver.join("deleted.bin"))?,
+        b"original deleted synthetic bytes"
+    );
+    assert_eq!(
+        std::fs::read(receiver.join("local-only.bin"))?,
+        b"local addition to be reverted"
+    );
+    assert_eq!(
+        std::fs::read(source.join("deleted.bin"))?,
+        b"original deleted synthetic bytes"
+    );
+    assert!(!source.join("local-only.bin").exists());
+    assert_eq!(
+        b.client().folder(&bf.configuration.id).await?.extra["type"],
+        "receiveonly"
+    );
+    assert_eq!(std::fs::read(source.join("revert.bin"))?, original);
+    a.client().pause_device(&b_id).await?;
+    b.client().pause_device(&a_id).await?;
+    let marker_data = root.join("marker-data");
+    std::fs::create_dir(&marker_data)?;
+    std::fs::write(marker_data.join("retained.bin"), b"retained marker bytes")?;
+    let marker_keys = a.client().generate_share().await?;
+    let marker_share = a
+        .client()
+        .validate_share_key(&marker_keys.read_write_key)
+        .await?;
+    let mf = a
+        .client()
+        .join_folder(
+            &JoinFolderOptions::new(marker_share, TargetPath::local(&marker_data)).paused(true),
+        )
+        .await?;
+    a.client()
+        .update_folder_scan_configuration(
+            &mf.configuration.id,
+            &verysync_sidecar::FolderScanPatch::default()
+                .watcher(false)
+                .rescan_interval_seconds(0),
+        )
+        .await?;
+    a.client().resume_folder(&mf.configuration.id).await?;
+    a.client().request_scan(&mf.configuration.id).await?;
+    indexed_files(a.client(), &mf.configuration.id, 1).await?;
+    let before = a.client().folder(&mf.configuration.id).await?;
+    assert!(before
+        .extra
+        .get("secretKey")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|s| !s.is_empty()));
+    assert_eq!(before.extra["markerName"], ".verysync");
+    assert_eq!(before.extra["autoRepairtMarker"], false);
+    a.client().pause_folder(&mf.configuration.id).await?;
+    std::fs::rename(marker_data.join(".verysync"), root.join("marker-backup"))?;
+    a.client().resume_folder(&mf.configuration.id).await?;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if a.client().folder_status(&mf.configuration.id).await?.state
+                == Some(verysync_sidecar::FolderState::Error)
+            {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let repaired = a
+        .client()
+        .request_marker_repair(&mf.configuration.id)
+        .await?;
+    assert!(repaired.success && repaired.error.is_empty());
+    assert!(!std::fs::symlink_metadata(marker_data.join(".verysync"))?
+        .file_type()
+        .is_symlink());
+    assert!(marker_data.join(".verysync").is_dir() && root.join("marker-backup").is_dir());
+    a.restart(Duration::from_secs(30)).await?;
+    a.client().request_scan(&mf.configuration.id).await?;
+    indexed_files(a.client(), &mf.configuration.id, 1).await?;
+    let after = a.client().folder(&mf.configuration.id).await?;
+    assert!(before.id == after.id);
+    for field in ["secretKey", "readOnlySecret", "readWriteSecret"] {
+        assert!(before.extra.get(field) == after.extra.get(field));
+    }
+    assert!(matches!(
+        a.client()
+            .request_marker_repair(&FolderId::parse("missing")?)
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert_eq!(
+        std::fs::read(marker_data.join("retained.bin"))?,
+        b"retained marker bytes"
+    );
+    for core in [&mut b, &mut a] {
+        let exit = core.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    }
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public receive-only and marker recovery evidence: {}",
+        json!({"actual_receiveonly_fixture_readback":true,"actual_original_received_bytes":true,"actual_tracked_edit_observed_in_changes":true,"actual_local_edit_reverted":true,"actual_ro_key_deletion_autorestored_before_explicit_revert":true,"actual_unindexed_local_addition_bytes_retained":true,"actual_source_files_unchanged":true,"actual_local_changes_clear":true,"wrong_mode_rejected":true,"actual_missing_marker_error_observed":true,"actual_marker_repair_acknowledgement":true,"actual_marker_directory_recreated_without_symlink":true,"original_marker_backup_retained":true,"actual_same_folder_and_share_keys_after_restart":true,"actual_scan_recovers_after_explicit_restart":true,"all_retained_marker_data_bytes_preserved":true,"missing_folder_rejected":true,"both_actual_normal_tree_exits":true})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_sendonly_override_restores_remote_data_and_preserves_authority() -> TestResult {
+    use verysync_sidecar::{
+        DeviceTransport, JoinFolderOptions, RawMethod, RawRequest, RequestEffect,
+    };
+    let root = tempfile::Builder::new()
+        .prefix("vssover-")
+        .tempdir()?
+        .keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let a_address = private_tcp(a.client()).await?;
+    let b_address = private_tcp(b.client()).await?;
+    let keys = a.client().generate_share().await?;
+    let ak = a.client().validate_share_key(&keys.read_write_key).await?;
+    let bk = b.client().validate_share_key(&keys.read_write_key).await?;
+    let source = root.join("authority");
+    let other = root.join("other");
+    std::fs::create_dir(&source)?;
+    let original = b"send-only authoritative synthetic bytes";
+    std::fs::write(source.join("override.bin"), original)?;
+    let af = a
+        .client()
+        .join_folder(&JoinFolderOptions::new(ak, TargetPath::local(&source)).paused(true))
+        .await?;
+    let bf = b
+        .client()
+        .join_folder(&JoinFolderOptions::new(bk, TargetPath::local(&other)).paused(true))
+        .await?;
+    let r = a
+        .client()
+        .raw_request(
+            &RawRequest::new(
+                RawMethod::Patch,
+                ["rest", "config", "folders", af.configuration.id.as_str()],
+                RequestEffect::MayModify,
+            )?
+            .json_body(&json!({"type":"sendonly"}))?,
+        )
+        .await?;
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        a.client().folder(&af.configuration.id).await?.extra["type"],
+        "sendonly"
+    );
+    for (client, folder, peer, address) in [
+        (a.client(), &af.configuration.id, &b_id, b_address),
+        (b.client(), &bf.configuration.id, &a_id, a_address),
+    ] {
+        client
+            .create_device(
+                &CreateDeviceOptions::new(peer.clone()).settings(
+                    DevicePatch::default()
+                        .addresses(vec![address])
+                        .allowed_transports(vec![DeviceTransport::Tcp]),
+                ),
+            )
+            .await?;
+        client.share_folder_with(folder, peer).await?;
+        client.resume_folder(folder).await?;
+    }
+    a.client().request_scan(&af.configuration.id).await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if std::fs::read(other.join("override.bin")).is_ok_and(|v| v == original) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?;
+    let remote = b"synthetic remote edit requiring authority override";
+    std::fs::write(other.join("override.bin"), remote)?;
+    b.client().request_scan(&bf.configuration.id).await?;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let status = a.client().folder_status(&af.configuration.id).await?;
+            if status.need_bytes.is_some_and(|n| n > 0) {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    assert_eq!(std::fs::read(source.join("override.bin"))?, original);
+    a.client()
+        .request_override_remote_changes(&af.configuration.id)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if std::fs::read(other.join("override.bin")).is_ok_and(|v| v == original) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?;
+    assert_eq!(std::fs::read(other.join("override.bin"))?, original);
+    assert!(matches!(
+        a.client()
+            .request_revert_local_changes(&af.configuration.id)
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(std::fs::read(source.join("override.bin"))?, original);
+    a.client().pause_device(&b_id).await?;
+    b.client().pause_device(&a_id).await?;
+    for core in [&mut b, &mut a] {
+        let exit = core.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    }
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public send-only override evidence: {}",
+        json!({"actual_sendonly_fixture_readback":true,"actual_initial_remote_received_bytes":true,"actual_remote_modified_version_observed":true,"authority_retains_original_before_override":true,"actual_remote_original_bytes_restored":true,"authority_retains_original_after_override":true,"wrong_mode_revert_rejected":true,"both_actual_normal_tree_exits":true})
     );
     Ok(())
 }

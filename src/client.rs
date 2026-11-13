@@ -5,6 +5,7 @@ mod device_ignore;
 mod ignore_control;
 mod invitation_control;
 mod network_control;
+mod recovery;
 mod relay_control;
 mod scan_control;
 mod scheduling;

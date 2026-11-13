@@ -122,13 +122,18 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target network --allow-private-discovery
           --evidence-dir "${{ runner.temp }}/vs-network-proxy"
-      - name: Verify actual synchronization, selective browse and bounded transfer controls
+      - name: Verify actual sync, selective browse, recovery and bounded transfers
         env:
           VERYSYNC_BANDWIDTH_PHASE: acceptance
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target sync_observation
           --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
+      - name: Verify read-only handoff to a fresh third node with the source stopped
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target p2p_three_nodes
+          --evidence-dir "${{ runner.temp }}/vs-three-node-proxy"
       - name: Run independent-engine fixture contracts
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
