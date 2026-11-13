@@ -98,51 +98,73 @@ jobs:
           --toolchain "$TEST_TOOLCHAIN"
           --github-env "${{ github.env }}"
       - name: Validate the Windows UI probe before the complete lifecycle bundle
+        id: native_windows_ui
+        continue-on-error: true
         if: startsWith(matrix.package, 'windows-')
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_instance --test-filter restart_preserves_identity_folders_settings_and_samples
           --evidence-dir "${{ runner.temp }}/vs-managed-ui-proxy"
       - name: Verify mounted resource metadata, checksums and native previews
+        id: native_files_engine
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target files_engine
           --evidence-dir "${{ runner.temp }}/vs-file-resources-proxy"
       - name: Verify bounded file streaming, archive contents and actual cancellation
+        id: native_file_transfer_engine
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target file_transfer_engine
           --evidence-dir "${{ runner.temp }}/vs-file-transfer-proxy"
       - name: Verify actual version retention, deleted-file restoration and free audit conditions
+        id: native_file_history_engine
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target file_history_engine --evidence-dir "${{ runner.temp }}/vs-file-history-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
+        id: native_managed_lifetime
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_lifetime --evidence-dir "${{ runner.temp }}/vs-host-lifetime-proxy"
       - name: Exercise public managed startup, shutdown, restart and owned UI observations
+        id: native_managed_instance
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-managed-proxy"
       - name: Verify independent auxiliary address and passive owned IPv4 listeners
+        id: native_p2p_isolation
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target p2p_isolation --evidence-dir "${{ runner.temp }}/vs-p2p-isolation-proxy"
       - name: Verify public device controls and actual private peer effects
+        id: native_devices
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target devices --evidence-dir "${{ runner.temp }}/vs-devices-proxy"
       - name: Verify actual folder offers, persistent ignores and explicit key acceptance
+        id: native_invitations
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target invitations --evidence-dir "${{ runner.temp }}/vs-invitations-proxy"
       - name: Verify private TCP, UDP/QUIC, relay and isolated discovery effects
+        id: native_network
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target network --allow-private-discovery
           --evidence-dir "${{ runner.temp }}/vs-network-proxy"
       - name: Verify actual sync, selective browse, recovery and bounded transfers
+        id: native_sync_observation
+        continue-on-error: true
         env:
           VERYSYNC_BANDWIDTH_PHASE: acceptance
         run: >-
@@ -150,61 +172,93 @@ jobs:
           --test-target sync_observation
           --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
       - name: Verify read-only handoff to a fresh third node with the source stopped
+        id: native_p2p_three_nodes
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target p2p_three_nodes
           --evidence-dir "${{ runner.temp }}/vs-three-node-proxy"
       - name: Verify fixed-version upgrades, state restoration and cancellation
+        id: native_upgrade_engine
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
           --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
       - name: Run independent-engine fixture contracts
+        id: native_engine_control
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-control-proxy"
       - name: Exercise public bounded events, gaps, cancellation and actual restart recovery
+        id: native_events
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target events --evidence-dir "${{ runner.temp }}/vs-events-proxy"
       - name: Run compiled public examples on an independent engine
+        id: native_example_control
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target example_control --evidence-dir "${{ runner.temp }}/vs-examples-proxy"
       - name: Exercise actual scan phase observation, file effects and cancellation
+        id: native_operations
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target operations --evidence-dir "${{ runner.temp }}/vs-operations-proxy"
       - name: Exercise real sharing keys, distinct local registrations and loopback effects
+        id: native_sharing
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target sharing --evidence-dir "${{ runner.temp }}/vs-sharing-proxy"
       - name: Prepare the official fixed program through Rust and verify actual native startup
+        id: native_download_engine
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target download_engine --evidence-dir "${{ runner.temp }}/vs-download-proxy"
       - name: Verify cache reuse, recovery, immutable running programs and independent callers
+        id: native_cache_engine
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target cache_engine --evidence-dir "${{ runner.temp }}/vs-cache-proxy"
       - name: Investigate native macOS lifetime mechanisms
+        id: native_mechanism_macos
+        continue-on-error: true
         if: startsWith(matrix.package, 'macos-')
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --mechanism macos --evidence-dir "${{ runner.temp }}/vs-macos-mechanism-proxy"
       - name: Investigate native Linux lifetime mechanisms
+        id: native_mechanism_linux
+        continue-on-error: true
         if: startsWith(matrix.package, 'linux-')
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --mechanism linux --evidence-dir "${{ runner.temp }}/vs-linux-mechanism-proxy"
       - name: Investigate native Windows Job lifetime mechanisms
+        id: native_mechanism_windows
+        continue-on-error: true
         if: startsWith(matrix.package, 'windows-')
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --mechanism windows --evidence-dir "${{ runner.temp }}/vs-windows-mechanism-proxy"
       - name: Confirm no task-owned engine remains
+        id: native_cleanup_baseline
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
       - name: Confirm no pinned older upgrade-source engine remains
+        id: native_cleanup_upgrade
         if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Require every applicable native suite and exact cleanup
+        if: always()
+        env:
+          NATIVE_STEP_RESULTS: ${{ toJson(steps) }}
+          NATIVE_MATRIX_PACKAGE: ${{ matrix.package }}
+        run: python scripts/check-native-step-results.py
