@@ -14,6 +14,154 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn selective_browse_presence_flags_opaque_cursor_and_destructive_intent_are_exact(
+) -> TestResult {
+    use verysync_sidecar::{
+        FolderId, PathStyle, SelectiveAction, SelectiveBrowseOptions, SelectiveScope,
+        SelectiveSearchOptions, TargetPath,
+    };
+    let folder =
+        serde_json::json!({"id":"scope ?%","label":"synthetic","path":"/synthetic","paused":false});
+    let node = serde_json::json!({"name":"private-name","isdir":false,"size":15,"selectived":false,"exists":false});
+    let mut replies = vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ];
+    for response in [
+        serde_json::json!({"private-name":node}),
+        serde_json::json!({"search":true,"items":[],"hasMore":true,"nextCursor":format!("opaque /?% {KEY}")}),
+        serde_json::json!({"search":false,"items":[],"hasMore":false}),
+        serde_json::json!({"code":3000,"error":KEY}),
+        serde_json::json!({}),
+    ] {
+        replies.push(Reply::json(serde_json::json!({"myID":ID})));
+        replies.push(Reply::json(serde_json::json!({"folders":[folder.clone()]})));
+        replies.push(Reply::json(response));
+    }
+    let server = ScriptedServer::start(replies).await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("scope ?%")?;
+    let tree = client
+        .browse_selective(
+            &folder,
+            &SelectiveBrowseOptions::new(SelectiveScope::FolderRoot).levels(2),
+        )
+        .await?;
+    assert_eq!(tree.entries.len(), 1);
+    let options = SelectiveSearchOptions::new(format!("needle {KEY}"))?.limit(1);
+    let first = client.search_selective(&folder, &options).await?;
+    let error = client
+        .search_selective(&folder, &options.after_cursor(first.next_cursor.unwrap()))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::InvalidResponse { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    let target = SelectiveScope::Path(TargetPath::remote(PathStyle::Unix, "nested/二 ?%.bin")?);
+    let error = client
+        .request_selection(&folder, &target, SelectiveAction::RemoveFromAll)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::LicenseRequired { code: 3000, .. }));
+    client
+        .browse_selective(
+            &folder,
+            &SelectiveBrowseOptions::new(SelectiveScope::FolderRoot).directories_only(true),
+        )
+        .await?;
+    for options in [
+        SelectiveBrowseOptions::new(SelectiveScope::FolderRoot).levels(0),
+        SelectiveBrowseOptions::new(SelectiveScope::Path(TargetPath::remote(
+            PathStyle::Unix,
+            "../escape",
+        )?)),
+    ] {
+        assert!(client.browse_selective(&folder, &options).await.is_err());
+    }
+    let requests = server.finish().await?;
+    let targets: Vec<_> = requests
+        .iter()
+        .filter(|r| r.contains("/db/browse/selective?") || r.starts_with("POST "))
+        .map(|r| {
+            url::Url::parse(&format!(
+                "http://synthetic.invalid{}",
+                r.split_whitespace().nth(1).unwrap()
+            ))
+            .unwrap()
+        })
+        .collect();
+    assert_eq!(targets.len(), 5);
+    assert!(!targets[0].query_pairs().any(|(k, _)| k == "dirsonly"));
+    assert!(targets[2]
+        .query_pairs()
+        .any(|(k, v)| k == "cursor" && v == format!("opaque /?% {KEY}")));
+    let change: Vec<_> = targets[3].query_pairs().collect();
+    assert_eq!(
+        change,
+        vec![
+            ("folder".into(), "scope ?%".into()),
+            ("path".into(), "nested/二 ?%.bin".into()),
+            ("selected".into(), "false".into()),
+            ("removefromall".into(), "true".into())
+        ]
+    );
+    assert!(targets[4]
+        .query_pairs()
+        .any(|(k, v)| k == "dirsonly" && v == "true"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn known_license_envelope_is_not_http_success_and_raw_response_remains_explicit() -> TestResult
+{
+    use verysync_sidecar::{FolderId, RawMethod, RawRequest, RequestEffect};
+    let folder =
+        serde_json::json!({"id":"scope","label":"synthetic","path":"/synthetic","paused":false});
+    let license = serde_json::json!({"code":3000,"error":KEY});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(license.clone()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(license.clone()),
+        Reply::json(license),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for error in [
+        client
+            .request_scan(&FolderId::parse("scope")?)
+            .await
+            .unwrap_err(),
+        client.bandwidth_configuration().await.unwrap_err(),
+    ] {
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        let Error::LicenseRequired { code, response } = error else {
+            return Err("expected known license rejection".into());
+        };
+        assert_eq!(code, 3000);
+        assert_eq!(response.status(), 200);
+        assert!(std::str::from_utf8(response.body_bytes())?.contains(KEY));
+    }
+    let raw = client
+        .raw_request(&RawRequest::new(
+            RawMethod::Get,
+            ["rest", "synthetic"],
+            RequestEffect::ReadOnly,
+        )?)
+        .await?;
+    assert_eq!(raw.status(), 200);
+    assert!(std::str::from_utf8(raw.body_bytes())?.contains(KEY));
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests.iter().filter(|r| r.starts_with("POST ")).count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn scheduling_partial_bandwidth_and_priority_scope_preserve_protocol_and_failures(
 ) -> TestResult {
     use verysync_sidecar::{

@@ -69,6 +69,11 @@ The unreleased [scheduling API](docs/public/scheduling.md) adds file pull-order
 settings, explicit priority pages and global/per-device KiB/s limits. Native
 queue and byte-cap effects have distinct mode and measurement conditions.
 
+The unreleased [selective index API](docs/public/selective-sync.md) provides
+actual trees, scoped search pages, opaque cursors and explicit mode settings.
+Conditional selection requests report real Pro-license refusals as typed errors;
+licensed selection and all-node removal effects remain unverified.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.

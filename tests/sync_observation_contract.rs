@@ -127,3 +127,27 @@ fn scheduling_preserves_unknown_orders_and_bandwidth_patch_uses_kib_wire_fields(
     assert!(actual.limit_in_lan);
     assert!(!format!("{actual:?}").contains("private"));
 }
+
+#[test]
+fn selective_tree_and_search_keep_untrusted_names_unknowns_and_missing_flags_fail() {
+    use verysync_sidecar::{SelectiveSearchPage, SelectiveTree};
+    let node = json!({"name":"../private-name","isdir":false,"size":15,"selectived":false,"exists":false,"private":"private-value"});
+    let tree: SelectiveTree =
+        serde_json::from_value(json!({"../private-key":node.clone()})).unwrap();
+    assert_eq!(tree.entries["../private-key"].name, "../private-name");
+    assert_eq!(
+        tree.entries["../private-key"].extra["private"],
+        "private-value"
+    );
+    assert!(!format!("{tree:?} {:?}", tree.entries["../private-key"]).contains("private"));
+    let page:SelectiveSearchPage=serde_json::from_value(json!({"search":true,"items":[{"path":"private/../opaque", "name":"private-name","isdir":false,"size":15,"selectived":false,"exists":false}],"hasMore":true,"nextCursor":"private/../cursor"})).unwrap();
+    assert_eq!(page.items[0].path, "private/../opaque");
+    assert_eq!(page.next_cursor.as_deref(), Some("private/../cursor"));
+    assert!(!format!("{page:?} {:?}", page.items[0]).contains("private"));
+    let mut missing = node;
+    missing.as_object_mut().unwrap().remove("selectived");
+    assert!(serde_json::from_value::<SelectiveTree>(json!({"node":missing})).is_err());
+    assert!(
+        serde_json::from_value::<SelectiveSearchPage>(json!({"items":[],"hasMore":false})).is_err()
+    );
+}

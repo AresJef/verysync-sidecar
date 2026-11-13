@@ -196,6 +196,14 @@ pub enum Error {
         /// Exact status and bounded body, omitted from ordinary Debug/Display.
         response: ResponseDiagnostic,
     },
+    /// The fixed engine rejected a typed operation with its known commercial
+    /// feature-license envelope, even if HTTP status was successful.
+    LicenseRequired {
+        /// Actual engine rejection code; currently verified as 3000 for Pro.
+        code: i64,
+        /// Original bounded response, hidden from ordinary formatting.
+        response: ResponseDiagnostic,
+    },
     /// A bounded management request did not finish before its deadline.
     Timeout {
         /// The operation that timed out.
@@ -337,6 +345,7 @@ impl fmt::Display for Error {
             Self::UnlistedProgramVersion => formatter.write_str("requested program version is not in the fixed catalog"),
             Self::UnsupportedProgramTarget { .. } => formatter.write_str("requested program target is not in the fixed catalog"),
             Self::ShareKeyRejected { .. } => formatter.write_str("engine rejected the sharing key"),
+            Self::LicenseRequired { code, .. } => write!(formatter, "engine requires a feature license (code {code})"),
             Self::IgnorePatternsRejected { .. } => formatter.write_str("engine reported invalid stored ignore patterns; inspect or explicitly restore the rules"),
             Self::ShareAlreadyConfigured { .. } => formatter.write_str("sharing group is already configured locally"),
             Self::ScanObservationLost => formatter.write_str("scan observation lost continuity; query state explicitly"),

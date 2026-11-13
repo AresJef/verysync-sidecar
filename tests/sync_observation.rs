@@ -1199,3 +1199,237 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> TestResult {
+    use verysync_sidecar::{
+        DeviceTransport, JoinFolderOptions, SelectiveAction, SelectiveBrowseOptions,
+        SelectiveScope, SelectiveSearchOptions,
+    };
+    let root = tempfile::Builder::new().prefix("vsssel-").tempdir()?.keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let a_address = private_tcp(a.client()).await?;
+    let b_address = private_tcp(b.client()).await?;
+    let keys = a.client().generate_share().await?;
+    let ak = a.client().validate_share_key(&keys.read_write_key).await?;
+    let bk = b.client().validate_share_key(&keys.read_write_key).await?;
+    let source = root.join("source");
+    let receiver = root.join("receiver");
+    std::fs::create_dir_all(source.join("nested"))?;
+    for (name, bytes) in [
+        (Path::new("first.bin"), b"first synthetic".as_slice()),
+        (Path::new("third.bin"), b"third synthetic".as_slice()),
+        (
+            Path::new("nested").join("child.bin").as_path(),
+            b"nested synthetic".as_slice(),
+        ),
+    ] {
+        std::fs::write(source.join(name), bytes)?;
+    }
+    let af = a
+        .client()
+        .join_folder(&JoinFolderOptions::new(ak, TargetPath::local(&source)).paused(true))
+        .await?;
+    let bf = b
+        .client()
+        .join_folder(&JoinFolderOptions::new(bk, TargetPath::local(&receiver)).paused(true))
+        .await?;
+    let configured = b
+        .client()
+        .set_folder_selective_enabled(&bf.configuration.id, true)
+        .await?;
+    assert!(configured.requested_mode_match && configured.configuration.enabled);
+    for (client, folder, peer, address) in [
+        (a.client(), &af.configuration.id, &b_id, b_address),
+        (b.client(), &bf.configuration.id, &a_id, a_address),
+    ] {
+        client
+            .create_device(
+                &CreateDeviceOptions::new(peer.clone()).settings(
+                    DevicePatch::default()
+                        .addresses(vec![address])
+                        .allowed_transports(vec![DeviceTransport::Tcp]),
+                ),
+            )
+            .await?;
+        client.share_folder_with(folder, peer).await?;
+        client.resume_folder(folder).await?;
+    }
+    a.client().request_scan(&af.configuration.id).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if b.client()
+                .folder_status(&bf.configuration.id)
+                .await?
+                .global_files
+                == Some(3)
+            {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let folder = &bf.configuration.id;
+    let root_options = SelectiveBrowseOptions::new(SelectiveScope::FolderRoot).levels(2);
+    let tree = b.client().browse_selective(folder, &root_options).await?;
+    assert_eq!(tree.entries.len(), 3);
+    assert_eq!(tree.entries["first.bin"].name, "first.bin");
+    assert_eq!(tree.entries["first.bin"].size, Some(15));
+    assert!(!tree.entries["first.bin"].selected && !tree.entries["first.bin"].exists_locally);
+    assert!(tree.entries["nested"].is_directory);
+    let child = &tree.entries["nested"]
+        .children
+        .as_ref()
+        .ok_or("expected actual nested tree")?
+        .entries["child.bin"];
+    assert_eq!(child.size, Some(16));
+    assert!(!child.selected && !child.exists_locally);
+    assert!(!format!("{tree:?}").contains("first.bin"));
+    let prefixed = b
+        .client()
+        .browse_selective(
+            folder,
+            &SelectiveBrowseOptions::new(SelectiveScope::Path(TargetPath::local("nested"))),
+        )
+        .await?;
+    assert_eq!(
+        prefixed
+            .entries
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["child.bin"]
+    );
+    let dirs = b
+        .client()
+        .browse_selective(
+            folder,
+            &SelectiveBrowseOptions::new(SelectiveScope::FolderRoot).directories_only(true),
+        )
+        .await?;
+    assert_eq!(
+        dirs.entries.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["nested"]
+    );
+    let search = SelectiveSearchOptions::new("child")?.limit(1);
+    let page = b.client().search_selective(folder, &search).await?;
+    assert!(page.search && page.has_more);
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].entry.name, "child.bin");
+    assert!(page.items[0].path.ends_with("child.bin"));
+    let cursor = page
+        .next_cursor
+        .clone()
+        .ok_or("expected explicit actual next cursor")?;
+    let end = b
+        .client()
+        .search_selective(folder, &search.after_cursor(cursor))
+        .await?;
+    assert!(end.items.is_empty() && !end.has_more);
+    assert!(!format!("{page:?}").contains("child.bin"));
+    for (scope, action) in [
+        (
+            SelectiveScope::Path(TargetPath::local("first.bin")),
+            SelectiveAction::Select,
+        ),
+        (
+            SelectiveScope::Path(TargetPath::local("first.bin")),
+            SelectiveAction::Deselect,
+        ),
+        (
+            SelectiveScope::Path(TargetPath::local("nested")),
+            SelectiveAction::Select,
+        ),
+        (SelectiveScope::FolderRoot, SelectiveAction::Select),
+        (
+            SelectiveScope::Path(TargetPath::local("third.bin")),
+            SelectiveAction::RemoveFromAll,
+        ),
+    ] {
+        let error = b
+            .client()
+            .request_selection(folder, &scope, action)
+            .await
+            .unwrap_err();
+        let Error::LicenseRequired { code, response } = error else {
+            return Err("expected actual Pro license refusal".into());
+        };
+        assert_eq!(code, 3000);
+        assert_eq!(response.status(), 200);
+    }
+    let unchanged = b.client().browse_selective(folder, &root_options).await?;
+    assert!(unchanged
+        .entries
+        .values()
+        .all(|n| !n.selected && !n.exists_locally));
+    assert_eq!(b.client().folder_status(folder).await?.local_files, Some(0));
+    assert!(matches!(
+        b.client()
+            .browse_selective(&FolderId::parse("missing")?, &root_options)
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert!(matches!(
+        b.client()
+            .request_selection(
+                folder,
+                &SelectiveScope::Path(TargetPath::local("../escape")),
+                SelectiveAction::RemoveFromAll
+            )
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(b
+        .client()
+        .search_selective(folder, &SelectiveSearchOptions::new("child")?.limit(0))
+        .await
+        .is_err());
+    assert!(
+        b.client()
+            .set_folder_selective_enabled(folder, false)
+            .await?
+            .requested_mode_match
+    );
+    b.restart(Duration::from_secs(30)).await?;
+    assert!(
+        !b.client()
+            .folder_selective_configuration(folder)
+            .await?
+            .enabled
+    );
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let status = b.client().folder_status(folder).await?;
+            if status.local_files == Some(3) && status.need_bytes == Some(0) {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let nested = Path::new("nested").join("child.bin");
+    for (name, bytes) in [
+        (Path::new("first.bin"), b"first synthetic".as_slice()),
+        (Path::new("third.bin"), b"third synthetic".as_slice()),
+        (nested.as_path(), b"nested synthetic".as_slice()),
+    ] {
+        assert_eq!(std::fs::read(source.join(name))?, bytes);
+        assert_eq!(std::fs::read(receiver.join(name))?, bytes);
+    }
+    a.client().pause_device(&b_id).await?;
+    b.client().pause_device(&a_id).await?;
+    for core in [&mut b, &mut a] {
+        let exit = core.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    }
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public selective browse and license evidence: {}",
+        json!({"actual_selective_mode_readback":true,"actual_unselected_remote_tree":true,"actual_nested_child_metadata":true,"actual_file_sizes_and_absence_flags":true,"actual_relative_prefix_scope":true,"actual_directories_only_filter":true,"actual_search_match_and_path":true,"actual_full_last_page_continuation_flag_retained":true,"actual_opaque_cursor_next_page":true,"all_five_mutations_return_typed_license_refusal":true,"http_success_not_selection_success":true,"denied_selection_keeps_all_flags_and_receiver_empty":true,"missing_folder_and_invalid_scope_rejected":true,"tree_names_and_cursor_not_in_debug":true,"explicit_normal_mode_restored_after_restart":true,"actual_free_normal_sync_receives_all_three_files":true,"all_source_and_destination_bytes_match":true,"both_actual_normal_tree_exits":true})
+    );
+    Ok(())
+}
