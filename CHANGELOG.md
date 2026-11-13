@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Give fresh owned instances an independent auxiliary loopback address while
+  retaining explicitly configured addresses across restart. Verify native
+  owned IPv4 listeners without connecting to unrelated local endpoints.
+
 - Add explicit offline cache resolution, cross-process preparation leases,
   rehashed hits and atomic indexes over immutable program generations. Preserve
   previous executables during corrupt-entry recovery and cancellation.

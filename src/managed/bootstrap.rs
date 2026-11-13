@@ -564,6 +564,9 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
         }
         set(field_mut(&mut root, "5")?, "17", Value::from(-1))?;
         set(field_mut(&mut root, "5")?, "24", Value::from(0))?;
+        // Baseline schema 54 options field 99 is localTunnelAddress. Fresh
+        // isolated cores must not use the shared upstream loopback port 18886.
+        set(field_mut(&mut root, "5")?, "99", Value::from("127.0.0.1:0"))?;
     }
     let mut encoded = Vec::new();
     rmpv::encode::write_value(&mut encoded, &root).map_err(|_| Error::ManagedFailure {

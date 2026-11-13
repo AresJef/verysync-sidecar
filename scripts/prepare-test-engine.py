@@ -15,6 +15,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -277,6 +278,79 @@ def check_cleanup():
     print("No process remains for the exact task-owned test executable.")
 
 
+def owned_tcp_listeners():
+    """Observe IPv4 LISTEN sockets for exact task-owned images; never connect."""
+    pids = owned_processes()
+    if not pids:
+        raise RuntimeError("no exact task-owned image is available for socket observation")
+    listeners = []
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        import socket
+        import struct
+        class Row(ctypes.Structure):
+            _fields_ = [(name, wintypes.DWORD) for name in
+                        ("state", "local_address", "local_port", "remote_address", "remote_port", "pid")]
+        api = ctypes.WinDLL("iphlpapi", use_last_error=True).GetExtendedTcpTable
+        api.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL,
+                        wintypes.ULONG, ctypes.c_int, wintypes.ULONG]
+        api.restype = wintypes.DWORD
+        size = wintypes.DWORD(0)
+        result = api(None, ctypes.byref(size), False, socket.AF_INET, 5, 0)
+        if result not in (0, 122) or size.value > 16 * 1024 * 1024:
+            raise RuntimeError("cannot size native owned TCP table")
+        table = ctypes.create_string_buffer(max(size.value, 4))
+        result = api(table, ctypes.byref(size), False, socket.AF_INET, 5, 0)
+        if result != 0:
+            raise RuntimeError("cannot read native owned TCP table")
+        count = wintypes.DWORD.from_buffer_copy(table).value
+        if 4 + count * ctypes.sizeof(Row) > len(table):
+            raise RuntimeError("native TCP table is incomplete")
+        for index in range(count):
+            row = Row.from_buffer_copy(table, 4 + index * ctypes.sizeof(Row))
+            if row.pid in pids and row.state == 2:
+                listeners.append({"pid": row.pid, "address": socket.inet_ntoa(struct.pack("=I", row.local_address)),
+                                  "port": socket.ntohs(row.local_port & 0xffff)})
+    elif sys.platform == "darwin":
+        result = subprocess.run(["/usr/sbin/lsof", "-nP", "-a", "-p", ",".join(map(str, pids)),
+                                 "-i4TCP", "-sTCP:LISTEN", "-Fpn"], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0 and not (result.returncode == 1 and not result.stdout and not result.stderr):
+            raise RuntimeError("cannot read exact owned TCP listeners")
+        pid = None
+        for line in result.stdout.splitlines():
+            if line.startswith("p"):
+                pid = int(line[1:])
+            elif line.startswith("n") and pid in pids:
+                address, port = line[1:].rsplit(":", 1)
+                listeners.append({"pid": pid, "address": address, "port": int(port)})
+    elif sys.platform.startswith("linux"):
+        import socket
+        import struct
+        for pid in pids:
+            descriptors = Path(f"/proc/{pid}/fd")
+            inodes = set()
+            for item in descriptors.iterdir():
+                try:
+                    target = os.readlink(item)
+                except FileNotFoundError:
+                    # A single descriptor can close during this passive snapshot.
+                    # Permission and process-directory failures still propagate.
+                    continue
+                if target.startswith("socket:["):
+                    inodes.add(target[8:-1])
+            for line in Path(f"/proc/{pid}/net/tcp").read_text().splitlines()[1:]:
+                fields = line.split()
+                if fields[3] != "0A" or fields[9] not in inodes:
+                    continue
+                address, port = fields[1].split(":")
+                listeners.append({"pid": pid, "address": socket.inet_ntoa(struct.pack("=I", int(address, 16))),
+                                  "port": int(port, 16)})
+    else:
+        raise RuntimeError("native owned socket observation is unavailable")
+    return {"pids": pids, "tcp_listeners": listeners, "scope": "exact owned images; passive IPv4 socket observation"}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -287,9 +361,12 @@ def main():
     prepare_parser.add_argument("--github-env", help="Explicit GitHub environment file to append to")
     commands.add_parser("check-cleanup")
     commands.add_parser("list-owned-processes")
+    commands.add_parser("list-owned-listeners")
     args = parser.parse_args()
     if args.command == "prepare":
         prepare(args)
+    elif args.command == "list-owned-listeners":
+        print(json.dumps(owned_tcp_listeners()))
     elif args.command == "list-owned-processes":
         try:
             print(json.dumps({"pids": owned_processes()}))

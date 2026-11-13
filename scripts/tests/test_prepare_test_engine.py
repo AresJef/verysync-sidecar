@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import socket
 import subprocess
 import tempfile
 import time
@@ -22,6 +23,17 @@ ROOT = "verysync-macos-arm64-v2.33.2"
 
 
 class ProcessInventoryContracts(unittest.TestCase):
+    def test_passive_native_tcp_snapshot_contains_only_the_selected_pid(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            with patch.object(HELPER, "owned_processes", return_value=[os.getpid()]):
+                observed = HELPER.owned_tcp_listeners()
+            self.assertTrue(any(row["pid"] == os.getpid() and row["address"] == "127.0.0.1"
+                                and row["port"] == port for row in observed["tcp_listeners"]))
+            self.assertTrue(all(row["pid"] == os.getpid() for row in observed["tcp_listeners"]))
+
     def test_windows_query_failure_requires_proven_exit_and_live_failure_is_not_empty(self):
         # Synthetic native-call verdicts, distinct from the real OS inventory test.
         for wait in [0, 258, 0xffffffff]:

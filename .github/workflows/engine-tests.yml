@@ -105,6 +105,10 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-managed-proxy"
+      - name: Verify independent auxiliary address and passive owned IPv4 listeners
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target p2p_isolation --evidence-dir "${{ runner.temp }}/vs-p2p-isolation-proxy"
       - name: Run independent-engine fixture contracts
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
