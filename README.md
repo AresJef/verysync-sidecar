@@ -20,6 +20,10 @@ actual engine keys, preserves reported read-only/read-write permissions and
 registers using the target's proposed local ID. Registration readback and peer
 association are separate observations.
 
+[Fixed program sources](docs/public/program-sources.md) distinguish local paths
+from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
+their ABI evidence. Selecting a source performs no download or execution.
+
 The development plan runs through full delivery. Alpha releases are intermediate milestones: after publishing an alpha, development continues in the same project until the complete agreed functionality, platforms, documentation, and examples pass acceptance and the full release is delivered.
 
 ## Development decisions

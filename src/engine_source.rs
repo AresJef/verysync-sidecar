@@ -4,6 +4,26 @@ use std::path::{Path, PathBuf};
 
 use crate::{Error, Result};
 
+/// Explicit source selection. Constructing either value performs no I/O.
+/// Official selection is metadata, not an implicit download/start request.
+#[derive(Clone, Debug)]
+pub enum EngineSource {
+    /// An explicit absolute caller-provided local program.
+    Local(LocalProgram),
+    /// A verified fixed catalog identity for an explicitly chosen official asset.
+    Official(Box<crate::OfficialProgram>),
+}
+impl From<crate::OfficialProgram> for EngineSource {
+    fn from(program: crate::OfficialProgram) -> Self {
+        Self::Official(Box::new(program))
+    }
+}
+impl From<LocalProgram> for EngineSource {
+    fn from(program: LocalProgram) -> Self {
+        Self::Local(program)
+    }
+}
+
 /// An explicit absolute path to a caller-provided official program.
 ///
 /// This value neither downloads nor runs a program. Managed startup verifies its

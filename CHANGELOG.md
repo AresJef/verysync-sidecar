@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit pinned program-source and official target models, fixed archive
+  identities and separate controller/runtime ABI conditions. Reject unlisted
+  versions/targets without selecting a newer or different program.
+
 - Add redacted sharing-key types, engine generation/validation and target-bound
   key registration with explicit material readback. Keep local registration IDs
   separate from peer association; reject invalid keys and duplicate groups.
