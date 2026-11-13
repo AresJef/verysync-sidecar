@@ -14,6 +14,98 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn ignore_http_success_parse_rejection_is_typed_and_get_preserves_stored_error() -> TestResult
+{
+    use verysync_sidecar::{FolderId, IgnorePatterns};
+    let folder = serde_json::json!({"id":"ignore ?%","label":"synthetic","path":"/synthetic","paused":false});
+    let invalid = serde_json::json!({"ignore":[format!("[{KEY}")],"expanded":[],"error":format!("private parser {KEY}"),"future":KEY});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(invalid.clone()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(invalid),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("ignore ?%")?;
+    let rules = IgnorePatterns::new(vec![format!("[{KEY}")])?;
+    let error = client
+        .set_ignore_patterns(&folder, &rules)
+        .await
+        .unwrap_err();
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    let Error::IgnorePatternsRejected { snapshot } = error else {
+        return Err("expected parse rejection".into());
+    };
+    assert_eq!(snapshot.patterns.as_deref(), Some(rules.patterns()));
+    assert!(snapshot.parse_error.as_ref().unwrap().contains(KEY));
+    let actual = client.ignore_patterns(&folder).await?;
+    assert_eq!(actual.patterns.as_deref(), Some(rules.patterns()));
+    assert!(actual.parse_error.is_some());
+    assert!(!format!("{actual:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let posts: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0].starts_with("POST /prefix/rest/db/ignores?folder=ignore+%3F%25 "));
+    Ok(())
+}
+
+#[tokio::test]
+async fn ignore_failed_readback_is_unknown_and_reset_restores_defaults_without_empty_body(
+) -> TestResult {
+    use verysync_sidecar::{FolderId, IgnorePatterns};
+    let folder =
+        serde_json::json!({"id":"scope","label":"synthetic","path":"/synthetic","paused":false});
+    let empty = serde_json::json!({"ignore":null,"expanded":[],"error":null});
+    let defaults = serde_json::json!({"ignore":["*.tmp"],"expanded":["*.tmp"],"error":null});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(empty),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply {
+            status: 500,
+            body: KEY.as_bytes().to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(defaults.clone()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(defaults),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("scope")?;
+    let error = client
+        .set_ignore_patterns(&folder, &IgnorePatterns::new(Vec::new())?)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    let reset = client.reset_ignore_patterns(&folder).await?;
+    assert_eq!(reset.patterns.unwrap(), vec!["*.tmp"]);
+    let requests = server.finish().await?;
+    let posts: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+    assert_eq!(posts.len(), 2);
+    let submitted: serde_json::Value =
+        serde_json::from_str(posts[0].split_once("\r\n\r\n").ok_or("body missing")?.1)?;
+    assert_eq!(submitted, serde_json::json!({"ignore":[]}));
+    assert!(posts[1].starts_with("POST /prefix/rest/db/resetIgnores?folder=scope "));
+    assert_eq!(posts[1].split_once("\r\n\r\n").ok_or("body missing")?.1, "");
+    Ok(())
+}
+
+#[tokio::test]
 async fn scan_scopes_encode_repeated_subpaths_and_refuse_invalid_or_changed_targets() -> TestResult
 {
     use verysync_sidecar::{FolderId, FolderScanPatch, PathStyle, TargetPath};

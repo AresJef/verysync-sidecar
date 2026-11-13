@@ -30,6 +30,7 @@
 #![doc = include_str!("../docs/public/relay.md")]
 #![doc = include_str!("../docs/public/sync-observation.md")]
 #![doc = include_str!("../docs/public/scan-control.md")]
+#![doc = include_str!("../docs/public/ignore-patterns.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -43,6 +44,7 @@ mod engine_source;
 mod error;
 mod events;
 mod folders;
+mod ignores;
 mod invitations;
 mod managed;
 mod network;
@@ -77,6 +79,7 @@ pub use events::{
     EventSubscription,
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
+pub use ignores::{IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
 pub use invitations::{
     DeviceIgnoreUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
     PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,

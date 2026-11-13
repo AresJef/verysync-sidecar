@@ -186,6 +186,145 @@ struct BlockedFile {
     #[cfg(windows)]
     _held: std::fs::File,
 }
+
+#[tokio::test]
+async fn actual_ignore_replace_parse_rejection_reset_and_restart_preserve_files() -> TestResult {
+    use verysync_sidecar::IgnorePatterns;
+    let root = tempfile::Builder::new()
+        .prefix("vss-ignore-")
+        .tempdir()?
+        .keep();
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let id = FolderId::parse("ignore-rules-a")?;
+    let other = FolderId::parse("ignore-rules-b")?;
+    let data = root.join("data");
+    let unrelated = root.join("other");
+    std::fs::create_dir_all(data.join("sub"))?;
+    std::fs::create_dir(&unrelated)?;
+    let nested = [
+        Path::new("sub").join("hidden.dat"),
+        Path::new("sub").join("second.dat"),
+    ];
+    let names = [
+        Path::new("visible.txt"),
+        Path::new("skip.tmp"),
+        Path::new("keep.tmp"),
+        nested[0].as_path(),
+        nested[1].as_path(),
+    ];
+    for name in names {
+        std::fs::write(data.join(name), b"retained synthetic ignore bytes")?;
+    }
+    std::fs::write(unrelated.join("untouched.bin"), b"unrelated bytes")?;
+    for (folder, path) in [(&id, &data), (&other, &unrelated)] {
+        core.client()
+            .create_folder(&CreateFolderOptions::new(
+                folder.clone(),
+                TargetPath::local(path),
+            ))
+            .await?;
+        core.client().request_scan(folder).await?;
+    }
+    indexed_files(core.client(), &id, 3).await?;
+    indexed_files(core.client(), &other, 1).await?;
+    let original = core.client().ignore_patterns(&id).await?;
+    let other_original = core.client().ignore_patterns(&other).await?;
+    assert!(original.parse_error.is_none() && !original.expanded_patterns.is_empty());
+    assert!(original
+        .patterns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .any(|s| s.contains("*.tmp")));
+    let empty = core
+        .client()
+        .set_ignore_patterns(&id, &IgnorePatterns::new(Vec::new())?)
+        .await?;
+    assert!(
+        empty.requested_patterns_match
+            && empty.snapshot.patterns.is_none()
+            && empty.snapshot.expanded_patterns.is_empty()
+    );
+    core.client().request_scan(&id).await?;
+    indexed_files(core.client(), &id, 5).await?;
+    let rules = IgnorePatterns::new(vec![
+        "// synthetic private rule".into(),
+        "!keep.tmp".into(),
+        "*.tmp".into(),
+        "sub/*.dat".into(),
+    ])?;
+    let changed = core.client().set_ignore_patterns(&id, &rules).await?;
+    assert!(changed.requested_patterns_match);
+    assert_eq!(changed.snapshot.patterns.as_deref(), Some(rules.patterns()));
+    assert!(!changed.snapshot.expanded_patterns.is_empty());
+    assert!(!format!("{changed:?} {rules:?}").contains("synthetic private"));
+    core.client().request_scan(&id).await?;
+    indexed_files(core.client(), &id, 2).await?;
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(
+        core.client()
+            .ignore_patterns(&id)
+            .await?
+            .patterns
+            .as_deref(),
+        Some(rules.patterns())
+    );
+    indexed_files(core.client(), &id, 2).await?;
+    let bad = IgnorePatterns::new(vec!["[synthetic-private-pattern".into()])?;
+    let rejection = core
+        .client()
+        .set_ignore_patterns(&id, &bad)
+        .await
+        .unwrap_err();
+    assert!(!format!("{rejection:?} {rejection}").contains("synthetic-private"));
+    let Error::IgnorePatternsRejected { snapshot } = rejection else {
+        return Err("expected actual ignore parser rejection".into());
+    };
+    assert_eq!(snapshot.patterns.as_deref(), Some(bad.patterns()));
+    assert!(snapshot.parse_error.as_ref().is_some_and(|s| !s.is_empty()));
+    let persisted = core.client().ignore_patterns(&id).await?;
+    assert_eq!(persisted.patterns.as_deref(), Some(bad.patterns()));
+    assert!(persisted
+        .parse_error
+        .as_ref()
+        .is_some_and(|s| !s.is_empty()));
+    let reset = core.client().reset_ignore_patterns(&id).await?;
+    assert!(reset.parse_error.is_none());
+    assert_eq!(reset.expanded_patterns, original.expanded_patterns);
+    core.client().request_scan(&id).await?;
+    indexed_files(core.client(), &id, 3).await?;
+    let other_after = core.client().ignore_patterns(&other).await?;
+    assert_eq!(other_after.patterns, other_original.patterns);
+    assert_eq!(
+        other_after.expanded_patterns,
+        other_original.expanded_patterns
+    );
+    indexed_files(core.client(), &other, 1).await?;
+    assert!(matches!(
+        core.client()
+            .set_ignore_patterns(&FolderId::parse("missing")?, &rules)
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    for name in names {
+        assert_eq!(
+            std::fs::read(data.join(name))?,
+            b"retained synthetic ignore bytes"
+        );
+    }
+    assert_eq!(
+        std::fs::read(unrelated.join("untouched.bin"))?,
+        b"unrelated bytes"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public ignore patterns evidence: {}",
+        json!({"actual_default_tmp_exclusion":true,"actual_empty_replacement_and_null_readback":true,"actual_all_files_indexed_after_clear":true,"exact_comment_negation_and_subdirectory_patterns":true,"actual_rule_filtered_index":true,"rules_persist_after_restart":true,"actual_http_success_parser_rejection_is_typed_error":true,"rejected_rules_actually_stored":true,"actual_get_retains_parse_error":true,"reset_restores_actual_engine_default_expansion":true,"actual_index_recovers_after_reset":true,"other_folder_rules_and_index_unchanged":true,"missing_folder_rejected":true,"patterns_and_errors_not_in_debug":true,"all_synthetic_bytes_retained":true,"actual_normal_tree_exit":true})
+    );
+    Ok(())
+}
 impl BlockedFile {
     fn new(path: &Path) -> TestResult<Self> {
         #[cfg(unix)]

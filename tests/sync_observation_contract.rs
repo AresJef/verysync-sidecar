@@ -71,3 +71,39 @@ fn scan_settings_preserve_fractional_seconds_and_patch_only_explicit_fields() {
         json!({"rescanIntervalS":0,"fsWatcherEnabled":false,"fsWatcherDelayS":1.5})
     );
 }
+
+#[test]
+fn ignore_snapshots_preserve_null_patterns_parse_errors_and_private_directives() {
+    use verysync_sidecar::{IgnorePatterns, IgnoreSnapshot};
+    let empty: IgnoreSnapshot =
+        serde_json::from_value(json!({"ignore":null,"expanded":[],"error":null})).unwrap();
+    assert!(empty.patterns.is_none());
+    let bad: IgnoreSnapshot = serde_json::from_value(json!({"ignore":["private-pattern"],"expanded":[],"error":"private-parse-error","future":"private-value"})).unwrap();
+    assert_eq!(bad.parse_error.as_deref(), Some("private-parse-error"));
+    assert!(!format!("{bad:?}").contains("private"));
+    let lines = vec![
+        r"#escape=\".into(),
+        "// private comment".into(),
+        "!keep.tmp".into(),
+        "*.tmp".into(),
+    ];
+    let rules = IgnorePatterns::new(lines.clone()).unwrap();
+    assert_eq!(rules.patterns(), lines);
+    assert!(!format!("{rules:?}").contains("private"));
+    for lines in [
+        vec!["a\nb".into()],
+        vec!["a\rb".into()],
+        vec!["\0".into()],
+        vec!["x".repeat(262145)],
+        vec![String::new(); 4097],
+    ] {
+        assert!(IgnorePatterns::new(lines).is_err());
+    }
+    for malformed in [
+        json!({"expanded":[],"error":null}),
+        json!({"ignore":[],"error":null}),
+        json!({"ignore":[],"expanded":[]}),
+    ] {
+        assert!(serde_json::from_value::<IgnoreSnapshot>(malformed).is_err());
+    }
+}

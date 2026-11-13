@@ -61,6 +61,10 @@ The unreleased [scan control API](docs/public/scan-control.md) adds explicit
 relative subpaths, all-folder requests and partial periodic/watcher settings,
 with actual index changes checked separately from configuration readback.
 
+The unreleased [ignore-pattern API](docs/public/ignore-patterns.md) preserves
+ordered engine rules, reports stored parser failures explicitly, and separates
+clearing rules from restoring the engine's built-in defaults.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.
