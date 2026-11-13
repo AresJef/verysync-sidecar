@@ -129,6 +129,11 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target sync_observation
           --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
+      - name: Verify read-only handoff to a fresh third node with the source stopped
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target p2p_three_nodes
+          --evidence-dir "${{ runner.temp }}/vs-three-node-proxy"
       - name: Run independent-engine fixture contracts
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"

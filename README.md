@@ -78,6 +78,10 @@ The unreleased [folder recovery API](docs/public/recovery.md) sends explicit
 receive-only reversion, send-only override and marker-repair requests. Real
 data, marker and identity observations remain separate from acknowledgements.
 
+The [read-only three-node scenario](docs/public/three-node-relay.md) verifies
+source handoff using real sharing permissions, complete file hashes and actual
+protocol byte counters. Loopback evidence is separate from WAN acceptance.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.

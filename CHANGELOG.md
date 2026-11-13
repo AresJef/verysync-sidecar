@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add a native three-node read-only handoff scenario with the source stopped,
+  an explicit wrong-endpoint failure, complete hashes and peer byte counters.
+
 - Add guarded receive-only reversion, send-only override and marker repair,
   separating acknowledgements from actual file and identity recovery.
 

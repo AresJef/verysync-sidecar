@@ -34,6 +34,7 @@
 #![doc = include_str!("../docs/public/scheduling.md")]
 #![doc = include_str!("../docs/public/selective-sync.md")]
 #![doc = include_str!("../docs/public/recovery.md")]
+#![doc = include_str!("../docs/public/three-node-relay.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
