@@ -68,8 +68,8 @@ pub use events::{
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
 pub use invitations::{
-    FolderPeerUpdate, IgnoredFolder, IgnoredFolderUpdate, PendingDeviceInfo, PendingDismissal,
-    PendingFolderOffer, PendingFolderOffers,
+    DeviceIgnoreUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
+    PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
 };
 #[cfg(feature = "download")]
 pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};

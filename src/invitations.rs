@@ -98,6 +98,41 @@ pub struct PendingDismissal {
     pub record_absent: bool,
 }
 
+/// One persistent ignored-device configuration record, independent of live state.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct IgnoredDevice {
+    /// Exact remote identity.
+    #[serde(rename = "deviceID")]
+    pub device_id: DeviceId,
+    /// Optional upstream observation timestamp; absent is not an invented time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<String>,
+    /// Optional retained peer name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Optional retained address, not a reachability verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// Unknown fields, preserved during changes and omitted from Debug.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for IgnoredDevice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IgnoredDevice")
+            .field("extra_field_count", &self.extra.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Configuration readback after explicitly changing one ignored identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeviceIgnoreUpdate {
+    /// Whether that exact identity is currently in the ignored-device list.
+    /// This alone does not prove a live attempt was blocked.
+    pub is_ignored: bool,
+}
+
 /// Current configuration and pending state following an explicit ignore change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IgnoredFolderUpdate {

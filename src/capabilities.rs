@@ -40,6 +40,8 @@ pub enum Capability {
     FolderInvitations,
     /// Pending-device records; nonempty native validation remains pending.
     PendingDeviceRecords,
+    /// Persistent ignored identities; live rejection remains a separate observation.
+    DeviceIgnores,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -169,6 +171,11 @@ static CATALOG: &[LibraryCapability] = &[
     },
     LibraryCapability {
         capability: Capability::PendingDeviceRecords,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::DeviceIgnores,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
