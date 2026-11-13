@@ -40,6 +40,11 @@ peer association. Nonempty pending-device records remain separately unverified.
 Explicit device-ignore changes preserve the full fixed-version configuration
 and report settings separately from observed connection rejection/recovery.
 
+The unreleased [network API](docs/public/network.md) separates explicit settings,
+listener status, discovery cache records and live peer snapshots. Real private
+TCP and isolated discovery lookup effects have dedicated tests; LAN, UDP, relay,
+announcements and WAN acceptance remain separate.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.

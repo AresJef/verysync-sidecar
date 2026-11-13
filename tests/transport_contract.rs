@@ -13,6 +13,86 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
+#[tokio::test]
+async fn network_patch_preserves_partial_body_and_distinguishes_stale_readback() -> TestResult {
+    use verysync_sidecar::NetworkPatch;
+    let config = serde_json::json!({"options":{
+        "listenAddresses":["tcp://127.0.0.1:12345"], "globalAnnounceServers":[],
+        "globalAnnounceEnabled":false, "localAnnounceEnabled":false,
+        "localAnnouncePort":21027,"localAnnounceMCAddr":"[ff12::8384]:21027",
+        "reconnectionIntervalS":5,"futureSecret":KEY
+    }});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(config),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let result = client
+        .update_network_configuration(&NetworkPatch::default().global_discovery(true))
+        .await?;
+    assert!(!result.requested_fields_match);
+    assert!(!result.configuration.global_announce_enabled);
+    assert_eq!(result.configuration.extra["futureSecret"], KEY);
+    assert!(!format!("{result:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let patches: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].starts_with("PATCH /prefix/rest/config/options "));
+    let body: serde_json::Value =
+        serde_json::from_str(patches[0].split_once("\r\n\r\n").ok_or("missing body")?.1)?;
+    assert_eq!(body, serde_json::json!({"globalAnnounceEnabled":true}));
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_patch_rechecks_identity_and_never_retries_unknown_outcomes() -> TestResult {
+    use verysync_sidecar::NetworkPatch;
+    let different = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    for failure in ["identity", "write", "readback"] {
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":if failure=="identity" {different}else{ID}})),
+        ];
+        if failure != "identity" {
+            replies.push(Reply {
+                status: if failure == "write" { 500 } else { 200 },
+                body: KEY.as_bytes().to_vec(),
+                headers: String::new(),
+                delay: Duration::ZERO,
+            });
+            if failure == "readback" {
+                replies.push(Reply::json(serde_json::json!({"options":null})));
+            }
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .update_network_configuration(&NetworkPatch::default().global_discovery(true))
+            .await
+            .unwrap_err();
+        if failure == "identity" {
+            assert!(matches!(error, Error::IdentityMismatch { .. }));
+        } else {
+            assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+        }
+        assert!(!format!("{error:?}").contains(KEY));
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests.iter().filter(|r| r.starts_with("PATCH ")).count(),
+            usize::from(failure != "identity")
+        );
+    }
+    Ok(())
+}
+
 #[cfg(not(feature = "tls"))]
 #[tokio::test]
 async fn https_without_tls_is_rejected_before_network_io() -> TestResult {

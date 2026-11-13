@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add partial network settings, typed transport selectors and fresh listener,
+  connection and discovery-cache observations. Keep stored configuration,
+  candidate addresses and actual connectivity distinct; retain the fixed
+  kernel's custom-discovery-server and unverified transport boundaries.
+
 - Add explicit ignored-device reads and changes using the fixed engine's full
   configuration PUT, preserving unknown fields and unrelated ignore records.
   Refuse implicit removal of configured peers and protect the local identity.

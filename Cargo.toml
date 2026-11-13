@@ -153,3 +153,8 @@ required-features = ["engine-tests"]
 name = "invitations"
 path = "tests/invitations.rs"
 required-features = ["engine-tests"]
+
+[[test]]
+name = "network"
+path = "tests/network.rs"
+required-features = ["engine-tests"]
