@@ -1,5 +1,7 @@
 //! Authenticated management connections, separate from process ownership.
 
+mod device_control;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;

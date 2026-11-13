@@ -34,6 +34,8 @@ pub enum Capability {
     ObservableTasks,
     /// Peer sharing and P2P controls.
     PeerSharing,
+    /// Remote device configuration, distinct from live connection or transfer state.
+    DeviceConfiguration,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -148,6 +150,11 @@ static CATALOG: &[LibraryCapability] = &[
     },
     LibraryCapability {
         capability: Capability::PeerSharing,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::DeviceConfiguration,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },

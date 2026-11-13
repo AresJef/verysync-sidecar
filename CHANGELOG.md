@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add typed remote-device reads, default-preserving creation, partial name,
+  protocol-address, compression and pause changes, and exact-ID removal with
+  association readback. Protect the local identity, preserve unknown fields,
+  and distinguish acknowledged configuration from actual peer effects.
+
 - Give fresh owned instances an independent auxiliary loopback address while
   retaining explicitly configured addresses across restart. Verify native
   owned IPv4 listeners without connecting to unrelated local endpoints.

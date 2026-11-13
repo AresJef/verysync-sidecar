@@ -23,6 +23,7 @@
 #![doc = include_str!("../docs/public/events.md")]
 #![doc = include_str!("../docs/public/long-running-operations.md")]
 #![doc = include_str!("../docs/public/sharing.md")]
+#![doc = include_str!("../docs/public/devices.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -30,6 +31,7 @@
 mod auth;
 mod capabilities;
 mod client;
+mod devices;
 mod endpoint;
 mod engine_source;
 mod error;
@@ -50,6 +52,10 @@ pub use capabilities::{
 };
 pub use client::{
     Client, ConnectOptions, EngineVersion, InstanceInfo, VersionCompatibility, VersionPolicy,
+};
+pub use devices::{
+    CreateDeviceOptions, DeviceCompression, DeviceConfig, DeviceDefaults, DevicePatch,
+    DeviceRemoval, DeviceUpdate,
 };
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use engine_source::{EngineSource, LocalProgram, ProgramInfo};

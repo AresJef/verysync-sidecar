@@ -143,3 +143,8 @@ required-features = ["download"]
 name = "p2p_isolation"
 path = "tests/p2p_isolation.rs"
 required-features = ["engine-tests"]
+
+[[test]]
+name = "devices"
+path = "tests/devices.rs"
+required-features = ["engine-tests"]

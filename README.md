@@ -29,6 +29,11 @@ actual engine keys, preserves reported read-only/read-write permissions and
 registers using the target's proposed local ID. Registration readback and peer
 association are separate observations.
 
+The unreleased [device configuration API](docs/public/devices.md) reads actual
+defaults, guards creation and partial updates, controls a remote device's pause
+layer, and observes removal and remaining folder associations. Configuration
+readback remains separate from connection and file-transfer evidence.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.
