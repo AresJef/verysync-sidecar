@@ -1,5 +1,12 @@
 # Managed instances (unreleased)
 
+Fresh library-owned instances also select an independent loopback auxiliary
+tunnel address. This avoids using the upstream shared loopback port alongside
+another local instance. Existing marked instances retain their configured
+auxiliary address when restarted. These local address choices do not constitute
+an OS-wide network isolation policy; explicit network scenarios have separate
+configuration and validation requirements.
+
 This guide describes the **0.1.0-alpha.2 development API**, not the published
 initial alpha. Use a reviewed checkout/path dependency to evaluate it. The
 published `0.1.0-alpha.1` controls an explicitly selected running instance.

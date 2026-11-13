@@ -563,6 +563,7 @@ fn configure_state(home: &Path, address: &str) -> TestResult<String> {
     }
     set(options, "17", Value::from(-1))?;
     set(options, "24", Value::from(0))?;
+    set(options, "99", Value::from("127.0.0.1:0"))?;
     set(field_mut(&mut root, "12")?, "0", Value::Boolean(false))?;
     let mut encoded = Vec::new();
     rmpv::encode::write_value(&mut encoded, &root)?;
