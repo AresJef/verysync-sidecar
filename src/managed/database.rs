@@ -86,21 +86,29 @@ pub struct DatabaseCommandExit {
     /// Typed count rows only for a recognized successful Counts response.
     /// None is not an invented successful empty table.
     pub counts: Option<Vec<DatabaseCountRow>>,
+    /// Opaque native text before a recognized counts table or known missing-folder
+    /// diagnostic. Retained privately rather than treated as a count row or discarded.
+    /// Other native text responses are not split into a preamble.
+    pub native_preamble: Option<ProcessDiagnostic>,
     /// Bounded private native output; explicit inspection can reveal paths/data.
     pub diagnostic: ProcessDiagnostic,
 }
-fn parse_counts(bytes: &[u8]) -> Option<Vec<DatabaseCountRow>> {
-    let mut lines = std::str::from_utf8(bytes)
-        .ok()?
-        .lines()
-        .filter(|l| !l.trim().is_empty());
-    if lines.next()?.split_whitespace().collect::<Vec<_>>()
-        != ["DEVICE", "TYPE", "FLAGS", "DELETED", "COUNT", "SIZE"]
-    {
-        return None;
+fn parse_counts(bytes: &[u8]) -> Option<(Vec<DatabaseCountRow>, Vec<u8>)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let mut offset = 0;
+    let mut start = None;
+    for line in text.split_inclusive('\n') {
+        if line.split_whitespace().collect::<Vec<_>>()
+            == ["DEVICE", "TYPE", "FLAGS", "DELETED", "COUNT", "SIZE"]
+        {
+            start = Some((offset, offset + line.len()));
+            break;
+        }
+        offset += line.len();
     }
+    let (header, body) = start?;
     let mut rows = Vec::new();
-    for line in lines {
+    for line in text[body..].lines().filter(|line| !line.trim().is_empty()) {
         let cells = line.split_whitespace().collect::<Vec<_>>();
         if cells.len() != 6 || rows.len() >= 1024 {
             return None;
@@ -114,7 +122,21 @@ fn parse_counts(bytes: &[u8]) -> Option<Vec<DatabaseCountRow>> {
             size: cells[5].parse().ok()?,
         });
     }
-    Some(rows)
+    Some((rows, bytes[..header].to_vec()))
+}
+fn missing_folder_preamble(bytes: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(bytes).ok()?.trim_end();
+    if text.lines().any(|line| {
+        line.split_whitespace().collect::<Vec<_>>()
+            == ["DEVICE", "TYPE", "FLAGS", "DELETED", "COUNT", "SIZE"]
+    }) {
+        return None;
+    }
+    let (prefix, line) = text
+        .rsplit_once('\n')
+        .map(|(prefix, line)| (&bytes[..prefix.len() + 1], line))
+        .unwrap_or((&bytes[..0], text));
+    (line.trim() == "verysync: error: no such folder").then(|| prefix.to_vec())
 }
 impl ManagedInstance {
     /// Run one whitelisted database command against this confirmed stopped
@@ -178,6 +200,7 @@ impl ManagedInstance {
         };
         let exit = self.run_stopped_cli(plan, timeout).await?;
         let mut counts = None;
+        let mut native_preamble = None;
         let mut outcome = if exit.code == Some(0) {
             DatabaseCommandOutcome::Success
         } else {
@@ -187,18 +210,25 @@ impl ManagedInstance {
             command,
             DatabaseCommand::Counts(_) | DatabaseCommand::File { .. }
         ) && exit.code == Some(1)
-            && std::str::from_utf8(exit.diagnostic.body_bytes())
-                .ok()
-                .is_some_and(|v| v.trim() == "verysync: error: no such folder")
         {
-            outcome = DatabaseCommandOutcome::FolderNotIndexed;
+            if let Some(prefix) = missing_folder_preamble(exit.diagnostic.body_bytes()) {
+                outcome = DatabaseCommandOutcome::FolderNotIndexed;
+                if !prefix.is_empty() {
+                    native_preamble = Some(ProcessDiagnostic::new(prefix));
+                }
+            }
         }
         if matches!(command, DatabaseCommand::Counts(_))
             && outcome == DatabaseCommandOutcome::Success
         {
-            counts = parse_counts(exit.diagnostic.body_bytes());
-            if counts.is_none() {
-                outcome = DatabaseCommandOutcome::UnrecognizedCounts;
+            match parse_counts(exit.diagnostic.body_bytes()) {
+                Some((rows, prefix)) => {
+                    counts = Some(rows);
+                    if !prefix.is_empty() {
+                        native_preamble = Some(ProcessDiagnostic::new(prefix));
+                    }
+                }
+                None => outcome = DatabaseCommandOutcome::UnrecognizedCounts,
             }
         }
         Ok(DatabaseCommandExit {
@@ -207,6 +237,7 @@ impl ManagedInstance {
             tree_stopped: exit.tree_stopped,
             outcome,
             counts,
+            native_preamble,
             diagnostic: exit.diagnostic,
         })
     }
@@ -214,13 +245,14 @@ impl ManagedInstance {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_counts;
+    use super::{missing_folder_preamble, parse_counts};
 
     #[test]
     fn counts_retain_unknown_labels_and_reject_partial_or_overflowing_tables() {
         let header = "DEVICE TYPE FLAGS DELETED COUNT SIZE\r\n";
         let table = format!("{header}native-device FUTURE --X-- future 2 67\r\n");
-        let rows = parse_counts(table.as_bytes()).unwrap();
+        let (rows, preamble) = parse_counts(table.as_bytes()).unwrap();
+        assert!(preamble.is_empty());
         assert_eq!(rows.len(), 1);
         assert_eq!(
             (&*rows[0].kind, &*rows[0].flags, &*rows[0].deleted),
@@ -239,6 +271,41 @@ mod tests {
         ] {
             assert!(parse_counts(&invalid).is_none());
         }
-        assert!(parse_counts(header.as_bytes()).unwrap().is_empty());
+        assert!(parse_counts(header.as_bytes()).unwrap().0.is_empty());
+    }
+
+    #[test]
+    fn native_preamble_is_retained_while_complete_count_rows_and_missing_errors_stay_strict() {
+        let prefix = b"opaque native startup text\r\n";
+        let header = b"DEVICE TYPE FLAGS DELETED COUNT SIZE\r\n";
+        let table = [
+            prefix.as_slice(),
+            header.as_slice(),
+            b"local FILE flags --- 1 36\r\n",
+        ]
+        .concat();
+        let (rows, observed) = parse_counts(&table).unwrap();
+        assert_eq!(observed, prefix);
+        assert_eq!((rows[0].count, rows[0].size), (1, 36));
+        assert!(parse_counts(&[table.as_slice(), header.as_slice()].concat()).is_none());
+        assert!(
+            parse_counts(&[table.as_slice(), b"native unrecognized trailer\n"].concat()).is_none()
+        );
+        assert!(parse_counts(prefix).is_none());
+        assert_eq!(
+            missing_folder_preamble(
+                &[prefix.as_slice(), b"verysync: error: no such folder\r\n"].concat()
+            )
+            .unwrap(),
+            prefix
+        );
+        assert!(
+            missing_folder_preamble(b"verysync: error: no such folder\nother failure\n").is_none()
+        );
+        assert!(missing_folder_preamble(b"verysync: error: permission denied\n").is_none());
+        assert!(missing_folder_preamble(
+            &[table.as_slice(), b"verysync: error: no such folder\n"].concat()
+        )
+        .is_none());
     }
 }

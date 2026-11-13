@@ -151,6 +151,11 @@ native syntax. No shell is invoked.
 `DatabaseCommandExit` retains the actual code, contained-tree completion and
 bounded private output. `Success` means native exit zero. Counts decode only the
 verified six-column table; unknown device/kind/flag/deletion labels remain exact.
+Opaque text preceding a recognized table or exact missing-folder error is
+retained separately in `native_preamble`, as well as unchanged in the complete
+private diagnostic. It is not interpreted as a row or silently discarded.
+Every row after the header must still match the schema; malformed, overflowing,
+duplicate-header and unknown-trailer responses remain unrecognized.
 Malformed successful tables return `UnrecognizedCounts`, never an invented empty
 index. Only the known exact exit-one diagnostic maps to `FolderNotIndexed`.
 Statistics and file metadata remain explicit native text; the SDK invents no
