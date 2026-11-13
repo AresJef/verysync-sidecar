@@ -62,7 +62,8 @@ fn owned_handle_count(core: &ManagedInstance) -> TestResult<u32> {
 async fn private_owned_directory_read_handle_characterization() -> TestResult {
     let root = tempfile::Builder::new().prefix("vfwh-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
-    let (profile, volume) = mount(&core).await?;
+    let volumes = core.client().resource_volumes().await?;
+    let (profile, volume, relative) = resource_fixture::owned_base(&core, &volumes)?;
     let native = profile.join("owned-directory-handle-probe");
     std::fs::create_dir(&native)?;
     let logical = volume.child("owned-directory-handle-probe")?;
@@ -71,17 +72,44 @@ async fn private_owned_directory_read_handle_characterization() -> TestResult {
         assert!(core.client().resource_info(&logical).await?.is_dir);
     }
     let after = owned_handle_count(&core)?;
-    let removal = core
+    use verysync_sidecar::{RawMethod, RawRequest, RequestEffect};
+    let heap = core
         .client()
-        .delete_resource(&logical, ResourceDeleteScope::RecursiveDirectory)
-        .await;
-    eprintln!(
-        "private owned directory handle observation: {}",
-        serde_json::json!({"reads":16,"handles_before":before,"handles_after":after,"native_directory_still_exists":native.is_dir(),"native_removal_reported_success":removal.is_ok()})
-    );
-    if let Err(error) = &removal {
-        report("owned-handle-probe-delete", error);
+        .raw_request(&RawRequest::new(
+            RawMethod::Get,
+            ["rest", "debug", "heapprof"],
+            RequestEffect::MayModify,
+        )?)
+        .await?;
+    let immediately_after_profile = owned_handle_count(&core)?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let settled_after_profile = owned_handle_count(&core)?;
+    let mut components = vec![
+        "rest".to_owned(),
+        "f".to_owned(),
+        "api".to_owned(),
+        "resources".to_owned(),
+        logical.volume().as_str().to_owned(),
+    ];
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err("owned mount-relative component is not normal".into());
+        };
+        components.push(component.to_str().ok_or("owned path encoding")?.to_owned());
     }
+    components.push("owned-directory-handle-probe".to_owned());
+    let deletion = core
+        .client()
+        .raw_request(&RawRequest::new(
+            RawMethod::Delete,
+            components,
+            RequestEffect::MayModify,
+        )?)
+        .await?;
+    eprintln!(
+        "private explicit native heap collection observation: {}",
+        serde_json::json!({"reads":16,"handles_before":before,"handles_after_reads":after,"heap_status":heap.status(),"heap_bytes":heap.body_bytes().len(),"heap_gzip":heap.body_bytes().starts_with(&[31,139]),"handles_immediately_after_profile":immediately_after_profile,"handles_after_half_second":settled_after_profile,"raw_delete_status":deletion.status(),"raw_delete_bytes":deletion.body_bytes().len(),"native_directory_still_exists":native.exists()})
+    );
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     // This is diagnosis, not a successful directory-removal acceptance case.
