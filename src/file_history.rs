@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, fmt};
 /// An explicit built-in versioning policy. A zero cleanout age keeps versions
 /// without age-based expiry. Keeping versions applies to future remote changes,
 /// not controller edits or a general filesystem snapshot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FolderVersioningPolicy {
     /// Stop creating versions; this does not delete existing archives.
     Disabled,
@@ -26,9 +26,72 @@ pub enum FolderVersioningPolicy {
         /// Positive cleanup interval in whole seconds.
         cleanup_interval_seconds: u32,
     },
+    /// Native staggered retention, with a maximum age measured in seconds.
+    Staggered {
+        /// Maximum archive age in seconds; zero disables age-based expiry.
+        max_age_seconds: u32,
+        /// Positive native cleanup interval in whole seconds.
+        cleanup_interval_seconds: u32,
+    },
+    /// Explicitly configure a caller-supplied command executed by the target's
+    /// native versioner. The library does not execute it on the controller.
+    External {
+        /// Exact native command and native placeholder syntax.
+        command: ExternalVersioningCommand,
+    },
+}
+
+/// An explicit native external-versioner command. It can execute a program with
+/// the target core's permissions when that core archives a remote change.
+/// Parsing, placeholder expansion and exit handling belong to the native core.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ExternalVersioningCommand(String);
+impl ExternalVersioningCommand {
+    /// Retain 1–8192 bytes of nonempty command text without control characters.
+    /// The SDK does not parse arguments, add quoting or select an executable.
+    pub fn new(command: impl Into<String>) -> Result<Self> {
+        let command = command.into();
+        if command.trim().is_empty()
+            || command.len() > 8192
+            || command.chars().any(char::is_control)
+        {
+            return Err(invalid(
+                "external versioner command is empty or exceeds its text bounds",
+            ));
+        }
+        Ok(Self(command))
+    }
+    /// Explicitly inspect the exact private target command.
+    pub fn native_command(&self) -> &str {
+        &self.0
+    }
+}
+impl fmt::Debug for ExternalVersioningCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ExternalVersioningCommand([REDACTED])")
+    }
+}
+
+/// Explicit archive-location selection for the native basic filesystem backend.
+/// Changing location does not migrate, copy or delete existing archived data.
+#[derive(Clone)]
+pub enum VersionArchiveLocation {
+    /// Restore the synchronization folder's native default archive location.
+    FolderDefault,
+    /// Select a directory in the target's syntax using the native basic backend.
+    /// Relative paths and tilde expansion are interpreted by that target.
+    BasicDirectory(TargetPath),
+}
+impl fmt::Debug for VersionArchiveLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::FolderDefault => "VersionArchiveLocation::FolderDefault",
+            Self::BasicDirectory(_) => "VersionArchiveLocation::BasicDirectory([REDACTED])",
+        })
+    }
 }
 impl FolderVersioningPolicy {
-    pub(crate) fn apply(self, config: &mut FolderVersioningConfiguration) -> Result<()> {
+    pub(crate) fn apply(&self, config: &mut FolderVersioningConfiguration) -> Result<()> {
         let (kind, keep, days, interval) = match self {
             Self::Disabled => ("", None, None, None),
             Self::Trashcan {
@@ -37,26 +100,38 @@ impl FolderVersioningPolicy {
             } => (
                 "trashcan",
                 None,
-                Some(cleanout_days),
-                Some(cleanup_interval_seconds),
+                Some(*cleanout_days),
+                Some(*cleanup_interval_seconds),
             ),
             Self::Simple {
                 keep,
                 cleanout_days,
                 cleanup_interval_seconds,
             } => {
-                if keep == 0 || keep > i32::MAX as u32 {
+                if *keep == 0 || *keep > i32::MAX as u32 {
                     return Err(invalid(
                         "version retention count must be between one and i32::MAX",
                     ));
                 }
                 (
                     "simple",
-                    Some(keep),
-                    Some(cleanout_days),
-                    Some(cleanup_interval_seconds),
+                    Some(*keep),
+                    Some(*cleanout_days),
+                    Some(*cleanup_interval_seconds),
                 )
             }
+            Self::Staggered {
+                max_age_seconds,
+                cleanup_interval_seconds,
+            } => {
+                if *max_age_seconds > i32::MAX as u32 {
+                    return Err(invalid(
+                        "staggered maximum age exceeds its explicit integer bound",
+                    ));
+                }
+                ("staggered", None, None, Some(*cleanup_interval_seconds))
+            }
+            Self::External { .. } => ("external", None, None, None),
         };
         if interval.is_some_and(|s| s == 0 || s > i32::MAX as u32)
             || days.is_some_and(|s| s > i32::MAX as u32)
@@ -79,9 +154,22 @@ impl FolderVersioningPolicy {
         if let Some(interval) = interval {
             config.cleanup_interval_seconds = interval;
         }
+        match self {
+            Self::Staggered {
+                max_age_seconds, ..
+            } => {
+                config
+                    .params
+                    .insert("maxAge".into(), max_age_seconds.to_string());
+            }
+            Self::External { command } => {
+                config.params.insert("command".into(), command.0.clone());
+            }
+            _ => {}
+        }
         Ok(())
     }
-    pub(crate) fn validate(self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         let mut empty = FolderVersioningConfiguration {
             kind: String::new(),
             params: BTreeMap::new(),

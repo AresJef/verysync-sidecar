@@ -2,6 +2,16 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add native staggered/external versioners and explicit basic/default archive
+  locations, preserving earlier archive data when selecting a location. Observe
+  actual external callbacks and native failure effects separately from config.
+  `FolderVersioningPolicy` is now `Clone` rather than `Copy` because an external
+  policy owns its command text; alpha interfaces remain unstable.
+
+- Add explicit folder/global index-reset acknowledgements and stopped-owner
+  statistics, counts, file metadata and database reset commands. Keep actual
+  exit, index effects, data retention and restarted readiness distinct.
+
 - Refuse unverified/same-second archive restores before native POST using the
   target's clock and a bounded directory preflight; preserve selected archives
   and current data in the observed v2.33.2 timestamp-collision case.

@@ -31,7 +31,7 @@ if let Some(versions) = history.0.get("report.txt") {
 # }
 ```
 
-`Disabled`, `Simple` and `Trashcan` select explicit policies. Simple keeps a
+`Disabled`, `Simple`, `Trashcan`, `Staggered` and `External` select explicit policies. Simple keeps a
 positive number of versions. Trashcan keeps the last archived version. A zero
 cleanout age disables age-based expiry. Positive cleanup intervals are whole
 seconds. These settings describe native retention; the SDK runs no cleanup job.
@@ -40,6 +40,47 @@ are preserved. Native PATCH merges parameter maps, so disabling a policy retains
 its unused values. Check `requested_fields_match` and the actual configuration.
 Disabling versioning does not delete existing archives; re-enabling can expose
 them again. Access while disabled is subject to the kernel's versioner state.
+
+`Staggered { max_age_seconds, cleanup_interval_seconds }` selects native
+staggered retention. Maximum age uses seconds, not the days shown by some native
+interfaces; zero disables age-based expiry. The target owns the age tiers and
+cleanup schedule. Positive bounded cleanup intervals do not guarantee an exact
+deletion time. The isolated native case observes a retained old archive first,
+then explicit age-based removal while current source/receiver bytes stay intact.
+
+`External { command: ExternalVersioningCommand }` is an explicit caller choice
+to run a program with the target core's permissions during archival. The SDK
+retains 1–8192 bytes of command text without controls; it does not parse, quote,
+expand or execute it on the controller. Native `%FOLDER_PATH%` and `%FILE_PATH%`
+placeholders are target arguments. Choose and verify the executable, quoting and
+retention behavior for that target. `native_command()` explicitly exposes the
+private text, while `Debug` redacts it. The external program owns archival and
+failure behavior; configuring it is not proof it ran or created a usable backup.
+The isolated test verifies an actual native invocation and exact old bytes moved
+by a short-lived controlled test callback. The library installs no callback,
+service or daemon. Native built-in browsing/restoration need not apply to an
+external program's own storage format.
+An actual exit-seven callback case produces native pull errors and preserves the
+existing receiver, newer source and both earlier archives. Native synchronization
+can retry independently; a configuration readback is not a callback-completion
+or cancellation receipt.
+
+`set_version_archive_location(folder, &VersionArchiveLocation)` selects either
+`FolderDefault` or `BasicDirectory(TargetPath)`. Basic selects the native basic
+filesystem backend. Native relative paths and tilde expansion are interpreted on
+the target; remote syntax must match that target. The SDK opens no controller
+path and never joins target paths with host strings. Logical path text is bounded
+to 32 KiB. Other storage backends retain separate verification gates.
+
+Changing location preserves policy parameters and unknown fields. The SDK does
+not migrate existing archives; native retention can clean the selected location.
+Earlier versions can become absent from current
+browsing because they remain in the prior location. The native core can precreate
+an empty default Archive directory even while using a selected location. Check
+actual archive files and hashes. An external versioner chooses its own storage;
+this setting does not rewrite its command. The public local case checks selected
+and restored-default archival, old-location data retention and actual native age
+cleanup. Complete same-source native acceptance remains pending for this slice.
 
 Archive browsing returns one bounded native response. `None` selects the root;
 an explicit relative target path selects a prefix. Prefix browsing lists

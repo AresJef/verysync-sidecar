@@ -327,6 +327,6 @@ Compatibility commitments begin with the first formal release. Compatible update
 Project-owned code is licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. The official VerySync program and third-party dependencies remain subject to their own terms. The controller's license does not grant redistribution rights for the official program. No official executable is included in this repository or crate.
 
 
-Unreleased [file versioning](docs/public/file-history.md) adds explicit simple/trashcan policies, bounded archive browsing and exact file-version restoration. Global audit recording remains subject to Pro entitlement and separate positive acceptance.
+Unreleased [file versioning](docs/public/file-history.md) adds explicit simple/trashcan/staggered policies, caller-selected native external versioners, archive locations, bounded archive browsing and guarded file/directory restoration. Global audit recording remains subject to Pro entitlement and separate positive acceptance.
 
 Unreleased [core maintenance](docs/public/core-maintenance.md) exposes native error logs, bounded log snapshots, explicit package-level changes, target-syntax diagnostic locations, native profiles and authenticated metrics. Explicit index resets and stopped-owner database commands have separate operation choices and return native outcomes; callers coordinate backups, peers and restarts. These APIs do not configure the controller application's logging.

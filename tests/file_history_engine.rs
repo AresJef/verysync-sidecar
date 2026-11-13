@@ -604,3 +604,219 @@ async fn public_directory_restore_selects_nested_and_explicit_root_versions() ->
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn public_staggered_external_and_archive_locations_preserve_actual_versions() -> TestResult {
+    use verysync_sidecar::{ExternalVersioningCommand, VersionArchiveLocation};
+    let root = tempfile::Builder::new().prefix("vhu-").tempdir()?.keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let source = root.join("source");
+    let receive = root.join("receive");
+    let archive = root.join("explicit archive");
+    std::fs::create_dir(&source)?;
+    std::fs::create_dir(&archive)?;
+    let name = "sample 二 %.txt";
+    let old = b"old staggered sample";
+    let new = b"new version with distinct length";
+    let last = b"final external version data";
+    std::fs::write(source.join(name), old)?;
+    let (af, bf) = register(&a, &b, &source, &receive).await?;
+    let location = VersionArchiveLocation::BasicDirectory(TargetPath::local(&archive));
+    let changed = b
+        .client()
+        .set_version_archive_location(&bf.id, &location)
+        .await?;
+    assert!(changed.requested_fields_match && changed.configuration.filesystem_type == "basic");
+    assert_eq!(
+        changed.configuration.filesystem_path,
+        archive.to_str().ok_or("test path UTF8")?
+    );
+    let changed = b
+        .client()
+        .set_folder_versioning(
+            &bf.id,
+            FolderVersioningPolicy::Staggered {
+                max_age_seconds: 0,
+                cleanup_interval_seconds: 1,
+            },
+        )
+        .await?;
+    assert!(changed.requested_fields_match && changed.configuration.kind == "staggered");
+    assert_eq!(
+        changed
+            .configuration
+            .params
+            .get("maxAge")
+            .map(String::as_str),
+        Some("0")
+    );
+    assert!(!format!("{location:?}").contains(archive.to_str().ok_or("test path UTF8")?));
+    a.client().resume_folder(&af.id).await?;
+    b.client().resume_folder(&bf.id).await?;
+    a.client().request_scan(&af.id).await?;
+    data(&receive.join(name), old).await?;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    std::fs::write(source.join(name), new)?;
+    a.client().request_scan(&af.id).await?;
+    data(&receive.join(name), new).await?;
+    let history = b.client().folder_versions(&bf.id, None).await?;
+    assert!(history.0.get(name).is_some_and(|v| v.len() == 1));
+    let files = std::fs::read_dir(&archive)?
+        .map(|e| e.map(|e| e.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(files
+        .iter()
+        .any(|p| std::fs::read(p).ok().as_deref() == Some(old.as_slice())));
+    let default_archive = receive.join(".verysync").join("Archive");
+    assert!(!default_archive.exists() || std::fs::read_dir(default_archive)?.next().is_none());
+    let helper = root.join("external-helper.py");
+    let external = root.join("external archive");
+    std::fs::create_dir(&external)?;
+    std::fs::write(
+        &helper,
+        r#"import sys,json,shutil
+from pathlib import Path
+folder=Path(sys.argv[1]).resolve();rel=Path(sys.argv[2]);destination=Path(sys.argv[3]).resolve()
+assert not rel.is_absolute() and '..' not in rel.parts
+source=(folder/rel).resolve();assert source.is_relative_to(folder)
+mode='fail' if len(sys.argv)>4 and sys.argv[4]=='fail' else 'archive'
+(destination/('failed-invocation.json' if mode=='fail' else 'invocation.json')).write_text(json.dumps({'folder':str(folder),'file':str(rel)}))
+if mode=='fail':sys.exit(7)
+shutil.move(str(source),str(destination/'kept.bin'))
+"#,
+    )?;
+    let python = std::env::var("VERYSYNC_TEST_PYTHON")?;
+    let command = format!(
+        "\"{}\" \"{}\" \"%FOLDER_PATH%\" \"%FILE_PATH%\" \"{}\"",
+        python,
+        helper.display(),
+        external.display()
+    );
+    let command = ExternalVersioningCommand::new(command)?;
+    assert!(!format!("{command:?}").contains(helper.to_str().ok_or("test helper UTF8")?));
+    let changed = b
+        .client()
+        .set_folder_versioning(&bf.id, FolderVersioningPolicy::External { command })
+        .await?;
+    assert!(changed.requested_fields_match && changed.configuration.kind == "external");
+    assert_eq!(
+        changed.configuration.filesystem_path,
+        archive.to_str().ok_or("test path UTF8")?
+    );
+    std::fs::write(source.join(name), last)?;
+    a.client().request_scan(&af.id).await?;
+    data(&receive.join(name), last).await?;
+    assert_eq!(std::fs::read(external.join("kept.bin"))?, new);
+    let called: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(external.join("invocation.json"))?)?;
+    assert_eq!(called["file"], name);
+    assert_eq!(
+        Path::new(called["folder"].as_str().ok_or("native folder arg")?),
+        std::fs::canonicalize(&receive)?
+    );
+    let reset_location = b
+        .client()
+        .set_version_archive_location(&bf.id, &VersionArchiveLocation::FolderDefault)
+        .await?;
+    assert!(
+        reset_location.requested_fields_match
+            && reset_location.configuration.filesystem_path.is_empty()
+    );
+    let changed = b
+        .client()
+        .set_folder_versioning(
+            &bf.id,
+            FolderVersioningPolicy::Staggered {
+                max_age_seconds: 0,
+                cleanup_interval_seconds: 1,
+            },
+        )
+        .await?;
+    assert!(changed.requested_fields_match);
+    let final_bytes = b"final default archive generation with unique bytes";
+    std::fs::write(source.join(name), final_bytes)?;
+    a.client().request_scan(&af.id).await?;
+    data(&receive.join(name), final_bytes).await?;
+    let default_archive = receive.join(".verysync").join("Archive");
+    let default_files = std::fs::read_dir(&default_archive)?
+        .map(|e| e.map(|e| e.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(default_files
+        .iter()
+        .any(|p| std::fs::read(p).ok().as_deref() == Some(last.as_slice())));
+    let expiring = b
+        .client()
+        .set_folder_versioning(
+            &bf.id,
+            FolderVersioningPolicy::Staggered {
+                max_age_seconds: 1,
+                cleanup_interval_seconds: 1,
+            },
+        )
+        .await?;
+    assert!(expiring.requested_fields_match);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if std::fs::read_dir(&default_archive)?.next().is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok::<_, std::io::Error>(())
+    })
+    .await??;
+    assert!(files
+        .iter()
+        .any(|p| std::fs::read(p).ok().as_deref() == Some(old.as_slice())));
+    assert_eq!(std::fs::read(external.join("kept.bin"))?, new);
+    assert_eq!(std::fs::read(receive.join(name))?, final_bytes);
+    let failure = ExternalVersioningCommand::new(format!(
+        "\"{}\" \"{}\" \"%FOLDER_PATH%\" \"%FILE_PATH%\" \"{}\" fail",
+        python,
+        helper.display(),
+        external.display()
+    ))?;
+    assert!(
+        b.client()
+            .set_folder_versioning(
+                &bf.id,
+                FolderVersioningPolicy::External { command: failure }
+            )
+            .await?
+            .requested_fields_match
+    );
+    let refused = b"new source bytes deliberately refused by the external archiver";
+    std::fs::write(source.join(name), refused)?;
+    a.client().request_scan(&af.id).await?;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let status = b.client().folder_status(&bf.id).await?;
+            if status.pull_errors.is_some_and(|n| n > 0)
+                && external.join("failed-invocation.json").is_file()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok::<_, verysync_sidecar::Error>(())
+    })
+    .await??;
+    assert_eq!(std::fs::read(receive.join(name))?, final_bytes);
+    assert_eq!(std::fs::read(source.join(name))?, refused);
+    assert_eq!(std::fs::read(external.join("kept.bin"))?, new);
+    assert!(files
+        .iter()
+        .any(|p| std::fs::read(p).ok().as_deref() == Some(old.as_slice())));
+    for core in [&mut b, &mut a] {
+        let exit = core.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    }
+    assert_eq!(std::fs::read(source.join(name))?, refused);
+    eprintln!(
+        "public extended versioner evidence: {}",
+        serde_json::json!({"actual_staggered_native_policy_and_zero_age":true,"actual_explicit_basic_archive_location":true,"actual_old_bytes_in_selected_archive":true,"actual_default_archive_initially_empty":true,"actual_native_browse_from_selected_location":true,"actual_external_command_native_readback":true,"actual_external_callback_folder_and_file_arguments":true,"actual_external_callback_archives_old_bytes":true,"actual_explicit_default_location_restored":true,"actual_default_location_archives_next_remote_change":true,"actual_positive_native_age_cleanup_removes_observed_archive":true,"actual_previous_location_archive_not_migrated_or_cleaned":true,"actual_external_archived_bytes_retained":true,"actual_current_source_and_receiver_bytes_retained":true,"actual_private_command_and_location_debug":true,"actual_both_normal_owned_tree_exits":true,"actual_failed_external_callback_invoked":true,"actual_native_pull_error_after_callback_exit_seven":true,"actual_failed_callback_preserves_existing_receiver_bytes":true,"actual_failed_callback_preserves_new_source_bytes":true,"actual_failed_callback_preserves_both_previous_archives":true})
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}

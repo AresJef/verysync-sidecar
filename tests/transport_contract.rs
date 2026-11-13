@@ -773,6 +773,138 @@ async fn version_policy_preserves_unknown_archive_settings_and_reports_stale_rea
 }
 
 #[tokio::test]
+async fn extended_versioners_and_remote_archive_location_keep_unknowns_and_unknown_outcomes(
+) -> TestResult {
+    use verysync_sidecar::{
+        ExternalVersioningCommand, FolderId, FolderVersioningPolicy, PathStyle, TargetPath,
+        VersionArchiveLocation,
+    };
+    let id = FolderId::parse("archive-policy")?;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let folder = |versioning| {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"C:\\data","paused":false,"versioning":versioning}]}),
+        )
+    };
+    let before = serde_json::json!({"type":"simple","params":{"keep":"9","native":KEY},"cleanupIntervalS":3600,"fsPath":"C:\\old","fsType":"basic","nativeSecret":KEY});
+    let mut staggered = before.clone();
+    staggered["type"] = "staggered".into();
+    staggered["params"]["maxAge"] = "0".into();
+    staggered["cleanupIntervalS"] = 7.into();
+    let command = format!("\"target-program\" \"%FOLDER_PATH%\" \"%FILE_PATH%\" {KEY}");
+    let mut external = staggered.clone();
+    external["type"] = "external".into();
+    external["params"]["command"] = command.clone().into();
+    let archive = "\\\\owned-host\\share\\档案 %.bak";
+    let mut located = external.clone();
+    located["fsPath"] = archive.into();
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+        identity(),
+        identity(),
+        folder(before),
+        Reply::json(serde_json::json!({})),
+        folder(staggered.clone()),
+        identity(),
+        folder(staggered),
+        Reply::json(serde_json::json!({})),
+        folder(external.clone()),
+        identity(),
+        folder(external),
+        Reply::json(serde_json::json!({})),
+        folder(located.clone()),
+        identity(),
+        folder(located),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"folders":[]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let update = client
+        .set_folder_versioning(
+            &id,
+            FolderVersioningPolicy::Staggered {
+                max_age_seconds: 0,
+                cleanup_interval_seconds: 7,
+            },
+        )
+        .await?;
+    assert!(update.requested_fields_match);
+    let native = ExternalVersioningCommand::new(command.clone())?;
+    assert_eq!(native.native_command(), command);
+    assert!(!format!("{native:?}").contains(KEY));
+    let update = client
+        .set_folder_versioning(&id, FolderVersioningPolicy::External { command: native })
+        .await?;
+    assert!(update.requested_fields_match);
+    let location =
+        VersionArchiveLocation::BasicDirectory(TargetPath::remote(PathStyle::Windows, archive)?);
+    let update = client.set_version_archive_location(&id, &location).await?;
+    assert!(update.requested_fields_match);
+    assert!(!format!("{update:?} {location:?}").contains(KEY));
+    assert!(matches!(
+        client
+            .set_version_archive_location(&id, &VersionArchiveLocation::FolderDefault)
+            .await,
+        Err(Error::MutationOutcomeUnknown { .. })
+    ));
+    assert!(matches!(
+        client
+            .set_version_archive_location(
+                &id,
+                &VersionArchiveLocation::BasicDirectory(TargetPath::remote(
+                    PathStyle::Unix,
+                    "/wrong-style"
+                )?)
+            )
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    for text in [
+        "".to_owned(),
+        "   ".to_owned(),
+        "bad\ncommand".to_owned(),
+        "x".repeat(8193),
+    ] {
+        assert!(ExternalVersioningCommand::new(text).is_err());
+    }
+    assert!(client
+        .set_folder_versioning(
+            &id,
+            FolderVersioningPolicy::Staggered {
+                max_age_seconds: 0,
+                cleanup_interval_seconds: 0
+            }
+        )
+        .await
+        .is_err());
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 4);
+    for (index, request) in writes.iter().enumerate() {
+        let body: serde_json::Value =
+            serde_json::from_str(request.split("\r\n\r\n").nth(1).ok_or("body")?)?;
+        assert_eq!(body["versioning"]["params"]["keep"], "9");
+        assert_eq!(body["versioning"]["params"]["native"], KEY);
+        assert_eq!(body["versioning"]["nativeSecret"], KEY);
+        match index {
+            0 => {
+                assert_eq!(body["versioning"]["params"]["maxAge"], "0");
+                assert_eq!(body["versioning"]["cleanupIntervalS"], 7);
+            }
+            1 => assert_eq!(body["versioning"]["params"]["command"], command),
+            2 => assert_eq!(body["versioning"]["fsPath"], archive),
+            3 => assert_eq!(body["versioning"]["fsPath"], ""),
+            _ => unreachable!(),
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn exact_version_restore_encodes_native_map_and_retains_partial_errors() -> TestResult {
     use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
     let identity = || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));

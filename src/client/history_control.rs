@@ -1,7 +1,7 @@
 //! Explicit versioning policies and native archive operations, without retries.
 use super::{mutation_error, Client};
 use crate::{AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate};
-use crate::{DirectoryVersionOrder, VersionedDirectory};
+use crate::{DirectoryVersionOrder, VersionArchiveLocation, VersionedDirectory};
 use crate::{
     Error, FileVersionRestore, FileVersionRestoreReport, FolderId, FolderVersionHistory,
     FolderVersioningConfiguration, FolderVersioningPolicy, FolderVersioningUpdate,
@@ -330,11 +330,14 @@ impl Client {
             reason: "native folder versioning configuration has an unknown schema",
         })
     }
-    /// Change only the built-in policy, preserving the actual archive location
+    /// Change only the native policy, preserving the actual archive location
     /// and unknown/inactive parameters. Native PATCH merges parameter maps;
     /// disabling a policy therefore retains its unused parameter values.
-    /// No cleanup, restart, retry or rollback is
-    /// implicit. Readback is separate from actual archival/retention effects.
+    /// The SDK starts no cleanup task, restart, retry or rollback. Native
+    /// retention can follow the explicit policy. Readback is separate from
+    /// actual archival/retention effects.
+    /// External explicitly selects a caller-supplied command for execution by
+    /// the target core when archiving; it is not run by the controller SDK.
     pub async fn set_folder_versioning(
         &self,
         folder: &FolderId,
@@ -346,6 +349,63 @@ impl Client {
         let mut expected = self.read_folder_versioning(folder).await?;
         policy.apply(&mut expected)?;
         let operation = "set folder versioning policy";
+        self.write_folder_versioning(folder, expected, operation)
+            .await
+    }
+
+    /// Select the native archive directory without SDK migration of existing
+    /// archives. Native retention can clean the selected location. Target paths
+    /// are not opened or expanded on the controller.
+    /// The basic backend uses native target-relative/absolute/tilde semantics.
+    /// Changing location can make earlier archives absent from current browsing;
+    /// it does not migrate them or change an external versioner's command.
+    ///
+    /// ```rust,no_run
+    /// # async fn select(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+    /// use verysync_sidecar::VersionArchiveLocation;
+    /// let update = client.set_version_archive_location(
+    ///     folder, &VersionArchiveLocation::FolderDefault,
+    /// ).await?;
+    /// assert!(update.requested_fields_match);
+    /// # Ok(()) }
+    /// ```
+    pub async fn set_version_archive_location(
+        &self,
+        folder: &FolderId,
+        location: &VersionArchiveLocation,
+    ) -> Result<FolderVersioningUpdate> {
+        let path = match location {
+            VersionArchiveLocation::FolderDefault => "",
+            VersionArchiveLocation::BasicDirectory(path) => {
+                if path.style() != self.folder_path_style()? {
+                    return Err(Error::InvalidPath {
+                        reason: "archive path syntax differs from the target",
+                    });
+                }
+                let value = path.to_protocol()?;
+                if value.len() > 32768 {
+                    return Err(Error::InvalidPath {
+                        reason: "archive path exceeds its text bound",
+                    });
+                }
+                value
+            }
+        };
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let mut expected = self.read_folder_versioning(folder).await?;
+        expected.filesystem_path = path.to_owned();
+        expected.filesystem_type = "basic".to_owned();
+        self.write_folder_versioning(folder, expected, "set native version archive location")
+            .await
+    }
+
+    async fn write_folder_versioning(
+        &self,
+        folder: &FolderId,
+        expected: FolderVersioningConfiguration,
+        operation: &'static str,
+    ) -> Result<FolderVersioningUpdate> {
         let url = self.connection.folder_url(folder)?;
         self.connection
             .request_bytes(

@@ -271,6 +271,8 @@ def main():
         for name in bypass_names:
             env[name] = "127.0.0.1,localhost,::1"
         env["CARGO_NET_OFFLINE"] = "true"
+        # Short-lived external-versioner fixture only; the library installs no helper.
+        env["VERYSYNC_TEST_PYTHON"] = str(Path(sys.executable).resolve(strict=True))
         # Never accept a target supplied by an unrelated parent environment.
         env.pop("VERYSYNC_TEST_DISCOVERY_FORWARD_TARGET_FILE", None)
         env.pop("VERYSYNC_TEST_DISCOVERY_FORWARD_TOKEN", None)
