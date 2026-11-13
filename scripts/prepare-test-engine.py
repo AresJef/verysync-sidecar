@@ -171,6 +171,20 @@ def prepare(args):
         raise
 
 
+def windows_retained_process_image(kernel, process):
+    """Return an image or a proven native exit; inaccessible live state fails."""
+    import ctypes
+    from ctypes import wintypes
+    image = ctypes.create_unicode_buffer(32768)
+    size = wintypes.DWORD(len(image))
+    if kernel.QueryFullProcessImageNameW(process, 0, image, ctypes.byref(size)):
+        return image.value
+    error = ctypes.get_last_error()
+    if kernel.WaitForSingleObject(process, 0) == 0:  # WAIT_OBJECT_0, exact handle
+        return None
+    raise ctypes.WinError(error)
+
+
 def windows_processes_for_binary(binary):
     """Query native process image paths without WMI/provider startup or a shell."""
     import ctypes
@@ -195,6 +209,8 @@ def windows_processes_for_binary(binary):
     kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD,
                                                 wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
     kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel.CloseHandle.restype = wintypes.BOOL
 
@@ -212,17 +228,14 @@ def windows_processes_for_binary(binary):
             if time.monotonic() > deadline:
                 raise TimeoutError("native test-process inventory exceeded its deadline")
             if ntpath.normcase(entry.szExeFile) == ntpath.basename(expected):
-                process = kernel.OpenProcess(0x1000, False, entry.th32ProcessID)  # QUERY_LIMITED_INFORMATION
+                process = kernel.OpenProcess(0x101000, False, entry.th32ProcessID)  # QUERY_LIMITED_INFORMATION | SYNCHRONIZE
                 if not process:
                     if ctypes.get_last_error() != 87:  # A process may already have exited.
                         raise ctypes.WinError(ctypes.get_last_error())
                 else:
                     try:
-                        image = ctypes.create_unicode_buffer(32768)
-                        size = wintypes.DWORD(len(image))
-                        if not kernel.QueryFullProcessImageNameW(process, 0, image, ctypes.byref(size)):
-                            raise ctypes.WinError(ctypes.get_last_error())
-                        if ntpath.normcase(ntpath.normpath(image.value)) == expected:
+                        image = windows_retained_process_image(kernel, process)
+                        if image is not None and ntpath.normcase(ntpath.normpath(image)) == expected:
                             matches.append(entry.th32ProcessID)
                     finally:
                         kernel.CloseHandle(process)
@@ -277,7 +290,15 @@ def main():
     if args.command == "prepare":
         prepare(args)
     elif args.command == "list-owned-processes":
-        print(json.dumps({"pids": owned_processes()}))
+        try:
+            print(json.dumps({"pids": owned_processes()}))
+        except OSError as error:
+            # Diagnostic classification only: never print command arguments,
+            # native paths, private state or exception payloads.
+            print(json.dumps({"observation_error": type(error).__name__,
+                              "winerror": getattr(error, "winerror", None),
+                              "errno": error.errno}))
+            raise SystemExit(1) from None
     else:
         check_cleanup()
 

@@ -413,10 +413,16 @@ async fn inventory(binary: &Path) -> TestResult<Vec<u32>> {
             .arg("list-owned-processes")
             .env("VERYSYNC_TEST_BINARY", binary)
             .output()?;
-        require(
-            output.status.success(),
-            "exact private process observation failed",
-        )?;
+        if !output.status.success() {
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+            eprintln!(
+                "exact private process observation error codes: {}",
+                json!({
+                "exit":output.status.code(), "winerror":value["winerror"].as_i64(),
+                "errno":value["errno"].as_i64()})
+            );
+            return Err("exact private process observation failed".into());
+        }
         let value: Value = serde_json::from_slice(&output.stdout)?;
         value["pids"]
             .as_array()

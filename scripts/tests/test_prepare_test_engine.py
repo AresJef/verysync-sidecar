@@ -1,5 +1,6 @@
 """Safety contracts for the explicit CI download helper, with synthetic archives."""
 import importlib.util
+import ctypes
 import os
 from pathlib import Path
 import shutil
@@ -8,7 +9,8 @@ import subprocess
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
+from types import SimpleNamespace
 import warnings
 import zipfile
 
@@ -20,6 +22,31 @@ ROOT = "verysync-macos-arm64-v2.33.2"
 
 
 class ProcessInventoryContracts(unittest.TestCase):
+    def test_windows_query_failure_requires_proven_exit_and_live_failure_is_not_empty(self):
+        # Synthetic native-call verdicts, distinct from the real OS inventory test.
+        for wait in [0, 258, 0xffffffff]:
+            kernel = SimpleNamespace(QueryFullProcessImageNameW=Mock(return_value=False),
+                                     WaitForSingleObject=Mock(return_value=wait))
+            with patch.object(ctypes, "get_last_error", return_value=5, create=True), \
+                 patch.object(ctypes, "WinError", side_effect=lambda code: OSError(code, "synthetic query failure"), create=True):
+                if wait == 0:
+                    self.assertIsNone(HELPER.windows_retained_process_image(kernel, 123))
+                else:
+                    with self.assertRaises(OSError) as raised:
+                        HELPER.windows_retained_process_image(kernel, 123)
+                    self.assertEqual(raised.exception.errno, 5)
+            kernel.WaitForSingleObject.assert_called_once_with(123, 0)
+
+    def test_windows_successful_image_read_does_not_require_or_infer_exit(self):
+        image_path = r"C:\private owned\program.exe"
+        def query(handle, flags, image, size):
+            image.value = image_path
+            return True
+        kernel = SimpleNamespace(QueryFullProcessImageNameW=Mock(side_effect=query),
+                                 WaitForSingleObject=Mock())
+        self.assertEqual(HELPER.windows_retained_process_image(kernel, 123), image_path)
+        kernel.WaitForSingleObject.assert_not_called()
+
     def test_live_private_process_is_found_through_an_absolute_path_alias(self):
         with tempfile.TemporaryDirectory(prefix="vs-process-test-") as root:
             parent = Path(root)
