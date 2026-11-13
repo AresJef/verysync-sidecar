@@ -82,7 +82,16 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
         core.client().network_configuration().await?.extra["autoUpgradeIntervalH"],
         0
     );
-    let checked = core.client().check_kernel_upgrade().await?;
+    let checked = core
+        .client()
+        .check_kernel_upgrade()
+        .await
+        .map_err(|error| {
+            if let Error::Http { response } = &error {
+                report_upgrade_diagnostic("provider-check", response.body_bytes());
+            }
+            error
+        })?;
     assert_eq!(checked.running, "v2.33.1");
     assert_eq!(
         checked.latest, "v2.33.2",
@@ -678,6 +687,7 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
         let check = core
             .run_cli_upgrade(KernelUpgradeCommand::Check, Duration::from_secs(20))
             .await?;
+        report_upgrade_diagnostic("cli-check", check.diagnostic.body_bytes());
         eprintln!(
             "native CLI upgrade check: code={:?} output_bytes={}",
             check.code,
@@ -699,6 +709,7 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
         let upgraded = core
             .run_cli_upgrade(command, Duration::from_secs(30))
             .await?;
+        report_upgrade_diagnostic("cli-upgrade", upgraded.diagnostic.body_bytes());
         std::fs::write(
             root.join("cli-upgrade-output.bin"),
             upgraded.diagnostic.body_bytes(),
@@ -1194,4 +1205,48 @@ async fn cancelled_streamed_upload_ends_actual_partial_request_without_program_r
         "actual_final_normal_tree_exit":true})
     );
     Ok(())
+}
+
+fn report_upgrade_diagnostic(stage: &str, bytes: &[u8]) {
+    use sha2::{Digest, Sha256};
+    let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
+    let categories: [(&str, &[&str]); 9] = [
+        (
+            "certificate",
+            &["x509", "certificate", "certgetcertificatechain"],
+        ),
+        ("dns", &["no such host", "lookup ", "name resolution"]),
+        ("tls", &["tls:", "handshake", "ssl"]),
+        ("http_forbidden", &["403", "forbidden"]),
+        ("timeout", &["timeout", "deadline exceeded"]),
+        (
+            "missing_matching_release",
+            &[
+                "no version",
+                "no release",
+                "not found",
+                "no asset",
+                "unsupported platform",
+            ],
+        ),
+        (
+            "connection",
+            &["connectex", "connection refused", "network is unreachable"],
+        ),
+        ("proxy", &["proxyconnect", "proxy error"]),
+        ("json", &["invalid character", "json:", "unmarshal"]),
+    ];
+    let tags = categories
+        .iter()
+        .filter(|(_, patterns)| patterns.iter().any(|p| text.contains(p)))
+        .map(|(tag, _)| *tag)
+        .collect::<Vec<_>>();
+    let sha = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    eprintln!(
+        "Native upgrade private diagnostic classification: {}",
+        serde_json::json!({"stage":stage,"bytes":bytes.len(),"sha256":sha,"categories":tags})
+    );
 }
