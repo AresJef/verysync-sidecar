@@ -67,7 +67,7 @@ async fn actual_scan_scopes_schedule_and_watcher_preserve_files() -> TestResult 
         core.client().resume_folder(id).await?;
         indexed_files(core.client(), id, 0).await?;
     }
-    let first = Path::new("one").join("二 ?%.bin");
+    let first = Path::new("one").join("二 空格 %.bin");
     let second = Path::new("two.bin");
     for path in [&first, second, Path::new("unselected.bin")] {
         std::fs::write(a_path.join(path), b"scope bytes")?;
