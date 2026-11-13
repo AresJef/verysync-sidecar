@@ -117,6 +117,12 @@ pub enum Error {
         /// A description excluding paths, arguments and captured program output.
         reason: &'static str,
     },
+    /// The fixed kernel's provider has no matching downloadable release for
+    /// this target. This is a known refusal, separate from SDK artifact listing.
+    UpgradeReleaseUnavailable {
+        /// Actual bounded provider refusal; private bytes require explicit inspection.
+        response: ResponseDiagnostic,
+    },
     /// An owned program exited before the required managed operation completed.
     ManagedProcessExited {
         /// The credential-free stage that could not complete.
@@ -355,6 +361,7 @@ impl fmt::Display for Error {
             Self::ShareAlreadyConfigured { .. } => formatter.write_str("sharing group is already configured locally"),
             Self::ScanObservationLost => formatter.write_str("scan observation lost continuity; query state explicitly"),
             Self::ProgramRejected { reason } => write!(formatter, "selected program rejected: {reason}"),
+            Self::UpgradeReleaseUnavailable { .. } => formatter.write_str("kernel upgrade provider has no matching release archive"),
             Self::ManagedProcessExited { operation, code, .. } => write!(formatter, "owned program exited while attempting to {operation} (code {code:?})"),
             Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),
             Self::StateBackupRejected { reason } => write!(formatter, "private state copy rejected: {reason}"),

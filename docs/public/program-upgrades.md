@@ -88,6 +88,16 @@ does not establish that separate upload/trigger handlers are unavailable.
 provider feed, independent of `OfficialProgram`'s fixed SDK catalog. A successful
 check cannot atomically pin a subsequent provider-selected upgrade.
 
+`UpgradeReleaseUnavailable` preserves the fixed kernel's known no-matching-release
+refusal. The [official v2.33.2 provider metadata](https://upgrades.verysync.cn/meta.json)
+observed on 2026-11-13 omits Windows ARM64,
+although that architecture has a fixed official download. Availability checks
+and provider-trigger requests therefore refuse that target. The absence is
+separately tested without claiming positive provider-mediated upgrading there.
+Explicit program selection, archive upload and CLI `FromUrl` remain separate
+paths with their own acceptance. Positive Windows ARM64 provider upgrading
+remains pending; this condition does not remove it from the project scope.
+
 `request_server_selected_upgrade` explicitly asks that provider to choose and
 install a release. It can overwrite the kernel executable and end the process.
 The provider's own asset transport and verification are upstream behavior; the
@@ -112,6 +122,8 @@ program bytes and process state. Use a dedicated writable executable copy for
 kernel-managed upgrades, never a shared program or immutable cache generation.
 After `wait_for_exit`, verify the new program independently and explicitly pass
 its new hash to `restart_with_program`; the old pinned hash remains stale.
+Manual archive upload does not depend on a successful provider availability
+check. The SDK performs no automatic fallback from a missing provider release.
 
 ## Explicit contained CLI operation
 
@@ -130,6 +142,9 @@ was installed. Cancellation requests exact cleanup and retains state until it
 ends; a program mutation may already have happened. The old clean-generation
 backup claim is invalidated even by a check. Explicitly start/stop before a new
 snapshot, and verify/select new executable bytes before restarting an upgrade.
+`KernelUpgradeExit::release_unavailable` identifies only a `Check`/`Provider`
+exit 1 containing the fixed kernel's known missing-release diagnostic; other
+failures stay unclassified. `FromUrl` errors do not set this flag.
 
 For the tested v2.33.1-to-v2.33.2 pair, the provider CLI actually replaces the
 program and exits 4, while a forced archive URL exits 0. Both are checked using

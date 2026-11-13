@@ -82,22 +82,6 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
         core.client().network_configuration().await?.extra["autoUpgradeIntervalH"],
         0
     );
-    let checked = core
-        .client()
-        .check_kernel_upgrade()
-        .await
-        .map_err(|error| {
-            if let Error::Http { response } = &error {
-                report_upgrade_diagnostic("provider-check", response.body_bytes());
-            }
-            error
-        })?;
-    assert_eq!(checked.running, "v2.33.1");
-    assert_eq!(
-        checked.latest, "v2.33.2",
-        "provider changed: no unpinned program may be fetched"
-    );
-    assert!(checked.newer && !checked.major_newer);
     let data = root.join("data");
     std::fs::create_dir(&data)?;
     std::fs::write(data.join("retained.bin"), b"native upgrade retained bytes")?;
@@ -128,6 +112,65 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     })
     .await??;
     let before = core.client().folder(&id).await?;
+    if !upload {
+        match core
+            .client()
+            .check_kernel_upgrade()
+            .await
+            .inspect_err(|error| {
+                if let Error::Http { response } | Error::UpgradeReleaseUnavailable { response } =
+                    error
+                {
+                    report_upgrade_diagnostic("provider-check", response.body_bytes());
+                }
+            }) {
+            Ok(checked) => {
+                assert_eq!(checked.running, "v2.33.1");
+                assert_eq!(
+                    checked.latest, "v2.33.2",
+                    "provider changed: no unpinned program may be fetched"
+                );
+                assert!(checked.newer && !checked.major_newer);
+            }
+            Err(Error::UpgradeReleaseUnavailable { .. }) => {
+                assert_eq!(
+                    (std::env::consts::OS, std::env::consts::ARCH),
+                    ("windows", "aarch64")
+                );
+                let config = std::fs::read(base.state_directory().join("setting.dat"))?;
+                assert!(matches!(
+                    core.client().request_server_selected_upgrade().await,
+                    Err(Error::UpgradeReleaseUnavailable { .. })
+                ));
+                assert_eq!(Sha256::digest(std::fs::read(&program)?).as_slice(), old_sha);
+                assert_eq!(
+                    std::fs::read(base.state_directory().join("setting.dat"))?,
+                    config
+                );
+                assert_eq!(core.client().system_status().await?.device_id, identity);
+                assert_eq!(core.client().version().await?.version, "v2.33.1");
+                assert_eq!(core.client().folder_status(&id).await?.local_files, Some(1));
+                assert_eq!(
+                    std::fs::read(data.join("retained.bin"))?,
+                    b"native upgrade retained bytes"
+                );
+                let exit = core.shutdown(Duration::from_secs(10)).await?;
+                assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+                std::fs::remove_dir_all(root)?;
+                println!(
+                    "public provider release absence evidence: {}",
+                    serde_json::json!({
+                    "actual_get_reports_typed_no_matching_release":true,"actual_post_reports_typed_no_matching_release":true,
+                    "actual_executable_sha_and_configuration_unchanged":true,"actual_old_version_and_identity_retained":true,
+                    "actual_folder_index_and_sample_bytes_retained":true,"actual_normal_owned_tree_exit":true,
+                    "positive_provider_upgrade":"pending","manual_upload_case":"separate_required_case"})
+                );
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+
     let result = if upload {
         let invalid = root.join("bad.zip");
         std::fs::write(&invalid, b"invalid archive")?;
@@ -199,7 +242,7 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
         "public native kernel upgrade evidence: {}",
         serde_json::json!({"mode":if upload { "streamed_archive" } else { "provider" },
         "default_check_rejected_without_program_change":true,"manual_periodic_checks_disabled":true,
-        "actual_provider_detects_2331_to_2332":true,"actual_old_program_normally_stopped":true,
+        "actual_explicit_mode_prerequisites_checked":true,"actual_old_program_normally_stopped":true,
         "actual_owned_program_replaced_with_fixed_baseline_sha":true,"actual_new_version_authenticated":true,
         "actual_identity_and_folder_keys_preserved":true,"actual_old_index_loaded_without_initial_scan":true,
         "actual_sample_bytes_preserved":true,"actual_new_tree_normally_stopped":true})
@@ -693,11 +736,22 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
             check.code,
             check.diagnostic.body_bytes().len()
         );
-        assert!(check.tree_stopped && check.code.is_some());
+        assert!(check.tree_stopped);
+        assert_eq!(
+            check.code,
+            Some(if check.release_unavailable { 1 } else { 0 })
+        );
+        if check.release_unavailable {
+            assert_eq!(
+                (std::env::consts::OS, std::env::consts::ARCH),
+                ("windows", "aarch64")
+            );
+        }
         assert_eq!(Sha256::digest(std::fs::read(&program)?).as_slice(), old_sha);
         core.restart(Duration::from_secs(30)).await?;
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+        let unchanged_config = std::fs::read(base.state_directory().join("setting.dat"))?;
         let command = if provider {
             KernelUpgradeCommand::Provider
         } else {
@@ -719,6 +773,34 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
             upgraded.code,
             upgraded.diagnostic.body_bytes().len()
         );
+        if provider && upgraded.release_unavailable {
+            assert_eq!(
+                (std::env::consts::OS, std::env::consts::ARCH),
+                ("windows", "aarch64")
+            );
+            assert_eq!(upgraded.code, Some(1));
+            assert!(upgraded.tree_stopped);
+            assert_eq!(Sha256::digest(std::fs::read(&program)?).as_slice(), old_sha);
+            assert_eq!(
+                std::fs::read(base.state_directory().join("setting.dat"))?,
+                unchanged_config
+            );
+            core.restart(Duration::from_secs(30)).await?;
+            assert_eq!(core.program_info().version, "v2.33.1");
+            assert_eq!(core.client().system_status().await?.device_id, identity);
+            let exit = core.shutdown(Duration::from_secs(10)).await?;
+            assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+            std::fs::remove_dir_all(root)?;
+            println!(
+                "public CLI provider release absence evidence: {}",
+                serde_json::json!({
+                "actual_cli_reports_known_missing_release_and_exit1":true,"actual_cli_containment_stopped":true,
+                "actual_old_program_sha_and_configuration_retained":true,"actual_old_version_identity_restarts":true,
+                "actual_normal_owned_tree_exit":true,"positive_provider_upgrade":"pending"})
+            );
+            continue;
+        }
+        assert!(!upgraded.release_unavailable);
         assert!(upgraded.tree_stopped);
         assert_eq!(upgraded.code, Some(if provider { 4 } else { 0 }));
         let actual: [u8; 32] = Sha256::digest(std::fs::read(&program)?).into();
@@ -1222,6 +1304,7 @@ fn report_upgrade_diagnostic(stage: &str, bytes: &[u8]) {
         (
             "missing_matching_release",
             &[
+                "couldn't find a release to download",
                 "no version",
                 "no release",
                 "not found",

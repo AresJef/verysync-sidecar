@@ -14,6 +14,49 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn known_provider_release_absence_is_typed_without_retry_or_erasing_other_failures(
+) -> TestResult {
+    let missing = b"couldn't find a release to download\n".to_vec();
+    let http = |body: Vec<u8>| Reply {
+        status: 500,
+        body,
+        headers: String::new(),
+        delay: Duration::ZERO,
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"arm64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        http(missing.clone()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        http(missing.clone()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        http(format!("couldn't find a release to download but unknown: {KEY}").into_bytes()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(
+        matches!(client.check_kernel_upgrade().await,Err(Error::UpgradeReleaseUnavailable{response})if response.body_bytes()==missing)
+    );
+    assert!(
+        matches!(client.request_server_selected_upgrade().await,Err(Error::UpgradeReleaseUnavailable{response})if response.status()==500)
+    );
+    let error = client.request_server_selected_upgrade().await.unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("POST "))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn upgrade_metadata_requires_flags_and_redacts_unknown_values() -> TestResult {
     let mut replies = vec![
         Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),

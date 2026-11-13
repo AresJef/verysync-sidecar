@@ -2,6 +2,12 @@
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 
+pub(crate) const NO_MATCHING_RELEASE: &[u8] = b"couldn't find a release to download";
+pub(crate) fn is_missing_release(response: &crate::ResponseDiagnostic) -> bool {
+    response.status() == 500
+        && response.body_bytes().strip_suffix(b"\n") == Some(NO_MATCHING_RELEASE)
+}
+
 /// The kernel's own provider check. It may use a moving release feed and makes
 /// no archive checksum, compatibility or successful installation guarantee.
 #[derive(Clone, Deserialize)]

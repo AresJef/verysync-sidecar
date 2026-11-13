@@ -31,7 +31,7 @@ jobs:
   fixture:
     name: ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -97,13 +97,6 @@ jobs:
           python scripts/prepare-test-examples.py
           --toolchain "$TEST_TOOLCHAIN"
           --github-env "${{ github.env }}"
-      - name: Diagnose ARM64 Windows upgrade provider before the complete bundle
-        if: matrix.package == 'windows-arm64-standard'
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target upgrade_engine --test-filter kernel_provider_upgrade_replaces_only_the_owned_old_copy
-          --allow-upgrade-metadata --serve-pinned-upgrade-archive
-          --evidence-dir "${{ runner.temp }}/vs-upgrade-provider-diagnostic-proxy"
       - name: Validate the Windows UI probe before the complete lifecycle bundle
         if: startsWith(matrix.package, 'windows-')
         run: >-

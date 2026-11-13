@@ -25,7 +25,8 @@ impl Client {
                 None,
                 false,
             )
-            .await?;
+            .await
+            .map_err(classify_release_unavailable)?;
         let value: KernelUpgradeCheck =
             serde_json::from_slice(&body).map_err(|_| Error::InvalidResponse {
                 operation,
@@ -60,7 +61,8 @@ impl Client {
                 None,
                 true,
             )
-            .await?;
+            .await
+            .map_err(classify_release_unavailable)?;
         acknowledge(operation, status, body)
     }
 
@@ -120,6 +122,24 @@ impl Client {
             .request_prepared(operation, request, true)
             .await?;
         acknowledge(operation, status, body)
+    }
+}
+
+fn classify_release_unavailable(error: Error) -> Error {
+    match error {
+        Error::Http { response } if crate::upgrades::is_missing_release(&response) => {
+            Error::UpgradeReleaseUnavailable { response }
+        }
+        Error::MutationOutcomeUnknown { operation, source } => match *source {
+            Error::Http { response } if crate::upgrades::is_missing_release(&response) => {
+                Error::UpgradeReleaseUnavailable { response }
+            }
+            source => Error::MutationOutcomeUnknown {
+                operation,
+                source: Box::new(source),
+            },
+        },
+        other => other,
     }
 }
 

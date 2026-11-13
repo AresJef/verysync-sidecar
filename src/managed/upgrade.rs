@@ -39,6 +39,9 @@ pub struct KernelUpgradeExit {
     pub code: Option<i32>,
     /// Exact helper containment has ended, including descendant cleanup.
     pub tree_stopped: bool,
+    /// True only for native exit 1 containing the fixed kernel's exact known
+    /// no-matching-release diagnostic. Other failures remain unclassified.
+    pub release_unavailable: bool,
     /// Output can contain private data; explicitly inspect only when needed.
     pub diagnostic: ProcessDiagnostic,
 }
@@ -192,6 +195,11 @@ impl ManagedInstance {
                     Ok(KernelUpgradeExit {
                         code: status.code(),
                         tree_stopped: true,
+                        release_unavailable: !matches!(command, KernelUpgradeCommand::FromUrl(_))
+                            && status.code() == Some(1)
+                            && bytes
+                                .windows(crate::upgrades::NO_MATCHING_RELEASE.len())
+                                .any(|w| w == crate::upgrades::NO_MATCHING_RELEASE),
                         diagnostic: ProcessDiagnostic::new(bytes),
                     })
                 })();
