@@ -14,6 +14,116 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn scheduling_partial_bandwidth_and_priority_scope_preserve_protocol_and_failures(
+) -> TestResult {
+    use verysync_sidecar::{
+        BandwidthPatch, FolderId, FolderPullOrder, ListPage, PathStyle, TargetPath,
+    };
+    let folder = serde_json::json!({"id":"scope /?%","label":"synthetic","path":"/synthetic","paused":false,"order":"alphabetic","secret":KEY});
+    let options = serde_json::json!({"maxSendKbps":0,"maxRecvKbps":0,"limitBandwidthInLan":false,"secret":KEY});
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({})),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"options":options})),
+        Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"folders":[folder.clone()]})),Reply::json(serde_json::json!({})),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"folders":[folder.clone()]})),Reply::json(serde_json::json!({"progress":[],"queued":[{"name":"last ?%.bin","type":"FILE_INFO_TYPE_FILE","size":1}],"rest":[],"page":2,"perpage":3})),
+        Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"folders":[folder]})),Reply::json(serde_json::json!({"queued":[]})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("scope /?%")?;
+    let result = client
+        .update_bandwidth_configuration(&BandwidthPatch::default().max_send_kib_per_second(64))
+        .await?;
+    assert!(!result.requested_fields_match && result.configuration.max_send_kib_per_second == 0);
+    assert!(!format!("{result:?}").contains(KEY));
+    let order = client
+        .set_folder_pull_order(&folder, &FolderPullOrder::LargestFirst)
+        .await?;
+    assert!(!order.requested_order_match);
+    assert_eq!(order.configuration.extra["secret"], KEY);
+    assert!(!format!("{order:?}").contains(KEY));
+    assert!(client
+        .set_folder_pull_order(&folder, &FolderPullOrder::Unknown(KEY.into()))
+        .await
+        .is_err());
+    for patch in [
+        BandwidthPatch::default(),
+        BandwidthPatch::default().max_receive_kib_per_second(u32::MAX),
+    ] {
+        assert!(client.update_bandwidth_configuration(&patch).await.is_err());
+    }
+    let file = TargetPath::remote(PathStyle::Unix, "last ?%.bin")?;
+    let page = ListPage::new(2, 3)?;
+    let need = client.prioritize_file(&folder, &file, page).await?;
+    assert_eq!(need.queued[0].name, "last ?%.bin");
+    let error = client
+        .prioritize_file(&folder, &file, page)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("POST ") || r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(writes.len(), 4);
+    assert!(writes[0].starts_with("PATCH /prefix/rest/config/options "));
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split_once("\r\n\r\n").unwrap().1)?;
+    assert_eq!(body, serde_json::json!({"maxSendKbps":64}));
+    let target = writes[2]
+        .split_whitespace()
+        .nth(1)
+        .ok_or("priority target missing")?;
+    let url = url::Url::parse(&format!("http://synthetic.invalid{target}"))?;
+    assert_eq!(
+        url.query_pairs().collect::<Vec<_>>(),
+        vec![
+            ("folder".into(), "scope /?%".into()),
+            ("file".into(), "last ?%.bin".into()),
+            ("page".into(), "2".into()),
+            ("perpage".into(), "3".into())
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn priority_refuses_paused_or_changed_targets_and_device_rates_do_not_overflow() -> TestResult
+{
+    use verysync_sidecar::{DeviceId, DevicePatch, FolderId, ListPage, TargetPath};
+    let remote = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"folders":[{"id":"scope","label":"synthetic","path":"/synthetic","paused":true}]})),
+        Reply::json(serde_json::json!({"myID":remote})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let file = TargetPath::remote(verysync_sidecar::PathStyle::Unix, "relative.bin")?;
+    let folder = FolderId::parse("scope")?;
+    let page = ListPage::new(1, 10)?;
+    assert!(matches!(
+        client.prioritize_file(&folder, &file, page).await,
+        Err(Error::FolderPaused { .. })
+    ));
+    assert!(matches!(
+        client.prioritize_file(&folder, &file, page).await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert!(client
+        .update_device(
+            &DeviceId::parse(remote)?,
+            &DevicePatch::default().max_send_kib_per_second(u32::MAX)
+        )
+        .await
+        .is_err());
+    let requests = server.finish().await?;
+    assert!(requests
+        .iter()
+        .all(|r| !r.starts_with("POST ") && !r.starts_with("PATCH ")));
+    Ok(())
+}
+
+#[tokio::test]
 async fn ignore_http_success_parse_rejection_is_typed_and_get_preserves_stored_error() -> TestResult
 {
     use verysync_sidecar::{FolderId, IgnorePatterns};

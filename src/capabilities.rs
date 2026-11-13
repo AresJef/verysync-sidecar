@@ -56,6 +56,8 @@ pub enum Capability {
     ScanControl,
     /// Exact ignore-file replacement, parser state and built-in default reset.
     IgnorePatterns,
+    /// File pull order, explicit priority pages and global/per-device limits.
+    TransferScheduling,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -229,6 +231,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::LocalSync),
+    LibraryCapability {
+        capability: Capability::TransferScheduling,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::EnterpriseRemoteManagement),
     planned(Capability::AuxiliaryControls),
 ];

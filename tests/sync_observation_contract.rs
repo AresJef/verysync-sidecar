@@ -107,3 +107,23 @@ fn ignore_snapshots_preserve_null_patterns_parse_errors_and_private_directives()
         assert!(serde_json::from_value::<IgnoreSnapshot>(malformed).is_err());
     }
 }
+
+#[test]
+fn scheduling_preserves_unknown_orders_and_bandwidth_patch_uses_kib_wire_fields() {
+    use verysync_sidecar::{BandwidthPatch, FolderPullOrder, GlobalBandwidthConfig};
+    let order: FolderPullOrder = serde_json::from_value(json!("future-private-order")).unwrap();
+    assert!(matches!(order, FolderPullOrder::Unknown(_)));
+    assert!(!format!("{order:?}").contains("private"));
+    let patch = BandwidthPatch::default()
+        .max_send_kib_per_second(64)
+        .max_receive_kib_per_second(0)
+        .limit_in_lan(true);
+    assert_eq!(
+        serde_json::to_value(patch).unwrap(),
+        json!({"maxSendKbps":64,"maxRecvKbps":0,"limitBandwidthInLan":true})
+    );
+    let actual:GlobalBandwidthConfig=serde_json::from_value(json!({"maxSendKbps":64,"maxRecvKbps":0,"limitBandwidthInLan":true,"future":"private-secret"})).unwrap();
+    assert_eq!(actual.max_send_kib_per_second, 64);
+    assert!(actual.limit_in_lan);
+    assert!(!format!("{actual:?}").contains("private"));
+}
