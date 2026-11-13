@@ -49,6 +49,20 @@ pub struct DeviceConfig {
     /// not proof that every transport is disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_transports: Option<Vec<DeviceTransport>>,
+    /// Per-device upload limit in KiB/s; zero removes this device limiter.
+    #[serde(
+        rename = "maxSendKbps",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_send_kib_per_second: Option<u32>,
+    /// Per-device download limit in KiB/s; independent of the global limiter.
+    #[serde(
+        rename = "maxRecvKbps",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_receive_kib_per_second: Option<u32>,
     /// Other actual fields. Values can be sensitive; Debug omits them.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -78,6 +92,20 @@ pub struct DeviceDefaults {
     /// Actual default selectors, if supplied. Empty follows the engine policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_transports: Option<Vec<DeviceTransport>>,
+    /// Per-device upload limit in KiB/s; zero removes this device limiter.
+    #[serde(
+        rename = "maxSendKbps",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_send_kib_per_second: Option<u32>,
+    /// Per-device download limit in KiB/s; independent of the global limiter.
+    #[serde(
+        rename = "maxRecvKbps",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_receive_kib_per_second: Option<u32>,
     /// Unmodeled defaults, preserved verbatim when creating a peer.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -106,6 +134,10 @@ pub struct DevicePatch {
     pub(crate) paused: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) allowed_transports: Option<Vec<DeviceTransport>>,
+    #[serde(rename = "maxSendKbps", skip_serializing_if = "Option::is_none")]
+    pub(crate) max_send_kib_per_second: Option<u32>,
+    #[serde(rename = "maxRecvKbps", skip_serializing_if = "Option::is_none")]
+    pub(crate) max_receive_kib_per_second: Option<u32>,
 }
 impl DevicePatch {
     /// Set the display name, including an explicitly empty name.
@@ -135,13 +167,35 @@ impl DevicePatch {
         self.allowed_transports = Some(values);
         self
     }
+    /// Set this peer's upload limit in KiB/s; zero removes only this limiter.
+    pub fn max_send_kib_per_second(mut self, value: u32) -> Self {
+        self.max_send_kib_per_second = Some(value);
+        self
+    }
+    /// Set this peer's download limit in KiB/s; zero removes only this limiter.
+    pub fn max_receive_kib_per_second(mut self, value: u32) -> Self {
+        self.max_receive_kib_per_second = Some(value);
+        self
+    }
     pub(crate) fn validate(&self, require_fields: bool) -> Result<()> {
+        for rate in [
+            self.max_send_kib_per_second,
+            self.max_receive_kib_per_second,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            crate::scheduling::validate_rate(rate)?;
+        }
+
         if require_fields
             && self.name.is_none()
             && self.addresses.is_none()
             && self.compression.is_none()
             && self.paused.is_none()
             && self.allowed_transports.is_none()
+            && self.max_send_kib_per_second.is_none()
+            && self.max_receive_kib_per_second.is_none()
         {
             return Err(Error::InvalidConfiguration {
                 reason: "device patch must contain at least one field",
@@ -183,6 +237,12 @@ impl DevicePatch {
                 .as_ref()
                 .is_none_or(|v| *v == value.compression)
             && self.paused.is_none_or(|v| v == value.paused)
+            && self
+                .max_send_kib_per_second
+                .is_none_or(|v| value.max_send_kib_per_second == Some(v))
+            && self
+                .max_receive_kib_per_second
+                .is_none_or(|v| value.max_receive_kib_per_second == Some(v))
             && self
                 .allowed_transports
                 .as_ref()

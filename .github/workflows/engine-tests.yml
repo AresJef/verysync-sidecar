@@ -122,7 +122,9 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target network --allow-private-discovery
           --evidence-dir "${{ runner.temp }}/vs-network-proxy"
-      - name: Verify actual synchronization snapshots, scans, watchers and ignore rules
+      - name: Verify actual synchronization, scans, ignores, priority and bandwidth
+        env:
+          VERYSYNC_BANDWIDTH_PHASE: acceptance
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target sync_observation

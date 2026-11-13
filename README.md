@@ -65,6 +65,10 @@ The unreleased [ignore-pattern API](docs/public/ignore-patterns.md) preserves
 ordered engine rules, reports stored parser failures explicitly, and separates
 clearing rules from restoring the engine's built-in defaults.
 
+The unreleased [scheduling API](docs/public/scheduling.md) adds file pull-order
+settings, explicit priority pages and global/per-device KiB/s limits. Native
+queue and byte-cap effects have distinct mode and measurement conditions.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.

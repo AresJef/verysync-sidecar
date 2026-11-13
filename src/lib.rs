@@ -31,6 +31,7 @@
 #![doc = include_str!("../docs/public/sync-observation.md")]
 #![doc = include_str!("../docs/public/scan-control.md")]
 #![doc = include_str!("../docs/public/ignore-patterns.md")]
+#![doc = include_str!("../docs/public/scheduling.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -54,6 +55,7 @@ mod raw;
 mod relay;
 mod releases;
 mod scans;
+mod scheduling;
 mod sharing;
 mod status;
 mod sync_observation;
@@ -105,6 +107,10 @@ pub use releases::{
     ProgramArchitecture, ProgramOs, ProgramTarget,
 };
 pub use scans::{FolderScanConfig, FolderScanPatch, FolderScanUpdate};
+pub use scheduling::{
+    BandwidthPatch, BandwidthUpdate, FolderPullOrder, FolderSchedulingConfig,
+    FolderSchedulingUpdate, GlobalBandwidthConfig,
+};
 pub use sharing::{
     GeneratedShare, JoinFolderOptions, JoinFolderResult, JoinPeerObservation, ShareKey,
     SharePermission, ValidatedShare,

@@ -729,3 +729,473 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> TestResult {
+    use verysync_sidecar::{
+        BandwidthPatch, DeviceTransport, FolderPullOrder, JoinFolderOptions, RawMethod, RawRequest,
+        RequestEffect,
+    };
+    let root = tempfile::Builder::new().prefix("vssp-").tempdir()?.keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let a_address = private_tcp(a.client()).await?;
+    let b_address = private_tcp(b.client()).await?;
+    let keys = a.client().generate_share().await?;
+    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
+    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
+    let source = root.join("source");
+    std::fs::create_dir(&source)?;
+    for index in 0..512u64 {
+        let name = if index == 511 {
+            "zz priority %.bin".to_owned()
+        } else {
+            format!("file-{index:04}.bin")
+        };
+        let mut random = 0x1234abcd9876u64 ^ (index + 1);
+        let sample: Vec<u8> = (0..8192)
+            .map(|_| {
+                random ^= random << 13;
+                random ^= random >> 7;
+                random ^= random << 17;
+                random as u8
+            })
+            .collect();
+        std::fs::write(source.join(name), sample)?;
+    }
+    let af = a
+        .client()
+        .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(&source)).paused(true))
+        .await?;
+    let bf = b
+        .client()
+        .join_folder(
+            &JoinFolderOptions::new(ro, TargetPath::local(root.join("receiver"))).paused(true),
+        )
+        .await?;
+    let folder = &bf.configuration.id;
+    assert!(matches!(
+        b.client()
+            .prioritize_file(
+                folder,
+                &TargetPath::local("zz priority %.bin"),
+                ListPage::new(1, 1000)?
+            )
+            .await,
+        Err(Error::FolderPaused { .. })
+    ));
+
+    // Select the fixed core's legacy queue only as an explicit fixture. This
+    // does not claim typed control of these advanced puller-mode fields.
+    let configured = b
+        .client()
+        .raw_request(
+            &RawRequest::new(
+                RawMethod::Patch,
+                ["rest", "config", "folders", folder.as_str()],
+                RequestEffect::MayModify,
+            )?
+            .json_body(
+                &json!({"copiers":1,"antsPullerEnabled":false,"pullerSessionEnabled":false}),
+            )?,
+        )
+        .await?;
+    assert_eq!(configured.status(), 200);
+    let fixture = b.client().folder(folder).await?;
+    assert_eq!(fixture.extra["antsPullerEnabled"], false);
+    assert_eq!(fixture.extra["pullerSessionEnabled"], false);
+    for order in [
+        FolderPullOrder::Random,
+        FolderPullOrder::Alphabetic,
+        FolderPullOrder::SmallestFirst,
+        FolderPullOrder::LargestFirst,
+        FolderPullOrder::OldestFirst,
+        FolderPullOrder::NewestFirst,
+        FolderPullOrder::Alphabetic,
+    ] {
+        let changed = b.client().set_folder_pull_order(folder, &order).await?;
+        assert!(changed.requested_order_match && changed.configuration.pull_order == order);
+        assert_eq!(changed.configuration.extra["antsPullerEnabled"], false);
+    }
+    assert!(
+        b.client()
+            .update_bandwidth_configuration(
+                &BandwidthPatch::default()
+                    .max_receive_kib_per_second(1)
+                    .limit_in_lan(true)
+            )
+            .await?
+            .requested_fields_match
+    );
+    for (client, folder, peer, address) in [
+        (a.client(), &af.configuration.id, &b_id, b_address),
+        (b.client(), &bf.configuration.id, &a_id, a_address),
+    ] {
+        client
+            .create_device(
+                &CreateDeviceOptions::new(peer.clone()).settings(
+                    DevicePatch::default()
+                        .addresses(vec![address])
+                        .allowed_transports(vec![DeviceTransport::Tcp])
+                        .paused(false),
+                ),
+            )
+            .await?;
+        client.share_folder_with(folder, peer).await?;
+    }
+    a.client().resume_folder(&af.configuration.id).await?;
+    a.client().request_scan(&af.configuration.id).await?;
+    b.client().resume_folder(folder).await?;
+    let page = ListPage::new(1, 1000)?;
+    let need = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let n = b.client().folder_need(folder, page).await?;
+            if n.queued.len() >= 2 && n.queued.iter().any(|f| f.name == "zz priority %.bin") {
+                break Ok::<_, Error>(n);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let target = "zz priority %.bin";
+    assert!(need
+        .queued
+        .iter()
+        .position(|f| f.name == target)
+        .is_some_and(|p| p > 0));
+    let prioritized = b
+        .client()
+        .prioritize_file(folder, &TargetPath::local(target), page)
+        .await?;
+    assert!(!prioritized.queued.is_empty());
+    assert!(
+        prioritized.queued.first().is_some_and(|f| f.name == target)
+            || prioritized.progress.iter().any(|f| f.name == target)
+    );
+    assert!(prioritized.queued.iter().any(|f| f.name != target));
+    assert_eq!(prioritized.page, Some(1));
+    assert_eq!(prioritized.per_page, Some(1000));
+    assert!(b
+        .client()
+        .set_folder_pull_order(folder, &FolderPullOrder::Unknown("unverified".into()))
+        .await
+        .is_err());
+    assert!(matches!(
+        b.client()
+            .prioritize_file(folder, &TargetPath::local("../escape"), page)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(
+        b.client()
+            .update_bandwidth_configuration(
+                &BandwidthPatch::default().max_receive_kib_per_second(0)
+            )
+            .await?
+            .requested_fields_match
+    );
+    tokio::time::timeout(Duration::from_secs(40), async {
+        loop {
+            let status = b.client().folder_status(folder).await?;
+            if status.local_files == Some(512) && status.need_bytes == Some(0) {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    for index in 0..512u64 {
+        let name = if index == 511 {
+            target.to_owned()
+        } else {
+            format!("file-{index:04}.bin")
+        };
+        assert_eq!(
+            std::fs::read(source.join(&name))?,
+            std::fs::read(root.join("receiver").join(name))?
+        );
+    }
+    a.client().pause_device(&b_id).await?;
+    b.client().pause_device(&a_id).await?;
+    for instance in [&mut b, &mut a] {
+        let exit = instance.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    }
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public folder priority evidence: {}",
+        json!({"all_six_actual_order_readbacks":true,"paused_scope_rejected":true,"legacy_queue_fixture_fields_read_back":true,"actual_alphabetic_backlog_has_nonfirst_target":true,"actual_target_promoted_while_other_work_still_queued":true,"actual_page_scope_preserved":true,"unrelated_folder_settings_retained":true,"unknown_order_and_invalid_relative_path_rejected":true,"explicit_rate_restoration_read_back":true,"actual_all_512_files_received":true,"all_source_and_destination_contents_match":true,"both_actual_normal_tree_exits":true})
+    );
+    Ok(())
+}
+
+async fn incoming_bytes(
+    client: &verysync_sidecar::Client,
+    peer: &verysync_sidecar::DeviceId,
+) -> TestResult<u64> {
+    let snapshot = client.connections().await?;
+    let connection = snapshot
+        .connections
+        .get(peer)
+        .ok_or("private receiving peer is absent")?;
+    let endpoint = connection
+        .address
+        .as_deref()
+        .and_then(|s| s.parse::<std::net::SocketAddr>().ok());
+    if !connection.connected
+        || !endpoint.is_some_and(|s| s.ip().is_loopback() && s.port() != 0 && s.port() != 18886)
+        || !matches!(
+            connection.connection_type,
+            Some(
+                verysync_sidecar::PeerConnectionType::TcpClient
+                    | verysync_sidecar::PeerConnectionType::TcpServer
+            )
+        )
+    {
+        return Err("expected an actual connected private loopback TCP peer".into());
+    }
+    connection
+        .in_bytes_total
+        .ok_or_else(|| "incoming byte counter is absent".into())
+}
+async fn clear_bandwidth(a: &ManagedInstance, b: &ManagedInstance) -> TestResult {
+    use verysync_sidecar::BandwidthPatch;
+    for (client, peer) in [
+        (a.client(), &b.client().instance().device_id),
+        (b.client(), &a.client().instance().device_id),
+    ] {
+        assert!(
+            client
+                .update_bandwidth_configuration(
+                    &BandwidthPatch::default()
+                        .max_send_kib_per_second(0)
+                        .max_receive_kib_per_second(0)
+                        .limit_in_lan(true)
+                )
+                .await?
+                .requested_fields_match
+        );
+        assert!(
+            client
+                .update_device(
+                    peer,
+                    &DevicePatch::default()
+                        .max_send_kib_per_second(0)
+                        .max_receive_kib_per_second(0)
+                )
+                .await?
+                .requested_fields_match
+        );
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use std::time::Instant;
+    use verysync_sidecar::{BandwidthPatch, DeviceCompression, DeviceTransport, JoinFolderOptions};
+    let mut resolution = u128::MAX;
+    let clock_started = Instant::now();
+    for _ in 0..10000 {
+        let tick = Instant::now();
+        let dt = tick.elapsed().as_nanos();
+        if dt > 0 {
+            resolution = resolution.min(dt);
+        }
+    }
+    assert!(resolution > 0 && resolution <= 1_000_000);
+    println!(
+        "bandwidth clock preparation: {}",
+        json!({"minimum_positive_read_ns":resolution,"read_pairs":10000,"complete_loop_ns":clock_started.elapsed().as_nanos()})
+    );
+    let root = tempfile::Builder::new()
+        .prefix("vss-rates-")
+        .tempdir()?
+        .keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let a_address = private_tcp(a.client()).await?;
+    let b_address = private_tcp(b.client()).await?;
+    let keys = a.client().generate_share().await?;
+    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
+    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
+    let source = root.join("source");
+    let receiver = root.join("receiver");
+    std::fs::create_dir(&source)?;
+    let af = a
+        .client()
+        .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(&source)).paused(true))
+        .await?;
+    let bf = b
+        .client()
+        .join_folder(&JoinFolderOptions::new(ro, TargetPath::local(&receiver)).paused(true))
+        .await?;
+    for (client, folder, peer, address) in [
+        (a.client(), &af.configuration.id, &b_id, b_address),
+        (b.client(), &bf.configuration.id, &a_id, a_address),
+    ] {
+        client
+            .create_device(
+                &CreateDeviceOptions::new(peer.clone()).settings(
+                    DevicePatch::default()
+                        .addresses(vec![address])
+                        .allowed_transports(vec![DeviceTransport::Tcp])
+                        .compression(DeviceCompression::Never),
+                ),
+            )
+            .await?;
+        client.share_folder_with(folder, peer).await?;
+        client.resume_folder(folder).await?;
+    }
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if b.client()
+                .connections()
+                .await?
+                .connections
+                .get(&a_id)
+                .is_some_and(|p| p.connected)
+            {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let mut samples = Vec::new();
+    let mut original = Vec::new();
+    let mut payload_hashes = BTreeSet::new();
+    for case in 0..4u64 {
+        clear_bandwidth(&a, &b).await?;
+        match case {
+            0 => assert!(
+                a.client()
+                    .update_bandwidth_configuration(
+                        &BandwidthPatch::default().max_send_kib_per_second(64)
+                    )
+                    .await?
+                    .requested_fields_match
+            ),
+            1 => assert!(
+                b.client()
+                    .update_bandwidth_configuration(
+                        &BandwidthPatch::default().max_receive_kib_per_second(64)
+                    )
+                    .await?
+                    .requested_fields_match
+            ),
+            2 => assert!(
+                a.client()
+                    .update_device(&b_id, &DevicePatch::default().max_send_kib_per_second(64))
+                    .await?
+                    .requested_fields_match
+            ),
+            _ => assert!(
+                b.client()
+                    .update_device(
+                        &a_id,
+                        &DevicePatch::default().max_receive_kib_per_second(64)
+                    )
+                    .await?
+                    .requested_fields_match
+            ),
+        }
+        let name = format!("rate-{case}.bin");
+        let mut state = 0x1234abcd9876u64 ^ (case + 1);
+        let content: Vec<u8> = (0..2_097_152)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+        let digest = format!("{:x}", Sha256::digest(&content));
+        assert!(payload_hashes.insert(digest.clone()));
+        std::fs::write(source.join(&name), &content)?;
+        a.client().request_scan(&af.configuration.id).await?;
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let need = b
+                    .client()
+                    .folder_need(&bf.configuration.id, ListPage::new(1, 100)?)
+                    .await?;
+                if need
+                    .progress
+                    .iter()
+                    .chain(&need.queued)
+                    .chain(&need.rest)
+                    .any(|f| f.name == name && f.size == Some(content.len() as u64))
+                {
+                    break Ok::<_, Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await??;
+        let outer_start = Instant::now();
+        let before = incoming_bytes(b.client(), &a_id).await?;
+        let before_end = outer_start.elapsed();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let after_start = outer_start.elapsed();
+        let after = incoming_bytes(b.client(), &a_id).await?;
+        let outer_span = outer_start.elapsed();
+        let delta = after
+            .checked_sub(before)
+            .ok_or("counter decreased during the complete measurement window")?;
+        if !(3.0..=6.0).contains(&outer_span.as_secs_f64()) {
+            return Err("insufficient measurement: counter window outside frozen bounds".into());
+        }
+        let upper = 1_048_576.0 + 65_536.0 * outer_span.as_secs_f64();
+        assert!(
+            delta > 0 && (delta as f64) <= upper,
+            "functional rate window exceeded the frozen byte bound"
+        );
+        assert!(b
+            .client()
+            .folder_status(&bf.configuration.id)
+            .await?
+            .need_bytes
+            .is_some_and(|n| n > 0));
+        clear_bandwidth(&a, &b).await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let status = b.client().folder_status(&bf.configuration.id).await?;
+                if status.local_files == Some(case + 1) && status.need_bytes == Some(0) {
+                    break Ok::<_, Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await??;
+        assert_eq!(std::fs::read(receiver.join(&name))?, content);
+        let sample = json!({"case":case,"payload_bytes":content.len(),"payload_sha256":digest,"configured_kib_per_second":64,"before_bytes":before,"after_bytes":after,"delta_bytes":delta,"first_api_end_ns":before_end.as_nanos(),"second_api_start_ns":after_start.as_nanos(),"outer_span_ns":outer_span.as_nanos(),"upper_bytes":upper,"actual_full_content_after_limit_removed":true});
+        println!("public bandwidth functional sample: {}", sample);
+        samples.push(sample);
+        original.push((name, content));
+    }
+    for (name, content) in original {
+        assert_eq!(std::fs::read(source.join(name))?, content);
+    }
+    a.client().pause_device(&b_id).await?;
+    b.client().pause_device(&a_id).await?;
+    for core in [&mut b, &mut a] {
+        let exit = core.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    }
+    std::fs::remove_dir_all(root)?;
+    let phase = std::env::var("VERYSYNC_BANDWIDTH_PHASE").unwrap_or_else(|_| "acceptance".into());
+    println!(
+        "public bandwidth functional trial: {}",
+        json!({"phase":phase,"protocol":"VS033-S4-functional-v2","complete_cases":samples,"scope":"absolute functional byte-cap observations; no throughput or speedup claim"})
+    );
+    println!(
+        "public bandwidth functional evidence: {}",
+        json!({"actual_global_upload_cap":true,"actual_global_download_cap":true,"actual_device_upload_cap":true,"actual_device_download_cap":true,"all_positive_monotonic_byte_windows":true,"all_complete_windows_within_frozen_bounds":true,"actual_nonempty_need_while_limited":true,"all_selected_settings_read_back":true,"actual_explicit_zero_limit_restoration":true,"all_four_actual_full_received_files":true,"all_distinct_payload_hashes_and_source_bytes_preserved":true,"both_actual_normal_tree_exits":true})
+    );
+    Ok(())
+}

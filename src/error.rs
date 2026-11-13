@@ -268,6 +268,11 @@ pub enum Error {
         /// The requested opaque identifier.
         id: FolderId,
     },
+    /// The requested operation requires an unpaused configured folder.
+    FolderPaused {
+        /// Exact requested folder, omitted from ordinary formatting.
+        id: FolderId,
+    },
     /// A response identified a different folder from the requested one.
     FolderIdentityMismatch {
         /// Requested opaque identifier, omitted from ordinary formatting.
@@ -389,6 +394,7 @@ impl fmt::Display for Error {
                 write!(formatter, "invalid folder identifier: {reason}")
             }
             Self::FolderNotFound {..}=>formatter.write_str("folder is not configured"),
+            Self::FolderPaused {..}=>formatter.write_str("operation requires an unpaused folder"),
             Self::FolderIdentityMismatch {..}=>formatter.write_str("response folder identity did not match the requested folder"),
             Self::DeviceNotFound {..}=>formatter.write_str("device is not configured"),
             Self::DeviceAlreadyExists {..}=>formatter.write_str("device ID is already configured; creation did not start"),
