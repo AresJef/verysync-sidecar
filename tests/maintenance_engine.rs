@@ -5,6 +5,375 @@ use managed_fixture::{options, TestResult};
 use std::{collections::BTreeMap, time::Duration};
 use verysync_sidecar::{CoreLogLevel, ManagedInstance};
 
+#[tokio::test]
+async fn public_stopped_database_commands_capture_counts_metadata_and_reset_effects() -> TestResult
+{
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        DatabaseCommand, DatabaseCommandOutcome, FolderId, JoinFolderOptions, TargetPath,
+    };
+    let root = tempfile::Builder::new().prefix("vdb-").tempdir()?.keep();
+    let path = root.join("data");
+    std::fs::create_dir(&path)?;
+    let bytes = b"native database diagnostic sample";
+    let flag_bytes = b"literal filename resembling a flag";
+    std::fs::write(path.join("sample.txt"), bytes)?;
+    std::fs::write(path.join("--home"), flag_bytes)?;
+    let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
+    let id = core.client().instance().device_id.clone();
+    let share = core.client().generate_share().await?;
+    let key = core
+        .client()
+        .validate_share_key(&share.read_write_key)
+        .await?;
+    let folder = core
+        .client()
+        .join_folder(&JoinFolderOptions::new(key, TargetPath::local(&path)))
+        .await?
+        .configuration;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let status = core.client().folder_status(&folder.id).await?;
+            if status.local_files == Some(2)
+                && status.state == Some(verysync_sidecar::FolderState::Idle)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        Ok::<_, verysync_sidecar::Error>(())
+    })
+    .await??;
+    assert!(matches!(
+        core.run_database_command(DatabaseCommand::Statistics, Duration::from_secs(10))
+            .await,
+        Err(verysync_sidecar::Error::ManagedFailure { .. })
+    ));
+    assert_eq!(core.client().system_status().await?.device_id, id);
+    core.client().pause_folder(&folder.id).await?;
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert!(matches!(
+        core.run_database_command(DatabaseCommand::ResetAll, Duration::ZERO)
+            .await,
+        Err(verysync_sidecar::Error::InvalidConfiguration { .. })
+    ));
+    assert!(core
+        .run_database_command(DatabaseCommand::Statistics, Duration::from_nanos(1))
+        .await
+        .is_err());
+    #[cfg(unix)]
+    {
+        let sentinel = root.join("outside-state.txt");
+        std::fs::write(&sentinel, b"outside state must remain untouched")?;
+        let alias = core.state_directory().join("unexpected-alias");
+        std::os::unix::fs::symlink(&sentinel, &alias)?;
+        assert!(matches!(
+            core.run_database_command(DatabaseCommand::ResetAll, Duration::from_secs(10))
+                .await,
+            Err(verysync_sidecar::Error::UnmanagedState)
+        ));
+        assert_eq!(
+            std::fs::read(&sentinel)?,
+            b"outside state must remain untouched"
+        );
+        std::fs::remove_file(alias)?;
+        eprintln!("public Unix database state boundary evidence: {{\"actual_state_alias_refused_without_touching_outside_file\":true}}");
+    }
+    let stats = core
+        .run_database_command(DatabaseCommand::Statistics, Duration::from_secs(10))
+        .await?;
+    assert_eq!(stats.outcome, DatabaseCommandOutcome::Success);
+    assert!(stats.tree_stopped && !stats.diagnostic.body_bytes().is_empty());
+    let counts = core
+        .run_database_command(
+            DatabaseCommand::Counts(folder.id.clone()),
+            Duration::from_secs(10),
+        )
+        .await?;
+    assert_eq!(counts.outcome, DatabaseCommandOutcome::Success);
+    let rows = counts.counts.as_ref().ok_or("typed native counts absent")?;
+    assert!(rows
+        .iter()
+        .any(|row| row.count == 2 && row.size == (bytes.len() + flag_bytes.len()) as u64));
+    let file = core
+        .run_database_command(
+            DatabaseCommand::File {
+                folder: folder.id.clone(),
+                path: TargetPath::local(std::path::Path::new("--home")),
+            },
+            Duration::from_secs(10),
+        )
+        .await?;
+    assert_eq!(file.outcome, DatabaseCommandOutcome::Success);
+    assert!(std::str::from_utf8(file.diagnostic.body_bytes())?.contains("--home"));
+    let injected = core
+        .run_database_command(
+            DatabaseCommand::Counts(FolderId::parse("--home")?),
+            Duration::from_secs(10),
+        )
+        .await?;
+    assert!(injected.outcome != DatabaseCommandOutcome::Success && injected.code != Some(0));
+    assert!(!format!("{file:?}").contains(path.to_str().ok_or("test path UTF-8")?));
+    let reset = core
+        .run_database_command(DatabaseCommand::ResetAll, Duration::from_secs(10))
+        .await?;
+    assert_eq!(reset.outcome, DatabaseCommandOutcome::Success);
+    assert!(reset.tree_stopped && reset.code == Some(0));
+    let empty = core
+        .run_database_command(
+            DatabaseCommand::Counts(folder.id.clone()),
+            Duration::from_secs(10),
+        )
+        .await?;
+    assert_eq!(empty.outcome, DatabaseCommandOutcome::FolderNotIndexed);
+    assert!(empty.counts.is_none());
+    assert_eq!(std::fs::read(path.join("sample.txt"))?, bytes);
+    assert_eq!(std::fs::read(path.join("--home"))?, flag_bytes);
+    assert_eq!(
+        Sha256::digest(std::fs::read(path.join("sample.txt"))?),
+        Sha256::digest(bytes)
+    );
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(core.client().instance().device_id, id);
+    assert!(core.client().folder(&folder.id).await?.paused);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    eprintln!(
+        "public stopped database command evidence: {}",
+        serde_json::json!({"actual_active_owner_refused_without_stopping":true,"actual_pinned_statistics_command":true,"actual_typed_nonempty_native_counts":true,"actual_indexed_flag_like_filename_metadata":true,"actual_folder_flag_not_interpreted_as_option":true,"actual_bounded_private_output":true,"actual_explicit_offline_database_reset":true,"actual_index_absence_not_invented_zero":true,"actual_both_synthetic_files_preserved":true,"actual_original_sha_preserved":true,"actual_configuration_and_identity_retained":true,"actual_all_contained_cli_trees_stopped":true,"actual_normal_owned_final_exit":true,"actual_zero_and_expired_deadlines_refused":true})
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+// Independent stopped-database verification, not an SDK CLI capability claim.
+struct CountsOracle {
+    code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+struct OracleChild(std::process::Child);
+impl Drop for OracleChild {
+    fn drop(&mut self) {
+        if matches!(self.0.try_wait(), Ok(None)) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+async fn counts_oracle(
+    core: &ManagedInstance,
+    folder: &verysync_sidecar::FolderId,
+) -> TestResult<CountsOracle> {
+    use std::io::Read;
+    // This oracle accepts only IDs generated by the isolated native core.
+    assert!(folder.as_str().bytes().all(|b| b.is_ascii_digit()));
+    let mut child = OracleChild(
+        std::process::Command::new(
+            std::env::var_os("VERYSYNC_TEST_BINARY").ok_or("explicit fixed binary required")?,
+        )
+        .args(["debug", "database-counts", folder.as_str(), "--home"])
+        .arg(core.state_directory())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?,
+    );
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.0.try_wait()? {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(5) {
+            return Err("owned counts oracle exceeded its bound".into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    child
+        .0
+        .stdout
+        .take()
+        .ok_or("oracle stdout absent")?
+        .take(65537)
+        .read_to_end(&mut stdout)?;
+    child
+        .0
+        .stderr
+        .take()
+        .ok_or("oracle stderr absent")?
+        .take(65537)
+        .read_to_end(&mut stderr)?;
+    assert!(stdout.len() <= 65536 && stderr.len() <= 65536);
+    Ok(CountsOracle {
+        code: status.code(),
+        stdout,
+        stderr,
+    })
+}
+fn assert_indexed(oracle: &CountsOracle, size: usize) -> TestResult {
+    assert_eq!(oracle.code, Some(0));
+    assert!(oracle.stderr.is_empty());
+    let text = std::str::from_utf8(&oracle.stdout)?;
+    assert!(text
+        .lines()
+        .any(|line| line.split_whitespace().collect::<Vec<_>>()
+            == ["DEVICE", "TYPE", "FLAGS", "DELETED", "COUNT", "SIZE"]));
+    assert!(text
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .any(|cells| cells.len() == 6
+            && cells[4] == "1"
+            && cells[5].parse::<usize>().ok() == Some(size)));
+    Ok(())
+}
+fn assert_index_absent(oracle: &CountsOracle) -> TestResult {
+    assert_eq!(oracle.code, Some(1));
+    assert!(oracle.stdout.is_empty());
+    assert_eq!(
+        std::str::from_utf8(&oracle.stderr)?.trim(),
+        "verysync: error: no such folder"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_scoped_and_all_index_resets_preserve_data_identity_and_configuration() -> TestResult
+{
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        IndexResetScope, JoinFolderOptions, RawMethod, RawRequest, RequestEffect, TargetPath,
+    };
+    let root = tempfile::Builder::new().prefix("vir-").tempdir()?.keep();
+    let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let key_hash = Sha256::digest(std::fs::read(core.state_directory().join("key.pem"))?);
+    let cert_hash = Sha256::digest(std::fs::read(core.state_directory().join("cert.pem"))?);
+    let mut folders = Vec::new();
+    let mut samples = Vec::new();
+    for name in ["a", "b"] {
+        let path = root.join(name);
+        std::fs::create_dir(&path)?;
+        let bytes = format!("independent synthetic index sample {name}").into_bytes();
+        std::fs::write(path.join("sample.txt"), &bytes)?;
+        samples.push(bytes);
+        let share = core.client().generate_share().await?;
+        let key = core
+            .client()
+            .validate_share_key(&share.read_write_key)
+            .await?;
+        let folder = core
+            .client()
+            .join_folder(&JoinFolderOptions::new(key, TargetPath::local(&path)))
+            .await?
+            .configuration;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let status = core.client().folder_status(&folder.id).await?;
+                if status.local_files == Some(1)
+                    && status.state == Some(verysync_sidecar::FolderState::Idle)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+            Ok::<_, verysync_sidecar::Error>(())
+        })
+        .await??;
+        folders.push(folder);
+    }
+    for folder in &folders {
+        core.client().pause_folder(&folder.id).await?;
+    }
+    let config_request =
+        RawRequest::new(RawMethod::Get, ["rest", "config"], RequestEffect::ReadOnly)?;
+    let before: serde_json::Value = serde_json::from_slice(
+        core.client()
+            .raw_request(&config_request)
+            .await?
+            .body_bytes(),
+    )?;
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    let original_a = counts_oracle(&core, &folders[0].id).await?;
+    let original_b = counts_oracle(&core, &folders[1].id).await?;
+    assert_indexed(&original_a, samples[0].len())?;
+    assert_indexed(&original_b, samples[1].len())?;
+    core.restart(Duration::from_secs(30)).await?;
+    let scope = IndexResetScope::Folder(folders[0].id.clone());
+    let ack = core.client().request_index_reset(&scope).await?;
+    assert_eq!(ack.scope, scope);
+    assert!(ack.restart_expected);
+    assert_eq!(
+        ack.native_message(),
+        format!("resetting folder {}", folders[0].id.as_str())
+    );
+    assert!(!format!("{ack:?}").contains(folders[0].id.as_str()));
+    let exit = tokio::time::timeout(Duration::from_secs(10), core.wait_for_exit()).await??;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(3));
+    assert_index_absent(&counts_oracle(&core, &folders[0].id).await?)?;
+    let retained = counts_oracle(&core, &folders[1].id).await?;
+    assert_indexed(&retained, samples[1].len())?;
+    assert_eq!(retained.stdout, original_b.stdout);
+    core.restart(Duration::from_secs(30)).await?;
+    let after: serde_json::Value = serde_json::from_slice(
+        core.client()
+            .raw_request(&config_request)
+            .await?
+            .body_bytes(),
+    )?;
+    assert!(
+        before == after,
+        "native configuration changed after the selected index reset"
+    );
+    let ack = core
+        .client()
+        .request_index_reset(&IndexResetScope::AllFolders)
+        .await?;
+    assert!(ack.restart_expected && ack.scope == IndexResetScope::AllFolders);
+    assert_eq!(ack.native_message(), "resetting database");
+    let exit = tokio::time::timeout(Duration::from_secs(10), core.wait_for_exit()).await??;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(3));
+    for folder in &folders {
+        assert_index_absent(&counts_oracle(&core, &folder.id).await?)?;
+    }
+    core.restart(Duration::from_secs(30)).await?;
+    let after: serde_json::Value = serde_json::from_slice(
+        core.client()
+            .raw_request(&config_request)
+            .await?
+            .body_bytes(),
+    )?;
+    assert!(
+        before == after,
+        "native configuration changed after the all-folders index reset"
+    );
+    assert_eq!(core.client().instance().device_id, identity);
+    assert_eq!(
+        Sha256::digest(std::fs::read(core.state_directory().join("key.pem"))?),
+        key_hash
+    );
+    assert_eq!(
+        Sha256::digest(std::fs::read(core.state_directory().join("cert.pem"))?),
+        cert_hash
+    );
+    for (name, bytes) in ["a", "b"].iter().zip(samples.iter()) {
+        let actual = std::fs::read(root.join(name).join("sample.txt"))?;
+        assert_eq!(&actual, bytes);
+        assert_eq!(Sha256::digest(actual), Sha256::digest(bytes));
+    }
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    eprintln!(
+        "public index reset evidence: {}",
+        serde_json::json!({"actual_two_initial_indexes":true,"actual_explicit_folder_ack":true,"actual_folder_reset_exit_three":true,"actual_selected_index_absent_offline":true,"actual_unselected_index_exactly_retained":true,"actual_configuration_unchanged_after_folder_reset":true,"actual_explicit_all_folders_ack":true,"actual_all_reset_exit_three":true,"actual_both_indexes_absent_offline":true,"actual_configuration_unchanged_after_all_reset":true,"actual_identity_certificate_and_key_retained":true,"actual_both_file_bytes_and_sha_retained":true,"actual_explicit_restarts_authenticate":true,"actual_normal_final_owned_tree_exit":true})
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
 fn decode_profile(profile: &verysync_sidecar::CoreProfile) -> TestResult<Vec<u8>> {
     use std::io::Read;
     let mut decoded = Vec::new();

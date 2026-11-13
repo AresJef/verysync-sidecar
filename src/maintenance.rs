@@ -1,7 +1,52 @@
 //! Observed official-core logs and maintenance settings, not controller logging.
-use crate::TargetPath;
+use crate::{FolderId, TargetPath};
 use serde::{Deserialize, Deserializer};
 use std::{collections::BTreeMap, fmt};
+
+/// Explicit native synchronization-index reset scope. All folders is a distinct
+/// choice, never inferred from a missing folder or an empty identifier.
+#[derive(Clone, Eq, PartialEq)]
+pub enum IndexResetScope {
+    /// Reset the selected configured folder's native index.
+    Folder(FolderId),
+    /// Reset native synchronization indexes for all configured folders.
+    AllFolders,
+}
+impl fmt::Debug for IndexResetScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Folder(_) => "IndexResetScope::Folder([REDACTED])",
+            Self::AllFolders => "IndexResetScope::AllFolders",
+        })
+    }
+}
+/// Verified native acknowledgement, separate from observed index removal,
+/// program exit, future readiness or filesystem-data preservation.
+#[derive(Clone)]
+pub struct IndexResetAcknowledgement {
+    /// The exact explicit scope submitted by the caller.
+    pub scope: IndexResetScope,
+    /// The native action expects program restart. No implicit SDK restart or
+    /// successful readiness is implied by this observation.
+    pub restart_expected: bool,
+    pub(crate) native_message: String,
+    /// Additional native fields, which can contain private target data.
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl IndexResetAcknowledgement {
+    /// Inspect the exact private native acknowledgement text explicitly.
+    pub fn native_message(&self) -> &str {
+        &self.native_message
+    }
+}
+impl fmt::Debug for IndexResetAcknowledgement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexResetAcknowledgement")
+            .field("scope", &self.scope)
+            .field("restart_expected", &self.restart_expected)
+            .finish_non_exhaustive()
+    }
+}
 
 /// One native log/error entry. Message text can contain private target data.
 #[derive(Clone, Deserialize)]

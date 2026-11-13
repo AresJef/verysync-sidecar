@@ -79,6 +79,10 @@ pub enum Capability {
     /// Explicit core logs, package levels, diagnostic locations, native profiles
     /// and authenticated metrics. Destructive maintenance has separate gates.
     CoreMaintenance,
+    /// Explicit synchronization-index reset requests and restart acknowledgements.
+    SynchronizationIndexReset,
+    /// Explicit stopped-owner native statistics, counts, file metadata and reset.
+    OfflineDatabaseMaintenance,
     /// Remaining advanced folder settings.
     AdvancedFolderSettings,
     /// Account, configuration and commercial authorization.
@@ -233,6 +237,16 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::ResourceMutation),
+    LibraryCapability {
+        capability: Capability::SynchronizationIndexReset,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::OfflineDatabaseMaintenance,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::CoreMaintenance,
         implementation: ImplementationStatus::Typed,

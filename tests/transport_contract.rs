@@ -14,6 +14,111 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn index_reset_requires_explicit_scope_and_exact_native_ack_without_readback() -> TestResult {
+    use verysync_sidecar::{FolderId, IndexResetScope};
+    for all in [false, true] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+        ];
+        let scope = if all {
+            IndexResetScope::AllFolders
+        } else {
+            IndexResetScope::Folder(FolderId::parse(KEY)?)
+        };
+        if !all {
+            replies.push(Reply::json(serde_json::json!({"folders":[{"id":KEY,"label":"","path":"/synthetic","paused":true}]})));
+        }
+        let message = if all {
+            "resetting database".to_owned()
+        } else {
+            format!("resetting folder {KEY}")
+        };
+        replies.push(Reply::json(serde_json::json!({"ok":message,"private":KEY})));
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let ack = client.request_index_reset(&scope).await?;
+        assert_eq!(ack.scope, scope);
+        assert!(ack.restart_expected);
+        assert_eq!(ack.native_message(), message);
+        assert_eq!(ack.extra["private"], KEY);
+        assert!(!format!("{ack:?}").contains(KEY));
+        let requests = server.finish().await?;
+        let posts = requests
+            .iter()
+            .filter(|r| r.starts_with("POST "))
+            .collect::<Vec<_>>();
+        assert_eq!(posts.len(), 1);
+        let target = if all {
+            "POST /prefix/rest/system/reset ".to_owned()
+        } else {
+            format!("POST /prefix/rest/system/reset?folder={KEY} ")
+        };
+        assert!(posts[0].starts_with(&target));
+        assert!(requests.last().is_some_and(|r| r.starts_with("POST ")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_reset_unknown_ack_is_unknown_once_and_missing_folder_never_resets_all() -> TestResult
+{
+    use verysync_sidecar::{FolderId, IndexResetScope};
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({"ok":"other native action","private":KEY}),
+    ] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            Reply::json(body),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .request_index_reset(&IndexResetScope::AllFolders)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        assert_eq!(
+            server
+                .finish()
+                .await?
+                .iter()
+                .filter(|r| r.starts_with("POST "))
+                .count(),
+            1
+        );
+    }
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"folders":[]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client
+            .request_index_reset(&IndexResetScope::Folder(FolderId::parse("absent")?))
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert!(!server
+        .finish()
+        .await?
+        .iter()
+        .any(|r| r.starts_with("POST ")));
+    Ok(())
+}
+
+#[tokio::test]
 async fn archive_restore_refuses_same_future_missing_or_unknown_target_clock_without_post(
 ) -> TestResult {
     use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};

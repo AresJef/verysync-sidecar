@@ -5,9 +5,75 @@ use crate::{
     CoreLogSnapshot, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest, Error,
     ResponseDiagnostic, Result, TargetPath,
 };
+use crate::{IndexResetAcknowledgement, IndexResetScope};
 use std::collections::BTreeMap;
 
 impl Client {
+    /// Explicitly request a native synchronization-index reset for one configured
+    /// folder or all folders. The native program can exit for restart; this does
+    /// not stop/restart an owned instance on the caller's behalf.
+    ///
+    /// This is an acknowledgement, not proof of index removal or data retention.
+    /// Coordinate peers and keep an independent state backup. Future rescans or
+    /// synchronization can change files. The SDK does not delete controller
+    /// paths, pause peers, retry or roll back this native operation.
+    pub async fn request_index_reset(
+        &self,
+        scope: &IndexResetScope,
+    ) -> Result<IndexResetAcknowledgement> {
+        #[derive(serde::Deserialize)]
+        struct Ack {
+            ok: String,
+            #[serde(flatten)]
+            extra: BTreeMap<String, serde_json::Value>,
+        }
+        let operation = "request native synchronization index reset";
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let (query, expected) = match scope {
+            IndexResetScope::Folder(id) => {
+                self.folder(id).await?;
+                (
+                    vec![("folder", id.as_str())],
+                    format!("resetting folder {}", id.as_str()),
+                )
+            }
+            IndexResetScope::AllFolders => (Vec::new(), "resetting database".to_owned()),
+        };
+        let url = self
+            .connection
+            .management_url("rest/system/reset", &query)?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(operation, reqwest::Method::POST, url, None, true)
+            .await?;
+        let ack: Ack = serde_json::from_slice(&bytes).map_err(|_| {
+            mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes.clone()),
+                },
+            )
+        })?;
+        if ack.ok != expected {
+            return Err(mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                },
+            ));
+        }
+        Ok(IndexResetAcknowledgement {
+            scope: scope.clone(),
+            restart_expected: true,
+            native_message: ack.ok,
+            extra: ack.extra,
+        })
+    }
     /// Collect one explicitly requested native profile. This GET is treated as
     /// a mutation: heap collection invokes native GC and CPU collection changes
     /// native profiler state. No automatic retry, storage, global controller

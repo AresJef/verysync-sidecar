@@ -116,16 +116,18 @@ pub use invitations::{
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
     CoreLogSnapshot, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest,
+    IndexResetAcknowledgement, IndexResetScope,
 };
 #[cfg(feature = "download")]
 pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
-#[cfg(feature = "download")]
-pub use managed::{DownloadOptions, PreparedProgram};
 pub use managed::{
+    DatabaseCommand, DatabaseCommandExit, DatabaseCommandOutcome, DatabaseCountRow,
     KernelUpgradeCommand, KernelUpgradeExit, ManagedExit, ManagedInstance, ManagedLifetime,
     ManagedOptions, ManagedUpgradeChecks, ProgramTransition, StateBackup, StateBackupInfo,
     StateBackupOptions,
 };
+#[cfg(feature = "download")]
+pub use managed::{DownloadOptions, PreparedProgram};
 pub use network::{
     ConnectionSnapshot, ConnectionTotals, DeviceTransport, DiscoveryRecord, ListenerStatus,
     NetworkConfig, NetworkPatch, NetworkUpdate, PeerConnection, PeerConnectionType,

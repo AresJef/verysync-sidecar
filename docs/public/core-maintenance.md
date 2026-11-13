@@ -107,3 +107,93 @@ remains false. It also checks native GC count observation, complete heap/CPU
 gzip data, clone serialization, unchanged instance identity and normal owned
 process exit. Same-source six-native acceptance for profiles and metrics remains
 pending; these observations are functional evidence, not a performance score.
+
+## Explicit synchronization-index reset
+
+`request_index_reset(&IndexResetScope::Folder(id))` requests the native reset for
+one configured folder. `IndexResetScope::AllFolders` is a separate explicit
+choice. An absent folder never falls back to a global reset. Paused configured
+folders can be selected. The SDK verifies the exact native acknowledgement and
+returns `IndexResetAcknowledgement`; malformed or different action messages
+remain unknown mutation outcomes and are not retried.
+
+The native action schedules a program restart. On the fixed isolated baseline,
+the owned generation exits normally with native code **3**. This acknowledgement
+does not prove an index was removed, an old tree exited or a new generation is
+ready. An owner can explicitly await `ManagedInstance::wait_for_exit()` and then
+call `restart()`; remote callers must coordinate the actual program owner. The
+SDK does not start a replacement, pause peers, restore a backup or roll back.
+
+Keep an independent state backup and coordinate active writers/peers before
+destructive index maintenance. Resetting an index does not itself unregister
+the folder or remove the controlled synthetic files, but later scanning and
+synchronization can apply changes. The isolated public-API case verifies
+selected-index removal, exact retention of the other paused folder's index,
+removal of both indexes for the explicit global choice, unchanged complete
+configuration/identity/key/certificate and original file hashes. A separate
+stopped-program CLI oracle checks the actual database; the paused HTTP status
+already reports zero before reset and is not used as removal evidence.
+
+Those oracle commands are independent test instrumentation. Final same-source
+native acceptance for the reset API remains pending.
+
+## Explicit stopped-owner database commands
+
+`ManagedInstance::run_database_command(command, timeout)` runs only the selected,
+hash-verified official executable against its private state after a confirmed
+owned-tree exit. It rejects an active generation and never stops or starts one
+implicitly. `DatabaseCommand` admits `Statistics`, `Counts(folder)`,
+`File { folder, path }` and the separate destructive choice `ResetAll`.
+Arguments use structured argv with an option terminator before folder/file
+selectors. File selectors must be bounded relative paths in the local program's
+native syntax. No shell is invoked.
+
+`DatabaseCommandExit` retains the actual code, contained-tree completion and
+bounded private output. `Success` means native exit zero. Counts decode only the
+verified six-column table; unknown device/kind/flag/deletion labels remain exact.
+Malformed successful tables return `UnrecognizedCounts`, never an invented empty
+index. Only the known exact exit-one diagnostic maps to `FolderNotIndexed`.
+Statistics and file metadata remain explicit native text; the SDK invents no
+units or undocumented metadata schema. Default `Debug` omits selectors and output.
+
+Each call holds the existing private-state lease through process cleanup and
+uses the caller's positive deadline for admission, program hashing and native
+execution. Output is limited to 64 KiB. Before a database command, a bounded
+metadata walk rejects symbolic links, reparse points and special entries in the stopped state without
+following them or traversing registered data roots: at most 65,536 entries and
+64 directory levels; only the selected retained management socket is allowed. Coordinate
+external state writers; this check is not a filesystem transaction.
+
+Dropping the future requests cooperative cancellation and exact CLI containment
+cleanup; lease release can follow asynchronously. The SDK does not retry or roll
+back. After an interrupted reset, inspect the actual state before another action.
+A modifying command's execution failure can be `MutationOutcomeUnknown`.
+These commands invalidate the prior clean-state backup eligibility, including
+reads that can open native database files; explicitly restart and normally stop
+the owned core before taking a managed backup again.
+
+`ResetAll` resets native indexes, not the registered synchronization source
+files. Keep a separate state backup and coordinate peers and later scans.
+The isolated local case observes nonempty typed counts and actual file metadata,
+reset removal, missing-index classification, retained original hashes and
+identity, explicit restart and normal final exit. Same-source six-native gates
+remain pending; no general database repair or licensed feature is implied.
+
+```rust,no_run
+# async fn counts(core: &mut verysync_sidecar::ManagedInstance, folder: verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+use std::time::Duration;
+use verysync_sidecar::{DatabaseCommand, DatabaseCommandOutcome};
+
+// The caller has already confirmed this owned generation is stopped.
+let result = core.run_database_command(
+    DatabaseCommand::Counts(folder), Duration::from_secs(10),
+).await?;
+if result.outcome == DatabaseCommandOutcome::Success {
+    if let Some(rows) = result.counts {
+        for row in rows {
+            println!("count={} native_size={}", row.count, row.size);
+        }
+    }
+}
+# Ok(()) }
+```

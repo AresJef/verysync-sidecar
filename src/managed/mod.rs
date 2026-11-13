@@ -5,7 +5,11 @@ mod archive;
 mod backup;
 mod bootstrap;
 mod command;
+mod database;
 pub use backup::{StateBackup, StateBackupInfo, StateBackupOptions};
+pub use database::{
+    DatabaseCommand, DatabaseCommandExit, DatabaseCommandOutcome, DatabaseCountRow,
+};
 #[cfg(feature = "download")]
 mod cache;
 #[cfg(feature = "download")]
