@@ -30,6 +30,64 @@ fn report(stage: &str, error: &Error) {
         _ => {}
     }
 }
+#[cfg(windows)]
+#[allow(unsafe_code)] // Bounded read-only query of the exact owned child; see safety comment.
+fn owned_handle_count(core: &ManagedInstance) -> TestResult<u32> {
+    use windows_sys::Win32::{
+        Foundation::CloseHandle,
+        System::Threading::{
+            GetProcessHandleCount, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        },
+    };
+    // SAFETY: Query only the exact task-owned managed child's PID. This obtains
+    // no control/termination rights and closes the one query handle on all paths.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, core.process_id());
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let mut count = 0;
+        let ok = GetProcessHandleCount(handle, &mut count);
+        let error = std::io::Error::last_os_error();
+        CloseHandle(handle);
+        if ok == 0 {
+            return Err(error.into());
+        }
+        Ok(count)
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn private_owned_directory_read_handle_characterization() -> TestResult {
+    let root = tempfile::Builder::new().prefix("vfwh-").tempdir()?.keep();
+    let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
+    let (profile, volume) = mount(&core).await?;
+    let native = profile.join("owned-directory-handle-probe");
+    std::fs::create_dir(&native)?;
+    let logical = volume.child("owned-directory-handle-probe")?;
+    let before = owned_handle_count(&core)?;
+    for _ in 0..16 {
+        assert!(core.client().resource_info(&logical).await?.is_dir);
+    }
+    let after = owned_handle_count(&core)?;
+    let removal = core
+        .client()
+        .delete_resource(&logical, ResourceDeleteScope::RecursiveDirectory)
+        .await;
+    eprintln!(
+        "private owned directory handle observation: {}",
+        serde_json::json!({"reads":16,"handles_before":before,"handles_after":after,"native_directory_still_exists":native.is_dir(),"native_removal_reported_success":removal.is_ok()})
+    );
+    if let Err(error) = &removal {
+        report("owned-handle-probe-delete", error);
+    }
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    // This is diagnosis, not a successful directory-removal acceptance case.
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
 async fn diagnose_owned_paths(
     core: &ManagedInstance,
     stage: &str,

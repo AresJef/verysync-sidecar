@@ -1,0 +1,48 @@
+name: Windows owned directory handles (diagnostic only)
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    name: ${{ matrix.package }} diagnostic - not acceptance
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+      - run: cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare private fixed official engine
+        run: >-
+          python scripts/prepare-test-engine.py prepare
+          --package "${{ matrix.package }}" --parent "${{ runner.temp }}"
+          --github-env "${{ github.env }}"
+      - name: Observe only the exact owned child's handles and synthetic directory
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_mutation_engine
+          --test-filter private_owned_directory_read_handle_characterization
+          --evidence-dir "${{ runner.temp }}/vs-owned-directory-handles"
+      - name: Verify no task-owned fixed engine remains
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
