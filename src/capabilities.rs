@@ -45,6 +45,11 @@ pub enum Capability {
     /// Network settings and actual TCP, listener and discovery-cache snapshots.
     /// Local discovery, announcements and other transports have separate gates.
     NetworkControl,
+    /// Explicit transport settings and actual tracker/NAT snapshots; positive
+    /// registration, mapping and WAN traversal have separate evidence gates.
+    TransportControl,
+    /// Official relay server settings, runtime and explicit network probes.
+    RelayServer,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -189,6 +194,16 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::FileHistory),
+    LibraryCapability {
+        capability: Capability::TransportControl,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::RelayServer,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::AdvancedFolderSettings),
     planned(Capability::AccountLicense),
     planned(Capability::StorageProtocols),

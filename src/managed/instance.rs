@@ -309,6 +309,9 @@ fn owner_thread(
     };
     drop(process);
     drop(lease);
+    // Publish only after releasing the diagnostic handle as well. On Windows
+    // this private handle denies rename/delete while it remains open.
+    drop(capture);
     let _ = exit.send(Some(report));
 }
 

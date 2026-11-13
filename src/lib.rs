@@ -26,6 +26,8 @@
 #![doc = include_str!("../docs/public/devices.md")]
 #![doc = include_str!("../docs/public/invitations.md")]
 #![doc = include_str!("../docs/public/network.md")]
+#![doc = include_str!("../docs/public/transports.md")]
+#![doc = include_str!("../docs/public/relay.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -45,9 +47,11 @@ mod network;
 mod operations;
 mod path;
 mod raw;
+mod relay;
 mod releases;
 mod sharing;
 mod status;
+mod transports;
 
 pub use auth::{ApiKey, DeviceId};
 pub use capabilities::{
@@ -85,6 +89,10 @@ pub use network::{
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
+pub use relay::{
+    RelayProbe, RelayProbeResult, RelayRuntimeOptions, RelayServerConfig, RelayServerPatch,
+    RelayServerStatus, RelayServerUpdate,
+};
 pub use releases::{
     official_programs, ArchiveFormat, BuildVariant, OfficialProgram, PinnedVersion, ProgramAbi,
     ProgramArchitecture, ProgramOs, ProgramTarget,
@@ -94,6 +102,9 @@ pub use sharing::{
     SharePermission, ValidatedShare,
 };
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
+pub use transports::{
+    TrackerStatus, TransportConfig, TransportPatch, TransportStatus, TransportUpdate,
+};
 
 /// The fixed upstream version selected for initial compatibility acceptance.
 ///

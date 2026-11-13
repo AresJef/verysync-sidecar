@@ -200,6 +200,18 @@ pub enum PeerConnectionType {
     /// A TCP server-side connection.
     #[serde(rename = "tcp-server")]
     TcpServer,
+    /// A QUIC client connection, observed with UDP-only device selectors.
+    #[serde(rename = "quic-client")]
+    QuicClient,
+    /// A QUIC server connection, observed with UDP-only device selectors.
+    #[serde(rename = "quic-server")]
+    QuicServer,
+    /// A relay session initiated by this peer.
+    #[serde(rename = "relay-client")]
+    RelayClient,
+    /// A relay session accepted by this peer.
+    #[serde(rename = "relay-server")]
+    RelayServer,
     /// An unrecognized upstream type, not guessed as direct or relayed.
     #[serde(untagged)]
     Unknown(String),
@@ -209,6 +221,10 @@ impl fmt::Debug for PeerConnectionType {
         f.write_str(match self {
             Self::TcpClient => "PeerConnectionType::TcpClient",
             Self::TcpServer => "PeerConnectionType::TcpServer",
+            Self::QuicClient => "PeerConnectionType::QuicClient",
+            Self::QuicServer => "PeerConnectionType::QuicServer",
+            Self::RelayClient => "PeerConnectionType::RelayClient",
+            Self::RelayServer => "PeerConnectionType::RelayServer",
             Self::Unknown(_) => "PeerConnectionType::Unknown([REDACTED])",
         })
     }

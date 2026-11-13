@@ -2,6 +2,14 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit tracker/NAT/UDP/relay-client settings and fresh reported state,
+  official relay server control, typed effective timeouts and explicit probes.
+  Observe private UDP/QUIC and real three-core relay paths independently from
+  unverified WAN, public-provider and relay-authentication conditions.
+
+- Release the private diagnostic file before publishing managed exit, and
+  verify immediate post-stop diagnostic rename in native program preparation.
+
 - Add partial network settings, typed transport selectors and fresh listener,
   connection and discovery-cache observations. Keep stored configuration,
   candidate addresses and actual connectivity distinct; retain the fixed
