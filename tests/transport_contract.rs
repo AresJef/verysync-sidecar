@@ -14,6 +14,84 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn recovery_nonempty_ack_is_unknown_without_retry_and_pause_is_not_resumed() -> TestResult {
+    use verysync_sidecar::FolderId;
+    let folder = serde_json::json!({"id":"recovery","label":"synthetic","path":"/synthetic","paused":false,"type":"sendonly"});
+    let mut paused = folder.clone();
+    paused["paused"] = true.into();
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(serde_json::json!({"unexpected_private_body":KEY})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[paused]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("recovery")?;
+    let error = client
+        .request_override_remote_changes(&folder)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(matches!(
+        client.request_override_remote_changes(&folder).await,
+        Err(Error::FolderPaused { .. })
+    ));
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("POST ") || r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with("POST /prefix/rest/db/override?folder=recovery "));
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_guards_modes_and_marker_body_failure_is_not_success() -> TestResult {
+    use verysync_sidecar::FolderId;
+    let folder = serde_json::json!({"id":"recovery ?%","label":"synthetic","path":"/synthetic","paused":false,"type":"receiveonly"});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply {
+            status: 200,
+            body: Vec::new(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(serde_json::json!({"success":false,"error":KEY})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("recovery ?%")?;
+    assert!(matches!(
+        client.request_override_remote_changes(&folder).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    client.request_revert_local_changes(&folder).await?;
+    let error = client.request_marker_repair(&folder).await.unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    let requests = server.finish().await?;
+    let posts: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+    assert_eq!(posts.len(), 2);
+    assert!(posts[0].starts_with("POST /prefix/rest/db/revert?folder=recovery+%3F%25 "));
+    assert!(posts[1].starts_with("POST /prefix/rest/folder/marker/repair?folder=recovery+%3F%25 "));
+    Ok(())
+}
+
+#[tokio::test]
 async fn selective_browse_presence_flags_opaque_cursor_and_destructive_intent_are_exact(
 ) -> TestResult {
     use verysync_sidecar::{

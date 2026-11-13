@@ -122,7 +122,7 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target network --allow-private-discovery
           --evidence-dir "${{ runner.temp }}/vs-network-proxy"
-      - name: Verify actual synchronization, selective browse and bounded transfer controls
+      - name: Verify actual sync, selective browse, recovery and bounded transfers
         env:
           VERYSYNC_BANDWIDTH_PHASE: acceptance
         run: >-

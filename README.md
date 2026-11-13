@@ -74,6 +74,10 @@ actual trees, scoped search pages, opaque cursors and explicit mode settings.
 Conditional selection requests report real Pro-license refusals as typed errors;
 licensed selection and all-node removal effects remain unverified.
 
+The unreleased [folder recovery API](docs/public/recovery.md) sends explicit
+receive-only reversion, send-only override and marker-repair requests. Real
+data, marker and identity observations remain separate from acknowledgements.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.

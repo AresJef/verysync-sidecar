@@ -62,6 +62,8 @@ pub enum Capability {
     SelectiveBrowse,
     /// Explicit conditional selection requests; licensed effects unverified.
     LicensedSelectiveSelection,
+    /// Explicit tracked-change reversion, authority override and marker repair.
+    FolderRecovery,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -252,6 +254,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AuxiliaryControls),
+    LibraryCapability {
+        capability: Capability::FolderRecovery,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
 ];
 
 /// Inspect library code/evidence without I/O or a running engine.
