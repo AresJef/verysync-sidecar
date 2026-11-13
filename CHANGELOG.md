@@ -2,6 +2,15 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add redacted sharing-key types, engine generation/validation and target-bound
+  key registration with explicit material readback. Keep local registration IDs
+  separate from peer association; reject invalid keys and duplicate groups.
+
+- Add explicit whole-folder scan requests and bounded observation of actual
+  scanning entry/exit, optional reported progress and fresh terminal status.
+  Preserve state when a wait is cancelled; gaps remain indeterminate and
+  observation cancellation sends no engine-stop or pause command.
+
 - Restrict Windows child handle inheritance to explicitly selected private
   standard I/O, while retaining suspended creation, private Job containment and
   exact process/thread ownership. Verify caller-output EOF while a persistent

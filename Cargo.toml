@@ -104,3 +104,13 @@ unsafe_code = "deny"
 
 [lints.clippy]
 all = "warn"
+
+[[test]]
+name = "operations"
+path = "tests/operations.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "sharing"
+path = "tests/sharing.rs"
+required-features = ["engine-tests"]

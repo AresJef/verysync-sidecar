@@ -10,6 +10,16 @@ The unreleased [event subscription API](docs/public/events.md) provides bounded
 queues, explicit continuity gaps and finite read-only recovery. Its task belongs
 to the subscription; closing it leaves the engine running.
 
+The unreleased [scan observation API](docs/public/long-running-operations.md)
+separates an explicit scan request from observed scanning entry/exit and fresh
+status. Cancelling observation closes only its read subscription; completion
+does not certify peer synchronization or invent a server job identifier.
+
+The unreleased [sharing API](docs/public/sharing.md) generates and validates
+actual engine keys, preserves reported read-only/read-write permissions and
+registers using the target's proposed local ID. Registration readback and peer
+association are separate observations.
+
 The development plan runs through full delivery. Alpha releases are intermediate milestones: after publishing an alpha, development continues in the same project until the complete agreed functionality, platforms, documentation, and examples pass acceptance and the full release is delivered.
 
 ## Development decisions
