@@ -48,6 +48,11 @@ native null is an observed empty listing. Returned paths and timestamps remain
 untrusted data and are never opened as controller paths. Use `TargetPath::remote`
 with the target's syntax when controlling another system.
 
+The browse response describes one directory level. A directory entry has an
+empty version array, even when descendants have archived files. Read that
+directory with an explicit prefix to see its children. An empty directory marker
+does not prove that its whole subtree contains no historical versions.
+
 Restoration submits a bounded map of 1–1024 unique relative files and exact
 native timestamps through POST `/rest/folder/versions`. Logical selection text
 is limited to 64 KiB. Timestamps should come from a fresh archive listing and
@@ -61,8 +66,23 @@ Coordinate active writers and peers before restoration. The SDK does not pause
 them, rescan, retry, create a backup, or roll back partial effects. A cancelled
 future does not establish that a native operation stopped. A failure after POST
 can leave an unknown outcome. A later synchronization can change restored data
-again. Folder root restoration and the separate GUI items-based restore entry
-retain their own verification requirements.
+again.
+
+`restore_directory_versions(folder, scope, order)` requests the native
+items-based directory planner with `DirectoryVersionOrder::Newest` or `Oldest`.
+Select one explicit `VersionedDirectory::Path(TargetPath)` or
+`VersionedDirectory::FolderRoot`. The latter uses the observed dot-root spelling;
+an arbitrary dot or parent input path remains invalid. The fixed GUI's empty-root
+spelling did not reliably restore the isolated samples. The SDK does not retry
+it or translate an empty acknowledgement into successful data recovery.
+
+Directory restoration can affect multiple historical files, including nested
+descendants. Coordinate other writers, inspect the per-path report and verify
+actual content. Local isolated tests check nested oldest/newest restoration,
+an unselected root file, a deeper descendant, and explicit root restoration
+against actual bytes/SHA-256. Same-source multi-platform acceptance remains
+pending. This operation does not automatically expand a version browse response
+on the controller or open any controller path.
 
 These APIs are unreleased. Isolated macOS ARM64 tests have checked actual remote
 overwrites, retention of two versions, trashcan retention after remote deletion,

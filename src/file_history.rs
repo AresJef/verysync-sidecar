@@ -208,6 +208,33 @@ impl fmt::Debug for FileVersionRestore {
 #[derive(Clone, Deserialize)]
 #[serde(transparent)]
 pub struct FileVersionRestoreReport(pub BTreeMap<String, Option<String>>);
+
+/// An explicit configured-folder root or one relative directory whose archived
+/// file versions should be selected by the native directory restore planner.
+#[derive(Clone)]
+pub enum VersionedDirectory {
+    /// The configured folder's root, deliberately encoded as native dot-root.
+    /// This is separate from accepting an arbitrary dot-segment input path.
+    FolderRoot,
+    /// A relative target directory. Absolute and parent paths are refused.
+    Path(TargetPath),
+}
+impl fmt::Debug for VersionedDirectory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::FolderRoot => "VersionedDirectory::FolderRoot",
+            Self::Path(_) => "VersionedDirectory::Path([REDACTED])",
+        })
+    }
+}
+/// Which native archived version to request for files in a directory scope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryVersionOrder {
+    /// Request the native planner's newest archived version for each path.
+    Newest,
+    /// Request the native planner's oldest archived version for each path.
+    Oldest,
+}
 impl FileVersionRestoreReport {
     /// Number of non-null native errors. Error strings can contain target paths.
     pub fn error_count(&self) -> usize {

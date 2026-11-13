@@ -1,6 +1,7 @@
 //! Explicit versioning policies and native archive operations, without retries.
 use super::{mutation_error, Client};
 use crate::{AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate};
+use crate::{DirectoryVersionOrder, VersionedDirectory};
 use crate::{
     Error, FileVersionRestore, FileVersionRestoreReport, FolderId, FolderVersionHistory,
     FolderVersioningConfiguration, FolderVersioningPolicy, FolderVersioningUpdate,
@@ -9,6 +10,67 @@ use crate::{
 use std::collections::BTreeMap;
 
 impl Client {
+    /// Request the native directory version restore planner for one explicit
+    /// root/directory scope. Current files can be overwritten and errors can be
+    /// partial. The SDK does not traverse controller files, pause peers, retry,
+    /// create backups or roll back. A successful error-free report remains an
+    /// acknowledgement; observe actual restored content separately.
+    ///
+    /// Explicit FolderRoot uses the observed native dot-root representation.
+    /// The fixed GUI's empty-root spelling did not reliably restore the isolated
+    /// samples and is not silently accepted as a completed restore.
+    pub async fn restore_directory_versions(
+        &self,
+        folder: &FolderId,
+        scope: &VersionedDirectory,
+        order: DirectoryVersionOrder,
+    ) -> Result<FileVersionRestoreReport> {
+        let path = match scope {
+            VersionedDirectory::FolderRoot => ".",
+            VersionedDirectory::Path(path) => {
+                crate::scans::validate_subpath(path, self.folder_path_style()?)?
+            }
+        };
+        if path.len() > 65536 {
+            return Err(Error::InvalidConfiguration {
+                reason: "directory version selection exceeds 64 KiB",
+            });
+        }
+        let action = match order {
+            DirectoryVersionOrder::Newest => "latest",
+            DirectoryVersionOrder::Oldest => "oldest",
+        };
+        let operation = "restore archived directory versions";
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        if self.folder(folder).await?.paused {
+            return Err(Error::FolderPaused { id: folder.clone() });
+        }
+        let url = self.connection.management_url(
+            "rest/folder/versions/restore",
+            &[("folder", folder.as_str())],
+        )?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                operation,
+                reqwest::Method::POST,
+                url,
+                Some(&serde_json::json!({"items":[{"path":path,"action":action}]})),
+                true,
+            )
+            .await?;
+        serde_json::from_slice(&bytes).map_err(|_| {
+            mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                },
+            )
+        })
+    }
     /// Read native audit-log settings, without inferring actual entitlement or
     /// successful recording from an enabled flag alone.
     pub async fn audit_history_settings(&self) -> Result<AuditHistorySettings> {

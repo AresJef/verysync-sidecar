@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit directory oldest/newest version restoration, including an
+  explicit native dot-root selection, with observed nested-file effects.
+
 - Add explicit file versioning policies, native archive listings and exact file
   restoration, with bounded selection and per-path errors. Preserve unknown
   archive settings and expose conditional audit-log settings/pages/reset.

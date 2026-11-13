@@ -95,8 +95,9 @@ pub use events::{
 };
 pub use file_history::{
     ArchivedFileVersion, AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate,
-    FileVersionRestore, FileVersionRestoreReport, FolderVersionHistory,
+    DirectoryVersionOrder, FileVersionRestore, FileVersionRestoreReport, FolderVersionHistory,
     FolderVersioningConfiguration, FolderVersioningPolicy, FolderVersioningUpdate,
+    VersionedDirectory,
 };
 pub use file_transfers::{
     ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,

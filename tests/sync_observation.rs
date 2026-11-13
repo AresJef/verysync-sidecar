@@ -1601,16 +1601,16 @@ async fn actual_receiveonly_revert_and_marker_repair_restore_owned_data() -> Tes
     b.client().request_scan(&bf.configuration.id).await?;
     let change_observation = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            if b.client()
+            let observed = b
+                .client()
                 .local_changes(&bf.configuration.id, ListPage::new(1, 10)?)
-                .await?
-                .files
-                .iter()
-                .any(|f| f.name == "revert.bin")
+                .await?;
+            if observed.files.iter().any(|f| f.name == "revert.bin")
+                && !observed.files.iter().any(|f| f.name == "deleted.bin")
                 && std::fs::read(receiver.join("deleted.bin"))
                     .is_ok_and(|v| v == b"original deleted synthetic bytes")
             {
-                break Ok::<_, Error>(());
+                break Ok::<_, Error>(observed);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -1633,17 +1633,14 @@ async fn actual_receiveonly_revert_and_marker_repair_restore_owned_data() -> Tes
             })
         );
     }
-    change_observation??;
+    let observed_changes = change_observation??;
     // The fixed engine derives receive-only mode from the RO key and repairs
     // local deletion itself; establish that separately before explicit revert.
     assert_eq!(
         std::fs::read(receiver.join("deleted.bin"))?,
         b"original deleted synthetic bytes"
     );
-    assert!(!b
-        .client()
-        .local_changes(&bf.configuration.id, ListPage::new(1, 10)?)
-        .await?
+    assert!(!observed_changes
         .files
         .iter()
         .any(|f| f.name == "deleted.bin"));

@@ -14,6 +14,80 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn directory_version_restore_requires_explicit_root_and_native_items_body() -> TestResult {
+    use verysync_sidecar::{
+        DirectoryVersionOrder, FolderId, PathStyle, TargetPath, VersionedDirectory,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let id = FolderId::parse("directory versions")?;
+    let folder = || {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":id.as_str(),"path":"/synthetic","label":"","paused":false}]}),
+        )
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        folder(),
+        Reply::json(serde_json::json!({})),
+        identity(),
+        folder(),
+        Reply::json(serde_json::json!({"native-path":KEY})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for path in [".", "..", "/absolute", "nested/../escape"] {
+        let scope = VersionedDirectory::Path(TargetPath::remote(PathStyle::Unix, path)?);
+        assert!(matches!(
+            client
+                .restore_directory_versions(&id, &scope, DirectoryVersionOrder::Oldest)
+                .await,
+            Err(Error::InvalidPath { .. })
+        ));
+    }
+    let root = client
+        .restore_directory_versions(
+            &id,
+            &VersionedDirectory::FolderRoot,
+            DirectoryVersionOrder::Oldest,
+        )
+        .await?;
+    assert_eq!(root.error_count(), 0);
+    let scope = VersionedDirectory::Path(TargetPath::remote(PathStyle::Unix, "nested/二 %")?);
+    assert!(!format!("{scope:?}").contains("nested"));
+    let result = client
+        .restore_directory_versions(&id, &scope, DirectoryVersionOrder::Newest)
+        .await?;
+    assert_eq!(result.error_count(), 1);
+    assert!(!format!("{result:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 2);
+    let mut bodies = Vec::new();
+    for request in &writes {
+        let text = request.split("\r\n\r\n").nth(1).ok_or("body")?;
+        bodies.push(serde_json::from_str::<serde_json::Value>(text)?);
+    }
+    assert!(writes
+        .iter()
+        .all(|r| r
+            .starts_with("POST /prefix/rest/folder/versions/restore?folder=directory+versions ")));
+    assert_eq!(
+        bodies[0],
+        serde_json::json!({"items":[{"path":".","action":"oldest"}]})
+    );
+    assert_eq!(
+        bodies[1],
+        serde_json::json!({"items":[{"path":"nested/二 %","action":"latest"}]})
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn audit_settings_report_ignored_enable_and_preserve_null_pages() -> TestResult {
     use verysync_sidecar::AuditHistorySettings;
     let identity = || Reply::json(serde_json::json!({"myID":ID}));
