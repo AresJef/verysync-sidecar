@@ -1323,20 +1323,22 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
         client.resume_folder(folder).await?;
     }
     a.client().request_scan(&af.configuration.id).await?;
+    let mut last_remote = None;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if b.client()
-                .folder_status(&bf.configuration.id)
-                .await?
-                .global_files
-                == Some(3)
-            {
+            let status = b.client().folder_status(&bf.configuration.id).await?;
+            last_remote = Some((status.global_files, status.local_files, status.need_bytes));
+            if status.global_files == Some(3) {
                 break Ok::<_, Error>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??;
+    .await
+    .map_err(|_| {
+        eprintln!("selective preparation timed out: phase=remote-index counters={last_remote:?}");
+        "selective remote-index preparation exceeded its original 20-second bound"
+    })??;
     let folder = &bf.configuration.id;
     let root_options = SelectiveBrowseOptions::new(SelectiveScope::FolderRoot).levels(2);
     let tree = b.client().browse_selective(folder, &root_options).await?;
@@ -1465,16 +1467,24 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
             .await?
             .enabled
     );
+    let mut last_received = None;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let status = b.client().folder_status(folder).await?;
+            last_received = Some((status.global_files, status.local_files, status.need_bytes));
             if status.local_files == Some(3) && status.need_bytes == Some(0) {
                 break Ok::<_, Error>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??;
+    .await
+    .map_err(|_| {
+        eprintln!(
+            "selective preparation timed out: phase=normal-receive counters={last_received:?}"
+        );
+        "selective normal-receive effect exceeded its original 20-second bound"
+    })??;
     let nested = Path::new("nested").join("child.bin");
     for (name, bytes) in [
         (Path::new("first.bin"), b"first synthetic".as_slice()),
