@@ -62,6 +62,18 @@ data changed. Confirm actual content separately. Native archive timestamps
 have one-second resolution; closely spaced edits require particular care when
 selecting and checking a historical version.
 
+Fixed v2.33.2 has an observed native same-second collision: restoring over an
+existing file can first archive its current content using the selected archive's
+same timestamp, replace that selected archive, and restore the current content
+again. The selected old bytes can be lost despite an empty error report. An
+isolated controlled case reproduced this in one native second while a distinct
+older archive restored correctly. This affects the native restore primitive,
+including directory planning. Keep an independent copy before destructive
+restoration and coordinate the target's writers and timestamp generations.
+The SDK does not silently sleep, retry, patch the official program or claim to
+fix this engine defect. Functional test fixtures explicitly separate archive
+generations; same-second recovery remains a distinct unresolved condition.
+
 Coordinate active writers and peers before restoration. The SDK does not pause
 them, rescan, retry, create a backup, or roll back partial effects. A cancelled
 future does not establish that a native operation stopped. A failure after POST

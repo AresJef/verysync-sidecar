@@ -19,6 +19,9 @@ impl Client {
     /// Explicit FolderRoot uses the observed native dot-root representation.
     /// The fixed GUI's empty-root spelling did not reliably restore the isolated
     /// samples and is not silently accepted as a completed restore.
+    /// Native second-resolution archive collisions can consume the selected old
+    /// version while retaining current bytes with an empty report. Coordinate
+    /// writers, preserve independent copies and verify actual target content.
     pub async fn restore_directory_versions(
         &self,
         folder: &FolderId,
@@ -262,6 +265,9 @@ impl Client {
     /// A successful report with zero native errors is an acknowledgement only.
     /// Verify actual file content separately. Cancellation/transport failure
     /// after POST leaves a possible partial, unknown outcome.
+    /// The baseline can replace a selected archive when current-content
+    /// archiving collides with its one-second timestamp; preserve independent
+    /// copies and coordinate archive generations before destructive restoration.
     pub async fn restore_file_versions(
         &self,
         folder: &FolderId,

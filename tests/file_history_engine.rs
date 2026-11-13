@@ -365,26 +365,10 @@ async fn public_directory_restore_selects_nested_and_explicit_root_versions() ->
         data(&receive.join(p), new).await?;
     }
     let root_catalog = b.client().folder_versions(&bf.id, None).await?;
-    eprintln!(
-        "private directory version root entries: {:?}",
-        root_catalog
-            .0
-            .iter()
-            .map(|(p, v)| (p, v.len()))
-            .collect::<Vec<_>>()
-    );
     let nested_catalog = b
         .client()
         .folder_versions(&bf.id, Some(&TargetPath::local(Path::new("nested"))))
         .await?;
-    eprintln!(
-        "private directory version nested entries: {:?}",
-        nested_catalog
-            .0
-            .iter()
-            .map(|(p, v)| (p, v.len()))
-            .collect::<Vec<_>>()
-    );
     assert!(root_catalog.0.values().any(|versions| !versions.is_empty()));
     assert!(nested_catalog
         .0
@@ -392,6 +376,11 @@ async fn public_directory_restore_selects_nested_and_explicit_root_versions() ->
         .any(|versions| !versions.is_empty()));
     let exit = a.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    // Native archive names have one-second precision. Restoring a selected
+    // archive while archiving the current file in that same second can replace
+    // the selected archive before it is restored. Establish distinct archive
+    // generations explicitly; keep every 30-second content deadline unchanged.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     let scope = VersionedDirectory::Path(TargetPath::local(Path::new("nested")));
     let result = b
         .client()
