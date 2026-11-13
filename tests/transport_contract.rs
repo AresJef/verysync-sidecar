@@ -141,6 +141,214 @@ fn version(value: &str) -> Reply {
 }
 
 #[tokio::test]
+async fn pending_route_http_and_schema_errors_are_never_empty_snapshots() -> TestResult {
+    for reply in [
+        Reply {
+            status: 404,
+            body: b"missing route".to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        Reply::json(serde_json::json!({"folder":{"offeredBy":"malformed"}})),
+    ] {
+        let server = ScriptedServer::start(vec![
+            version("v2.33.2"),
+            Reply::json(serde_json::json!({"myID":ID})),
+            reply,
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.pending_folders(None).await,
+            Err(Error::Http { .. }) | Err(Error::InvalidResponse { .. })
+        ));
+        assert_eq!(server.finish().await?.len(), 3);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn candidate_pending_device_dismissal_is_exact_and_has_no_implicit_ignore() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;
+    let pending = serde_json::json!({peer.as_str():{"time":"2026-01-01T00:00:00Z","name":"private pending name","address":"private.invalid:1234","futureSecret":"private future value"}});
+    let server = ScriptedServer::start(vec![
+        version("v2.33.2"),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(pending),
+        Reply::json(serde_json::Value::Null),
+        Reply::json(serde_json::json!({})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(client.dismiss_pending_device(&peer).await?.record_absent);
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests.iter().filter(|v| !v.starts_with("GET ")).collect();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with(&format!(
+        "DELETE /prefix/rest/cluster/pending/devices?device={} HTTP/1.1\r\n",
+        peer.as_str()
+    )));
+    assert!(writes[0].ends_with("\r\n\r\n"));
+    // Synthetic candidate wire evidence only; no nonempty native record claim.
+    Ok(())
+}
+
+#[tokio::test]
+async fn persistent_folder_ignore_preserves_other_entries_and_only_patches_that_field() -> TestResult
+{
+    use verysync_sidecar::{DeviceId, FolderId};
+    let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;
+    let folder = FolderId::parse("remote ?/#%")?;
+    let other = serde_json::json!({"id":"other","label":"keep","time":"2025-01-01T00:00:00Z","unknown":{"preserved":7}});
+    let new =
+        serde_json::json!({"id":folder.as_str(),"label":"offered","time":"2026-01-01T00:00:00Z"});
+    let server=ScriptedServer::start(vec![
+        version("v2.33.2"),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({folder.as_str():{"offeredBy":{peer.as_str():{"time":"2026-01-01T00:00:00Z","label":"offered","receiveEncrypted":false,"remoteEncrypted":false}}}})),
+        Reply::json(serde_json::json!({"devices":[{"deviceID":peer.as_str(),"ignoredFolders":[other.clone()]}]})),
+        Reply::json(serde_json::Value::Null),
+        Reply::json(serde_json::json!({"devices":[{"deviceID":peer.as_str(),"ignoredFolders":[other.clone(),new.clone()]}]})),
+        Reply::json(serde_json::json!({})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let result = client.ignore_folder_offer(&folder, &peer).await?;
+    assert!(result.is_ignored && result.pending_offer_absent);
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|v| v.starts_with("PATCH "))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split_once("\r\n\r\n").ok_or("missing body")?.1)?;
+    assert_eq!(body, serde_json::json!({"ignoredFolders":[other,new]}));
+    assert!(requests
+        .iter()
+        .filter(|v| v.contains("pending/folders?"))
+        .all(|v| v.contains(&format!("device={}", peer.as_str()))));
+    Ok(())
+}
+
+#[tokio::test]
+async fn device_creation_preserves_unknown_defaults_and_rejects_cloned_duplicates() -> TestResult {
+    use verysync_sidecar::{CreateDeviceOptions, DeviceId, DevicePatch};
+    let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;
+    let configured = serde_json::json!({"deviceID":peer.as_str(),"name":"Chosen peer","addresses":["dynamic"],"compression":"metadata","paused":true,"vendorDefault":{"retained":7}});
+    let server = ScriptedServer::start(vec![
+        version("v2.33.2"), Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"devices":[]})),
+        Reply::json(serde_json::json!({"deviceID":"","name":"Default","addresses":["dynamic"],"compression":"metadata","paused":false,"vendorDefault":{"retained":7}})),
+        Reply::json(serde_json::Value::Null),
+        Reply::json(serde_json::json!({"devices":[configured.clone()]})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"devices":[configured]})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let options = CreateDeviceOptions::new(peer.clone())
+        .settings(DevicePatch::default().name("Chosen peer").paused(true));
+    assert!(client.create_device(&options).await?.requested_fields_match);
+    assert!(matches!(
+        client.clone().create_device(&options).await,
+        Err(Error::DeviceAlreadyExists { .. })
+    ));
+    let requests = server.finish().await?;
+    let posts: Vec<_> = requests.iter().filter(|v| v.starts_with("POST ")).collect();
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0].starts_with("POST /prefix/rest/config/devices HTTP/1.1\r\n"));
+    let body: serde_json::Value =
+        serde_json::from_str(posts[0].split_once("\r\n\r\n").ok_or("missing body")?.1)?;
+    assert_eq!(body["deviceID"], peer.as_str());
+    assert_eq!(body["vendorDefault"]["retained"], 7);
+    assert_eq!(body["addresses"], serde_json::json!(["dynamic"]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn device_patch_reports_stale_values_and_rejects_wrong_target_before_write() -> TestResult {
+    use verysync_sidecar::{DeviceId, DevicePatch};
+    let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;
+    let configured = serde_json::json!({"deviceID":peer.as_str(),"name":"Old","addresses":["dynamic"],"compression":"metadata","paused":false});
+    let server = ScriptedServer::start(vec![
+        version("v2.33.2"),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"devices":[configured.clone()]})),
+        Reply::json(serde_json::Value::Null),
+        Reply::json(serde_json::json!({"devices":[configured]})),
+        Reply::json(serde_json::json!({"myID":peer.as_str()})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(
+        !client
+            .update_device(&peer, &DevicePatch::default().name("New"))
+            .await?
+            .requested_fields_match
+    );
+    assert!(matches!(
+        client.remove_device(&peer).await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert!(matches!(
+        client.remove_device(&DeviceId::parse(ID)?).await,
+        Err(Error::LocalDeviceProtected)
+    ));
+    let requests = server.finish().await?;
+    let patches: Vec<_> = requests
+        .iter()
+        .filter(|v| v.starts_with("PATCH "))
+        .collect();
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].starts_with(&format!(
+        "PATCH /prefix/rest/config/devices/{} HTTP/1.1\r\n",
+        peer.as_str()
+    )));
+    let body: serde_json::Value =
+        serde_json::from_str(patches[0].split_once("\r\n\r\n").ok_or("missing body")?.1)?;
+    assert_eq!(body, serde_json::json!({"name":"New"}));
+    assert!(!requests.iter().any(|v| v.starts_with("DELETE ")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn device_delete_readback_failure_is_unknown_without_retry_or_file_flags() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;
+    let configured = serde_json::json!({"deviceID":peer.as_str(),"name":"Peer","addresses":["dynamic"],"compression":"metadata","paused":false});
+    let server = ScriptedServer::start(vec![
+        version("v2.33.2"),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"devices":[configured]})),
+        Reply::json(serde_json::Value::Null),
+        Reply::json(
+            serde_json::json!({"devices":[],"folders":[{"id":"sample","devices":"malformed"}]}),
+        ),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(
+        matches!(client.remove_device(&peer).await,Err(Error::MutationOutcomeUnknown { source,.. }) if matches!(*source,Error::InvalidResponse { .. }))
+    );
+    let requests = server.finish().await?;
+    let deletes: Vec<_> = requests
+        .iter()
+        .filter(|v| v.starts_with("DELETE "))
+        .collect();
+    assert_eq!(deletes.len(), 1);
+    assert!(deletes[0].starts_with(&format!(
+        "DELETE /prefix/rest/config/devices/{} HTTP/1.1\r\n",
+        peer.as_str()
+    )));
+    assert!(deletes[0].ends_with("\r\n\r\n"));
+    assert!(!deletes[0].to_ascii_lowercase().contains("content-type:"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn unverified_version_requires_explicit_policy_and_retains_unknown_metadata() -> TestResult {
     let server = ScriptedServer::start(vec![version("v99.0.0")]).await?;
     let error = Client::connect(server.options()?).await.unwrap_err();

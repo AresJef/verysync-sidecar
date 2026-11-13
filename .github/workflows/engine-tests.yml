@@ -83,7 +83,7 @@ jobs:
           --parent "${{ runner.temp }}"
           --github-env "${{ github.env }}"
       - name: Run public input and synthetic transport contracts
-        run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test releases --locked
+        run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test devices_contract --test invitations_contract --test releases --locked
       - name: Check explicit preparation and bounded archive contracts
         run: cargo +"$TEST_TOOLCHAIN" test --features download --lib --test download --test cache --locked
       - name: Build public examples explicitly
@@ -109,6 +109,14 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target p2p_isolation --evidence-dir "${{ runner.temp }}/vs-p2p-isolation-proxy"
+      - name: Verify public device controls and actual private peer effects
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --evidence-dir "${{ runner.temp }}/vs-devices-proxy"
+      - name: Verify actual folder offers, persistent ignores and explicit key acceptance
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target invitations --evidence-dir "${{ runner.temp }}/vs-invitations-proxy"
       - name: Run independent-engine fixture contracts
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"

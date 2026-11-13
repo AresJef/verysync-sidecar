@@ -53,7 +53,7 @@ impl fmt::Debug for ApiKey {
 ///
 /// Parsing checks the eight groups of seven Base32 characters. It does not
 /// claim to verify the underlying device certificate or its cryptographic key.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DeviceId(String);
 
 impl DeviceId {

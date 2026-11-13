@@ -34,6 +34,12 @@ pub enum Capability {
     ObservableTasks,
     /// Peer sharing and P2P controls.
     PeerSharing,
+    /// Remote device configuration, distinct from live connection or transfer state.
+    DeviceConfiguration,
+    /// Pending folder offers, per-peer ignores and explicit local folder associations.
+    FolderInvitations,
+    /// Pending-device records; nonempty native validation remains pending.
+    PendingDeviceRecords,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -148,6 +154,21 @@ static CATALOG: &[LibraryCapability] = &[
     },
     LibraryCapability {
         capability: Capability::PeerSharing,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::DeviceConfiguration,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::FolderInvitations,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::PendingDeviceRecords,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
