@@ -32,9 +32,10 @@ jobs:
       - run: cargo +1.99.1 check --lib --locked
       - run: cargo +1.99.1 check --all-targets --locked
       - run: cargo +1.99.1 test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test releases --locked
+      - run: cargo +1.99.1 test --features download --lib --test download --locked
       - run: cargo +1.99.1 clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo +1.99.1 doc --no-deps --all-features --locked
-      - run: cargo +1.99.1 test --doc --locked
+      - run: cargo +1.99.1 test --doc --features download --locked
       - name: Audit locked dependencies against current RustSec advisories
         run: python3 scripts/run-dependency-audit.py --toolchain 1.99.1
 
@@ -52,4 +53,5 @@ jobs:
       - run: cargo +1.85.0 check --all-targets --locked
       - run: cargo +1.85.0 test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test releases --locked
       - run: cargo +1.85.0 test --no-default-features --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test releases --locked
-      - run: cargo +1.85.0 test --doc --locked
+      - run: cargo +1.85.0 test --features download --lib --test download --locked
+      - run: cargo +1.85.0 test --doc --features download --locked

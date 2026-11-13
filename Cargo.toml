@@ -31,6 +31,7 @@ include = [
 ]
 
 [dependencies]
+flate2 = { version = "1.1.11", default-features = false, features = ["miniz_oxide"], optional = true }
 fs2 = "0.4.3"
 getrandom = "0.4.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
@@ -38,8 +39,10 @@ rmpv = "1.3.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
+tar = { version = "0.4.46", default-features = false, optional = true }
 tokio = { version = "1.54.1", features = ["rt", "sync", "time", "macros"] }
 url = "2.5.8"
+rawzip = { version = "0.5.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
@@ -52,6 +55,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 default = ["tls"]
 tls = ["reqwest/rustls"]
 engine-tests = []
+download = ["tls", "dep:flate2", "dep:tar", "dep:rawzip"]
 
 [dev-dependencies]
 getrandom = "0.4.3"
@@ -114,3 +118,13 @@ required-features = ["engine-tests"]
 name = "sharing"
 path = "tests/sharing.rs"
 required-features = ["engine-tests"]
+
+[[test]]
+name = "download_engine"
+path = "tests/download_engine.rs"
+required-features = ["engine-tests", "download"]
+
+[[test]]
+name = "download_catalog"
+path = "tests/download_catalog.rs"
+required-features = ["engine-tests", "download"]

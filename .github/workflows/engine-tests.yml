@@ -15,6 +15,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  artifact-catalog:
+    name: Fixed archive catalog (static, no engine execution)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install MSRV
+        run: rustup toolchain install 1.85.0 --profile minimal
+      - name: Check every in-scope fixed archive through the public Rust API
+        run: cargo +1.85.0 test --features engine-tests,download --test download_catalog --locked -- --nocapture
+
   fixture:
     name: ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
@@ -71,6 +84,8 @@ jobs:
           --github-env "${{ github.env }}"
       - name: Run public input and synthetic transport contracts
         run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test releases --locked
+      - name: Check explicit preparation and bounded archive contracts
+        run: cargo +"$TEST_TOOLCHAIN" test --features download --lib --test download --locked
       - name: Build public examples explicitly
         run: >-
           python scripts/prepare-test-examples.py
@@ -110,6 +125,10 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target sharing --evidence-dir "${{ runner.temp }}/vs-sharing-proxy"
+      - name: Prepare the official fixed program through Rust and verify actual native startup
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target download_engine --evidence-dir "${{ runner.temp }}/vs-download-proxy"
       - name: Investigate native macOS lifetime mechanisms
         if: startsWith(matrix.package, 'macos-')
         run: >-

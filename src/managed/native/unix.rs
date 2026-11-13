@@ -270,6 +270,16 @@ pub(in crate::managed) fn create_directory(path: &Path) -> io::Result<()> {
     fs::DirBuilder::new().mode(0o700).create(path)
 }
 
+#[cfg(feature = "download")]
+pub(in crate::managed) fn retain_private_directory(path: &Path) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    private_directory(path, &file.metadata()?)?;
+    Ok(file)
+}
+
 fn options() -> OpenOptions {
     let mut options = OpenOptions::new();
     options

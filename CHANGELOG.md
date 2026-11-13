@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add optional explicit fixed program preparation with bounded streaming,
+  complete archive SHA-256 checks, exact regular executable extraction,
+  private permissions and runtime-independent partial-file cleanup.
+
 - Add explicit pinned program-source and official target models, fixed archive
   identities and separate controller/runtime ABI conditions. Reject unlisted
   versions/targets without selecting a newer or different program.
