@@ -47,6 +47,9 @@ async fn invoke(
     state: &Path,
     address: &std::ffi::OsStr,
 ) -> TestResult<Value> {
+    let capture_root = state.parent().ok_or("example capture parent missing")?;
+    let stdout = tempfile::NamedTempFile::new_in(capture_root)?;
+    let stderr = tempfile::NamedTempFile::new_in(capture_root)?;
     let mut command = Command::new(executable);
     command
         .arg(mode)
@@ -59,8 +62,8 @@ async fn invoke(
             std::env::var("VERYSYNC_TEST_BINARY_SHA256")?,
         )
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(stdout.as_file().try_clone()?)
+        .stderr(stderr.as_file().try_clone()?);
     let mut host = container.spawn(&mut command)?;
     eprintln!("compiled owned example stage: {mode} spawned");
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -72,23 +75,20 @@ async fn invoke(
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     eprintln!("compiled owned example stage: {mode} caller exited");
-    // The example emits one small JSON document; cores never inherit these pipes.
+    // Read a bounded regular file after this exact caller exits. A retained
+    // Windows pipe writer can otherwise prevent EOF despite observed root exit.
+    // This capture is independent of the native core-survival/exit verdicts.
     let output = tokio::task::spawn_blocking(move || -> TestResult<_> {
         use std::io::Read;
-        let mut stdout = Vec::new();
-        host.0
-            .stdout
-            .take()
-            .ok_or("compiled example stdout missing")?
-            .take(8193)
-            .read_to_end(&mut stdout)?;
+        let mut bytes = Vec::new();
+        stdout.reopen()?.take(8193).read_to_end(&mut bytes)?;
         require(
-            stdout.len() <= 8192,
+            bytes.len() <= 8192,
             "compiled owned example output exceeds its bound",
         )?;
         let status = host.0.wait()?;
         require(status.success(), "compiled owned example returned failure")?;
-        Ok(serde_json::from_slice::<Value>(&stdout)?)
+        Ok(serde_json::from_slice::<Value>(&bytes)?)
     })
     .await??;
     eprintln!("compiled owned example stage: {mode} output consumed");
