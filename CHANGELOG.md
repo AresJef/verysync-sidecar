@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add fresh typed completion/status batches, bounded need/local-change/error
+  pages and device/folder statistics. Preserve unknown remote state, null lists
+  and untrusted file names; verify native access errors, active need, local edits
+  and content/time restoration without claiming business-batch completion.
+
 - Add explicit tracker/NAT/UDP/relay-client settings and fresh reported state,
   official relay server control, typed effective timeouts and explicit probes.
   Observe private UDP/QUIC and real three-core relay paths independently from

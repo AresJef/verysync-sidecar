@@ -52,6 +52,11 @@ Dedicated tests cover private UDP/QUIC peers and a three-core relay path.
 Cross-WAN traversal, public providers and authenticated relay enforcement
 retain separate acceptance requirements.
 
+The unreleased [synchronization snapshots](docs/public/sync-observation.md)
+preserve completion uncertainty, explicit need/change/error pages and actual
+device/folder statistics. Synthetic file/index, active need and local-change
+effects have dedicated native tests; snapshots do not certify business batches.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.

@@ -559,7 +559,9 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
             Value::Array(vec![Value::from("tcp://127.0.0.1:0")]),
         )?;
         set(field_mut(&mut root, "5")?, "2", Value::Array(Vec::new()))?;
-        for key in ["3", "4", "10", "12", "13", "59", "74", "79"] {
+        // Schema 54 field 81 is TCPPunchEnabled. Disable it before the first
+        // serve, independently of NAT mapping and tracker settings.
+        for key in ["3", "4", "10", "12", "13", "59", "74", "79", "81"] {
             set(field_mut(&mut root, "5")?, key, Value::Boolean(false))?;
         }
         set(field_mut(&mut root, "5")?, "17", Value::from(-1))?;

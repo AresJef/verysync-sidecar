@@ -158,3 +158,8 @@ required-features = ["engine-tests"]
 name = "network"
 path = "tests/network.rs"
 required-features = ["engine-tests"]
+
+[[test]]
+name = "sync_observation"
+path = "tests/sync_observation.rs"
+required-features = ["engine-tests"]

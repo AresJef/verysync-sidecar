@@ -262,6 +262,13 @@ pub enum Error {
         /// The requested opaque identifier.
         id: FolderId,
     },
+    /// A response identified a different folder from the requested one.
+    FolderIdentityMismatch {
+        /// Requested opaque identifier, omitted from ordinary formatting.
+        expected: FolderId,
+        /// Actual response identifier, omitted from ordinary formatting.
+        actual: FolderId,
+    },
     /// Creation would replace an already configured folder ID.
     FolderAlreadyExists {
         /// The existing opaque identifier.
@@ -375,6 +382,7 @@ impl fmt::Display for Error {
                 write!(formatter, "invalid folder identifier: {reason}")
             }
             Self::FolderNotFound {..}=>formatter.write_str("folder is not configured"),
+            Self::FolderIdentityMismatch {..}=>formatter.write_str("response folder identity did not match the requested folder"),
             Self::DeviceNotFound {..}=>formatter.write_str("device is not configured"),
             Self::DeviceAlreadyExists {..}=>formatter.write_str("device ID is already configured; creation did not start"),
             Self::LocalDeviceProtected=>formatter.write_str("remote-device mutation cannot target the local identity"),
