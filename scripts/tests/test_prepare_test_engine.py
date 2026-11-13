@@ -47,6 +47,8 @@ class ProcessInventoryContracts(unittest.TestCase):
                     with self.assertRaises(OSError) as raised:
                         HELPER.windows_retained_process_image(kernel, 123)
                     self.assertEqual(raised.exception.errno, 5)
+                    self.assertEqual(raised.exception.native_operation, "query_full_process_image")
+                    self.assertEqual(raised.exception.native_wait, wait)
             kernel.WaitForSingleObject.assert_called_once_with(123, 0)
 
     def test_windows_successful_image_read_does_not_require_or_infer_exit(self):

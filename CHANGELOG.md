@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit ignored-device reads and changes using the fixed engine's full
+  configuration PUT, preserving unknown fields and unrelated ignore records.
+  Refuse implicit removal of configured peers and protect the local identity.
+
 - Add pending-folder reads, exact offer dismissal, per-peer persistent ignores
   and explicit folder-peer associations. Keep remote offer IDs, local IDs and
   independently validated keys separate; retain pending-device validation limits.

@@ -141,6 +141,71 @@ fn version(value: &str) -> Reply {
 }
 
 #[tokio::test]
+async fn device_ignore_put_preserves_full_unknown_configuration_and_other_records() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;
+    let other = serde_json::json!({"deviceID":"CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC","time":"2025-01-01T00:00:00Z","name":"private-name","address":"private-address","futureSecret":{"preserved":7}});
+    let config = serde_json::json!({"version":54,"devices":[{"deviceID":ID,"futureDeviceField":{"keep":true}}],"remoteIgnoredDevices":[other.clone()],"gui":{"apiKey":KEY},"futureSetting":{"nested":[1,false,"private-value"]}});
+    let mut readback = config.clone();
+    readback["remoteIgnoredDevices"].as_array_mut().ok_or("missing ignore list")?.push(serde_json::json!({"deviceID":peer.as_str(),"time":"0001-01-01T00:00:00Z","name":"","address":""}));
+    let server = ScriptedServer::start(vec![
+        version("v2.33.2"),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(config.clone()),
+        Reply::json(serde_json::Value::Null),
+        Reply::json(readback),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(client.ignore_device(&peer).await?.is_ignored);
+    let requests = server.finish().await?;
+    let puts: Vec<_> = requests.iter().filter(|v| v.starts_with("PUT ")).collect();
+    assert_eq!(puts.len(), 1);
+    assert!(puts[0].starts_with("PUT /prefix/rest/config HTTP/1.1\r\n"));
+    let mut body: serde_json::Value =
+        serde_json::from_str(puts[0].split_once("\r\n\r\n").ok_or("missing body")?.1)?;
+    assert_eq!(body["remoteIgnoredDevices"][0], other);
+    assert_eq!(
+        body["remoteIgnoredDevices"][1],
+        serde_json::json!({"deviceID":peer.as_str()})
+    );
+    body["remoteIgnoredDevices"] = config["remoteIgnoredDevices"].clone();
+    assert_eq!(body, config);
+    Ok(())
+}
+
+#[tokio::test]
+async fn device_ignore_failed_readback_is_unknown_and_does_not_retry_full_put() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;
+    let config = serde_json::json!({"devices":[{"deviceID":ID}],"remoteIgnoredDevices":[],"gui":{"apiKey":KEY}});
+    let server = ScriptedServer::start(vec![
+        version("v2.33.2"),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(config),
+        Reply::json(serde_json::Value::Null),
+        Reply::json(serde_json::json!({"devices":[],"remoteIgnoredDevices":"malformed"})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client.ignore_device(&peer).await.unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|v| v.starts_with("PUT "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn pending_route_http_and_schema_errors_are_never_empty_snapshots() -> TestResult {
     for reply in [
         Reply {

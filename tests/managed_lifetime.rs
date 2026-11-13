@@ -148,6 +148,7 @@ async fn run_test_host() -> TestResult {
     #[cfg(windows)]
     let environment_names = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "TEMP", "TMP"];
     let environment_before: Vec<_> = environment_names.iter().map(std::env::var_os).collect();
+    std::fs::write(root.join("host-stage"), b"native-ui-baseline")?;
     let ui_baseline = if mode == "persist-kill" || (cfg!(windows) && mode == "kill") {
         Some(managed_ui::observe(None, &root).await?)
     } else {
@@ -164,7 +165,9 @@ async fn run_test_host() -> TestResult {
     } else {
         options
     };
+    std::fs::write(root.join("host-stage"), b"managed-public-start")?;
     let mut instance = ManagedInstance::start(options).await?;
+    std::fs::write(root.join("host-stage"), b"post-start-invariants")?;
     #[cfg(unix)]
     if inherited {
         require(
@@ -216,11 +219,13 @@ async fn run_test_host() -> TestResult {
     let ready = {
         let mut ready = ready;
         if let Some(baseline) = ui_baseline {
+            std::fs::write(root.join("host-stage"), b"native-ui-after-start")?;
             let observed = managed_ui::observe(Some(instance.process_id()), &root).await?;
             ready["ui"] = json!({"baseline": baseline, "start": observed});
         }
         ready
     };
+    std::fs::write(root.join("host-stage"), b"publish-ready-record")?;
     std::fs::write(root.join("ready.tmp"), serde_json::to_vec(&ready)?)?;
     std::fs::rename(root.join("ready.tmp"), root.join("ready.json"))?;
     let mut input = String::new();
@@ -392,6 +397,47 @@ async fn unrelated_finished(pid: u32, birth: (u64, u64)) -> TestResult {
 }
 
 struct Host(Child);
+
+fn host_diagnostic(root: &Path, status: Option<std::process::ExitStatus>) -> TestResult {
+    fn bounded_json(path: &Path) -> TestResult<Value> {
+        match std::fs::metadata(path) {
+            Ok(metadata) if metadata.len() <= 16 * 1024 => {
+                Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+            }
+            Ok(_) => Err("private host diagnostic exceeded its bound".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+            Err(error) => Err(error.into()),
+        }
+    }
+    let stage = match std::fs::read(root.join("host-stage")) {
+        Ok(bytes) if bytes.len() <= 128 => Some(String::from_utf8(bytes)?),
+        Ok(_) => return Err("private host stage exceeded its bound".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    eprintln!(
+        "private host readiness diagnostic: {}",
+        json!({"actual_host_exit_code":status.and_then(|v|v.code()),"stage":stage,"failure":bounded_json(&root.join("host-failure.json"))?})
+    );
+    Ok(())
+}
+
+fn record_host_failure(error: &(dyn std::error::Error + Send + Sync + 'static)) -> TestResult {
+    let root =
+        PathBuf::from(std::env::var_os(HOST_ROOT).ok_or("private host diagnostic root missing")?);
+    let library = error.downcast_ref::<verysync_sidecar::Error>();
+    let io = error.downcast_ref::<std::io::Error>();
+    let diagnostic = json!({"library_error":library.map(ToString::to_string),"io_kind":io.map(|e|format!("{:?}",e.kind())),"native_code":io.and_then(std::io::Error::raw_os_error),"unclassified_error":library.is_none()&&io.is_none()});
+    std::fs::write(
+        root.join("host-failure.tmp"),
+        serde_json::to_vec(&diagnostic)?,
+    )?;
+    std::fs::rename(
+        root.join("host-failure.tmp"),
+        root.join("host-failure.json"),
+    )?;
+    Ok(())
+}
 impl Drop for Host {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
@@ -419,7 +465,7 @@ async fn inventory(binary: &Path) -> TestResult<Vec<u32>> {
                 "exact private process observation error codes: {}",
                 json!({
                 "exit":output.status.code(), "winerror":value["winerror"].as_i64(),
-                "errno":value["errno"].as_i64()})
+                "errno":value["errno"].as_i64(),"native_operation":value["native_operation"],"native_wait":value["native_wait"]})
             );
             return Err("exact private process observation failed".into());
         }
@@ -507,11 +553,14 @@ async fn exercise(mode: &'static str) -> TestResult {
             if root.join("ready.json").try_exists()? {
                 break serde_json::from_slice(&std::fs::read(root.join("ready.json"))?)?;
             }
-            require(
-                host.0.try_wait()?.is_none(),
-                "test host exited before public API readiness",
-            )?;
-            require(Instant::now() < deadline, "test host readiness deadline")?;
+            if let Some(status) = host.0.try_wait()? {
+                host_diagnostic(&root, Some(status))?;
+                return Err("test host exited before public API readiness".into());
+            }
+            if Instant::now() >= deadline {
+                host_diagnostic(&root, None)?;
+                return Err("test host readiness deadline".into());
+            }
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
         let pid = u32::try_from(ready["pid"].as_u64().ok_or("missing owned root")?)?;
@@ -708,10 +757,63 @@ async fn exercise(mode: &'static str) -> TestResult {
 #[tokio::test]
 async fn owned_host_returns() -> TestResult {
     if std::env::var_os(HOST_MODE).is_some() {
-        run_test_host().await
+        let result = run_test_host().await;
+        if let Err(error) = &result {
+            record_host_failure(error.as_ref())?;
+        }
+        result
     } else {
         exercise("return").await
     }
+}
+
+#[tokio::test]
+async fn host_readiness_failure_retains_safe_stage_and_actual_exit_code() -> TestResult {
+    let root = tempfile::Builder::new().prefix("vshd-").tempdir()?;
+    let invalid = root.path().join(CORE_FILE);
+    std::fs::write(&invalid, b"synthetic mismatched executable; must never run")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let mut host = Host(host_command(root.path(), "return")?.spawn()?);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = host.0.try_wait()? {
+            break status;
+        }
+        require(Instant::now() < deadline, "diagnostic child exit deadline")?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    require(
+        !status.success(),
+        "mismatched synthetic program was not rejected",
+    )?;
+    host_diagnostic(root.path(), Some(status))?;
+    let failure: Value =
+        serde_json::from_slice(&std::fs::read(root.path().join("host-failure.json"))?)?;
+    require(
+        failure["library_error"]
+            .as_str()
+            .is_some_and(|v| v.starts_with("selected program rejected: ")),
+        "library failure classification missing",
+    )?;
+    require(
+        std::fs::read(root.path().join("host-stage"))? == b"managed-public-start",
+        "failure stage missing",
+    )?;
+    require(
+        !failure
+            .to_string()
+            .contains(root.path().to_string_lossy().as_ref()),
+        "diagnostic disclosed private arguments",
+    )?;
+    require(
+        !root.path().join("ready.json").try_exists()?,
+        "failed host published readiness",
+    )?;
+    Ok(())
 }
 #[tokio::test]
 async fn owned_host_exits_without_destructors() -> TestResult {
@@ -758,8 +860,8 @@ async fn persistent_exercise(mode: &'static str) -> TestResult {
         let deadline=Instant::now()+Duration::from_secs(60);
         let ready:Value=loop {
             if root.join("ready.json").try_exists()? {break serde_json::from_slice(&std::fs::read(root.join("ready.json"))?)?;}
-            require(host.0.try_wait()?.is_none(),"persistent test host exited before readiness")?;
-            require(Instant::now()<deadline,"persistent test host readiness deadline")?;
+            if let Some(status)=host.0.try_wait()? {host_diagnostic(&root,Some(status))?;return Err("persistent test host exited before readiness".into());}
+            if Instant::now()>=deadline {host_diagnostic(&root,None)?;return Err("persistent test host readiness deadline".into());}
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
         let pid=u32::try_from(ready["pid"].as_u64().ok_or("persistent root missing")?)?;

@@ -182,9 +182,13 @@ def windows_retained_process_image(kernel, process):
     if kernel.QueryFullProcessImageNameW(process, 0, image, ctypes.byref(size)):
         return image.value
     error = ctypes.get_last_error()
-    if kernel.WaitForSingleObject(process, 0) == 0:  # WAIT_OBJECT_0, exact handle
+    wait = kernel.WaitForSingleObject(process, 0)
+    if wait == 0:  # WAIT_OBJECT_0, exact handle
         return None
-    raise ctypes.WinError(error)
+    failure = ctypes.WinError(error)
+    failure.native_operation = "query_full_process_image"
+    failure.native_wait = wait
+    raise failure
 
 
 def windows_processes_for_binary(binary):
@@ -232,8 +236,11 @@ def windows_processes_for_binary(binary):
             if ntpath.normcase(entry.szExeFile) == ntpath.basename(expected):
                 process = kernel.OpenProcess(0x101000, False, entry.th32ProcessID)  # QUERY_LIMITED_INFORMATION | SYNCHRONIZE
                 if not process:
-                    if ctypes.get_last_error() != 87:  # A process may already have exited.
-                        raise ctypes.WinError(ctypes.get_last_error())
+                    error = ctypes.get_last_error()
+                    if error != 87:  # A process may already have exited.
+                        failure = ctypes.WinError(error)
+                        failure.native_operation = "open_process_for_image"
+                        raise failure
                 else:
                     try:
                         image = windows_retained_process_image(kernel, process)
@@ -375,6 +382,8 @@ def main():
             # native paths, private state or exception payloads.
             print(json.dumps({"observation_error": type(error).__name__,
                               "winerror": getattr(error, "winerror", None),
+                              "native_operation": getattr(error, "native_operation", None),
+                              "native_wait": getattr(error, "native_wait", None),
                               "errno": error.errno}))
             raise SystemExit(1) from None
     else:

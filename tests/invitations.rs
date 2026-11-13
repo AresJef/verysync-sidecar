@@ -1,14 +1,300 @@
 //! Real pending offers, persistent ignores and caller-chosen key acceptance.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/peer_proxy.rs"]
+mod peer_proxy;
 use managed_fixture::{options, TestResult};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, time::Duration};
 use verysync_sidecar::{
-    Client, CreateDeviceOptions, DeviceId, DevicePatch, Error, FolderId, JoinFolderOptions,
-    ManagedInstance, PendingFolderOffers, RawMethod, RawRequest, RequestEffect, SharePermission,
-    TargetPath,
+    Client, CreateDeviceOptions, DeviceCompression, DeviceId, DevicePatch, Error, FolderId,
+    JoinFolderOptions, ManagedInstance, PendingFolderOffers, RawMethod, RawRequest, RequestEffect,
+    SharePermission, TargetPath,
 };
+
+#[tokio::test]
+async fn unapproved_inbound_stop_retains_truthful_deadline_and_explicit_owned_cleanup() -> TestResult
+{
+    let root = tempfile::Builder::new().prefix("vsil-").tempdir()?.keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let sample = b"synthetic unrelated data must survive any selected cleanup";
+    std::fs::write(root.join("sample.bin"), sample)?;
+    let created = a
+        .client()
+        .create_device(
+            &CreateDeviceOptions::new(b_id.clone()).settings(
+                DevicePatch::default()
+                    .name("Unapproved inbound sender")
+                    .addresses(vec![listener(b.client()).await?])
+                    .compression(DeviceCompression::Never)
+                    .paused(true),
+            ),
+        )
+        .await?;
+    assert!(created.requested_fields_match);
+    for compression in [DeviceCompression::Always, DeviceCompression::Metadata] {
+        assert!(
+            a.client()
+                .update_device(&b_id, &DevicePatch::default().compression(compression))
+                .await?
+                .requested_fields_match
+        );
+    }
+    a.client().resume_device(&b_id).await?;
+    connection(a.client(), &b_id, true).await?;
+    assert_eq!(b.client().devices().await?.len(), 1);
+    assert!(matches!(
+        b.client().device(&a_id).await,
+        Err(Error::DeviceNotFound { .. })
+    ));
+    a.client().pause_device(&b_id).await?;
+    connection(a.client(), &b_id, false).await?;
+    assert!(a.client().remove_device(&b_id).await?.configuration_absent);
+    eprintln!(
+        "private unapproved inbound stage: one normal stop with original ten-second deadline"
+    );
+    let (mode, exit) = match b.shutdown(Duration::from_secs(10)).await {
+        Ok(exit) => ("normal_before_deadline", exit),
+        Err(Error::Timeout { .. }) => {
+            eprintln!("private unapproved inbound stage: timeout is not an exit; reconcile without another write");
+            match tokio::time::timeout(Duration::from_secs(2), b.wait_for_exit()).await {
+                Ok(exit) => ("normal_after_deadline_without_retry", exit?),
+                Err(_) => {
+                    let exit = b.force_stop(Duration::from_secs(10)).await?;
+                    (
+                        if exit.forced {
+                            "explicit_owned_force_after_unobserved_exit"
+                        } else {
+                            "normal_exit_raced_explicit_force"
+                        },
+                        exit,
+                    )
+                }
+            }
+        }
+        Err(error) => return Err(error.into()),
+    };
+    assert!(exit.tree_stopped);
+    if !exit.forced {
+        assert_eq!(exit.code, Some(0));
+    }
+    assert_eq!(a.client().system_status().await?.device_id, a_id);
+    assert_eq!(std::fs::read(root.join("sample.bin"))?, sample);
+    let sender_exit = a.shutdown(Duration::from_secs(10)).await?;
+    assert!(sender_exit.tree_stopped && !sender_exit.forced && sender_exit.code == Some(0));
+    println!("private unapproved inbound actual exit mode: {mode}");
+    println!(
+        "public unapproved inbound lifetime evidence: {}",
+        json!({"actual_one_sided_private_connection":true,"receiver_remote_identity_not_configured":true,"sender_pause_and_removal_observed":true,"single_normal_stop_request_with_original_deadline":true,"actual_receiver_tree_exit_observed":true,"other_private_sender_untouched":true,"synthetic_sample_preserved":true,"sender_actual_normal_tree_exit":true})
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn typed_device_ignore_blocks_actual_attempts_persists_and_preserves_configuration(
+) -> TestResult {
+    async fn config(client: &Client) -> TestResult<Value> {
+        let response = client
+            .raw_request(&RawRequest::new(
+                RawMethod::Get,
+                ["rest", "config"],
+                RequestEffect::ReadOnly,
+            )?)
+            .await?;
+        assert_eq!(response.status(), 200);
+        Ok(serde_json::from_slice(response.body_bytes())?)
+    }
+    fn unrelated(mut value: Value) -> Value {
+        value
+            .as_object_mut()
+            .expect("observed config object")
+            .remove("remoteIgnoredDevices");
+        value
+    }
+    async fn drained(proxy: &peer_proxy::PeerProxy) -> TestResult {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while proxy.attempts().0 != proxy.attempts().1 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await?;
+        Ok(())
+    }
+    async fn rejected_attempt(
+        a: &Client,
+        b: &DeviceId,
+        proxy: &peer_proxy::PeerProxy,
+    ) -> TestResult {
+        let before = proxy.attempts();
+        let upstream = proxy.upstream_connections();
+        a.resume_device(b).await?;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            while proxy.attempts().1 <= before.1 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await?;
+        assert!(
+            proxy.upstream_connections() > upstream,
+            "no actual TCP attempt reached the private receiver"
+        );
+        connection(a, b, false).await?;
+        Ok(())
+    }
+    let root = tempfile::Builder::new().prefix("vsid-").tempdir()?.keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let mut c = ManagedInstance::start(options(&root.join("c"))?).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let c_id = c.client().instance().device_id.clone();
+    let sample = b"synthetic ignored-device preservation control";
+    std::fs::write(root.join("sample.bin"), sample)?;
+    // Explicit fixture scheduling; keep the original connection-observation
+    // deadline while avoiding the engine's unrelated default redial interval.
+    let response = a
+        .client()
+        .raw_request(
+            &RawRequest::new(
+                RawMethod::Patch,
+                ["rest", "config", "options"],
+                RequestEffect::MayModify,
+            )?
+            .json_body(&json!({"reconnectionIntervalS":5}))?,
+        )
+        .await?;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        config(a.client()).await?["options"]["reconnectionIntervalS"],
+        5
+    );
+    eprintln!(
+        "private device ignore stage: baseline connection with explicit fixture redial interval"
+    );
+    let proxy = peer_proxy::PeerProxy::start(&listener(b.client()).await?).await?;
+    a.client()
+        .create_device(
+            &CreateDeviceOptions::new(b_id.clone()).settings(
+                DevicePatch::default()
+                    .addresses(vec![proxy.address()])
+                    .paused(false),
+            ),
+        )
+        .await?;
+    connection(a.client(), &b_id, true).await?;
+    a.client().pause_device(&b_id).await?;
+    connection(a.client(), &b_id, false).await?;
+    drained(&proxy).await?;
+    assert!(matches!(
+        a.client().ignore_device(&b_id).await,
+        Err(Error::ConfiguredDeviceCannotBeIgnored { .. })
+    ));
+    assert!(matches!(
+        b.client().ignore_device(&b_id).await,
+        Err(Error::LocalDeviceProtected)
+    ));
+    let before = unrelated(config(b.client()).await?);
+    assert!(b.client().ignored_devices().await?.is_empty());
+    assert!(b.client().ignore_device(&c_id).await?.is_ignored);
+    let other = b
+        .client()
+        .ignored_devices()
+        .await?
+        .into_iter()
+        .find(|v| v.device_id == c_id)
+        .ok_or("unrelated ignore missing")?;
+    let other = serde_json::to_value(other)?;
+    assert!(b.client().ignore_device(&a_id).await?.is_ignored);
+    let ignored = b.client().ignored_devices().await?;
+    assert_eq!(ignored.len(), 2);
+    assert_eq!(
+        serde_json::to_value(
+            ignored
+                .iter()
+                .find(|v| v.device_id == c_id)
+                .ok_or("unrelated ignore lost")?
+        )?,
+        other
+    );
+    assert_eq!(unrelated(config(b.client()).await?), before);
+    assert!(b.client().ignore_device(&a_id).await?.is_ignored);
+    eprintln!("private device ignore stage: first actual rejected attempt");
+    rejected_attempt(a.client(), &b_id, &proxy).await?;
+    a.client().pause_device(&b_id).await?;
+    connection(a.client(), &b_id, false).await?;
+    drained(&proxy).await?;
+    proxy.close().await?;
+    eprintln!("private device ignore stage: restart receiver with both ignored identities");
+    b.restart(Duration::from_secs(30)).await?;
+    assert_eq!(b.client().instance().device_id, b_id);
+    assert_eq!(b.client().ignored_devices().await?.len(), 2);
+    let proxy = peer_proxy::PeerProxy::start(&listener(b.client()).await?).await?;
+    assert!(
+        a.client()
+            .update_device(
+                &b_id,
+                &DevicePatch::default().addresses(vec![proxy.address()])
+            )
+            .await?
+            .requested_fields_match
+    );
+    eprintln!("private device ignore stage: actual rejection after restart");
+    rejected_attempt(a.client(), &b_id, &proxy).await?;
+    a.client().pause_device(&b_id).await?;
+    connection(a.client(), &b_id, false).await?;
+    drained(&proxy).await?;
+    assert!(!b.client().unignore_device(&a_id).await?.is_ignored);
+    let remaining = b.client().ignored_devices().await?;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(serde_json::to_value(&remaining[0])?, other);
+    assert!(matches!(
+        b.client().unignore_device(&a_id).await,
+        Err(Error::DeviceNotIgnored)
+    ));
+    assert!(matches!(
+        b.client().device(&a_id).await,
+        Err(Error::DeviceNotFound { .. })
+    ));
+    eprintln!("private device ignore stage: actual reconnect after unignore");
+    a.client().resume_device(&b_id).await?;
+    connection(a.client(), &b_id, true).await?;
+    assert!(!b.client().unignore_device(&c_id).await?.is_ignored);
+    assert_eq!(unrelated(config(b.client()).await?), before);
+    a.client().pause_device(&b_id).await?;
+    connection(a.client(), &b_id, false).await?;
+    drained(&proxy).await?;
+    let (exit, mode) = match b.shutdown(Duration::from_secs(10)).await {
+        Ok(exit) => (exit, "normal"),
+        Err(Error::Timeout { .. }) => (
+            b.force_stop(Duration::from_secs(10)).await?,
+            "explicit_force_after_normal_deadline",
+        ),
+        Err(error) => return Err(error.into()),
+    };
+    assert!(exit.tree_stopped);
+    if !exit.forced {
+        assert_eq!(exit.code, Some(0));
+    }
+    assert_eq!(a.client().system_status().await?.device_id, a_id);
+    assert_eq!(c.client().system_status().await?.device_id, c_id);
+    assert_eq!(std::fs::read(root.join("sample.bin"))?, sample);
+    for instance in [&mut c, &mut a] {
+        let exit = instance.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    }
+    proxy.close().await?;
+    std::fs::remove_dir_all(root)?;
+    println!("private ignored-device actual receiver exit mode: {mode}");
+    println!(
+        "public ignored device evidence: {}",
+        json!({"actual_baseline_peer_connected":true,"local_identity_protected":true,"configured_device_cannot_be_implicitly_removed":true,"two_real_device_ignore_records":true,"unrelated_ignore_metadata_preserved":true,"all_other_configuration_preserved":true,"actual_attempt_reached_private_receiver_and_closed":true,"sender_connection_rejected":true,"two_ignores_survive_actual_restart":true,"same_receiver_identity_restarted":true,"actual_attempt_rejected_after_restart":true,"unignore_removes_only_exact_identity":true,"missing_unignore_rejected":true,"ignore_does_not_register_remote_device":true,"actual_same_path_reconnect_after_unignore":true,"final_configuration_restored":true,"other_private_instances_untouched":true,"synthetic_sample_preserved":true,"all_actual_tree_exits_observed":true,"loopback_proxy_closed_and_joined":true})
+    );
+    Ok(())
+}
 
 fn address(value: &Value) -> Option<String> {
     match value {

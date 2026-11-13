@@ -52,6 +52,26 @@ their dismissal remain unverified on VerySync.** Their candidate record fields
 are retained with unknown values available explicitly. Do not infer device
 approval, commercial authorization, or permanent device blocking from them.
 
+`ignored_devices()`, `ignore_device()` and `unignore_device()` separately expose
+persistent ignored identities. Ignoring requires an unconfigured remote ID;
+the local ID is protected, and a configured peer must first be explicitly
+removed. No implicit unregistering or folder change occurs. Unignore removes
+only the chosen record. Optional metadata remains `None` when absent; new
+records let the engine supply its canonical metadata rather than inventing
+an observation timestamp.
+
+The fixed v2.33.2 API rejects a PATCH to the configuration root. Device ignore
+changes therefore read the full configuration and send a PUT preserving every
+unrelated field, including unknown settings and management credentials. Client
+clones share the mutation lock; independent clients and external writers must
+coordinate the entire read-modify-write interval. This is not an atomic field
+update against other writers. A failed readback remains an unknown outcome.
+`DeviceIgnoreUpdate::is_ignored` reports configuration only. Future connection
+attempts, existing temporary connections and live reconnection are separate
+observations. Native tests use explicitly selected private redial settings and
+count actual attempts reaching an owned loopback receiver; they do not establish
+an unconditional reconnection deadline for applications.
+
 Missing offers and missing ignores have distinct errors. Authentication, HTTP
 errors and malformed responses are never converted into empty lists. Every
 mutation rechecks target identity, shares the Client-clone mutation lock and

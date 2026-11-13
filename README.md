@@ -37,6 +37,8 @@ readback remains separate from connection and file-transfer evidence.
 The unreleased [invitation and folder-peer APIs](docs/public/invitations.md)
 distinguish remote offers, persistent ignores, local key registration and explicit
 peer association. Nonempty pending-device records remain separately unverified.
+Explicit device-ignore changes preserve the full fixed-version configuration
+and report settings separately from observed connection rejection/recovery.
 
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
