@@ -23,7 +23,7 @@ class ProxyContracts(unittest.TestCase):
         # console forwarding, private proxy and failure report all execute.
         output = "native synthetic filename: 二 %\n"
         console_bytes = io.BytesIO()
-        console = io.TextIOWrapper(console_bytes, encoding="cp1252")
+        console = io.TextIOWrapper(console_bytes, encoding="cp1252", newline="\r\n")
         process = MagicMock()
         process.__enter__.return_value = process
         process.stdout = iter([output])
@@ -42,7 +42,8 @@ class ProxyContracts(unittest.TestCase):
                     patch.object(HELPER.subprocess, "Popen", return_value=process):
                 self.assertEqual(HELPER.main(), 7)
                 console.flush()
-                self.assertIn(output.encode("utf-8"), console_bytes.getvalue())
+                self.assertEqual(console_bytes.getvalue().decode("utf-8").splitlines()[0],
+                                 output.rstrip("\n"))
             self.assertEqual((evidence / "engine-control.log").read_text(encoding="utf-8"), output)
             report = json.loads((evidence / "proxy-observations.json").read_text())
             self.assertEqual(report["test_exit_code"], 7)
