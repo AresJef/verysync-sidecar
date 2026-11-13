@@ -123,6 +123,20 @@ same isolated HTTP proxy wrapper (`--test-target events`). The default-feature
 backpressure and cancellation of actual pending HTTP connections; it does not
 count as real-engine effects. Never print raw configuration-event payloads.
 
+The `operations` engine-test target separately checks public whole-folder scan
+requests and actual phase observations, file-index effects, cancellation of
+only the observer and paused-target rejection. Run it with `--test-target
+operations` through the same isolation wrapper. Scan contracts in
+`events_contract` use synthetic transport and failure responses. A successful
+request, an observed phase exit and synchronized files are separate verdicts.
+
+The `sharing` engine-test target exercises actual key generation/validation,
+target-bound preparation, read-only/read-write registration and typed rejections.
+Its controlled loopback fixture uses only two task-owned engines and explicit
+loopback listeners/peer identities; discovery, relays and NAT remain disabled.
+No fixture setup is a typed device-management or WAN acceptance claim. Keep
+sharing keys out of all logs and publish only effect flags.
+
 Use synthetic files. Disable discovery, trackers, relay, NAT and external
 connections unless the particular network case requires them. Await only owned
 child processes when cleaning up; never kill by executable name. Keep private
@@ -144,3 +158,9 @@ from the fixed upstream links only when explicitly running the relevant test
 or application API; never from a Cargo build script.
 
 Native process containment and private state creation use small platform modules under `src/managed/native`. These modules locally permit audited unsafe OS calls with safety comments; the crate-wide unsafe-code deny lint remains in effect elsewhere. Keep blocking filesystem/process reaping on the private owner thread and test actual effects on the native matched controller/engine targets.
+
+Native engine acceptance runs on pull requests and explicit workflow dispatches.
+The same accepted source tree is not automatically run again merely because its
+PR was merged. The lighter quality workflow still runs on main pushes. A direct
+main change requires an explicit native workflow dispatch before claiming native
+acceptance; an absent run is never a passing result.

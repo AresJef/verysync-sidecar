@@ -2,6 +2,25 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add redacted sharing-key types, engine generation/validation and target-bound
+  key registration with explicit material readback. Keep local registration IDs
+  separate from peer association; reject invalid keys and duplicate groups.
+
+- Add explicit whole-folder scan requests and bounded observation of actual
+  scanning entry/exit, optional reported progress and fresh terminal status.
+  Preserve state when a wait is cancelled; gaps remain indeterminate and
+  observation cancellation sends no engine-stop or pause command.
+
+- Restrict Windows child handle inheritance to explicitly selected private
+  standard I/O, while retaining suspended creation, private Job containment and
+  exact process/thread ownership. Verify caller-output EOF while a persistent
+  core remains alive, including native paths with spaces and Unicode.
+
+- Add explicit persistent lifetime, protected read-only state reconnection and a
+  borrowed shutdown request with acknowledgement-only semantics. Keep cancelled
+  startup cleanup active until authenticated readiness commits. Add a compiled
+  owned/persistent/reconnect/shutdown example and actual native lifetime cases.
+
 - Add bounded caller-owned event subscriptions, preserved unknown events,
   credential-safe Debug, explicit cursor gaps and finite read-only recovery.
   Keep producer queue positions separate from consumed cursors; close/drop

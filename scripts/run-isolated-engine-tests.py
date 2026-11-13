@@ -59,7 +59,7 @@ def main():
     parser.add_argument("--cargo", default=shutil.which("cargo"))
     parser.add_argument("--evidence-dir", required=True, type=Path)
     suite = parser.add_mutually_exclusive_group(required=True)
-    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events"])
+    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing"])
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
     parser.add_argument("--test-filter")
     args = parser.parse_args()
@@ -107,8 +107,14 @@ def main():
                 command = [sys.executable, str(Path(__file__).with_name(f"run-{args.mechanism}-lifetime-probes.py")),
                            "--toolchain", args.toolchain, "--evidence-dir", str(args.evidence_dir / "mechanism")]
             with log_path.open("w", encoding="utf-8") as log:
-                result = subprocess.run(command, cwd=Path(__file__).resolve().parents[1],
-                                        env=env, stdout=log, stderr=subprocess.STDOUT)
+                with subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1],
+                                      env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, encoding="utf-8", errors="replace") as process:
+                    for line in process.stdout:
+                        log.write(line)
+                        log.flush()
+                        print(line, end="", flush=True)
+                    returncode = process.wait()
         finally:
             proxy.shutdown()
             server.join(timeout=5)
@@ -119,11 +125,10 @@ def main():
         report = {"scope": "test-only HTTP proxy observations; not an OS-wide no-egress proof",
                   "loopback_only": True, "forwarding_implemented": False,
                   "requests_blocked": observed, "handler_errors": errors,
-                  "test_exit_code": result.returncode}
+                  "test_exit_code": returncode}
         (args.evidence_dir / "proxy-observations.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(log_path.read_text(encoding="utf-8", errors="replace"), end="")
         print("Isolated engine HTTP proxy observations: " + json.dumps(report, sort_keys=True))
-        return result.returncode
+        return returncode
 
 
 if __name__ == "__main__":

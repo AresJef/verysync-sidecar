@@ -10,10 +10,10 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use std::ptr;
 
-use std::os::windows::process::CommandExt;
-use std::process::{Child, Command};
+use std::process::Command;
+mod launch;
+pub(in crate::managed) use launch::Child;
 use windows_sys::Win32::Foundation::LocalFree;
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
     ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
@@ -27,25 +27,21 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
     FILE_SHARE_WRITE,
 };
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
-};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
     JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
     TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
-use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcessToken, CREATE_NO_WINDOW, CREATE_SUSPENDED,
-};
-use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken, ResumeThread};
 
 pub(in crate::managed) struct ProcessGuard(OwnedHandle);
 
 pub(in crate::managed) fn spawn(
     mut command: Command,
     helper: bool,
+    lifetime: crate::managed::ManagedLifetime,
+    io: crate::managed::process::ProcessIo,
 ) -> io::Result<(Child, ProcessGuard)> {
     // SAFETY: Null attributes/name create an unnamed noninheritable private Job.
     let raw = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
@@ -55,7 +51,12 @@ pub(in crate::managed) fn spawn(
     // SAFETY: Successful API returned one newly owned handle.
     let guard = ProcessGuard(unsafe { OwnedHandle::from_raw_handle(raw) });
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    limits.BasicLimitInformation.LimitFlags =
+        if helper || lifetime == crate::managed::ManagedLifetime::CallerOwned {
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        } else {
+            0
+        };
     // SAFETY: Live Job and correctly typed initialized native structure/length.
     if unsafe {
         SetInformationJobObject(
@@ -68,14 +69,13 @@ pub(in crate::managed) fn spawn(
     {
         return Err(io::Error::last_os_error());
     }
-    command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     if !helper {
         // The SDK owns monitoring/restart for this fixed baseline. Select the
         // direct core so suspended creation and private Job ownership apply to
         // that core, without another upstream monitoring generation.
         command.env("VSMONITORED", "yes");
     }
-    let mut child = command.spawn()?;
+    let (mut child, thread) = launch::create(&command, io)?;
     // SAFETY: The exact child is suspended and both handles remain live. It
     // cannot create any descendants before joining the private Job.
     if unsafe { AssignProcessToJobObject(guard.0.as_raw_handle(), child.as_raw_handle()) } == 0 {
@@ -84,7 +84,10 @@ pub(in crate::managed) fn spawn(
         let _ = child.wait();
         return Err(error);
     }
-    if let Err(error) = resume_initial_thread(child.id()) {
+    // SAFETY: The exact initial thread returned by CreateProcess remains owned
+    // and suspended, after the process joined its private Job.
+    if unsafe { ResumeThread(thread.as_raw_handle()) } != 1 {
+        let error = io::Error::other("unexpected initial suspend count");
         let _ = guard.stop(&mut child);
         let _ = child.wait();
         return Err(error);
@@ -120,39 +123,6 @@ impl ProcessGuard {
         }
         Ok(info.ActiveProcesses == 0)
     }
-}
-
-fn resume_initial_thread(pid: u32) -> io::Result<()> {
-    // SAFETY: Snapshot API takes no pointers; its returned handle is uniquely owned.
-    let raw = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if raw == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    let snapshot = unsafe { OwnedHandle::from_raw_handle(raw) };
-    let mut entry = THREADENTRY32 {
-        dwSize: size_of::<THREADENTRY32>() as u32,
-        ..THREADENTRY32::default()
-    };
-    // SAFETY: Live snapshot and correctly sized writable entry.
-    let mut present = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) };
-    while present != 0 {
-        if entry.th32OwnerProcessID == pid {
-            // SAFETY: The exact retained child remains suspended; its PID cannot
-            // be reused and this is its initial thread, not another process's.
-            let raw = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-            if raw.is_null() {
-                return Err(io::Error::last_os_error());
-            }
-            let thread = unsafe { OwnedHandle::from_raw_handle(raw) };
-            if unsafe { ResumeThread(thread.as_raw_handle()) } != 1 {
-                return Err(io::Error::other("unexpected initial suspend count"));
-            }
-            return Ok(());
-        }
-        // SAFETY: Same live snapshot and writable initialized entry.
-        present = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
-    }
-    Err(io::Error::other("initial owned thread was not found"))
 }
 
 struct LocalAllocation(*mut core::ffi::c_void);

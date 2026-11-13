@@ -1,8 +1,6 @@
 name: Engine fixture
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -73,6 +71,11 @@ jobs:
           --github-env "${{ github.env }}"
       - name: Run public input and synthetic transport contracts
         run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --locked
+      - name: Build public examples explicitly
+        run: >-
+          python scripts/prepare-test-examples.py
+          --toolchain "$TEST_TOOLCHAIN"
+          --github-env "${{ github.env }}"
       - name: Validate the Windows UI probe before the complete lifecycle bundle
         if: startsWith(matrix.package, 'windows-')
         run: >-
@@ -95,15 +98,18 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target events --evidence-dir "${{ runner.temp }}/vs-events-proxy"
-      - name: Build public examples explicitly
-        run: >-
-          python scripts/prepare-test-examples.py
-          --toolchain "$TEST_TOOLCHAIN"
-          --github-env "${{ github.env }}"
       - name: Run compiled public examples on an independent engine
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target example_control --evidence-dir "${{ runner.temp }}/vs-examples-proxy"
+      - name: Exercise actual scan phase observation, file effects and cancellation
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target operations --evidence-dir "${{ runner.temp }}/vs-operations-proxy"
+      - name: Exercise real sharing keys, distinct local registrations and loopback effects
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target sharing --evidence-dir "${{ runner.temp }}/vs-sharing-proxy"
       - name: Investigate native macOS lifetime mechanisms
         if: startsWith(matrix.package, 'macos-')
         run: >-

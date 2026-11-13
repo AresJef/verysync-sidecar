@@ -13,6 +13,28 @@ const MARKER: &str = ".verysync-sidecar-state";
 const LEASE: &str = ".verysync-sidecar-lease";
 const FORMAT: &[u8] = b"verysync-sidecar private state v1\n";
 
+/// Admit existing private state for reads only, without creating files or leases.
+pub(super) fn existing(path: &Path) -> Result<PathBuf> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|e| io_error("inspect existing private state", e))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(Error::UnmanagedState);
+    }
+    native::private_directory(path, &metadata)
+        .map_err(|e| io_error("check existing state privacy", e))?;
+    let path = canonical(path).map_err(|e| io_error("resolve existing private state", e))?;
+    let mut bytes = Vec::new();
+    native::open_private(&path.join(MARKER), true)
+        .map_err(|e| io_error("open existing state marker", e))?
+        .take(128)
+        .read_to_end(&mut bytes)
+        .map_err(|e| io_error("read existing state marker", e))?;
+    if bytes != FORMAT {
+        return Err(Error::UnmanagedState);
+    }
+    Ok(path)
+}
+
 pub(super) struct StateLease {
     path: PathBuf,
     _file: File,

@@ -4,11 +4,21 @@ A general-purpose Rust library for managing and controlling the official VerySyn
 
 The project is under active development. The current API provides explicit endpoints and target paths, authenticated version/identity checks, fresh typed status reads, and folder registration, partial label/pause updates and unregistering while retaining files. Further management operations are being implemented and tested. The initial alpha version is `0.1.0-alpha.1`; pin it exactly and review the validation scope. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
 
-The working branch also develops explicit owned-program startup. See [managed instances](docs/public/managed-instances.md) for the unreleased API and its distinct lifetime/state responsibility; the published initial alpha still targets already running instances.
+The working branch also develops explicit owned-program startup and deliberately selected persistence. See [managed instances](docs/public/managed-instances.md) for the unreleased API and its distinct lifetime/state responsibility; the published initial alpha still targets already running instances.
 
 The unreleased [event subscription API](docs/public/events.md) provides bounded
 queues, explicit continuity gaps and finite read-only recovery. Its task belongs
 to the subscription; closing it leaves the engine running.
+
+The unreleased [scan observation API](docs/public/long-running-operations.md)
+separates an explicit scan request from observed scanning entry/exit and fresh
+status. Cancelling observation closes only its read subscription; completion
+does not certify peer synchronization or invent a server job identifier.
+
+The unreleased [sharing API](docs/public/sharing.md) generates and validates
+actual engine keys, preserves reported read-only/read-write permissions and
+registers using the target's proposed local ID. Registration readback and peer
+association are separate observations.
 
 The development plan runs through full delivery. Alpha releases are intermediate milestones: after publishing an alpha, development continues in the same project until the complete agreed functionality, platforms, documentation, and examples pass acceptance and the full release is delivered.
 

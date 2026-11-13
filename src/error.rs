@@ -67,6 +67,16 @@ impl fmt::Debug for ResponseDiagnostic {
 /// change; callers should handle the cases relevant to their operation.
 #[non_exhaustive]
 pub enum Error {
+    /// The engine explicitly rejected a sharing key, including HTTP-200 rejection.
+    ShareKeyRejected {
+        /// Bounded original rejection payload, omitted from ordinary formatting.
+        response: ResponseDiagnostic,
+    },
+    /// This sharing group is already registered locally; no POST was sent.
+    ShareAlreadyConfigured {
+        /// Actual existing local registration ID.
+        id: FolderId,
+    },
     /// The selected local executable failed a baseline or checksum check.
     ProgramRejected {
         /// A description excluding paths, arguments and captured program output.
@@ -106,6 +116,10 @@ pub enum Error {
     EventSubscriptionFailure,
     /// The engine's reported generation changed across an event snapshot read.
     EventGenerationChanged,
+    /// A next-scan observation cannot begin while the target is not idle.
+    ScanNotIdle,
+    /// Gaps or missing transitions prevent this local observation establishing a full scan cycle.
+    ScanObservationLost,
     /// A management credential cannot be sent safely.
     InvalidCredential {
         /// A description that excludes the supplied credential.
@@ -244,6 +258,10 @@ impl fmt::Display for Error {
         match self {
             Self::EventSubscriptionFailure => formatter.write_str("event subscription task failed"),
             Self::EventGenerationChanged => formatter.write_str("engine generation changed during event observation"),
+            Self::ScanNotIdle => formatter.write_str("next-scan observation requires an idle folder"),
+            Self::ShareKeyRejected { .. } => formatter.write_str("engine rejected the sharing key"),
+            Self::ShareAlreadyConfigured { .. } => formatter.write_str("sharing group is already configured locally"),
+            Self::ScanObservationLost => formatter.write_str("scan observation lost continuity; query state explicitly"),
             Self::ProgramRejected { reason } => write!(formatter, "selected program rejected: {reason}"),
             Self::ManagedProcessExited { operation, code, .. } => write!(formatter, "owned program exited while attempting to {operation} (code {code:?})"),
             Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),

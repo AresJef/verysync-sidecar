@@ -3,7 +3,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -37,6 +37,10 @@ pub(super) fn check_active(cancel: &Receiver<()>, deadline: Instant) -> Result<(
 
 pub(super) fn command(binary: &Path, state: &Path) -> Command {
     let mut command = Command::new(binary);
+    // Windows native creation consumes this explicit, case-normalized snapshot.
+    // Never alter the caller environment or rely on ambient process attributes.
+    #[cfg(windows)]
+    command.env_clear().envs(std::env::vars_os());
     command.current_dir(state).env("TMPDIR", state.join("tmp"));
     #[cfg(unix)]
     command
@@ -311,29 +315,25 @@ fn cli(
     let capture = native::create_private(&scratch.0)
         .map_err(|e| io_error("create private CLI capture", e))?;
     let mut command = command(binary, state);
-    command
-        .args(args)
-        .arg("--home")
-        .arg(state)
-        .stdin(if password.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(
+    command.args(args).arg("--home").arg(state);
+    let io = super::process::ProcessIo {
+        stdin_pipe: password.is_some(),
+        stdout: Some(
             capture
                 .try_clone()
                 .map_err(|e| io_error("attach private CLI capture", e))?,
-        )
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    command.stderr(
-        capture
-            .try_clone()
-            .map_err(|e| io_error("attach private CLI diagnostics", e))?,
-    );
-    let mut process =
-        OwnedProcess::spawn(command, true).map_err(|e| io_error("spawn metadata helper", e))?;
+        ),
+        #[cfg(windows)]
+        stderr: Some(
+            capture
+                .try_clone()
+                .map_err(|e| io_error("attach private CLI diagnostics", e))?,
+        ),
+        #[cfg(not(windows))]
+        stderr: None,
+    };
+    let mut process = OwnedProcess::spawn(command, true, super::ManagedLifetime::CallerOwned, io)
+        .map_err(|e| io_error("spawn metadata helper", e))?;
     if let Some(password) = password {
         let mut input = process
             .child_mut()
@@ -431,7 +431,7 @@ fn field_mut<'a>(root: &'a mut Value, key: &str) -> Result<&'a mut Value> {
         })
 }
 
-fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiKey> {
+fn read_configuration(state: &Path) -> Result<Value> {
     let path = state.join("setting.dat");
     let mut input =
         native::open_private(&path, true).map_err(|e| io_error("open private configuration", e))?;
@@ -446,7 +446,7 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
         });
     }
     let mut cursor = std::io::Cursor::new(&bytes);
-    let mut root = rmpv::decode::read_value(&mut cursor).map_err(|_| Error::ManagedFailure {
+    let root = rmpv::decode::read_value(&mut cursor).map_err(|_| Error::ManagedFailure {
         reason: "configuration is not baseline MessagePack",
     })?;
     if cursor.position() != bytes.len() as u64 || root["1"].as_i64() != Some(54) {
@@ -454,6 +454,10 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
             reason: "configuration does not match the verified baseline schema",
         });
     }
+    Ok(root)
+}
+
+fn persisted_key(root: &Value) -> Result<ApiKey> {
     let key = ApiKey::new(
         root["4"]["6"]
             .as_str()
@@ -467,6 +471,10 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
             reason: "persistent GUI authentication missing",
         });
     }
+    Ok(key)
+}
+
+fn management_address(options: &ManagedOptions) -> Result<String> {
     let address = if let Some(socket) = options.endpoint.socket_path() {
         socket.to_str().ok_or(Error::PathEncoding)?.to_owned()
     } else {
@@ -483,6 +491,62 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
             })?
         )
     };
+    Ok(address)
+}
+
+pub(super) fn existing_connection(options: &ManagedOptions) -> Result<(ApiKey, DeviceId)> {
+    let state = super::state::existing(&options.state)?;
+    for name in [
+        "key.pem",
+        "cert.pem",
+        "setting.dat",
+        ".verysync-sidecar-identity",
+        ".verysync-sidecar-configured",
+    ] {
+        if !persisted_file(&state, name)? {
+            return Err(Error::UnmanagedState);
+        }
+    }
+    let mut completion = Vec::new();
+    native::open_private(&state.join(".verysync-sidecar-configured"), true)
+        .map_err(|e| io_error("read existing completion marker", e))?
+        .take(2)
+        .read_to_end(&mut completion)
+        .map_err(|e| io_error("read existing completion marker", e))?;
+    if completion != b"1" {
+        return Err(Error::UnmanagedState);
+    }
+    let mut identity = String::new();
+    native::open_private(&state.join(".verysync-sidecar-identity"), true)
+        .map_err(|e| io_error("read existing identity", e))?
+        .take(256)
+        .read_to_string(&mut identity)
+        .map_err(|e| io_error("read existing identity", e))?;
+    let identity = DeviceId::parse(identity.trim())?;
+    let root = read_configuration(&state)?;
+    let address = root["4"]["2"].as_str().ok_or(Error::UnmanagedState)?;
+    let matches = if let Some(socket) = options.endpoint.socket_path() {
+        let selected =
+            fs::canonicalize(socket).map_err(|e| io_error("resolve selected socket", e))?;
+        let persisted = fs::canonicalize(Path::new(address))
+            .map_err(|e| io_error("resolve persisted socket", e))?;
+        selected == persisted && selected.parent() == Some(state.as_path())
+    } else {
+        address == management_address(options)?
+    };
+    if !matches {
+        return Err(Error::InvalidConfiguration {
+            reason: "selected endpoint does not match completed private state",
+        });
+    }
+    Ok((persisted_key(&root)?, identity))
+}
+
+fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiKey> {
+    let path = state.join("setting.dat");
+    let mut root = read_configuration(state)?;
+    let key = persisted_key(&root)?;
+    let address = management_address(options)?;
     for (key, value) in [("1", true), ("5", false), ("7", false), ("10", false)] {
         set(field_mut(&mut root, "4")?, key, Value::Boolean(value))?;
     }
@@ -505,7 +569,6 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
     rmpv::encode::write_value(&mut encoded, &root).map_err(|_| Error::ManagedFailure {
         reason: "configuration encoding failed",
     })?;
-    drop(input);
     let mut entropy = [0; 16];
     getrandom::fill(&mut entropy).map_err(|_| Error::ManagedFailure {
         reason: "configuration temporary identity failed",

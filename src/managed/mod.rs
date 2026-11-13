@@ -14,6 +14,17 @@ use std::time::Duration;
 
 use crate::{Error, LocalProgram, ManagementEndpoint, Result};
 
+/// Lifetime selected before creating an owned core; never a system service.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ManagedLifetime {
+    /// Dropping the owner or exiting the caller ends its private core.
+    #[default]
+    CallerOwned,
+    /// Explicitly keep a successfully started core after owner/caller exit.
+    /// External OS job/cgroup/console termination policies still apply.
+    Persistent,
+}
+
 /// Settings for explicitly starting a caller-selected local program.
 ///
 /// The state must be new/empty or already marked as owned by this library. The
@@ -28,6 +39,7 @@ pub struct ManagedOptions {
     pub(crate) endpoint: ManagementEndpoint,
     pub(crate) timeout: Duration,
     pub(crate) request_timeout: Duration,
+    pub(crate) lifetime: ManagedLifetime,
 }
 
 impl ManagedOptions {
@@ -90,6 +102,7 @@ impl ManagedOptions {
             endpoint,
             timeout: Duration::from_secs(30),
             request_timeout: Duration::from_secs(10),
+            lifetime: ManagedLifetime::CallerOwned,
         })
     }
 
@@ -114,6 +127,44 @@ impl ManagedOptions {
         }
         self.request_timeout = timeout;
         Ok(self)
+    }
+
+    /// Explicitly select core persistence before startup (default CallerOwned).
+    /// Helpers and cancelled/failed startup still request exact cleanup. An
+    /// abrupt caller death after persistent core creation can leave that core
+    /// running before authenticated startup returns. No service is installed.
+    pub fn lifetime(mut self, lifetime: ManagedLifetime) -> Self {
+        self.lifetime = lifetime;
+        self
+    }
+
+    /// Inspect the explicitly selected core lifetime policy.
+    pub fn lifetime_policy(&self) -> ManagedLifetime {
+        self.lifetime
+    }
+
+    /// Reconnect read-only to an existing completed private state/endpoint.
+    ///
+    /// Reads protected persisted identity/credentials, then authenticates that
+    /// identity. Does not acquire process ownership, run/check the selected
+    /// executable, create state, change configuration, or stop an existing core.
+    pub async fn connect_existing(&self) -> Result<crate::Client> {
+        tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
+            reason: "private-state connections require a Tokio runtime with I/O and timers",
+        })?;
+        let options = self.clone();
+        let (key, identity) =
+            tokio::task::spawn_blocking(move || bootstrap::existing_connection(&options))
+                .await
+                .map_err(|_| Error::ManagedFailure {
+                    reason: "private state read task failed",
+                })??;
+        crate::Client::connect(
+            crate::ConnectOptions::new(self.endpoint.clone(), key)
+                .expected_device_id(identity)
+                .request_timeout(self.request_timeout)?,
+        )
+        .await
     }
 
     /// Borrow the explicit dedicated state path.

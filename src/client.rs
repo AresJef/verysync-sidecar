@@ -159,6 +159,197 @@ pub struct Client {
 }
 
 impl Client {
+    /// Explicitly ask this engine to generate a fresh read/write and read-only pair.
+    /// Generation registers no folder; these credentials are not management keys.
+    pub async fn generate_share(&self) -> Result<crate::GeneratedShare> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                "generate sharing keys",
+                reqwest::Method::GET,
+                self.connection
+                    .management_url("rest/svc/folder/secret", &[])?,
+                None,
+                true,
+            )
+            .await?;
+        crate::sharing::generated(status, bytes)
+    }
+
+    /// Validate a sharing key on this authenticated target and prepare its local ID.
+    /// No key-format permission guess, cross-node ID equality or folder registration.
+    pub async fn validate_share_key(&self, key: &crate::ShareKey) -> Result<crate::ValidatedShare> {
+        self.system_status().await?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                "validate sharing key",
+                reqwest::Method::GET,
+                self.connection.management_url(
+                    "rest/svc/folder/secret_validate",
+                    &[("key", key.expose_secret())],
+                )?,
+                None,
+                false,
+            )
+            .await?;
+        crate::sharing::validated(self.instance.device_id.clone(), key.clone(), status, bytes)
+    }
+
+    /// Register an engine-validated sharing key, then read the actual local configuration.
+    ///
+    /// Use preparation from this same target. The key establishes group membership;
+    /// no directory ID is manually copied from another node. Readback does not
+    /// establish peer association, remote acceptance or file synchronization.
+    /// Reconcile folder_id after cancellation/unknown outcome before retrying.
+    pub async fn join_folder(
+        &self,
+        options: &crate::JoinFolderOptions,
+    ) -> Result<crate::JoinFolderResult> {
+        use crate::{JoinPeerObservation, SharePermission};
+        let share = &options.share;
+        if share.device_id != self.instance.device_id {
+            return Err(Error::IdentityMismatch {
+                expected: share.device_id.clone(),
+                actual: self.instance.device_id.clone(),
+            });
+        }
+        if matches!(share.permission, SharePermission::Unknown(_)) {
+            return Err(Error::InvalidConfiguration {
+                reason: "cannot register an unknown sharing permission",
+            });
+        }
+        if options.path.style() != self.folder_path_style()? {
+            return Err(Error::InvalidPath {
+                reason: "path syntax differs from the connected engine",
+            });
+        }
+        let path = options.path.to_protocol()?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let configured = self.folders().await?;
+        for folder in &configured {
+            if folder.id == share.registration_id {
+                return Err(Error::FolderAlreadyExists {
+                    id: folder.id.clone(),
+                });
+            }
+            let known_key = ["secretKey", "readOnlySecret", "readWriteSecret"]
+                .iter()
+                .any(|field| {
+                    folder
+                        .extra
+                        .get(*field)
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| {
+                            value == share.submitted_key.expose_secret()
+                                || value == share.read_only_key.expose_secret()
+                                || share
+                                    .read_write_key
+                                    .as_ref()
+                                    .is_some_and(|key| value == key.expose_secret())
+                        })
+                });
+            if known_key {
+                return Err(Error::ShareAlreadyConfigured {
+                    id: folder.id.clone(),
+                });
+            }
+            if !options.allow_shared_path && folder.path.to_protocol().is_ok_and(|p| p == path) {
+                return Err(Error::FolderPathAlreadyConfigured {
+                    id: folder.id.clone(),
+                });
+            }
+        }
+        let mut defaults: serde_json::Map<String, serde_json::Value> = self
+            .connection
+            .get_json("read folder defaults", "rest/config/defaults/folder")
+            .await?;
+        defaults.insert(
+            "id".to_owned(),
+            serde_json::json!(share.registration_id.as_str()),
+        );
+        defaults.insert("path".to_owned(), serde_json::json!(path));
+        defaults.insert(
+            "secretKey".to_owned(),
+            serde_json::json!(share.submitted_key.expose_secret()),
+        );
+        // Match the actual join route: the engine derives these from the submitted key.
+        defaults.insert("readOnlySecret".to_owned(), serde_json::json!(""));
+        defaults.insert("readWriteSecret".to_owned(), serde_json::json!(""));
+        if let Some(label) = &options.label {
+            defaults.insert("label".to_owned(), serde_json::json!(label));
+        }
+        if let Some(paused) = options.paused {
+            defaults.insert("paused".to_owned(), serde_json::json!(paused));
+        }
+        self.connection
+            .post_json(
+                "register sharing key",
+                "rest/config/folders",
+                &serde_json::Value::Object(defaults),
+            )
+            .await?;
+        let configuration = self
+            .folder(&share.registration_id)
+            .await
+            .map_err(|source| Error::MutationOutcomeUnknown {
+                operation: "read back sharing registration",
+                source: Box::new(source),
+            })?;
+        let value = |field: &str| {
+            configuration
+                .extra
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+        };
+        let submitted_key_matches = value("secretKey") == Some(share.submitted_key.expose_secret());
+        let read_only_key_matches =
+            value("readOnlySecret") == Some(share.read_only_key.expose_secret());
+        let read_write_key_matches = value("readWriteSecret")
+            == Some(
+                share
+                    .read_write_key
+                    .as_ref()
+                    .map_or("", |key| key.expose_secret()),
+            );
+        Ok(crate::JoinFolderResult {
+            configuration,
+            permission: share.permission.clone(),
+            submitted_key_matches,
+            read_only_key_matches,
+            read_write_key_matches,
+            peer_observation: JoinPeerObservation::Unobserved,
+        })
+    }
+
+    /// Request one whole-folder scan, with fresh identity/existence checks.
+    ///
+    /// This response alone is not a scan-completion receipt. Establish
+    /// observe_next_scan first to observe an actual cycle. A failed modifying
+    /// response can be an unknown outcome and is never automatically retried.
+    pub async fn request_scan(&self, folder: &FolderId) -> Result<()> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        if self.folder(folder).await?.paused {
+            return Err(Error::ScanNotIdle);
+        }
+        let url = self
+            .connection
+            .management_url("rest/db/scan", &[("folder", folder.as_str())])?;
+        self.connection
+            .request_bytes(
+                "request folder scan",
+                reqwest::Method::POST,
+                url,
+                None,
+                true,
+            )
+            .await
+            .map(|_| ())
+    }
     pub(crate) async fn event_wire(
         &self,
         since: u64,
@@ -185,7 +376,12 @@ impl Client {
         }
         Ok(events)
     }
-    pub(crate) async fn request_owned_shutdown(&self) -> Result<()> {
+    /// Request normal engine shutdown once, after a fresh identity check.
+    ///
+    /// Success acknowledges the management command; this borrowed Client cannot
+    /// observe OS process-tree exit. Transport uncertainty is not retried. Owned
+    /// callers should use ManagedInstance::shutdown to observe actual exit.
+    pub async fn request_shutdown(&self) -> Result<()> {
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
         self.connection

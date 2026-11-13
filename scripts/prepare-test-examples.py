@@ -22,7 +22,7 @@ def main():
     ))
     directory = Path(metadata["target_directory"]).joinpath("debug", "examples")
     records = []
-    for name in ("connect_existing", "create_folder", "manage_existing"):
+    for name in ("connect_existing", "create_folder", "manage_existing", "manage_owned"):
         executable = directory.joinpath(name)
         if os.name == "nt":
             executable = executable.with_suffix(".exe")
