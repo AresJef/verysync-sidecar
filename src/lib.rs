@@ -25,6 +25,7 @@
 #![doc = include_str!("../docs/public/sharing.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
+#![doc = include_str!("../docs/public/program-cache.md")]
 
 mod auth;
 mod capabilities;
@@ -58,6 +59,8 @@ pub use events::{
     EventSubscription,
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
+#[cfg(feature = "download")]
+pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
 pub use managed::{ManagedExit, ManagedInstance, ManagedLifetime, ManagedOptions};

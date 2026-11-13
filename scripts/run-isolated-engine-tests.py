@@ -59,7 +59,7 @@ def main():
     parser.add_argument("--cargo", default=shutil.which("cargo"))
     parser.add_argument("--evidence-dir", required=True, type=Path)
     suite = parser.add_mutually_exclusive_group(required=True)
-    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine"])
+    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine"])
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
     parser.add_argument("--test-filter")
     args = parser.parse_args()
@@ -98,7 +98,7 @@ def main():
         log_path = args.evidence_dir / (label.replace("_", "-") + ".log")
         try:
             if args.test_target:
-                features = "engine-tests,download" if args.test_target == "download_engine" else "engine-tests"
+                features = "engine-tests,download" if args.test_target in {"download_engine", "cache_engine"} else "engine-tests"
                 command = [args.cargo, f"+{args.toolchain}", "test", "--features", features,
                            "--test", args.test_target, "--offline", "--locked"]
                 if args.test_filter:

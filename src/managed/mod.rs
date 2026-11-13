@@ -4,7 +4,11 @@
 mod archive;
 mod bootstrap;
 #[cfg(feature = "download")]
+mod cache;
+#[cfg(feature = "download")]
 mod download;
+#[cfg(feature = "download")]
+pub use cache::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
 #[cfg(feature = "download")]
 pub use download::{DownloadOptions, PreparedProgram};
 mod instance;

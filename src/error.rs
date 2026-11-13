@@ -67,6 +67,18 @@ impl fmt::Debug for ResponseDiagnostic {
 /// change; callers should handle the cases relevant to their operation.
 #[non_exhaustive]
 pub enum Error {
+    /// No complete program for the exact asset is available in offline cache.
+    CacheMiss,
+    /// A cache index or program does not match its recorded fixed identity.
+    CacheCorrupt {
+        /// Description without caller paths or source URLs.
+        reason: &'static str,
+    },
+    /// A directory or cache request is not admissible; caller data is preserved.
+    CacheRejected {
+        /// Description without caller paths or source URLs.
+        reason: &'static str,
+    },
     /// Explicit program preparation rejected an unsafe or mismatched artifact.
     DownloadRejected {
         /// A bounded description excluding source URLs and local paths.
@@ -273,6 +285,9 @@ impl fmt::Debug for Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CacheMiss => formatter.write_str("no complete program is available in the offline cache"),
+            Self::CacheCorrupt { reason } => write!(formatter, "program cache is corrupt: {reason}"),
+            Self::CacheRejected { reason } => write!(formatter, "program cache rejected: {reason}"),
             Self::DownloadRejected { reason } => write!(formatter, "program preparation rejected: {reason}"),
             Self::DownloadHttp { status } => write!(formatter, "program source returned HTTP {status}"),
             Self::EventSubscriptionFailure => formatter.write_str("event subscription task failed"),

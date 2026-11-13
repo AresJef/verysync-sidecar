@@ -128,3 +128,13 @@ required-features = ["engine-tests", "download"]
 name = "download_catalog"
 path = "tests/download_catalog.rs"
 required-features = ["engine-tests", "download"]
+
+[[test]]
+name = "cache_engine"
+path = "tests/cache_engine.rs"
+required-features = ["engine-tests", "download"]
+
+[[example]]
+name = "cache_program"
+path = "examples/cache_program.rs"
+required-features = ["download"]

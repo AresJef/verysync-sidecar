@@ -160,11 +160,12 @@ def prepare(args):
                    "binary": str(binary), "binary_sha256": binary_hash}
         (directory / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         if args.github_env:
-            if any(c in str(binary) for c in "\r\n"):
+            if any(c in str(binary) + str(archive) for c in "\r\n"):
                 raise ValueError("test executable path cannot be represented in an environment file")
             with Path(args.github_env).open("a", encoding="utf-8", newline="\n") as output:
                 output.write("VERYSYNC_TEST_BINARY=" + str(binary) + "\n")
                 output.write("VERYSYNC_TEST_BINARY_SHA256=" + binary_hash + "\n")
+                output.write("VERYSYNC_TEST_ARCHIVE=" + str(archive) + "\n")
         print(json.dumps(receipt))
     except BaseException:
         shutil.rmtree(directory)
