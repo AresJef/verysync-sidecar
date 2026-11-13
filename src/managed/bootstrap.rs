@@ -342,6 +342,18 @@ pub(super) fn cli_capture(
     cancel: &Receiver<()>,
     deadline: Instant,
 ) -> Result<(std::process::ExitStatus, Vec<u8>)> {
+    cli_capture_positional(binary, state, args, &[], password, cancel, deadline)
+}
+
+pub(super) fn cli_capture_positional(
+    binary: &Path,
+    state: &Path,
+    args: &[&str],
+    positional: &[&str],
+    password: Option<&str>,
+    cancel: &Receiver<()>,
+    deadline: Instant,
+) -> Result<(std::process::ExitStatus, Vec<u8>)> {
     let active = || {
         check_active(cancel, deadline).map_err(|error| {
             if args.first() == Some(&"upgrade") && matches!(error, Error::Timeout { .. }) {
@@ -364,6 +376,13 @@ pub(super) fn cli_capture(
         .map_err(|e| io_error("create private CLI capture", e))?;
     let mut command = command(binary, state);
     command.args(args).arg("--home").arg(state);
+    if !positional.is_empty() {
+        command.arg("--").args(positional);
+    }
+    // Database debug commands need no credential stdin. Retain the existing
+    // caller-owned stdin PTY so both output streams can use the private capture.
+    // Credential/metadata helpers keep their original stderr controlling PTY.
+    let helper = args.first() != Some(&"debug") || password.is_some();
     if args.first() == Some(&"upgrade") {
         command.env_remove("STNOUPGRADE").env("STNORESTART", "yes");
     }
@@ -374,16 +393,17 @@ pub(super) fn cli_capture(
                 .try_clone()
                 .map_err(|e| io_error("attach private CLI capture", e))?,
         ),
-        #[cfg(windows)]
-        stderr: Some(
-            capture
-                .try_clone()
-                .map_err(|e| io_error("attach private CLI diagnostics", e))?,
-        ),
-        #[cfg(not(windows))]
-        stderr: None,
+        stderr: if cfg!(windows) || !helper {
+            Some(
+                capture
+                    .try_clone()
+                    .map_err(|e| io_error("attach private CLI diagnostics", e))?,
+            )
+        } else {
+            None
+        },
     };
-    let mut process = OwnedProcess::spawn(command, true, super::ManagedLifetime::CallerOwned, io)
+    let mut process = OwnedProcess::spawn(command, helper, super::ManagedLifetime::CallerOwned, io)
         .map_err(|e| io_error("spawn metadata helper", e))?;
     if let Some(password) = password {
         let mut input = process

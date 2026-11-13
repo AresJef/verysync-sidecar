@@ -1,13 +1,7 @@
 //! Explicit stopped-state CLI upgrades with exact child containment.
-use super::{bootstrap, io_error, state, ManagedInstance};
+use super::ManagedInstance;
 use crate::{Error, ProcessDiagnostic, Result};
-use sha2::{Digest, Sha256};
-use std::{
-    fmt,
-    io::Read,
-    sync::mpsc,
-    time::{Duration, Instant},
-};
+use std::{fmt, time::Duration};
 use url::Url;
 
 /// Explicit native CLI operation. Provider/from-URL modes can overwrite the
@@ -81,135 +75,37 @@ impl ManagedInstance {
                 return Err(Error::InvalidConfiguration { reason: "CLI upgrade requires an explicit HTTP(S) archive URL without credentials or fragment" });
             }
         }
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .filter(|_| !timeout.is_zero())
-            .ok_or(Error::InvalidConfiguration {
-                reason: "CLI upgrade deadline must be positive and representable",
-            })?;
-        let source = self.selected_program().path().to_owned();
-        let expected = self.program_info().sha256;
-        let state = self.state_directory().to_owned();
-        let (cancel, cancelled) = mpsc::channel::<()>();
-        let (send, receive) = tokio::sync::oneshot::channel();
-        self.state_ready_for_backup = false;
-        std::thread::Builder::new()
-            .name("verysync-sidecar-cli-upgrade".into())
-            .spawn(move || {
-                let result = (|| {
-                    let state = state::existing(&state)?;
-                    let mut lease = state::StateLease::acquire(&state)?;
-                    #[cfg(windows)]
-                    let source = dunce::canonicalize(&source);
-                    #[cfg(not(windows))]
-                    let source = std::fs::canonicalize(&source);
-                    let source = source.map_err(|e| io_error("resolve selected CLI program", e))?;
-                    // Executables are public artifacts, not private state files.
-                    // Refuse special files and swapped final-component aliases without requiring
-                    // a private state-file ACL on a caller-supplied program.
-                    let mut open = std::fs::OpenOptions::new();
-                    open.read(true);
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::OpenOptionsExt;
-                        open.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
-                    }
-                    #[cfg(windows)]
-                    {
-                        use std::os::windows::fs::OpenOptionsExt;
-                        open.custom_flags(
-                            windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
-                        );
-                    }
-                    let mut file = open
-                        .open(&source)
-                        .map_err(|e| io_error("open selected CLI program", e))?;
-                    let metadata = file
-                        .metadata()
-                        .map_err(|e| io_error("inspect selected CLI program", e))?;
-                    if !metadata.is_file() || metadata.len() > 256 * 1024 * 1024 {
-                        return Err(Error::ProgramRejected {
-                            reason: "CLI program is not a bounded regular file",
-                        });
-                    }
-                    #[cfg(windows)]
-                    {
-                        use std::os::windows::fs::MetadataExt;
-                        if metadata.file_attributes()
-                            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-                            != 0
-                        {
-                            return Err(Error::ProgramRejected {
-                                reason: "CLI program is a reparse point",
-                            });
-                        }
-                    }
-                    let mut hash = Sha256::new();
-                    let mut buffer = [0; 65536];
-                    loop {
-                        bootstrap::check_active(&cancelled, deadline)?;
-                        let n = file
-                            .read(&mut buffer)
-                            .map_err(|e| io_error("verify selected CLI program", e))?;
-                        if n == 0 {
-                            break;
-                        }
-                        hash.update(&buffer[..n]);
-                    }
-                    if <[u8; 32]>::from(hash.finalize()) != expected {
-                        return Err(Error::ProgramRejected {
-                            reason: "CLI program differs from the last ready generation",
-                        });
-                    }
-                    // Windows must be able to replace the old executable. Do not
-                    // retain a verification handle across the modifying CLI.
-                    drop(file);
-                    let mut args = vec!["upgrade"];
-                    match &command {
-                        KernelUpgradeCommand::Check => args.push("--check-only"),
-                        KernelUpgradeCommand::Provider => {}
-                        KernelUpgradeCommand::FromUrl(url) => {
-                            args.push("--from");
-                            args.push(url.as_str());
-                        }
-                    }
-                    lease.release_engine_lock_for_spawn();
-                    let outcome = bootstrap::cli_capture(
-                        &source,
-                        lease.path(),
-                        &args,
-                        None,
-                        &cancelled,
-                        deadline,
-                    );
-                    let (status, bytes) = outcome.map_err(|source| {
-                        if matches!(command, KernelUpgradeCommand::Check) {
-                            source
-                        } else {
-                            Error::MutationOutcomeUnknown {
-                                operation: "run kernel CLI upgrade",
-                                source: Box::new(source),
-                            }
-                        }
-                    })?;
-                    Ok(KernelUpgradeExit {
-                        code: status.code(),
-                        tree_stopped: true,
-                        release_unavailable: !matches!(command, KernelUpgradeCommand::FromUrl(_))
-                            && status.code() == Some(1)
-                            && bytes
-                                .windows(crate::upgrades::NO_MATCHING_RELEASE.len())
-                                .any(|w| w == crate::upgrades::NO_MATCHING_RELEASE),
-                        diagnostic: ProcessDiagnostic::new(bytes),
-                    })
-                })();
-                let _ = send.send(result);
-            })
-            .map_err(|e| io_error("create contained CLI upgrade worker", e))?;
-        let result = receive.await.map_err(|_| Error::ManagedFailure {
-            reason: "CLI upgrade worker ended without an outcome",
-        })?;
-        drop(cancel);
-        result
+        let mut arguments = vec!["upgrade".to_owned()];
+        match &command {
+            KernelUpgradeCommand::Check => arguments.push("--check-only".to_owned()),
+            KernelUpgradeCommand::Provider => {}
+            KernelUpgradeCommand::FromUrl(url) => {
+                arguments.extend(["--from".to_owned(), url.as_str().to_owned()])
+            }
+        }
+        let exit = self
+            .run_stopped_cli(
+                super::command::CliPlan {
+                    arguments,
+                    positional: Vec::new(),
+                    operation: "run kernel CLI upgrade",
+                    may_modify: !matches!(command, KernelUpgradeCommand::Check),
+                    clean_stop_required: true,
+                },
+                timeout,
+            )
+            .await?;
+        Ok(KernelUpgradeExit {
+            code: exit.code,
+            tree_stopped: exit.tree_stopped,
+            release_unavailable: !matches!(command, KernelUpgradeCommand::FromUrl(_))
+                && exit.code == Some(1)
+                && exit
+                    .diagnostic
+                    .body_bytes()
+                    .windows(crate::upgrades::NO_MATCHING_RELEASE.len())
+                    .any(|w| w == crate::upgrades::NO_MATCHING_RELEASE),
+            diagnostic: exit.diagnostic,
+        })
     }
 }

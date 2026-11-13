@@ -4,6 +4,7 @@
 mod archive;
 mod backup;
 mod bootstrap;
+mod command;
 pub use backup::{StateBackup, StateBackupInfo, StateBackupOptions};
 #[cfg(feature = "download")]
 mod cache;
