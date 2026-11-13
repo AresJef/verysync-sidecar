@@ -34,6 +34,10 @@ defaults, guards creation and partial updates, controls a remote device's pause
 layer, and observes removal and remaining folder associations. Configuration
 readback remains separate from connection and file-transfer evidence.
 
+The unreleased [invitation and folder-peer APIs](docs/public/invitations.md)
+distinguish remote offers, persistent ignores, local key registration and explicit
+peer association. Nonempty pending-device records remain separately unverified.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.

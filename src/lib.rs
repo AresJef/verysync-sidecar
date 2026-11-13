@@ -24,6 +24,7 @@
 #![doc = include_str!("../docs/public/long-running-operations.md")]
 #![doc = include_str!("../docs/public/sharing.md")]
 #![doc = include_str!("../docs/public/devices.md")]
+#![doc = include_str!("../docs/public/invitations.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -37,6 +38,7 @@ mod engine_source;
 mod error;
 mod events;
 mod folders;
+mod invitations;
 mod managed;
 mod operations;
 mod path;
@@ -65,6 +67,10 @@ pub use events::{
     EventSubscription,
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
+pub use invitations::{
+    FolderPeerUpdate, IgnoredFolder, IgnoredFolderUpdate, PendingDeviceInfo, PendingDismissal,
+    PendingFolderOffer, PendingFolderOffers,
+};
 #[cfg(feature = "download")]
 pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
 #[cfg(feature = "download")]

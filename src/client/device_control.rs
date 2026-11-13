@@ -181,14 +181,14 @@ impl Client {
         })
     }
 
-    fn require_remote_device(&self, id: &DeviceId) -> Result<()> {
+    pub(super) fn require_remote_device(&self, id: &DeviceId) -> Result<()> {
         if *id == self.instance.device_id {
             Err(Error::LocalDeviceProtected)
         } else {
             Ok(())
         }
     }
-    fn device_url(&self, id: &DeviceId) -> Result<url::Url> {
+    pub(super) fn device_url(&self, id: &DeviceId) -> Result<url::Url> {
         let mut url = self
             .connection
             .management_url("rest/config/devices/", &[])?;

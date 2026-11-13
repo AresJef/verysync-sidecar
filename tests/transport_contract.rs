@@ -141,6 +141,97 @@ fn version(value: &str) -> Reply {
 }
 
 #[tokio::test]
+async fn pending_route_http_and_schema_errors_are_never_empty_snapshots() -> TestResult {
+    for reply in [
+        Reply {
+            status: 404,
+            body: b"missing route".to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        Reply::json(serde_json::json!({"folder":{"offeredBy":"malformed"}})),
+    ] {
+        let server = ScriptedServer::start(vec![
+            version("v2.33.2"),
+            Reply::json(serde_json::json!({"myID":ID})),
+            reply,
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.pending_folders(None).await,
+            Err(Error::Http { .. }) | Err(Error::InvalidResponse { .. })
+        ));
+        assert_eq!(server.finish().await?.len(), 3);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn candidate_pending_device_dismissal_is_exact_and_has_no_implicit_ignore() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;
+    let pending = serde_json::json!({peer.as_str():{"time":"2026-01-01T00:00:00Z","name":"private pending name","address":"private.invalid:1234","futureSecret":"private future value"}});
+    let server = ScriptedServer::start(vec![
+        version("v2.33.2"),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(pending),
+        Reply::json(serde_json::Value::Null),
+        Reply::json(serde_json::json!({})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(client.dismiss_pending_device(&peer).await?.record_absent);
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests.iter().filter(|v| !v.starts_with("GET ")).collect();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with(&format!(
+        "DELETE /prefix/rest/cluster/pending/devices?device={} HTTP/1.1\r\n",
+        peer.as_str()
+    )));
+    assert!(writes[0].ends_with("\r\n\r\n"));
+    // Synthetic candidate wire evidence only; no nonempty native record claim.
+    Ok(())
+}
+
+#[tokio::test]
+async fn persistent_folder_ignore_preserves_other_entries_and_only_patches_that_field() -> TestResult
+{
+    use verysync_sidecar::{DeviceId, FolderId};
+    let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;
+    let folder = FolderId::parse("remote ?/#%")?;
+    let other = serde_json::json!({"id":"other","label":"keep","time":"2025-01-01T00:00:00Z","unknown":{"preserved":7}});
+    let new =
+        serde_json::json!({"id":folder.as_str(),"label":"offered","time":"2026-01-01T00:00:00Z"});
+    let server=ScriptedServer::start(vec![
+        version("v2.33.2"),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({folder.as_str():{"offeredBy":{peer.as_str():{"time":"2026-01-01T00:00:00Z","label":"offered","receiveEncrypted":false,"remoteEncrypted":false}}}})),
+        Reply::json(serde_json::json!({"devices":[{"deviceID":peer.as_str(),"ignoredFolders":[other.clone()]}]})),
+        Reply::json(serde_json::Value::Null),
+        Reply::json(serde_json::json!({"devices":[{"deviceID":peer.as_str(),"ignoredFolders":[other.clone(),new.clone()]}]})),
+        Reply::json(serde_json::json!({})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let result = client.ignore_folder_offer(&folder, &peer).await?;
+    assert!(result.is_ignored && result.pending_offer_absent);
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|v| v.starts_with("PATCH "))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split_once("\r\n\r\n").ok_or("missing body")?.1)?;
+    assert_eq!(body, serde_json::json!({"ignoredFolders":[other,new]}));
+    assert!(requests
+        .iter()
+        .filter(|v| v.contains("pending/folders?"))
+        .all(|v| v.contains(&format!("device={}", peer.as_str()))));
+    Ok(())
+}
+
+#[tokio::test]
 async fn device_creation_preserves_unknown_defaults_and_rejects_cloned_duplicates() -> TestResult {
     use verysync_sidecar::{CreateDeviceOptions, DeviceId, DevicePatch};
     let peer = DeviceId::parse("BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB")?;

@@ -1,6 +1,7 @@
 //! Authenticated management connections, separate from process ownership.
 
 mod device_control;
+mod invitation_control;
 
 use std::collections::BTreeMap;
 use std::fmt;

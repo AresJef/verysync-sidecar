@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add pending-folder reads, exact offer dismissal, per-peer persistent ignores
+  and explicit folder-peer associations. Keep remote offer IDs, local IDs and
+  independently validated keys separate; retain pending-device validation limits.
+
 - Add typed remote-device reads, default-preserving creation, partial name,
   protocol-address, compression and pause changes, and exact-ID removal with
   association readback. Protect the local identity, preserve unknown fields,

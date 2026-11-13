@@ -246,6 +246,10 @@ pub enum Error {
     },
     /// A remote-device mutation targeted the connected instance's own identity.
     LocalDeviceProtected,
+    /// The exact remote offer is absent; no modifying request was sent.
+    PendingOfferNotFound,
+    /// This peer has no persistent ignored-folder entry for the requested ID.
+    FolderNotIgnored,
     /// The requested folder is absent from the authenticated configuration.
     FolderNotFound {
         /// The requested opaque identifier.
@@ -367,6 +371,8 @@ impl fmt::Display for Error {
             Self::DeviceNotFound {..}=>formatter.write_str("device is not configured"),
             Self::DeviceAlreadyExists {..}=>formatter.write_str("device ID is already configured; creation did not start"),
             Self::LocalDeviceProtected=>formatter.write_str("remote-device mutation cannot target the local identity"),
+            Self::PendingOfferNotFound=>formatter.write_str("pending offer is not present"),
+            Self::FolderNotIgnored=>formatter.write_str("folder is not ignored for this device"),
             Self::FolderAlreadyExists {..}=>formatter.write_str("folder ID is already configured; creation did not start"),
             Self::FolderPathAlreadyConfigured {..}=>formatter.write_str("target path string is already configured; creation did not start"),
             Self::MutationOutcomeUnknown {operation,..}=>write!(formatter,"outcome is unknown after attempting to {operation}; read current configuration before retrying"),

@@ -12,7 +12,7 @@ use crate::{DeviceId, Error, Result};
 /// Protocol requests encode this identifier as one query value or path segment.
 /// The engine remains
 /// responsible for determining whether that identifier names a configured folder.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FolderId(String);
 
 impl FolderId {
