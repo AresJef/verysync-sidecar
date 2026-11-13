@@ -17,12 +17,13 @@ def main():
     args = parser.parse_args()
     cargo = [args.cargo, f"+{args.toolchain}"]
     subprocess.run([*cargo, "build", "--examples", "--locked"], check=True)
+    subprocess.run([*cargo, "build", "--example", "cache_program", "--features", "download", "--locked"], check=True)
     metadata = json.loads(subprocess.check_output(
         [*cargo, "metadata", "--no-deps", "--format-version", "1"], text=True
     ))
     directory = Path(metadata["target_directory"]).joinpath("debug", "examples")
     records = []
-    for name in ("connect_existing", "create_folder", "manage_existing", "manage_owned"):
+    for name in ("connect_existing", "create_folder", "manage_existing", "manage_owned", "cache_program"):
         executable = directory.joinpath(name)
         if os.name == "nt":
             executable = executable.with_suffix(".exe")

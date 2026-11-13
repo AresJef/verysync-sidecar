@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit offline cache resolution, cross-process preparation leases,
+  rehashed hits and atomic indexes over immutable program generations. Preserve
+  previous executables during corrupt-entry recovery and cancellation.
+
 - Add optional explicit fixed program preparation with bounded streaming,
   complete archive SHA-256 checks, exact regular executable extraction,
   private permissions and runtime-independent partial-file cleanup.

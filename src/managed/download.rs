@@ -25,6 +25,7 @@ pub struct DownloadOptions {
     destination: PathBuf,
     source: Url,
     timeout: Duration,
+    cache_lease: Option<Arc<dyn Send + Sync>>,
 }
 impl std::fmt::Debug for DownloadOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -55,6 +56,7 @@ impl DownloadOptions {
             asset,
             destination,
             timeout: Duration::from_secs(300),
+            cache_lease: None,
         })
     }
     /// Bound the complete transfer, checksum and extraction operation.
@@ -69,22 +71,13 @@ impl DownloadOptions {
     /// HTTPS or literal loopback HTTP only; no userinfo, query or fragment.
     /// Ambient proxies are ignored, and redirects cannot change the source host.
     pub fn source_url(mut self, source: Url) -> Result<Self> {
-        let loopback = match source.host() {
-            Some(Host::Ipv4(ip)) => IpAddr::V4(ip).is_loopback(),
-            Some(Host::Ipv6(ip)) => IpAddr::V6(ip).is_loopback(),
-            _ => false,
-        };
-        if !(source.scheme() == "https" || source.scheme() == "http" && loopback)
-            || source.host().is_none()
-            || !source.username().is_empty()
-            || source.password().is_some()
-            || source.query().is_some()
-            || source.fragment().is_some()
-        {
-            return Err(rejected("source must be HTTPS or literal loopback HTTP without credentials, query or fragment"));
-        }
+        validate_source(&source)?;
         self.source = source;
         Ok(self)
+    }
+    pub(super) fn cache_lease(mut self, lease: Arc<dyn Send + Sync>) -> Self {
+        self.cache_lease = Some(lease);
+        self
     }
     /// Download, verify the complete archive and extract only its exact regular executable.
     /// Dropping this future cancels its native file owner without depending on Tokio shutdown.
@@ -180,11 +173,20 @@ impl DownloadOptions {
 
 /// A program extracted from a complete, matching fixed official archive.
 /// This is static artifact evidence; managed startup separately checks its actual version.
-#[derive(Clone, Debug)]
 pub struct PreparedProgram {
     program: LocalProgram,
     asset: OfficialProgram,
     executable_sha256: [u8; 32],
+    cache_owner: Option<Staging>,
+}
+impl std::fmt::Debug for PreparedProgram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedProgram")
+            .field("program", &self.program)
+            .field("asset", &self.asset)
+            .field("executable_sha256", &self.executable_sha256)
+            .finish()
+    }
 }
 impl PreparedProgram {
     /// Native program path with its actual extracted executable digest pinned.
@@ -198,6 +200,11 @@ impl PreparedProgram {
     /// Actual extracted executable SHA-256, distinct from the archive digest.
     pub fn executable_sha256(&self) -> [u8; 32] {
         self.executable_sha256
+    }
+    pub(super) fn retain_in_cache(&mut self) {
+        if let Some(owner) = &mut self.cache_owner {
+            owner.retain_committed = true;
+        }
     }
 }
 
@@ -239,6 +246,25 @@ fn transport(source: reqwest::Error) -> Error {
         source: source.without_url(),
     }
 }
+pub(super) fn validate_source(source: &Url) -> Result<()> {
+    let loopback = match source.host() {
+        Some(Host::Ipv4(ip)) => IpAddr::V4(ip).is_loopback(),
+        Some(Host::Ipv6(ip)) => IpAddr::V6(ip).is_loopback(),
+        _ => false,
+    };
+    if !(source.scheme() == "https" || source.scheme() == "http" && loopback)
+        || source.host().is_none()
+        || !source.username().is_empty()
+        || source.password().is_some()
+        || source.query().is_some()
+        || source.fragment().is_some()
+    {
+        return Err(rejected(
+            "source must be HTTPS or literal loopback HTTP without credentials, query or fragment",
+        ));
+    }
+    Ok(())
+}
 
 struct Staging {
     directory: PathBuf,
@@ -246,6 +272,9 @@ struct Staging {
     #[cfg(unix)]
     identity: fs::Metadata,
     committed: bool,
+    retain_committed: bool,
+    executable_name: String,
+    _cache_lease: Option<Arc<dyn Send + Sync>>,
 }
 impl Drop for Staging {
     fn drop(&mut self) {
@@ -276,8 +305,11 @@ impl Drop for Staging {
         // The retained Windows directory handle denies rename/replacement until cleanup.
         let _ = fs::remove_file(self.directory.join("archive.part"));
         let _ = fs::remove_file(self.directory.join("program.part"));
+        if self.committed && !self.retain_committed {
+            let _ = fs::remove_file(self.directory.join(&self.executable_name));
+        }
         drop(self.handle.take());
-        if !self.committed {
+        if !self.committed || !self.retain_committed {
             let _ = fs::remove_dir(&self.directory);
         }
     }
@@ -323,6 +355,9 @@ fn worker(
             .map_err(|e| io("record preparation directory identity", e))?,
         handle: Some(handle),
         committed: false,
+        retain_committed: options.cache_lease.is_none(),
+        executable_name: options.asset.executable_name().to_owned(),
+        _cache_lease: options.cache_lease.clone(),
     };
     let archive_path = staging.directory.join("archive.part");
     let mut archive =
@@ -388,10 +423,22 @@ fn worker(
     fs::hard_link(&program_path, &final_path)
         .map_err(|e| io("commit verified executable without replacement", e))?;
     staging.committed = true;
+    // A cache transaction retains this exact directory owner until its index
+    // commits. Dropping an unconsumed result still cleans its private generation.
+    let cache_owner = if options.cache_lease.is_some() {
+        fs::remove_file(&archive_path)
+            .map_err(|e| io("remove verified cache archive staging file", e))?;
+        fs::remove_file(&program_path)
+            .map_err(|e| io("remove verified cache executable staging link", e))?;
+        Some(staging)
+    } else {
+        None
+    };
     Ok(PreparedProgram {
         program: LocalProgram::new(final_path)?.expected_sha256(executable_sha256),
         asset: options.asset,
         executable_sha256,
+        cache_owner,
     })
 }
 pub(super) fn check(cancelled: &AtomicBool, deadline: Instant) -> Result<()> {
@@ -436,6 +483,9 @@ mod tests {
             identity: handle.metadata().unwrap(),
             handle: Some(handle),
             committed: false,
+            retain_committed: true,
+            executable_name: "verysync".into(),
+            _cache_lease: None,
         };
         std::fs::write(directory.join("archive.part"), b"owned partial bytes").unwrap();
         std::fs::create_dir(&unrelated).unwrap();
