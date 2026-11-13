@@ -52,6 +52,10 @@ pub enum Capability {
     RelayServer,
     /// Fresh completion, need/change pages, statistics and actual file errors.
     SyncObservation,
+    /// Relative subpath/all-folder scan requests and partial scan scheduling.
+    ScanControl,
+    /// Exact ignore-file replacement, parser state and built-in default reset.
+    IgnorePatterns,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -213,7 +217,17 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::ScanControl,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::StorageProtocols),
+    LibraryCapability {
+        capability: Capability::IgnorePatterns,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::LocalSync),
     planned(Capability::EnterpriseRemoteManagement),
     planned(Capability::AuxiliaryControls),

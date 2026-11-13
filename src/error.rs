@@ -106,6 +106,12 @@ pub enum Error {
         /// Actual existing local registration ID.
         id: FolderId,
     },
+    /// A modifying ignore-file response reports a parser rejection. Rules may
+    /// already be stored; inspect or explicitly replace/reset them before retry.
+    IgnorePatternsRejected {
+        /// Actual returned state and private parser diagnostic, hidden in Debug.
+        snapshot: Box<crate::IgnoreSnapshot>,
+    },
     /// The selected local executable failed a baseline or checksum check.
     ProgramRejected {
         /// A description excluding paths, arguments and captured program output.
@@ -326,6 +332,7 @@ impl fmt::Display for Error {
             Self::UnlistedProgramVersion => formatter.write_str("requested program version is not in the fixed catalog"),
             Self::UnsupportedProgramTarget { .. } => formatter.write_str("requested program target is not in the fixed catalog"),
             Self::ShareKeyRejected { .. } => formatter.write_str("engine rejected the sharing key"),
+            Self::IgnorePatternsRejected { .. } => formatter.write_str("engine reported invalid stored ignore patterns; inspect or explicitly restore the rules"),
             Self::ShareAlreadyConfigured { .. } => formatter.write_str("sharing group is already configured locally"),
             Self::ScanObservationLost => formatter.write_str("scan observation lost continuity; query state explicitly"),
             Self::ProgramRejected { reason } => write!(formatter, "selected program rejected: {reason}"),

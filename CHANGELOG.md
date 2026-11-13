@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add exact ignore-rule replacement and default restoration, preserving null
+  file lines and reporting HTTP-success parser rejection as a typed error.
+
+- Add relative subpath and all-folder scans, partial periodic scan/watcher
+  settings and separate native index, automatic-scan and notification effects.
+
 - Add fresh typed completion/status batches, bounded need/local-change/error
   pages and device/folder statistics. Preserve unknown remote state, null lists
   and untrusted file names; verify native access errors, active need, local edits

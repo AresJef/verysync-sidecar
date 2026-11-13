@@ -14,6 +14,276 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn ignore_http_success_parse_rejection_is_typed_and_get_preserves_stored_error() -> TestResult
+{
+    use verysync_sidecar::{FolderId, IgnorePatterns};
+    let folder = serde_json::json!({"id":"ignore ?%","label":"synthetic","path":"/synthetic","paused":false});
+    let invalid = serde_json::json!({"ignore":[format!("[{KEY}")],"expanded":[],"error":format!("private parser {KEY}"),"future":KEY});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(invalid.clone()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(invalid),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("ignore ?%")?;
+    let rules = IgnorePatterns::new(vec![format!("[{KEY}")])?;
+    let error = client
+        .set_ignore_patterns(&folder, &rules)
+        .await
+        .unwrap_err();
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    let Error::IgnorePatternsRejected { snapshot } = error else {
+        return Err("expected parse rejection".into());
+    };
+    assert_eq!(snapshot.patterns.as_deref(), Some(rules.patterns()));
+    assert!(snapshot.parse_error.as_ref().unwrap().contains(KEY));
+    let actual = client.ignore_patterns(&folder).await?;
+    assert_eq!(actual.patterns.as_deref(), Some(rules.patterns()));
+    assert!(actual.parse_error.is_some());
+    assert!(!format!("{actual:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let posts: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0].starts_with("POST /prefix/rest/db/ignores?folder=ignore+%3F%25 "));
+    Ok(())
+}
+
+#[tokio::test]
+async fn ignore_failed_readback_is_unknown_and_reset_restores_defaults_without_empty_body(
+) -> TestResult {
+    use verysync_sidecar::{FolderId, IgnorePatterns};
+    let folder =
+        serde_json::json!({"id":"scope","label":"synthetic","path":"/synthetic","paused":false});
+    let empty = serde_json::json!({"ignore":null,"expanded":[],"error":null});
+    let defaults = serde_json::json!({"ignore":["*.tmp"],"expanded":["*.tmp"],"error":null});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(empty),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply {
+            status: 500,
+            body: KEY.as_bytes().to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(defaults.clone()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(defaults),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("scope")?;
+    let error = client
+        .set_ignore_patterns(&folder, &IgnorePatterns::new(Vec::new())?)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    let reset = client.reset_ignore_patterns(&folder).await?;
+    assert_eq!(reset.patterns.unwrap(), vec!["*.tmp"]);
+    let requests = server.finish().await?;
+    let posts: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+    assert_eq!(posts.len(), 2);
+    let submitted: serde_json::Value =
+        serde_json::from_str(posts[0].split_once("\r\n\r\n").ok_or("body missing")?.1)?;
+    assert_eq!(submitted, serde_json::json!({"ignore":[]}));
+    assert!(posts[1].starts_with("POST /prefix/rest/db/resetIgnores?folder=scope "));
+    assert_eq!(posts[1].split_once("\r\n\r\n").ok_or("body missing")?.1, "");
+    Ok(())
+}
+
+#[tokio::test]
+async fn scan_scopes_encode_repeated_subpaths_and_refuse_invalid_or_changed_targets() -> TestResult
+{
+    use verysync_sidecar::{FolderId, FolderScanPatch, PathStyle, TargetPath};
+    let folder = serde_json::json!({"id":"scope /?%","label":"synthetic","path":"/synthetic","paused":false});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"myID":"BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB"})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("scope /?%")?;
+    for paths in [
+        vec![],
+        vec![TargetPath::remote(PathStyle::Unix, "../escape")?],
+        vec![TargetPath::remote(PathStyle::Unix, "/absolute")?],
+        vec![TargetPath::remote(PathStyle::Windows, "relative")?],
+    ] {
+        assert!(matches!(
+            client.request_scan_subpaths(&folder, &paths).await,
+            Err(Error::InvalidPath { .. })
+        ));
+    }
+    for patch in [
+        FolderScanPatch::default(),
+        FolderScanPatch::default().watcher_delay_seconds(f64::NAN),
+        FolderScanPatch::default().watcher_delay_seconds(-1.0),
+        FolderScanPatch::default().progress_interval_seconds(-2),
+        FolderScanPatch::default().rescan_interval_seconds(u32::MAX),
+    ] {
+        assert!(matches!(
+            client
+                .update_folder_scan_configuration(&folder, &patch)
+                .await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert!(client
+        .update_folder_scan_configuration(
+            &FolderId::parse("..")?,
+            &FolderScanPatch::default().watcher(false)
+        )
+        .await
+        .is_err());
+    client
+        .request_scan_subpaths(
+            &folder,
+            &[
+                TargetPath::remote(PathStyle::Unix, "one/二 ?%.bin")?,
+                TargetPath::remote(PathStyle::Unix, "two.bin")?,
+            ],
+        )
+        .await?;
+    client.request_all_scans().await?;
+    assert!(matches!(
+        client.request_all_scans().await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    let requests = server.finish().await?;
+    let scans: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+    assert_eq!(scans.len(), 2);
+    let url = url::Url::parse(&format!(
+        "http://synthetic.invalid{}",
+        scans[0].split_whitespace().nth(1).ok_or("target missing")?
+    ))?;
+    assert_eq!(
+        url.query_pairs().collect::<Vec<_>>(),
+        vec![
+            ("folder".into(), "scope /?%".into()),
+            ("sub".into(), "one/二 ?%.bin".into()),
+            ("sub".into(), "two.bin".into())
+        ]
+    );
+    assert!(scans[1].starts_with("POST /prefix/rest/db/scan "));
+    Ok(())
+}
+
+#[tokio::test]
+async fn scan_partial_patch_preserves_fields_and_unknown_outcome_is_not_retried() -> TestResult {
+    use verysync_sidecar::{FolderId, FolderScanPatch};
+    let folder = serde_json::json!({"id":"scope /?%","label":"synthetic","path":"/synthetic","paused":false,"rescanIntervalS":0,"fsWatcherEnabled":false,"fsWatcherDelayS":1.5,"fsWatcherTimeoutS":2,"scanProgressIntervalS":-1,"disableInitialScan":false,"futureSecret":KEY});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply {
+            status: 500,
+            body: KEY.as_bytes().to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("scope /?%")?;
+    let changed = client
+        .update_folder_scan_configuration(&folder, &FolderScanPatch::default().watcher(true))
+        .await?;
+    assert!(!changed.requested_fields_match && !changed.configuration.watcher_enabled);
+    assert_eq!(changed.configuration.extra["futureSecret"], KEY);
+    assert!(!format!("{changed:?}").contains(KEY));
+    let error = client
+        .update_folder_scan_configuration(
+            &folder,
+            &FolderScanPatch::default().rescan_interval_seconds(1),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    let requests = server.finish().await?;
+    let patches: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(patches.len(), 2);
+    assert!(patches[0].starts_with("PATCH /prefix/rest/config/folders/scope%20%2F%3F%25 "));
+    let body: serde_json::Value =
+        serde_json::from_str(patches[0].split_once("\r\n\r\n").ok_or("body missing")?.1)?;
+    assert_eq!(body, serde_json::json!({"fsWatcherEnabled":true}));
+    Ok(())
+}
+
+#[tokio::test]
+async fn scan_remote_windows_scope_uses_target_syntax_without_host_rewriting() -> TestResult {
+    use verysync_sidecar::{FolderId, PathStyle, TargetPath};
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"folders":[{"id":"scope","label":"synthetic","path":"C:\\synthetic","paused":false}]})),
+        Reply::json(serde_json::json!({})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("scope")?;
+    for path in [
+        r"C:relative",
+        r"C:\absolute",
+        r"\\host\share",
+        r"a\..\escape",
+        "/root",
+        "a/../escape",
+        ".",
+    ] {
+        assert!(matches!(
+            client
+                .request_scan_subpaths(&folder, &[TargetPath::remote(PathStyle::Windows, path)?])
+                .await,
+            Err(Error::InvalidPath { .. })
+        ));
+    }
+    client
+        .request_scan_subpaths(
+            &folder,
+            &[TargetPath::remote(PathStyle::Windows, r"folder\二 %.bin")?],
+        )
+        .await?;
+    let requests = server.finish().await?;
+    let target = requests[4]
+        .split_whitespace()
+        .nth(1)
+        .ok_or("target missing")?;
+    let url = url::Url::parse(&format!("http://synthetic.invalid{target}"))?;
+    assert_eq!(url.query_pairs().last().unwrap().1, r"folder\二 %.bin");
+    Ok(())
+}
+
+#[tokio::test]
 async fn sync_missing_folder_and_changed_target_do_not_return_empty_data() -> TestResult {
     use verysync_sidecar::{FolderId, ListPage};
     let different = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";

@@ -11,6 +11,173 @@ use verysync_sidecar::{
     ManagedInstance, SyncFileKind, TargetPath,
 };
 
+async fn indexed_files(
+    client: &verysync_sidecar::Client,
+    folder: &FolderId,
+    count: u64,
+) -> TestResult {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let status = client.folder_status(folder).await?;
+            if status.local_files == Some(count)
+                && status.state == Some(verysync_sidecar::FolderState::Idle)
+            {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_scan_scopes_schedule_and_watcher_preserve_files() -> TestResult {
+    use verysync_sidecar::FolderScanPatch;
+    let root = tempfile::Builder::new()
+        .prefix("vss-scan-")
+        .tempdir()?
+        .keep();
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let a = FolderId::parse("scan-scope-a")?;
+    let b = FolderId::parse("scan-scope-b")?;
+    let a_path = root.join("a files");
+    let b_path = root.join("b files");
+    std::fs::create_dir_all(a_path.join("one"))?;
+    std::fs::create_dir(&b_path)?;
+    let stopped = FolderScanPatch::default()
+        .rescan_interval_seconds(0)
+        .watcher(false)
+        .watcher_delay_seconds(1.5)
+        .watcher_timeout_seconds(2)
+        .progress_interval_seconds(1)
+        .disable_initial_scan(false);
+    for (id, path) in [(&a, &a_path), (&b, &b_path)] {
+        core.client()
+            .create_folder(
+                &CreateFolderOptions::new(id.clone(), TargetPath::local(path)).paused(true),
+            )
+            .await?;
+        let changed = core
+            .client()
+            .update_folder_scan_configuration(id, &stopped)
+            .await?;
+        assert!(changed.requested_fields_match);
+        assert_eq!(changed.configuration.watcher_delay_seconds, 1.5);
+        core.client().resume_folder(id).await?;
+        indexed_files(core.client(), id, 0).await?;
+    }
+    let first = Path::new("one").join("二 空格 %.bin");
+    let second = Path::new("two.bin");
+    for path in [&first, second, Path::new("unselected.bin")] {
+        std::fs::write(a_path.join(path), b"scope bytes")?;
+    }
+    std::fs::write(b_path.join("other.bin"), b"other folder bytes")?;
+    core.client()
+        .request_scan_subpaths(&a, &[TargetPath::local(&first), TargetPath::local(second)])
+        .await?;
+    indexed_files(core.client(), &a, 2).await?;
+    assert_eq!(core.client().folder_status(&b).await?.local_files, Some(0));
+    core.client().request_scan(&a).await?;
+    indexed_files(core.client(), &a, 3).await?;
+    assert_eq!(core.client().folder_status(&b).await?.local_files, Some(0));
+    core.client().request_all_scans().await?;
+    indexed_files(core.client(), &b, 1).await?;
+    core.client().pause_folder(&a).await?;
+    std::fs::write(a_path.join("paused.bin"), b"paused folder bytes")?;
+    assert!(matches!(
+        core.client()
+            .request_scan_subpaths(&a, &[TargetPath::local("paused.bin")])
+            .await,
+        Err(Error::ScanNotIdle)
+    ));
+    for invalid in [TargetPath::local("../escape"), TargetPath::local(&a_path)] {
+        assert!(matches!(
+            core.client().request_scan_subpaths(&b, &[invalid]).await,
+            Err(Error::InvalidPath { .. })
+        ));
+    }
+    assert!(matches!(
+        core.client()
+            .request_scan_subpaths(&FolderId::parse("missing")?, &[TargetPath::local("file")])
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    core.client().request_all_scans().await?;
+    assert!(core.client().folder(&a).await?.paused);
+    core.client().resume_folder(&a).await?;
+    core.client().request_scan(&a).await?;
+    indexed_files(core.client(), &a, 4).await?;
+    assert!(
+        core.client()
+            .update_folder_scan_configuration(
+                &b,
+                &FolderScanPatch::default().rescan_interval_seconds(1)
+            )
+            .await?
+            .requested_fields_match
+    );
+    std::fs::write(b_path.join("scheduled.bin"), b"automatic rescan bytes")?;
+    indexed_files(core.client(), &b, 2).await?;
+    assert!(
+        core.client()
+            .update_folder_scan_configuration(
+                &b,
+                &FolderScanPatch::default()
+                    .rescan_interval_seconds(0)
+                    .watcher(true)
+                    .watcher_delay_seconds(1.5)
+                    .disable_initial_scan(true)
+            )
+            .await?
+            .requested_fields_match
+    );
+    core.restart(Duration::from_secs(30)).await?;
+    indexed_files(core.client(), &b, 2).await?;
+    let settings = core.client().folder_scan_configuration(&b).await?;
+    assert_eq!(settings.rescan_interval_seconds, 0);
+    assert!(settings.watcher_enabled);
+    assert_eq!(settings.watcher_delay_seconds, 1.5);
+    assert!(settings.disable_initial_scan);
+    let mut settle = core.client().observe_next_scan(&b).await?;
+    let (requested, completed) = tokio::join!(
+        core.client().request_scan(&b),
+        settle.wait(Duration::from_secs(15)),
+    );
+    settle.close().await?;
+    requested?;
+    completed?;
+    std::fs::write(b_path.join("watched.bin"), b"filesystem notification bytes")?;
+    indexed_files(core.client(), &b, 3).await?;
+    for path in [&first, second, Path::new("unselected.bin")] {
+        assert_eq!(std::fs::read(a_path.join(path))?, b"scope bytes");
+    }
+    assert_eq!(
+        std::fs::read(a_path.join("paused.bin"))?,
+        b"paused folder bytes"
+    );
+    assert_eq!(
+        std::fs::read(b_path.join("other.bin"))?,
+        b"other folder bytes"
+    );
+    assert_eq!(
+        std::fs::read(b_path.join("scheduled.bin"))?,
+        b"automatic rescan bytes"
+    );
+    assert_eq!(
+        std::fs::read(b_path.join("watched.bin"))?,
+        b"filesystem notification bytes"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public scan scope evidence: {}",
+        json!({"actual_partial_settings_readback":true,"actual_fractional_watcher_delay":true,"actual_two_subpaths_index_only_selected_files":true,"subpaths_preserve_other_folder_index":true,"actual_whole_folder_indexes_remainder":true,"whole_folder_preserves_other_index":true,"actual_all_folder_scan":true,"paused_subpath_rejected":true,"invalid_scope_rejected":true,"missing_folder_rejected":true,"all_scan_does_not_resume_paused_folder":true,"explicit_resume_and_index":true,"actual_scheduled_scan_without_request":true,"settings_persist_after_restart":true,"startup_scan_disabled_before_watch_sample":true,"actual_settle_scan_observed_before_watch_sample":true,"actual_watcher_scan_without_request":true,"all_original_synthetic_bytes_preserved":true,"actual_normal_tree_exit":true})
+    );
+    Ok(())
+}
+
 struct BlockedFile {
     #[cfg(unix)]
     path: PathBuf,
@@ -18,6 +185,145 @@ struct BlockedFile {
     original: std::fs::Permissions,
     #[cfg(windows)]
     _held: std::fs::File,
+}
+
+#[tokio::test]
+async fn actual_ignore_replace_parse_rejection_reset_and_restart_preserve_files() -> TestResult {
+    use verysync_sidecar::IgnorePatterns;
+    let root = tempfile::Builder::new()
+        .prefix("vss-ignore-")
+        .tempdir()?
+        .keep();
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let id = FolderId::parse("ignore-rules-a")?;
+    let other = FolderId::parse("ignore-rules-b")?;
+    let data = root.join("data");
+    let unrelated = root.join("other");
+    std::fs::create_dir_all(data.join("sub"))?;
+    std::fs::create_dir(&unrelated)?;
+    let nested = [
+        Path::new("sub").join("hidden.dat"),
+        Path::new("sub").join("second.dat"),
+    ];
+    let names = [
+        Path::new("visible.txt"),
+        Path::new("skip.tmp"),
+        Path::new("keep.tmp"),
+        nested[0].as_path(),
+        nested[1].as_path(),
+    ];
+    for name in names {
+        std::fs::write(data.join(name), b"retained synthetic ignore bytes")?;
+    }
+    std::fs::write(unrelated.join("untouched.bin"), b"unrelated bytes")?;
+    for (folder, path) in [(&id, &data), (&other, &unrelated)] {
+        core.client()
+            .create_folder(&CreateFolderOptions::new(
+                folder.clone(),
+                TargetPath::local(path),
+            ))
+            .await?;
+        core.client().request_scan(folder).await?;
+    }
+    indexed_files(core.client(), &id, 3).await?;
+    indexed_files(core.client(), &other, 1).await?;
+    let original = core.client().ignore_patterns(&id).await?;
+    let other_original = core.client().ignore_patterns(&other).await?;
+    assert!(original.parse_error.is_none() && !original.expanded_patterns.is_empty());
+    assert!(original
+        .patterns
+        .as_ref()
+        .unwrap()
+        .iter()
+        .any(|s| s.contains("*.tmp")));
+    let empty = core
+        .client()
+        .set_ignore_patterns(&id, &IgnorePatterns::new(Vec::new())?)
+        .await?;
+    assert!(
+        empty.requested_patterns_match
+            && empty.snapshot.patterns.is_none()
+            && empty.snapshot.expanded_patterns.is_empty()
+    );
+    core.client().request_scan(&id).await?;
+    indexed_files(core.client(), &id, 5).await?;
+    let rules = IgnorePatterns::new(vec![
+        "// synthetic private rule".into(),
+        "!keep.tmp".into(),
+        "*.tmp".into(),
+        "sub/*.dat".into(),
+    ])?;
+    let changed = core.client().set_ignore_patterns(&id, &rules).await?;
+    assert!(changed.requested_patterns_match);
+    assert_eq!(changed.snapshot.patterns.as_deref(), Some(rules.patterns()));
+    assert!(!changed.snapshot.expanded_patterns.is_empty());
+    assert!(!format!("{changed:?} {rules:?}").contains("synthetic private"));
+    core.client().request_scan(&id).await?;
+    indexed_files(core.client(), &id, 2).await?;
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(
+        core.client()
+            .ignore_patterns(&id)
+            .await?
+            .patterns
+            .as_deref(),
+        Some(rules.patterns())
+    );
+    indexed_files(core.client(), &id, 2).await?;
+    let bad = IgnorePatterns::new(vec!["[synthetic-private-pattern".into()])?;
+    let rejection = core
+        .client()
+        .set_ignore_patterns(&id, &bad)
+        .await
+        .unwrap_err();
+    assert!(!format!("{rejection:?} {rejection}").contains("synthetic-private"));
+    let Error::IgnorePatternsRejected { snapshot } = rejection else {
+        return Err("expected actual ignore parser rejection".into());
+    };
+    assert_eq!(snapshot.patterns.as_deref(), Some(bad.patterns()));
+    assert!(snapshot.parse_error.as_ref().is_some_and(|s| !s.is_empty()));
+    let persisted = core.client().ignore_patterns(&id).await?;
+    assert_eq!(persisted.patterns.as_deref(), Some(bad.patterns()));
+    assert!(persisted
+        .parse_error
+        .as_ref()
+        .is_some_and(|s| !s.is_empty()));
+    let reset = core.client().reset_ignore_patterns(&id).await?;
+    assert!(reset.parse_error.is_none());
+    assert_eq!(reset.expanded_patterns, original.expanded_patterns);
+    core.client().request_scan(&id).await?;
+    indexed_files(core.client(), &id, 3).await?;
+    let other_after = core.client().ignore_patterns(&other).await?;
+    assert_eq!(other_after.patterns, other_original.patterns);
+    assert_eq!(
+        other_after.expanded_patterns,
+        other_original.expanded_patterns
+    );
+    indexed_files(core.client(), &other, 1).await?;
+    assert!(matches!(
+        core.client()
+            .set_ignore_patterns(&FolderId::parse("missing")?, &rules)
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    for name in names {
+        assert_eq!(
+            std::fs::read(data.join(name))?,
+            b"retained synthetic ignore bytes"
+        );
+    }
+    assert_eq!(
+        std::fs::read(unrelated.join("untouched.bin"))?,
+        b"unrelated bytes"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public ignore patterns evidence: {}",
+        json!({"actual_default_tmp_exclusion":true,"actual_empty_replacement_and_null_readback":true,"actual_all_files_indexed_after_clear":true,"exact_comment_negation_and_subdirectory_patterns":true,"actual_rule_filtered_index":true,"rules_persist_after_restart":true,"actual_http_success_parser_rejection_is_typed_error":true,"rejected_rules_actually_stored":true,"actual_get_retains_parse_error":true,"reset_restores_actual_engine_default_expansion":true,"actual_index_recovers_after_reset":true,"other_folder_rules_and_index_unchanged":true,"missing_folder_rejected":true,"patterns_and_errors_not_in_debug":true,"all_synthetic_bytes_retained":true,"actual_normal_tree_exit":true})
+    );
+    Ok(())
 }
 impl BlockedFile {
     fn new(path: &Path) -> TestResult<Self> {

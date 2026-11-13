@@ -2,9 +2,11 @@
 
 mod device_control;
 mod device_ignore;
+mod ignore_control;
 mod invitation_control;
 mod network_control;
 mod relay_control;
+mod scan_control;
 mod sync_observation;
 mod transport_control;
 
