@@ -1,5 +1,5 @@
 //! Explicit peer configuration, independent of connection and transfer state.
-use crate::{DeviceId, Error, FolderId, Result};
+use crate::{DeviceId, DeviceTransport, Error, FolderId, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 
@@ -45,6 +45,10 @@ pub struct DeviceConfig {
     pub compression: DeviceCompression,
     /// Device-level pause setting, independent of folder or instance pauses.
     pub paused: bool,
+    /// Actual transport selectors, if reported. An empty list means engine policy,
+    /// not proof that every transport is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_transports: Option<Vec<DeviceTransport>>,
     /// Other actual fields. Values can be sensitive; Debug omits them.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -71,6 +75,9 @@ pub struct DeviceDefaults {
     pub compression: DeviceCompression,
     /// Default device-level pause.
     pub paused: bool,
+    /// Actual default selectors, if supplied. Empty follows the engine policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_transports: Option<Vec<DeviceTransport>>,
     /// Unmodeled defaults, preserved verbatim when creating a peer.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -97,6 +104,8 @@ pub struct DevicePatch {
     pub(crate) compression: Option<DeviceCompression>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) paused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) allowed_transports: Option<Vec<DeviceTransport>>,
 }
 impl DevicePatch {
     /// Set the display name, including an explicitly empty name.
@@ -120,12 +129,19 @@ impl DevicePatch {
         self.paused = Some(paused);
         self
     }
+    /// Replace explicit protocol selectors; an empty list asks for engine policy.
+    /// A matching readback does not prove a UDP/relay path has been exercised.
+    pub fn allowed_transports(mut self, values: Vec<DeviceTransport>) -> Self {
+        self.allowed_transports = Some(values);
+        self
+    }
     pub(crate) fn validate(&self, require_fields: bool) -> Result<()> {
         if require_fields
             && self.name.is_none()
             && self.addresses.is_none()
             && self.compression.is_none()
             && self.paused.is_none()
+            && self.allowed_transports.is_none()
         {
             return Err(Error::InvalidConfiguration {
                 reason: "device patch must contain at least one field",
@@ -134,6 +150,15 @@ impl DevicePatch {
         if matches!(self.compression, Some(DeviceCompression::Unknown(_))) {
             return Err(Error::InvalidConfiguration {
                 reason: "unknown device compression cannot be submitted by a typed mutation",
+            });
+        }
+        if self
+            .allowed_transports
+            .as_ref()
+            .is_some_and(|v| v.iter().any(|t| matches!(t, DeviceTransport::Unknown(_))))
+        {
+            return Err(Error::InvalidConfiguration {
+                reason: "unknown device transport cannot be submitted by a typed mutation",
             });
         }
         if self.addresses.as_ref().is_some_and(|values| {
@@ -158,6 +183,10 @@ impl DevicePatch {
                 .as_ref()
                 .is_none_or(|v| *v == value.compression)
             && self.paused.is_none_or(|v| v == value.paused)
+            && self
+                .allowed_transports
+                .as_ref()
+                .is_none_or(|v| value.allowed_transports.as_ref() == Some(v))
     }
 }
 impl fmt::Debug for DevicePatch {
@@ -166,6 +195,7 @@ impl fmt::Debug for DevicePatch {
             .field("changes_name", &self.name.is_some())
             .field("changes_addresses", &self.addresses.is_some())
             .field("changes_compression", &self.compression.is_some())
+            .field("changes_transports", &self.allowed_transports.is_some())
             .field("paused", &self.paused)
             .finish()
     }

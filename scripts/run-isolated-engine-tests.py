@@ -1,28 +1,64 @@
 #!/usr/bin/env python3
-"""Run explicit engine tests with a bounded, nonforwarding private HTTP proxy."""
+"""Run engine tests with blocked HTTP egress and optional private discovery routing."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 from pathlib import Path
+import secrets
+import select
 import shutil
+import socket
 import socketserver
 import subprocess
 import sys
 import threading
+import time
 from urllib.parse import urlsplit
+
+DISCOVERY_HOSTS = frozenset({
+    "discovery.verysync.cn", "discovery-v4.verysync.cn",
+    "discovery-v4-1.verysync.cn", "discovery-v4-2.verysync.cn",
+    "discovery-v4-3.verysync.cn", "discovery-v6.verysync.cn",
+    "discovery-v6-1.verysync.cn",
+})
 
 
 class BlockedProxy(socketserver.ThreadingTCPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self):
+    def __init__(self, discovery_file=None, discovery_token=None):
         super().__init__(("127.0.0.1", 0), BlockRequest)
         self.observed = {}
         self.errors = 0
+        self.discovery_file = discovery_file
+        self.discovery_token = discovery_token
+        self.forwarded = 0
         self.guard = threading.Lock()
+
+    def private_discovery_port(self, method, target):
+        if method != "CONNECT" or not self.discovery_file or not self.discovery_token:
+            return None
+        try:
+            parsed = urlsplit("//" + target)
+            if (parsed.hostname not in DISCOVERY_HOSTS or parsed.port != 443
+                    or parsed.username or parsed.password or parsed.path
+                    or parsed.query or parsed.fragment):
+                return None
+            with self.discovery_file.open("rb") as source:
+                data = source.read(4097)
+            if len(data) > 4096:
+                return None
+            record = json.loads(data)
+            port = record.get("port")
+            if (not secrets.compare_digest(str(record.get("token", "")), self.discovery_token)
+                    or type(port) is not int or not 1 <= port <= 65535 or port == 18886):
+                return None
+            return port
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
 
     def handle_error(self, request, client_address):
         # No request headers, targets, environment or credential-bearing trace.
@@ -44,6 +80,37 @@ class BlockRequest(socketserver.StreamRequestHandler):
             host = urlsplit("//" + parts[1] if method == "CONNECT" else parts[1]).hostname
         except ValueError:
             host = None
+        port = self.server.private_discovery_port(method, parts[1])
+        if port is not None:
+            # Consume bounded CONNECT headers before switching to raw TLS bytes.
+            remaining = 16384
+            while remaining > 0:
+                header = self.rfile.readline(min(remaining + 1, 8193))
+                remaining -= len(header)
+                if header == b"\r\n":
+                    break
+                if not header or len(header) > 8192:
+                    return
+            else:
+                return
+            # The original hostname is never resolved or contacted.
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=2) as upstream:
+                    self.wfile.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    self.wfile.flush()
+                    with self.server.guard:
+                        self.server.forwarded += 1
+                    deadline = time.monotonic() + 30
+                    while time.monotonic() < deadline:
+                        readable, _, _ = select.select([self.request, upstream], [], [], 0.2)
+                        for source in readable:
+                            data = source.recv(65536)
+                            if not data:
+                                return
+                            (upstream if source is self.request else self.request).sendall(data)
+                return
+            except (OSError, ValueError):
+                return
         # Retain only a hostname and method, never credentials, queries or headers.
         key = (method, host if host and len(host) <= 253 else "unparsed")
         with self.server.guard:
@@ -59,9 +126,11 @@ def main():
     parser.add_argument("--cargo", default=shutil.which("cargo"))
     parser.add_argument("--evidence-dir", required=True, type=Path)
     suite = parser.add_mutually_exclusive_group(required=True)
-    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations"])
+    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network"])
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
     parser.add_argument("--test-filter")
+    parser.add_argument("--allow-private-discovery", action="store_true",
+                        help="route only allowlisted discovery CONNECTs to a nonce-selected loopback fixture")
     args = parser.parse_args()
     if args.test_target == "managed_lifetime" and sys.platform not in {"darwin", "linux", "win32"}:
         raise RuntimeError("owned-host acceptance requires native macOS, Linux or Windows")
@@ -69,6 +138,8 @@ def main():
         raise RuntimeError("mechanism investigation requires its actual native platform")
     if args.test_filter and not args.test_target:
         raise ValueError("a test filter requires an explicit Cargo test target")
+    if args.allow_private_discovery and args.test_target != "network":
+        raise ValueError("private discovery routing is restricted to the explicit network suite")
     if not args.cargo or not Path(args.cargo).is_absolute():
         raise ValueError("an explicit resolved Cargo executable is required")
     binary = os.environ.get("VERYSYNC_TEST_BINARY")
@@ -79,7 +150,9 @@ def main():
     if not args.evidence_dir.is_absolute():
         raise ValueError("an absolute private evidence directory is required")
     args.evidence_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
-    with BlockedProxy() as proxy:
+    discovery_file = args.evidence_dir / "private-discovery-target.json" if args.allow_private_discovery else None
+    discovery_token = secrets.token_hex(32) if args.allow_private_discovery else None
+    with BlockedProxy(discovery_file, discovery_token) as proxy:
         server = threading.Thread(target=proxy.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         server.start()
         env = os.environ.copy()
@@ -94,6 +167,12 @@ def main():
         for name in bypass_names:
             env[name] = "127.0.0.1,localhost,::1"
         env["CARGO_NET_OFFLINE"] = "true"
+        # Never accept a target supplied by an unrelated parent environment.
+        env.pop("VERYSYNC_TEST_DISCOVERY_FORWARD_TARGET_FILE", None)
+        env.pop("VERYSYNC_TEST_DISCOVERY_FORWARD_TOKEN", None)
+        if discovery_file:
+            env["VERYSYNC_TEST_DISCOVERY_FORWARD_TARGET_FILE"] = str(discovery_file)
+            env["VERYSYNC_TEST_DISCOVERY_FORWARD_TOKEN"] = discovery_token
         label = args.test_target or "mechanism-" + args.mechanism
         log_path = args.evidence_dir / (label.replace("_", "-") + ".log")
         try:
@@ -124,7 +203,10 @@ def main():
                         for (method, host), count in sorted(proxy.observed.items())]
             errors = proxy.errors
         report = {"scope": "test-only HTTP proxy observations; not an OS-wide no-egress proof",
-                  "loopback_only": True, "forwarding_implemented": False,
+                  "loopback_only": True, "forwarding_implemented": args.allow_private_discovery,
+                  "external_forwarding_implemented": False,
+                  "private_discovery_forwarding_enabled": args.allow_private_discovery,
+                  "private_connections_forwarded": proxy.forwarded,
                   "requests_blocked": observed, "handler_errors": errors,
                   "test_exit_code": returncode}
         (args.evidence_dir / "proxy-observations.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

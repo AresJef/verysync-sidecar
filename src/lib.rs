@@ -25,6 +25,7 @@
 #![doc = include_str!("../docs/public/sharing.md")]
 #![doc = include_str!("../docs/public/devices.md")]
 #![doc = include_str!("../docs/public/invitations.md")]
+#![doc = include_str!("../docs/public/network.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -40,6 +41,7 @@ mod events;
 mod folders;
 mod invitations;
 mod managed;
+mod network;
 mod operations;
 mod path;
 mod raw;
@@ -76,6 +78,10 @@ pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
 pub use managed::{ManagedExit, ManagedInstance, ManagedLifetime, ManagedOptions};
+pub use network::{
+    ConnectionSnapshot, ConnectionTotals, DeviceTransport, DiscoveryRecord, ListenerStatus,
+    NetworkConfig, NetworkPatch, NetworkUpdate, PeerConnection, PeerConnectionType,
+};
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};

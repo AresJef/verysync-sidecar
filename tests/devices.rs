@@ -128,6 +128,10 @@ async fn actual_peer_defaults_creation_patch_conflicts_and_self_protection() -> 
     let created = first.or(second)?;
     assert!(created.requested_fields_match && created.configuration.paused);
     assert_eq!(created.configuration.device_id, peer);
+    assert_eq!(
+        created.configuration.allowed_transports,
+        defaults.allowed_transports
+    );
     for (key, value) in &defaults.extra {
         if key != "deviceID" {
             assert_eq!(created.configuration.extra.get(key), Some(value));

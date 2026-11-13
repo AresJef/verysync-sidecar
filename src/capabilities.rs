@@ -42,6 +42,9 @@ pub enum Capability {
     PendingDeviceRecords,
     /// Persistent ignored identities; live rejection remains a separate observation.
     DeviceIgnores,
+    /// Network settings and actual TCP, listener and discovery-cache snapshots.
+    /// Local discovery, announcements and other transports have separate gates.
+    NetworkControl,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -180,6 +183,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::EngineDownloadUpgrade),
+    LibraryCapability {
+        capability: Capability::NetworkControl,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::FileHistory),
     planned(Capability::AdvancedFolderSettings),
     planned(Capability::AccountLicense),
