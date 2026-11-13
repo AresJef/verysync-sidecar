@@ -4,7 +4,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::{ExitStatus, Stdio};
+use std::process::ExitStatus;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -327,30 +327,36 @@ fn spawn_core(
         .seek(SeekFrom::Start(0))
         .map_err(|e| io_error("position private core diagnostics", e))?;
     let mut command = bootstrap::command(binary, state);
-    command
-        .arg("serve")
-        .arg("--home")
-        .arg(state)
-        .args(["--no-browser", "--no-restart", "--no-upgrade"])
-        .stdin(Stdio::null())
-        .stdout(
-            capture
-                .try_clone()
-                .map_err(|e| io_error("capture core output", e))?,
-        )
-        .stderr(
-            capture
-                .try_clone()
-                .map_err(|e| io_error("capture core errors", e))?,
-        );
+    command.arg("serve").arg("--home").arg(state).args([
+        "--no-browser",
+        "--no-restart",
+        "--no-upgrade",
+    ]);
     lease.release_engine_lock_for_spawn();
-    if lifetime == super::ManagedLifetime::Persistent {
-        // The caller can exit, so its capture-trimming thread cannot provide a
-        // durable log bound. Discard inherited core output in this explicit mode.
-        command.stdout(Stdio::null()).stderr(Stdio::null());
-    }
+    let retained = lifetime == super::ManagedLifetime::CallerOwned;
+    let io = super::process::ProcessIo {
+        stdin_pipe: false,
+        stdout: if retained {
+            Some(
+                capture
+                    .try_clone()
+                    .map_err(|e| io_error("capture core output", e))?,
+            )
+        } else {
+            None
+        },
+        stderr: if retained {
+            Some(
+                capture
+                    .try_clone()
+                    .map_err(|e| io_error("capture core errors", e))?,
+            )
+        } else {
+            None
+        },
+    };
     Ok((
-        OwnedProcess::spawn(command, false, lifetime)
+        OwnedProcess::spawn(command, false, lifetime, io)
             .map_err(|e| io_error("spawn owned program", e))?,
         capture,
     ))

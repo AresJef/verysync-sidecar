@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Restrict Windows child handle inheritance to explicitly selected private
+  standard I/O, while retaining suspended creation, private Job containment and
+  exact process/thread ownership. Verify caller-output EOF while a persistent
+  core remains alive, including native paths with spaces and Unicode.
+
 - Add explicit persistent lifetime, protected read-only state reconnection and a
   borrowed shutdown request with acknowledgement-only semantics. Keep cancelled
   startup cleanup active until authenticated readiness commits. Add a compiled

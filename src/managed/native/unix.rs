@@ -93,7 +93,15 @@ pub(in crate::managed) fn spawn(
     mut command: Command,
     helper: bool,
     lifetime: crate::managed::ManagedLifetime,
+    io: crate::managed::process::ProcessIo,
 ) -> io::Result<(Child, ProcessGuard)> {
+    command.stdin(if io.stdin_pipe {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
+    command.stdout(io.stdout.map_or_else(Stdio::null, Stdio::from));
+    command.stderr(io.stderr.map_or_else(Stdio::null, Stdio::from));
     let (master, terminal) = if helper || lifetime == crate::managed::ManagedLifetime::CallerOwned {
         let (master, slave) = private_pty()?;
         // Helpers retain pipe stdin; their stderr supplies the private terminal.

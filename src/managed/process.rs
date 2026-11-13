@@ -1,10 +1,21 @@
 //! Exact-child ownership. All blocking work runs on the private owner thread.
 
+#[cfg(windows)]
+use super::native::Child;
+use std::fs::File;
 use std::io;
-use std::process::{Child, Command, ExitStatus};
+#[cfg(unix)]
+use std::process::Child;
+use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use super::native;
+
+pub(in crate::managed) struct ProcessIo {
+    pub(in crate::managed) stdin_pipe: bool,
+    pub(in crate::managed) stdout: Option<File>,
+    pub(in crate::managed) stderr: Option<File>,
+}
 
 pub(super) struct OwnedProcess {
     child: Child,
@@ -16,8 +27,9 @@ impl OwnedProcess {
         command: Command,
         helper: bool,
         lifetime: super::ManagedLifetime,
+        io: ProcessIo,
     ) -> io::Result<Self> {
-        let (child, guard) = native::spawn(command, helper, lifetime)?;
+        let (child, guard) = native::spawn(command, helper, lifetime, io)?;
         Ok(Self { child, guard })
     }
 

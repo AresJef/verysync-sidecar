@@ -56,8 +56,11 @@ replacement; malformed or partial identity/configuration is not silently reset.
 The private owner thread retains the native child/containment and state lease.
 Unix uses a separate session and private PTY whose master/slave descriptors are
 close-on-exec at allocation, without an open-then-fcntl inheritance interval.
-Windows assigns a suspended,
-hidden child to a noninheritable kill-on-close Job before resuming it. Direct
+Windows creates a suspended hidden child with an explicit inherited-handle list
+containing only its three private standard I/O handles, then assigns its
+noninheritable kill-on-close Job before resuming the exact initial thread. Native
+creation retains UTF-16 arguments/environment and does not change caller handle
+flags. Helpers use the same restricted creation path. Direct
 inner-process mode on Linux/Windows is specific to the fixed program baseline.
 There is no production supervisor executable, installed service, caller-global logger,
 signal handler or exit hook. Dedicated startup helpers are temporary invocations

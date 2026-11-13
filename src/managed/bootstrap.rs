@@ -3,7 +3,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -37,6 +37,10 @@ pub(super) fn check_active(cancel: &Receiver<()>, deadline: Instant) -> Result<(
 
 pub(super) fn command(binary: &Path, state: &Path) -> Command {
     let mut command = Command::new(binary);
+    // Windows native creation consumes this explicit, case-normalized snapshot.
+    // Never alter the caller environment or rely on ambient process attributes.
+    #[cfg(windows)]
+    command.env_clear().envs(std::env::vars_os());
     command.current_dir(state).env("TMPDIR", state.join("tmp"));
     #[cfg(unix)]
     command
@@ -311,28 +315,24 @@ fn cli(
     let capture = native::create_private(&scratch.0)
         .map_err(|e| io_error("create private CLI capture", e))?;
     let mut command = command(binary, state);
-    command
-        .args(args)
-        .arg("--home")
-        .arg(state)
-        .stdin(if password.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(
+    command.args(args).arg("--home").arg(state);
+    let io = super::process::ProcessIo {
+        stdin_pipe: password.is_some(),
+        stdout: Some(
             capture
                 .try_clone()
                 .map_err(|e| io_error("attach private CLI capture", e))?,
-        )
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    command.stderr(
-        capture
-            .try_clone()
-            .map_err(|e| io_error("attach private CLI diagnostics", e))?,
-    );
-    let mut process = OwnedProcess::spawn(command, true, super::ManagedLifetime::CallerOwned)
+        ),
+        #[cfg(windows)]
+        stderr: Some(
+            capture
+                .try_clone()
+                .map_err(|e| io_error("attach private CLI diagnostics", e))?,
+        ),
+        #[cfg(not(windows))]
+        stderr: None,
+    };
+    let mut process = OwnedProcess::spawn(command, true, super::ManagedLifetime::CallerOwned, io)
         .map_err(|e| io_error("spawn metadata helper", e))?;
     if let Some(password) = password {
         let mut input = process
