@@ -24,6 +24,7 @@
 #![doc = include_str!("../docs/public/long-running-operations.md")]
 #![doc = include_str!("../docs/public/sharing.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
+#![doc = include_str!("../docs/public/program-preparation.md")]
 
 mod auth;
 mod capabilities;
@@ -57,6 +58,8 @@ pub use events::{
     EventSubscription,
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
+#[cfg(feature = "download")]
+pub use managed::{DownloadOptions, PreparedProgram};
 pub use managed::{ManagedExit, ManagedInstance, ManagedLifetime, ManagedOptions};
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};

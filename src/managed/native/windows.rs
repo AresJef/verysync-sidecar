@@ -285,6 +285,20 @@ pub(in crate::managed) fn private_directory(path: &Path, metadata: &Metadata) ->
     private_acl(path, true)
 }
 
+#[cfg(feature = "download")]
+pub(in crate::managed) fn retain_private_directory(path: &Path) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(
+            FILE_FLAG_OPEN_REPARSE_POINT
+                | windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS,
+        )
+        .open(path)?;
+    private_directory(path, &file.metadata()?)?;
+    Ok(file)
+}
+
 pub(in crate::managed) fn create_directory(path: &Path) -> io::Result<()> {
     let sddl = format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{})", owner_sid()?);
     let sddl: Vec<_> = sddl.encode_utf16().chain(Some(0)).collect();

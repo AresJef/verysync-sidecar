@@ -1,6 +1,12 @@
 //! Explicit ownership of a program and a library-owned private state directory.
 
+#[cfg(feature = "download")]
+mod archive;
 mod bootstrap;
+#[cfg(feature = "download")]
+mod download;
+#[cfg(feature = "download")]
+pub use download::{DownloadOptions, PreparedProgram};
 mod instance;
 pub use instance::{ManagedExit, ManagedInstance};
 mod native;

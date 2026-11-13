@@ -67,6 +67,16 @@ impl fmt::Debug for ResponseDiagnostic {
 /// change; callers should handle the cases relevant to their operation.
 #[non_exhaustive]
 pub enum Error {
+    /// Explicit program preparation rejected an unsafe or mismatched artifact.
+    DownloadRejected {
+        /// A bounded description excluding source URLs and local paths.
+        reason: &'static str,
+    },
+    /// The explicit program source returned a non-success status.
+    DownloadHttp {
+        /// Actual HTTP status; response bodies are not buffered or logged.
+        status: u16,
+    },
     /// The explicitly pinned requested version has no verified release catalog.
     UnlistedProgramVersion,
     /// No artifact is listed for this exact OS/architecture/build tuple.
@@ -263,6 +273,8 @@ impl fmt::Debug for Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DownloadRejected { reason } => write!(formatter, "program preparation rejected: {reason}"),
+            Self::DownloadHttp { status } => write!(formatter, "program source returned HTTP {status}"),
             Self::EventSubscriptionFailure => formatter.write_str("event subscription task failed"),
             Self::EventGenerationChanged => formatter.write_str("engine generation changed during event observation"),
             Self::ScanNotIdle => formatter.write_str("next-scan observation requires an idle folder"),
