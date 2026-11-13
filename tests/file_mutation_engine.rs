@@ -10,7 +10,8 @@ use verysync_sidecar::{
 };
 async fn mount(core: &ManagedInstance) -> TestResult<(std::path::PathBuf, ResourcePath)> {
     let volumes = core.client().resource_volumes().await?;
-    resource_fixture::owned_base(core, &volumes)
+    let (profile, base, _) = resource_fixture::owned_base(core, &volumes)?;
+    Ok((profile, base))
 }
 fn report(stage: &str, error: &Error) {
     eprintln!("Private mutation failure stage: {stage}, error={error:?}");

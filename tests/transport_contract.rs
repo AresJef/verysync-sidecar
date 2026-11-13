@@ -2678,3 +2678,53 @@ async fn resource_keep_both_ambiguous_parent_changes_are_unknown_without_retries
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn resource_selection_uses_root_route_and_nested_escaped_volume_relative_uris() -> TestResult
+{
+    use verysync_sidecar::{
+        PathStyle, ResourceArchiveFormat, ResourcePath, ResourceTransferOptions, ResourceVolumeId,
+        TargetPath,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let archive = b"PK synthetic opaque archive payload";
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),
+        identity(),Reply::json(serde_json::json!({"path":"/base","name":"base","size":0,"mode":493,"modified":"native-value","isDir":true,"items":[]})),
+        identity(),Reply{status:200,body:archive.to_vec(),headers:"Content-Type: application/zip\r\n".into(),delay:Duration::ZERO},
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let base = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix)
+        .child("base 二 %,dir")?;
+    let output = tempfile::tempdir()?.keep().join("selection.zip");
+    let result = client
+        .download_selected_resources(
+            &base,
+            &[
+                TargetPath::remote(PathStyle::Unix, "reports/二%,x.txt")?,
+                TargetPath::remote(PathStyle::Unix, "line\nbreak.txt")?,
+            ],
+            ResourceArchiveFormat::Zip,
+            &output,
+            &ResourceTransferOptions::default(),
+        )
+        .await?;
+    assert_eq!(std::fs::read(&output)?, archive);
+    assert_eq!(result.bytes, archive.len() as u64);
+    std::fs::remove_dir_all(output.parent().ok_or("output parent absent")?)?;
+    let requests = server.finish().await?;
+    let target = requests
+        .last()
+        .ok_or("missing selection request")?
+        .split_whitespace()
+        .nth(1)
+        .ok_or("missing target")?;
+    let uri = url::Url::parse(&format!("http://synthetic.invalid{target}"))?;
+    assert_eq!(uri.path(), "/prefix/rest/f/api/raw/volume/");
+    let query = uri
+        .query_pairs()
+        .into_owned()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(query.get("files").map(String::as_str),Some("base%20%E4%BA%8C%20%25%2Cdir/reports/%E4%BA%8C%25%2Cx.txt,base%20%E4%BA%8C%20%25%2Cdir/line%0Abreak.txt"));
+    Ok(())
+}

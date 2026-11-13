@@ -41,9 +41,13 @@ The native formats are ZIP, TAR, TAR with gzip, bzip2, XZ, LZ4 frames or Snappy
 frames, selected through `ResourceArchiveFormat`. The SDK does not extract or
 recompress them. Archive methods first require bounded directory metadata; very
 large listings can require a larger configured management response limit. Untrusted archive member names are not local output paths.
-Selection is bounded to 1..=1024 distinct paths and 64 KiB of logical selection
-text. Native comma-separated selection cannot express comma-containing names;
-those are refused explicitly. A directory archive can contain such names.
+Selection is bounded to 1..=1024 distinct paths and 64 KiB of encoded native
+selection text. Paths are relative to the explicit base in the Rust API; the
+SDK sends full volume-relative resource URIs to the native root endpoint. Each
+URI is escaped before the whole comma-separated query value, preserving literal
+commas, percent signs, Unicode and Unix control filenames. Native archive member
+layout can retain volume-relative directory prefixes, including on Windows;
+no fixed directory-relative layout is promised.
 Adding `algo` to a single regular file does not make that file an archive;
 archive methods require the expected native archive media type.
 

@@ -15,7 +15,7 @@ fn canonical(path: &Path) -> std::io::Result<PathBuf> {
 pub fn owned_base(
     core: &ManagedInstance,
     volumes: &[ResourceVolume],
-) -> TestResult<(PathBuf, ResourcePath)> {
+) -> TestResult<(PathBuf, ResourcePath, PathBuf)> {
     let profile = canonical(&core.state_directory().join("profile"))?;
     let mut candidates = Vec::new();
     let mut diagnostic = Vec::new();
@@ -41,15 +41,15 @@ pub fn owned_base(
         } else {
             ResourcePath::relative(volume.id.clone(), &TargetPath::local(relative))?
         };
-        candidates.push((relative.components().count(), base));
+        candidates.push((relative.components().count(), base, relative.to_path_buf()));
     }
-    candidates.sort_by_key(|(depth, _)| *depth);
-    let Some((_, base)) = candidates.into_iter().next() else {
+    candidates.sort_by_key(|(depth, _, _)| *depth);
+    let Some((_, base, relative)) = candidates.into_iter().next() else {
         eprintln!(
             "private resource volume ownership diagnostic: {}",
             serde_json::to_string(&diagnostic)?
         );
         return Err("no actual local mount resolves to the exact task-owned profile".into());
     };
-    Ok((profile, base))
+    Ok((profile, base, relative))
 }

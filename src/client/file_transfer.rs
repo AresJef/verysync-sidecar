@@ -54,8 +54,9 @@ impl Client {
     }
 
     /// Archive 1..=1024 relative resources within one explicit base directory.
-    /// All paths use the target syntax. The native comma-separated selection
-    /// cannot represent comma-containing names, which are explicitly rejected.
+    /// All paths use the target syntax. Each volume-relative resource URI is
+    /// escaped before the comma-separated selection is encoded as a query value;
+    /// literal comma, percent, Unicode and Unix control filenames stay data.
     /// No local path is constructed from returned archive entry names.
     pub async fn download_selected_resources(
         &self,
@@ -72,35 +73,42 @@ impl Client {
                 "archive selection must contain 1 to 1024 resources",
             ));
         }
+        let root = ResourcePath::root(base.volume.clone(), base.style);
+        let mut url = self.resource_url("rest/f/api/raw", &root)?;
+        let root_prefix = url.path().to_owned();
         let mut names = Vec::with_capacity(selected.len());
         let mut selected_bytes = 0usize;
-        for path in selected {
-            if path.to_protocol()?.len() > 64 * 1024 {
+        for selected_path in selected {
+            if selected_path.to_protocol()?.len() > 64 * 1024 {
                 return Err(rejected("selected path exceeds the selection byte bound"));
             }
-            let path = ResourcePath::relative(base.volume.clone(), path)?;
-            if path.style != base.style || path.components.iter().any(|p| p.contains(',')) {
-                return Err(rejected(
-                    "archive selection syntax differs or contains a comma",
-                ));
+            let relative = ResourcePath::relative(base.volume.clone(), selected_path)?;
+            if relative.style != base.style {
+                return Err(rejected("archive selection syntax differs from its base"));
             }
-            let name = path.components.join("/");
+            let mut full = base.clone();
+            for part in relative.components {
+                full = full.child(part)?;
+            }
+            let encoded = self.resource_url("rest/f/api/raw", &full)?;
+            let name = encoded
+                .path()
+                .strip_prefix(&root_prefix)
+                .ok_or_else(|| rejected("selected URI escaped its volume root"))?
+                .to_owned();
             selected_bytes = selected_bytes.saturating_add(name.len() + 1);
             if selected_bytes > 64 * 1024 {
-                return Err(rejected("archive selection exceeds the URL bound"));
+                return Err(rejected("encoded archive selection exceeds the URL bound"));
             }
             if names.contains(&name) {
                 return Err(rejected("archive selection contains a duplicate"));
             }
             names.push(name);
         }
-        let selection = names.join(",");
-        if selection.len() > 64 * 1024 {
-            return Err(rejected("archive selection exceeds the URL bound"));
-        }
-        let mut url = self.resource_url("rest/f/api/raw", base)?;
+        // The fixed native endpoint resolves files from the VOLUME root. It
+        // does not interpret the selection relative to the requested base URL.
         url.query_pairs_mut()
-            .append_pair("files", &selection)
+            .append_pair("files", &names.join(","))
             .append_pair("algo", format.name());
         within(options.deadline, "download selected resources", async {
             if !self.resource_info(base).await?.is_dir {

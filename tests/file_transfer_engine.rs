@@ -11,7 +11,9 @@ use verysync_sidecar::{
     ResourceTransferOptions, ResourceUploadConflict, TargetPath,
 };
 
-async fn mount(core: &ManagedInstance) -> TestResult<(std::path::PathBuf, ResourcePath)> {
+async fn mount(
+    core: &ManagedInstance,
+) -> TestResult<(std::path::PathBuf, ResourcePath, std::path::PathBuf)> {
     let volumes = core.client().resource_volumes().await?;
     resource_fixture::owned_base(core, &volumes)
 }
@@ -19,12 +21,48 @@ fn digest(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 
+// Archive entry names are native output, never controller filesystem paths.
+fn archive_key(path: &Path) -> String {
+    path.components()
+        .map(|c| {
+            c.as_os_str()
+                .to_str()
+                .expect("synthetic UTF-8 archive component")
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+fn expected_selected_batch(relative: &Path) -> BTreeMap<String, Vec<u8>> {
+    BTreeMap::from([
+        (
+            archive_key(&relative.join("batch").join("first.txt")),
+            b"first".to_vec(),
+        ),
+        (
+            archive_key(&relative.join("batch").join("second.txt")),
+            b"second".to_vec(),
+        ),
+    ])
+}
+fn assert_directory_payloads(actual: BTreeMap<String, Vec<u8>>, relative: &Path) {
+    let directory_relative = BTreeMap::from([
+        ("first.txt".into(), b"first".to_vec()),
+        ("second.txt".into(), b"second".to_vec()),
+    ]);
+    // The fixed Windows archiver retains volume-relative prefixes; Unix can
+    // emit paths relative to the requested directory. Both exact sets contain
+    // only the two intended files with all their expected bytes.
+    if actual != directory_relative {
+        assert_eq!(actual, expected_selected_batch(relative));
+    }
+}
+
 #[tokio::test]
 async fn public_download_streams_full_ranges_and_archives_without_overwriting_outputs() -> TestResult
 {
     let root = tempfile::Builder::new().prefix("vfd-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
-    let (profile, volume) = mount(&core).await?;
+    let (profile, volume, relative_base) = mount(&core).await?;
     let data: Vec<_> = (0..2 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
     std::fs::write(profile.join("payload 二 %.bin"), &data)?;
     std::fs::create_dir(profile.join("batch"))?;
@@ -96,11 +134,7 @@ async fn public_download_streams_full_ranges_and_archives_without_overwriting_ou
         .download_resource_archive(&directory, ResourceArchiveFormat::Zip, &archive, &options)
         .await?;
     assert_eq!(result.media_type(), Some("application/zip"));
-    let expected = BTreeMap::from([
-        ("first.txt".into(), b"first".to_vec()),
-        ("second.txt".into(), b"second".to_vec()),
-    ]);
-    assert_eq!(zip_contents(&archive)?, expected);
+    assert_directory_payloads(zip_contents(&archive)?, &relative_base);
     let selected = root.join("selected.zip");
     let result = core
         .client()
@@ -118,23 +152,46 @@ async fn public_download_streams_full_ranges_and_archives_without_overwriting_ou
     assert_eq!(result.sha256, digest(&std::fs::read(&selected)?));
     assert_eq!(
         zip_contents(&selected)?,
-        BTreeMap::from([
-            ("batch/first.txt".into(), b"first".to_vec()),
-            ("batch/second.txt".into(), b"second".to_vec())
-        ])
+        expected_selected_batch(&relative_base)
     );
-    assert!(core
-        .client()
+    let nested = root.join("nested-base.zip");
+    core.client()
+        .download_selected_resources(
+            &directory,
+            &[
+                TargetPath::local(Path::new("second.txt")),
+                TargetPath::local(Path::new("first.txt")),
+            ],
+            ResourceArchiveFormat::Zip,
+            &nested,
+            &options,
+        )
+        .await?;
+    assert_eq!(
+        zip_contents(&nested)?,
+        expected_selected_batch(&relative_base)
+    );
+    std::fs::write(
+        profile.join("literal comma, %.txt"),
+        b"comma percent content",
+    )?;
+    let comma = root.join("comma.zip");
+    core.client()
         .download_selected_resources(
             &volume,
-            &[TargetPath::local(Path::new("has,comma"))],
+            &[TargetPath::local(Path::new("literal comma, %.txt"))],
             ResourceArchiveFormat::Zip,
-            &root.join("bad.zip"),
-            &options
+            &comma,
+            &options,
         )
-        .await
-        .is_err());
-    assert!(!root.join("bad.zip").exists());
+        .await?;
+    assert_eq!(
+        zip_contents(&comma)?,
+        BTreeMap::from([(
+            archive_key(&relative_base.join("literal comma, %.txt")),
+            b"comma percent content".to_vec()
+        )])
+    );
     for format in [ResourceArchiveFormat::Zip, ResourceArchiveFormat::Tar] {
         let rejected = root.join("file-as-archive.bin");
         assert!(core
@@ -166,7 +223,7 @@ async fn public_download_streams_full_ranges_and_archives_without_overwriting_ou
         "actual_unicode_percent_remote_name":true,"actual_existing_output_retained":true,
         "actual_finite_range_exact_bytes_sha256_and_content_range":true,"actual_preannounced_bound_no_output":true,
         "actual_missing_resource_no_output":true,"actual_directory_zip_members_and_contents":true,
-        "actual_selected_zip_members_contents_and_sha256":true,"ambiguous_comma_selection_rejected_without_output":true,
+        "actual_selected_zip_members_contents_and_sha256":true,"actual_comma_percent_selection_preserves_filename_and_contents":true,"actual_nested_selection_base_uses_full_volume_relative_paths":true,
         "private_download_debug_redacted":true,"actual_source_bytes_preserved":true,"actual_normal_owned_tree_exit":true})
     );
     Ok(())
@@ -177,7 +234,7 @@ async fn public_upload_streams_real_inputs_checks_remote_digest_and_controls_rep
 ) -> TestResult {
     let root = tempfile::Builder::new().prefix("vfu-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
-    let (profile, volume) = mount(&core).await?;
+    let (profile, volume, _relative_base) = mount(&core).await?;
     let data: Vec<_> = (0..3 * 1024 * 1024)
         .map(|i| ((i * 7) % 251) as u8)
         .collect();
@@ -306,7 +363,7 @@ async fn public_inflight_cancellation_retains_explicit_partial_outputs_and_owned
     use std::io::Write;
     let root = tempfile::Builder::new().prefix("vfc-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
-    let (profile, volume) = mount(&core).await?;
+    let (profile, volume, _relative_base) = mount(&core).await?;
     let block: Vec<_> = (0..65536).map(|i| (i % 251) as u8).collect();
     let source = root.join("large-input.bin");
     let mut file = std::fs::File::create(&source)?;
@@ -507,7 +564,7 @@ async fn public_native_archives_preserve_directory_and_selected_payloads_in_all_
 ) -> TestResult {
     let root = tempfile::Builder::new().prefix("vfa-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
-    let (profile, volume) = mount(&core).await?;
+    let (profile, volume, relative_base) = mount(&core).await?;
     std::fs::create_dir(profile.join("batch"))?;
     for (name, bytes) in [
         ("first.txt", b"first".as_slice()),
@@ -543,13 +600,7 @@ async fn public_native_archives_preserve_directory_and_selected_payloads_in_all_
             )
             .await?;
         assert_eq!(result.sha256, digest(&std::fs::read(&directory)?));
-        assert_eq!(
-            archive_contents(&directory, format)?,
-            BTreeMap::from([
-                ("first.txt".into(), b"first".to_vec()),
-                ("second.txt".into(), b"second".to_vec())
-            ])
-        );
+        assert_directory_payloads(archive_contents(&directory, format)?, &relative_base);
         let output = root.join(format!("selected-{name}.bin"));
         let result = core
             .client()
@@ -558,10 +609,7 @@ async fn public_native_archives_preserve_directory_and_selected_payloads_in_all_
         assert_eq!(result.sha256, digest(&std::fs::read(&output)?));
         assert_eq!(
             archive_contents(&output, format)?,
-            BTreeMap::from([
-                ("batch/first.txt".into(), b"first".to_vec()),
-                ("batch/second.txt".into(), b"second".to_vec())
-            ])
+            expected_selected_batch(&relative_base)
         );
         println!(
             "public resource archive format evidence: {}",

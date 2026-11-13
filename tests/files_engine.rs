@@ -28,7 +28,7 @@ async fn public_file_metadata_browses_owned_volume_and_hashes_actual_samples() -
     )?;
     let volumes = core.client().resource_volumes().await?;
     assert!(!volumes.is_empty());
-    let (_, mount) = resource_fixture::owned_base(&core, &volumes)?;
+    let (_, mount, _) = resource_fixture::owned_base(&core, &volumes)?;
     assert!(!format!("{volumes:?}").contains(root.to_str().ok_or("temporary root encoding")?));
     let style = TargetPath::local(&directory).style();
     let info = core.client().resource_info(&mount).await?;
@@ -111,7 +111,7 @@ async fn public_file_metadata_browses_owned_volume_and_hashes_actual_samples() -
     println!(
         "public resource browse evidence: {}",
         serde_json::json!({
-        "actual_mount_ids_and_exact_private_profile_volume":true,"actual_exact_owned_base_listing":true,
+        "actual_mount_ids_and_exact_owned_profile_base":true,"actual_exact_owned_base_listing":true,
         "actual_directory_and_native_names":true,"actual_text_content_and_byte_size":true,
         "actual_unicode_and_literal_percent_names":true,"actual_empty_directory_observation":true,
         "actual_md5_sha1_sha256_sha512_match_sample_bytes":true,"actual_missing_resource_is_error":true,
@@ -127,7 +127,7 @@ async fn public_native_thumbnails_read_actual_image_content_and_preserve_sources
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
     let profile = std::fs::canonicalize(core.state_directory().join("profile"))?;
     let volumes = core.client().resource_volumes().await?;
-    let (_, mount) = resource_fixture::owned_base(&core, &volumes)?;
+    let (_, mount, _) = resource_fixture::owned_base(&core, &volumes)?;
     let base = mount;
     let mut previews = Vec::new();
     const IMAGE_0: &[u8] = &[
@@ -306,7 +306,7 @@ async fn public_owned_resource_volume_probe_reads_only_the_exact_private_sample(
     let root = tempfile::Builder::new().prefix("vfp-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
     let volumes = core.client().resource_volumes().await?;
-    let (profile, base) = resource_fixture::owned_base(&core, &volumes)?;
+    let (profile, base, _) = resource_fixture::owned_base(&core, &volumes)?;
     let sample = b"explicit owned volume probe bytes";
     std::fs::write(profile.join("owned-volume-probe.txt"), sample)?;
     let info = core
