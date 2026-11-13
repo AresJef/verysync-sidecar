@@ -6,6 +6,8 @@ import socket
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
+from http.server import BaseHTTPRequestHandler
 
 SOURCE = Path(__file__).resolve().parents[1] / "run-isolated-engine-tests.py"
 SPEC = importlib.util.spec_from_file_location("isolated_engine_tests", SOURCE)
@@ -14,6 +16,17 @@ SPEC.loader.exec_module(HELPER)
 
 
 class ProxyContracts(unittest.TestCase):
+    def test_discovery_listener_does_not_call_reverse_dns(self):
+        source = SOURCE.with_name("fixture-discovery-server.py")
+        spec = importlib.util.spec_from_file_location("private_discovery_fixture", source)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch("socket.getfqdn", side_effect=AssertionError("reverse DNS must not run")):
+            with module.LoopbackDiscoveryServer(("127.0.0.1", 0), BaseHTTPRequestHandler) as server:
+                self.assertEqual(server.server_address[0], "127.0.0.1")
+                self.assertGreater(server.server_address[1], 0)
+                self.assertEqual(server.server_name, "private-loopback")
+
     def test_private_discovery_requires_exact_host_port_and_nonce(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "target.json"

@@ -71,9 +71,19 @@ impl DiscoveryFixture {
                     .try_wait()?
                     .is_some()
                 {
+                    eprintln!(
+                        "private discovery startup diagnostic: {}",
+                        bounded(&fixture.root.path().join("stage.json"))
+                            .unwrap_or(serde_json::json!({"phase":"no-stage-file"}))
+                    );
                     return Err("private discovery fixture exited before readiness".into());
                 }
                 if Instant::now() >= deadline {
+                    eprintln!(
+                        "private discovery startup diagnostic: {}",
+                        bounded(&fixture.root.path().join("stage.json"))
+                            .unwrap_or(serde_json::json!({"phase":"no-stage-file"}))
+                    );
                     return Err("private discovery fixture readiness deadline".into());
                 }
                 std::thread::sleep(Duration::from_millis(10));

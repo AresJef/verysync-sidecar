@@ -12,10 +12,43 @@ from pathlib import Path
 import ssl
 import sys
 import threading
+import time
+from socketserver import TCPServer
 from urllib.parse import parse_qs, urlsplit
+
+STARTED = time.monotonic()
+STAGE = "python-startup"
+OUTPUT = None
+
+
+def stage(phase, error=None):
+    global STAGE
+    STAGE = phase
+    if OUTPUT is None:
+        return
+    value = {"phase": phase, "elapsed_ms": int((time.monotonic() - STARTED) * 1000)}
+    if error is not None:
+        value["exception_type"] = type(error).__name__
+        value["errno"] = getattr(error, "errno", None)
+        value["ssl_reason"] = getattr(error, "reason", None)
+    scratch = OUTPUT / "stage.tmp"
+    scratch.write_text(json.dumps(value))
+    scratch.replace(OUTPUT / "stage.json")
+
+
+class LoopbackDiscoveryServer(ThreadingHTTPServer):
+    def server_bind(self):
+        if self.server_address[0] != "127.0.0.1":
+            raise ValueError("private discovery must bind loopback")
+        # HTTPServer.server_bind calls getfqdn even for literal loopback.
+        # This fixture needs no reverse DNS or external name-service dependency.
+        TCPServer.server_bind(self)
+        self.server_name = "private-loopback"
+        self.server_port = self.server_address[1]
 
 
 def main():
+    global OUTPUT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server-state", required=True, type=Path)
     parser.add_argument("--client-state", required=True, type=Path)
@@ -23,6 +56,8 @@ def main():
     parser.add_argument("--address", required=True)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
+    OUTPUT = args.output
+    stage("arguments-validated")
     selected = urlsplit(args.address)
     if selected.scheme != "tcp" or selected.hostname != "127.0.0.1" or selected.port in (None, 0, 18886):
         raise ValueError("only an explicit private receiver is admissible")
@@ -70,7 +105,7 @@ def main():
                 observations["client_certificate_verified"] += int(bool(valid))
             self.reply(204 if valid and isinstance(value, dict) else 403)
 
-    class Server(ThreadingHTTPServer):
+    class Server(LoopbackDiscoveryServer):
         daemon_threads = True
         allow_reuse_address = False
 
@@ -88,19 +123,25 @@ def main():
             with guard:
                 observations["unexpected_requests"] += 1
 
+    stage("create-tls-context")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_3
+    stage("load-server-certificate")
     context.load_cert_chain(args.server_state / "cert.pem", args.server_state / "key.pem")
+    stage("load-client-root")
     context.load_verify_locations(cafile=args.client_state / "cert.pem")
     context.verify_mode = ssl.CERT_OPTIONAL
     context.set_alpn_protocols(["http/1.1"])
+    stage("create-loopback-server")
     with Server(("127.0.0.1", 0), Handler) as server:
+        stage("wrap-listener-tls")
         server.socket = context.wrap_socket(server.socket, server_side=True)
         server.socket.settimeout(3)
         if server.server_address[1] == 18886:
             raise RuntimeError("shared endpoint is forbidden")
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1})
         thread.start()
+        stage("ready")
         ready = args.output / "ready.json"
         scratch = args.output / "ready.tmp"
         scratch.write_text(json.dumps({"loopback_https_port": server.server_address[1]}))
@@ -116,4 +157,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        stage(STAGE, error)
+        raise SystemExit(1) from None
