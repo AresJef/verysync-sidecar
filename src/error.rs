@@ -106,6 +106,10 @@ pub enum Error {
     EventSubscriptionFailure,
     /// The engine's reported generation changed across an event snapshot read.
     EventGenerationChanged,
+    /// A next-scan observation cannot begin while the target is not idle.
+    ScanNotIdle,
+    /// Gaps or missing transitions prevent this local observation establishing a full scan cycle.
+    ScanObservationLost,
     /// A management credential cannot be sent safely.
     InvalidCredential {
         /// A description that excludes the supplied credential.
@@ -244,6 +248,8 @@ impl fmt::Display for Error {
         match self {
             Self::EventSubscriptionFailure => formatter.write_str("event subscription task failed"),
             Self::EventGenerationChanged => formatter.write_str("engine generation changed during event observation"),
+            Self::ScanNotIdle => formatter.write_str("next-scan observation requires an idle folder"),
+            Self::ScanObservationLost => formatter.write_str("scan observation lost continuity; query state explicitly"),
             Self::ProgramRejected { reason } => write!(formatter, "selected program rejected: {reason}"),
             Self::ManagedProcessExited { operation, code, .. } => write!(formatter, "owned program exited while attempting to {operation} (code {code:?})"),
             Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),

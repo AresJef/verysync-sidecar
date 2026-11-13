@@ -159,6 +159,31 @@ pub struct Client {
 }
 
 impl Client {
+    /// Request one whole-folder scan, with fresh identity/existence checks.
+    ///
+    /// This response alone is not a scan-completion receipt. Establish
+    /// observe_next_scan first to observe an actual cycle. A failed modifying
+    /// response can be an unknown outcome and is never automatically retried.
+    pub async fn request_scan(&self, folder: &FolderId) -> Result<()> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        if self.folder(folder).await?.paused {
+            return Err(Error::ScanNotIdle);
+        }
+        let url = self
+            .connection
+            .management_url("rest/db/scan", &[("folder", folder.as_str())])?;
+        self.connection
+            .request_bytes(
+                "request folder scan",
+                reqwest::Method::POST,
+                url,
+                None,
+                true,
+            )
+            .await
+            .map(|_| ())
+    }
     pub(crate) async fn event_wire(
         &self,
         since: u64,

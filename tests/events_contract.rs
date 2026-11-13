@@ -33,6 +33,11 @@ struct State {
     cancelled: AtomicUsize,
     denied: AtomicBool,
     rotate_generation: AtomicUsize,
+    folder_state: Mutex<String>,
+    folder_paused: AtomicBool,
+    scan_requests: AtomicUsize,
+    hold_snapshot: AtomicBool,
+    snapshots_held: AtomicUsize,
     released: Notify,
 }
 struct Server {
@@ -73,6 +78,11 @@ impl Server {
             cancelled: AtomicUsize::new(0),
             denied: AtomicBool::new(false),
             rotate_generation: AtomicUsize::new(0),
+            folder_state: Mutex::new("idle".to_owned()),
+            folder_paused: AtomicBool::new(false),
+            scan_requests: AtomicUsize::new(0),
+            hold_snapshot: AtomicBool::new(false),
+            snapshots_held: AtomicUsize::new(0),
             released: Notify::new(),
         });
         let (stop, mut stopped) = oneshot::channel();
@@ -193,6 +203,27 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) -> TestResult {
                 .cloned()
                 .collect();
             json!(&events[events.len().saturating_sub(limit)..])
+        }
+        "/rest/db/status" => {
+            if state.hold_snapshot.load(Ordering::SeqCst) {
+                state.snapshots_held.fetch_add(1, Ordering::SeqCst);
+                let mut byte = [0; 1];
+                tokio::select! {
+                    _=state.released.notified()=>(),
+                    ended=socket.read(&mut byte)=>{if ended?==0 {return Ok(());}return Err("unexpected snapshot body".into());},
+                }
+            }
+            json!({"state":state.folder_state.lock().unwrap().clone(),"localFiles":17})
+        }
+        "/rest/db/scan" => {
+            if !header.starts_with("POST ") {
+                return Err("scan command must use POST".into());
+            }
+            state.scan_requests.fetch_add(1, Ordering::SeqCst);
+            json!({})
+        }
+        "/rest/config" => {
+            json!({"folders":[{"id":"scan-contract","path":"/synthetic-only","label":"Scan contract","paused":state.folder_paused.load(Ordering::SeqCst)}]})
         }
         _ => return Err("unapproved event fixture route".into()),
     };
@@ -504,4 +535,182 @@ async fn a_generation_change_during_a_snapshot_is_never_assigned_to_the_old_curs
     assert!(stream.next().await.is_none());
     stream.close().await?;
     server.finish().await
+}
+
+fn scan_event(id: u64, from: &str, to: &str) -> Value {
+    let mut value = event(id, "StateChanged");
+    value["data"] = json!({"folder":"scan-contract","from":from,"to":to});
+    value
+}
+
+#[tokio::test]
+async fn scan_observation_uses_real_transitions_and_preserves_unknown_progress_values() -> TestResult
+{
+    use verysync_sidecar::{FolderId, FolderState, ScanPhase};
+    let server = Server::start().await?;
+    let client = server.client().await?;
+    let mut scan = client
+        .observe_next_scan(&FolderId::parse("scan-contract")?)
+        .await?;
+    let mut progress = event(3, "FolderScanProgress");
+    progress["data"] =
+        json!({"folder":"scan-contract","current":4,"total":10,"rate":2.5,"future":KEY});
+    server.replace(vec![
+        event(1, "StartupCompleted"),
+        scan_event(2, "idle", "scanning"),
+        progress,
+        scan_event(4, "scanning", "idle"),
+    ]);
+    let result = scan.wait(Duration::from_secs(5)).await?;
+    assert_eq!(result.started.last_id, 2);
+    assert_eq!(result.ended.last_id, 4);
+    assert_eq!(result.exited_to, FolderState::Idle);
+    assert_eq!(result.snapshot.local_files, Some(17));
+    let progress = result
+        .progress
+        .as_ref()
+        .ok_or("actual progress not retained")?;
+    assert_eq!(progress.current, Some(4));
+    assert_eq!(progress.total, Some(10));
+    assert_eq!(progress.rate, Some(2.5));
+    assert_eq!(progress.raw()["future"], KEY);
+    assert!(!format!("{result:?} {scan:?}").contains(KEY));
+    assert_eq!(scan.phase(), ScanPhase::Ended);
+    assert_eq!(server.state.scan_requests.load(Ordering::SeqCst), 0);
+    scan.close().await?;
+    server.finish().await
+}
+
+#[tokio::test]
+async fn missing_scan_entry_and_event_gaps_never_become_completion() -> TestResult {
+    use verysync_sidecar::{FolderId, ScanPhase};
+    for gap in [false, true] {
+        let server = Server::start().await?;
+        let client = server.client().await?;
+        let mut scan = client
+            .observe_next_scan(&FolderId::parse("scan-contract")?)
+            .await?;
+        server.replace(vec![
+            event(1, "StartupCompleted"),
+            if gap {
+                scan_event(4, "idle", "scanning")
+            } else {
+                scan_event(2, "scanning", "idle")
+            },
+        ]);
+        assert!(matches!(
+            scan.wait(Duration::from_secs(5)).await,
+            Err(Error::ScanObservationLost)
+        ));
+        assert_eq!(scan.phase(), ScanPhase::ObservationLost);
+        assert!(matches!(
+            scan.next_update().await,
+            Err(Error::ScanObservationLost)
+        ));
+        scan.close().await?;
+        server.finish().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn scan_wait_timeout_and_close_never_send_a_mutation() -> TestResult {
+    use verysync_sidecar::{FolderId, ScanPhase};
+    let server = Server::start().await?;
+    let client = server.client().await?;
+    let mut scan = client
+        .observe_next_scan(&FolderId::parse("scan-contract")?)
+        .await?;
+    assert!(scan.wait(Duration::ZERO).await.is_err());
+    assert!(scan.wait(Duration::MAX).await.is_err());
+    assert!(matches!(
+        scan.wait(Duration::from_millis(10)).await,
+        Err(Error::Timeout { .. })
+    ));
+    assert_eq!(scan.phase(), ScanPhase::AwaitingStart);
+    scan.close().await?;
+    assert_eq!(server.state.scan_requests.load(Ordering::SeqCst), 0);
+    client.system_status().await?;
+    server.finish().await
+}
+
+#[tokio::test]
+async fn cancelling_terminal_snapshot_wait_does_not_lose_scan_completion() -> TestResult {
+    use verysync_sidecar::FolderId;
+    let server = Server::start().await?;
+    let client = server.client().await?;
+    let mut scan = client
+        .observe_next_scan(&FolderId::parse("scan-contract")?)
+        .await?;
+    server.state.hold_snapshot.store(true, Ordering::SeqCst);
+    server.replace(vec![
+        event(1, "StartupCompleted"),
+        scan_event(2, "idle", "scanning"),
+        scan_event(3, "scanning", "idle"),
+    ]);
+    let waiting = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while server.state.snapshots_held.load(Ordering::SeqCst) == 0 {
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    };
+    // Cancel only after observing the actual pending terminal-snapshot request.
+    tokio::select! {
+        result = scan.wait(Duration::from_secs(10)) => panic!("snapshot should remain pending: {result:?}"),
+        () = waiting => (),
+    }
+    assert!(server.state.snapshots_held.load(Ordering::SeqCst) > 0);
+    server.state.hold_snapshot.store(false, Ordering::SeqCst);
+    server.state.released.notify_waiters();
+    assert_eq!(scan.wait(Duration::from_secs(5)).await?.ended.last_id, 3);
+    scan.close().await?;
+    server.finish().await
+}
+
+#[tokio::test]
+async fn scan_requests_are_explicit_and_paused_targets_reject_before_post() -> TestResult {
+    use verysync_sidecar::FolderId;
+    let server = Server::start().await?;
+    let client = server.client().await?;
+    let id = FolderId::parse("scan-contract")?;
+    client.request_scan(&id).await?;
+    assert_eq!(server.state.scan_requests.load(Ordering::SeqCst), 1);
+    server.state.folder_paused.store(true, Ordering::SeqCst);
+    *server.state.folder_state.lock().unwrap() = "paused".to_owned();
+    assert!(matches!(
+        client.request_scan(&id).await,
+        Err(Error::ScanNotIdle)
+    ));
+    assert!(matches!(
+        client.observe_next_scan(&id).await,
+        Err(Error::ScanNotIdle)
+    ));
+    assert_eq!(server.state.scan_requests.load(Ordering::SeqCst), 1);
+    server.finish().await
+}
+
+#[tokio::test]
+async fn scan_phase_exit_does_not_claim_peer_sync_or_mask_error_states() -> TestResult {
+    use verysync_sidecar::{FolderId, FolderState};
+    for next in ["syncing", "paused", "error"] {
+        let server = Server::start().await?;
+        let client = server.client().await?;
+        let mut scan = client
+            .observe_next_scan(&FolderId::parse("scan-contract")?)
+            .await?;
+        *server.state.folder_state.lock().unwrap() = next.to_owned();
+        server.replace(vec![
+            event(1, "StartupCompleted"),
+            scan_event(2, "idle", "scanning"),
+            scan_event(3, "scanning", next),
+        ]);
+        let result = scan.wait(Duration::from_secs(5)).await?;
+        assert_ne!(result.exited_to, FolderState::Idle);
+        assert_eq!(serde_json::to_value(&result.exited_to)?, next);
+        assert_eq!(result.snapshot.state, Some(result.exited_to.clone()));
+        scan.close().await?;
+        server.finish().await?;
+    }
+    Ok(())
 }

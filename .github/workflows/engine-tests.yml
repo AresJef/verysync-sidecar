@@ -102,6 +102,10 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target example_control --evidence-dir "${{ runner.temp }}/vs-examples-proxy"
+      - name: Exercise actual scan phase observation, file effects and cancellation
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target operations --evidence-dir "${{ runner.temp }}/vs-operations-proxy"
       - name: Investigate native macOS lifetime mechanisms
         if: startsWith(matrix.package, 'macos-')
         run: >-

@@ -21,6 +21,7 @@
 #![doc = include_str!("../docs/public/getting-started.md")]
 #![doc = include_str!("../docs/public/managed-instances.md")]
 #![doc = include_str!("../docs/public/events.md")]
+#![doc = include_str!("../docs/public/long-running-operations.md")]
 
 mod auth;
 mod capabilities;
@@ -31,6 +32,7 @@ mod error;
 mod events;
 mod folders;
 mod managed;
+mod operations;
 mod path;
 mod raw;
 mod status;
@@ -52,6 +54,7 @@ pub use events::{
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
 pub use managed::{ManagedExit, ManagedInstance, ManagedLifetime, ManagedOptions};
+pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
