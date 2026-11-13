@@ -67,6 +67,13 @@ impl fmt::Debug for ResponseDiagnostic {
 /// change; callers should handle the cases relevant to their operation.
 #[non_exhaustive]
 pub enum Error {
+    /// The explicitly pinned requested version has no verified release catalog.
+    UnlistedProgramVersion,
+    /// No artifact is listed for this exact OS/architecture/build tuple.
+    UnsupportedProgramTarget {
+        /// Explicit requested tuple; no host-based fallback was applied.
+        target: crate::ProgramTarget,
+    },
     /// The engine explicitly rejected a sharing key, including HTTP-200 rejection.
     ShareKeyRejected {
         /// Bounded original rejection payload, omitted from ordinary formatting.
@@ -259,6 +266,8 @@ impl fmt::Display for Error {
             Self::EventSubscriptionFailure => formatter.write_str("event subscription task failed"),
             Self::EventGenerationChanged => formatter.write_str("engine generation changed during event observation"),
             Self::ScanNotIdle => formatter.write_str("next-scan observation requires an idle folder"),
+            Self::UnlistedProgramVersion => formatter.write_str("requested program version is not in the fixed catalog"),
+            Self::UnsupportedProgramTarget { .. } => formatter.write_str("requested program target is not in the fixed catalog"),
             Self::ShareKeyRejected { .. } => formatter.write_str("engine rejected the sharing key"),
             Self::ShareAlreadyConfigured { .. } => formatter.write_str("sharing group is already configured locally"),
             Self::ScanObservationLost => formatter.write_str("scan observation lost continuity; query state explicitly"),

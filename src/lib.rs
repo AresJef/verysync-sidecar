@@ -23,6 +23,7 @@
 #![doc = include_str!("../docs/public/events.md")]
 #![doc = include_str!("../docs/public/long-running-operations.md")]
 #![doc = include_str!("../docs/public/sharing.md")]
+#![doc = include_str!("../docs/public/program-sources.md")]
 
 mod auth;
 mod capabilities;
@@ -36,6 +37,7 @@ mod managed;
 mod operations;
 mod path;
 mod raw;
+mod releases;
 mod sharing;
 mod status;
 
@@ -48,7 +50,7 @@ pub use client::{
     Client, ConnectOptions, EngineVersion, InstanceInfo, VersionCompatibility, VersionPolicy,
 };
 pub use endpoint::{EndpointKind, ManagementEndpoint};
-pub use engine_source::{LocalProgram, ProgramInfo};
+pub use engine_source::{EngineSource, LocalProgram, ProgramInfo};
 pub use error::{Error, ProcessDiagnostic, ResponseDiagnostic, Result};
 pub use events::{
     EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventStreamItem,
@@ -59,6 +61,10 @@ pub use managed::{ManagedExit, ManagedInstance, ManagedLifetime, ManagedOptions}
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
+pub use releases::{
+    official_programs, ArchiveFormat, BuildVariant, OfficialProgram, PinnedVersion, ProgramAbi,
+    ProgramArchitecture, ProgramOs, ProgramTarget,
+};
 pub use sharing::{
     GeneratedShare, JoinFolderOptions, JoinFolderResult, JoinPeerObservation, ShareKey,
     SharePermission, ValidatedShare,

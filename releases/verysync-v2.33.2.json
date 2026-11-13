@@ -19,7 +19,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": false,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "x86_64-unknown-freebsd"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Catalog retained only; no support commitment",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "freebsd-arm64-standard",
@@ -33,7 +40,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": false,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "aarch64-unknown-freebsd"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Catalog retained only; no support commitment",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-386-standard",
@@ -47,7 +61,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "i686-unknown-linux-gnu"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-amd64-standard",
@@ -61,7 +82,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": true
+      "alpha_target": true,
+      "controller_target_candidates": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "runtime_abi_note": "Runtime ABI accepted on named runner; exact minimum ABI not established",
+      "mapping_note": "Verified standard package and native Rust on named modern runner; minimum OS remains unverified",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-arm-standard",
@@ -75,7 +103,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "armv5te-unknown-linux-gnueabi"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-arm64-standard",
@@ -89,7 +124,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": true
+      "alpha_target": true,
+      "controller_target_candidates": [
+        "aarch64-unknown-linux-gnu"
+      ],
+      "runtime_abi_note": "Runtime ABI accepted on named runner; exact minimum ABI not established",
+      "mapping_note": "Verified standard package and native Rust on named modern runner; minimum OS remains unverified",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-armhf-standard",
@@ -103,7 +145,15 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "armv7-unknown-linux-gnueabihf",
+        "arm-unknown-linux-gnueabihf"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-armv6-standard",
@@ -117,7 +167,15 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "arm-unknown-linux-gnueabi",
+        "arm-unknown-linux-gnueabihf"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-loong64-standard",
@@ -131,7 +189,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "loongarch64-unknown-linux-gnu"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-mips-standard",
@@ -145,7 +210,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "mips-unknown-linux-gnu"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-mips64-standard",
@@ -159,7 +231,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "mips64-unknown-linux-gnuabi64"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-mips64le-standard",
@@ -173,7 +252,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "mips64el-unknown-linux-gnuabi64"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-mipsle-standard",
@@ -187,7 +273,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "mipsel-unknown-linux-gnu"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-ppc64le-standard",
@@ -201,7 +294,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "powerpc64le-unknown-linux-gnu"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-riscv64-standard",
@@ -215,7 +315,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "riscv64gc-unknown-linux-gnu"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "linux-s390x-standard",
@@ -229,7 +336,14 @@
       "archive_format": "tar.gz",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "s390x-unknown-linux-gnu"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
+      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "macos-amd64-standard",
@@ -243,7 +357,14 @@
       "archive_format": "zip",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": true
+      "alpha_target": true,
+      "controller_target_candidates": [
+        "x86_64-apple-darwin"
+      ],
+      "runtime_abi_note": "Runtime ABI accepted on named runner; exact minimum ABI not established",
+      "mapping_note": "Verified standard package and native Rust on named modern runner; minimum OS remains unverified",
+      "minimum_os_note": "macOS 11.0+",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "macos-arm64-standard",
@@ -257,7 +378,14 @@
       "archive_format": "zip",
       "executable_name": "verysync",
       "in_scope": true,
-      "alpha_target": true
+      "alpha_target": true,
+      "controller_target_candidates": [
+        "aarch64-apple-darwin"
+      ],
+      "runtime_abi_note": "Runtime ABI accepted on named runner; exact minimum ABI not established",
+      "mapping_note": "Verified standard package and native Rust on named modern runner; minimum OS remains unverified",
+      "minimum_os_note": "macOS 11.0+",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "windows-386-legacy",
@@ -271,7 +399,14 @@
       "archive_format": "zip",
       "executable_name": "verysync.exe",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "i686-win7-windows-msvc"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Tier-3 target; custom std/toolchain and OS-specific runtime evidence required",
+      "minimum_os_note": "Windows 7/8 and Server 2008/2012 compatibility family; exact service-pack/build pending",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "windows-386-standard",
@@ -285,7 +420,14 @@
       "archive_format": "zip",
       "executable_name": "verysync.exe",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "i686-pc-windows-msvc"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "WOW64 process acceptance pending; not a native 32-bit OS run",
+      "minimum_os_note": "Windows 10+; ARM64-specific minimum build pending",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "windows-amd64-legacy",
@@ -299,7 +441,14 @@
       "archive_format": "zip",
       "executable_name": "verysync.exe",
       "in_scope": true,
-      "alpha_target": false
+      "alpha_target": false,
+      "controller_target_candidates": [
+        "x86_64-win7-windows-msvc"
+      ],
+      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
+      "mapping_note": "Tier-3 target; custom std/toolchain and OS-specific runtime evidence required",
+      "minimum_os_note": "Windows 7/8 and Server 2008/2012 compatibility family; exact service-pack/build pending",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "windows-amd64-standard",
@@ -313,7 +462,14 @@
       "archive_format": "zip",
       "executable_name": "verysync.exe",
       "in_scope": true,
-      "alpha_target": true
+      "alpha_target": true,
+      "controller_target_candidates": [
+        "x86_64-pc-windows-msvc"
+      ],
+      "runtime_abi_note": "Runtime ABI accepted on named runner; exact minimum ABI not established",
+      "mapping_note": "Verified standard package and native Rust on named modern runner; minimum OS remains unverified",
+      "minimum_os_note": "Windows 10+; ARM64-specific minimum build pending",
+      "minimum_os_runtime_verified": false
     },
     {
       "id": "windows-arm64-standard",
@@ -327,7 +483,14 @@
       "archive_format": "zip",
       "executable_name": "verysync.exe",
       "in_scope": true,
-      "alpha_target": true
+      "alpha_target": true,
+      "controller_target_candidates": [
+        "aarch64-pc-windows-msvc"
+      ],
+      "runtime_abi_note": "Runtime ABI accepted on named runner; exact minimum ABI not established",
+      "mapping_note": "Verified standard package and native Rust on named modern runner; minimum OS remains unverified",
+      "minimum_os_note": "Windows 10+; ARM64-specific minimum build pending",
+      "minimum_os_runtime_verified": false
     }
   ]
 }
