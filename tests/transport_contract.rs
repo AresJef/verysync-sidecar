@@ -13,6 +13,227 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
+#[test]
+fn maintenance_schema_preserves_null_unknown_levels_and_redacts_private_data() -> TestResult {
+    use verysync_sidecar::{CoreErrorLog, CoreLogLevel, CoreLogLevels, CoreLogSnapshot};
+    let empty: CoreErrorLog =
+        serde_json::from_value(serde_json::json!({"errors":null,"private":KEY}))?;
+    assert!(empty.is_empty());
+    for value in [
+        serde_json::json!({}),
+        serde_json::json!({"errors":{}}),
+        serde_json::json!({"errors":[{"message":KEY}]}),
+    ] {
+        assert!(serde_json::from_value::<CoreErrorLog>(value).is_err());
+    }
+    assert!(serde_json::from_value::<CoreLogSnapshot>(serde_json::json!({})).is_err());
+    let log: CoreLogSnapshot = serde_json::from_value(
+        serde_json::json!({"messages":[{"when":KEY,"level":"UNMODELED","message":KEY,"unknown":KEY}],"private":KEY}),
+    )?;
+    let entry = &log.messages.as_ref().ok_or("entry absent")?[0];
+    assert_eq!(entry.level, "UNMODELED");
+    assert_eq!(entry.extra["unknown"], KEY);
+    let levels: CoreLogLevels = serde_json::from_value(
+        serde_json::json!({"levels":{"main":KEY},"packages":{"main":KEY},"private":KEY}),
+    )?;
+    assert_eq!(
+        levels.levels.get("main"),
+        Some(&CoreLogLevel::Other(KEY.to_owned()))
+    );
+    assert!(!format!(
+        "{empty:?} {log:?} {entry:?} {levels:?} {:?}",
+        levels.levels["main"]
+    )
+    .contains(KEY));
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_invalid_inputs_issue_no_requests() -> TestResult {
+    use verysync_sidecar::CoreLogLevel;
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for message in ["".to_owned(), "bad\0message".to_owned(), "x".repeat(8193)] {
+        assert!(matches!(
+            client.record_core_error(&message).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    for stamp in ["", "bad\nvalue"] {
+        assert!(matches!(
+            client.core_log(Some(stamp)).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    for levels in [
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::from([(
+            "main".to_owned(),
+            CoreLogLevel::Other("TRACE".to_owned()),
+        )]),
+    ] {
+        assert!(matches!(
+            client.set_core_log_levels(&levels).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_diagnostics_keep_remote_windows_paths_and_log_timestamp_query() -> TestResult {
+    let stamp = "2026-11-14T04:00:00.123+08:00";
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"databaseSize":12,"locations":{"confdir":"Q:\\private\\二 %"},"private":KEY})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"messages":null})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let diagnostic = client.core_diagnostics().await?;
+    let path = &diagnostic.locations["confdir"];
+    assert_eq!(path.style(), verysync_sidecar::PathStyle::Windows);
+    assert_eq!(path.to_protocol()?, "Q:\\private\\二 %");
+    assert!(path.local_path().is_none());
+    assert_eq!(diagnostic.extra["private"], KEY);
+    assert!(!format!("{diagnostic:?}").contains("Q:"));
+    assert!(client.core_log(Some(stamp)).await?.messages.is_none());
+    let requests = server.finish().await?;
+    let expected = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("since", stamp)
+        .finish();
+    assert!(requests
+        .last()
+        .ok_or("last request absent")?
+        .starts_with(&format!("GET /prefix/rest/system/log?{expected} ")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_nonempty_ack_or_failed_readback_is_unknown_without_retry() -> TestResult {
+    for invalid_ack in [true, false] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+        ];
+        if invalid_ack {
+            replies.push(Reply::json(serde_json::json!({"unexpected":KEY})));
+        } else {
+            replies.push(Reply {
+                body: Vec::new(),
+                ..Reply::json(serde_json::Value::Null)
+            });
+            replies.push(identity());
+            replies.push(Reply {
+                status: 500,
+                body: KEY.as_bytes().to_vec(),
+                ..Reply::json(serde_json::Value::Null)
+            });
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .record_core_error("explicit synthetic message")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        let requests = server.finish().await?;
+        let writes = requests
+            .iter()
+            .filter(|r| r.starts_with("POST "))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].starts_with("POST /prefix/rest/system/error "));
+        assert_eq!(
+            writes[0].split("\r\n\r\n").nth(1),
+            Some("explicit synthetic message")
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_invalid_diagnostics_are_not_successful_empty_metadata() -> TestResult {
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(), Reply::json(serde_json::json!({"locations":{},"private":KEY})),
+        identity(), Reply::json(serde_json::json!({"databaseSize":0,"locations":{"confdir":"/bad\0path"},"private":KEY})),
+        identity(), Reply::json(serde_json::json!({"databaseSize":-1,"locations":{},"private":KEY})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    for _ in 0..3 {
+        let error = client.core_diagnostics().await.unwrap_err();
+        assert!(matches!(error, Error::InvalidResponse { .. }));
+        assert!(!format!("{error:?} {error}").contains(KEY));
+    }
+    assert_eq!(server.finish().await?.len(), 8);
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_level_update_is_partial_and_returns_actual_ignored_readback() -> TestResult {
+    use verysync_sidecar::CoreLogLevel;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let levels = || {
+        Reply::json(
+            serde_json::json!({"levels":{"main":"INFO","other":"WARN"},"packages":{"main":"Main","other":KEY}}),
+        )
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        levels(),
+        Reply {
+            body: Vec::new(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+        identity(),
+        levels(),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let update = client
+        .set_core_log_levels(&std::collections::BTreeMap::from([(
+            "main".to_owned(),
+            CoreLogLevel::Debug,
+        )]))
+        .await?;
+    assert!(!update.requested_levels_match);
+    assert_eq!(
+        update.configuration.levels.get("main"),
+        Some(&CoreLogLevel::Info)
+    );
+    assert_eq!(
+        update.configuration.levels.get("other"),
+        Some(&CoreLogLevel::Warn)
+    );
+    assert!(!format!("{update:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with("POST /prefix/rest/system/loglevels "));
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("body absent")?)?;
+    assert_eq!(body, serde_json::json!({"main":"DEBUG"}));
+    Ok(())
+}
+
 #[tokio::test]
 async fn directory_version_restore_requires_explicit_root_and_native_items_body() -> TestResult {
     use verysync_sidecar::{

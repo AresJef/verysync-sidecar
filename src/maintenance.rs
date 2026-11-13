@@ -1,0 +1,156 @@
+//! Observed official-core logs and maintenance settings, not controller logging.
+use crate::TargetPath;
+use serde::{Deserialize, Deserializer};
+use std::{collections::BTreeMap, fmt};
+
+/// One native log/error entry. Message text can contain private target data.
+#[derive(Clone, Deserialize)]
+pub struct CoreLogEntry {
+    /// Native timestamp, retained without controller-timezone conversion.
+    pub when: String,
+    /// Native entry severity, distinct from configuration level spellings.
+    pub level: String,
+    /// Exact observed message; omitted from Debug.
+    pub message: String,
+    /// Additional native fields.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for CoreLogEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CoreLogEntry([REDACTED])")
+    }
+}
+fn nullable_entries<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<Vec<CoreLogEntry>>, D::Error> {
+    Option::<Vec<CoreLogEntry>>::deserialize(d)
+}
+/// The native error log. Null is a known empty log; a missing errors field is
+/// invalid rather than an invented successful empty response.
+#[derive(Clone, Deserialize)]
+pub struct CoreErrorLog {
+    /// Actual native error entries, preserving null versus an empty array.
+    #[serde(deserialize_with = "nullable_entries")]
+    pub errors: Option<Vec<CoreLogEntry>>,
+    /// Additional native fields.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl CoreErrorLog {
+    /// Whether the observed native error log is empty.
+    pub fn is_empty(&self) -> bool {
+        self.errors.as_ref().is_none_or(Vec::is_empty)
+    }
+}
+impl fmt::Debug for CoreErrorLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreErrorLog")
+            .field("entries", &self.errors.as_ref().map(Vec::len))
+            .finish_non_exhaustive()
+    }
+}
+/// One bounded log snapshot. The SDK does not automatically poll or paginate it.
+#[derive(Clone, Deserialize)]
+pub struct CoreLogSnapshot {
+    /// Native log entries, preserving a nullable response.
+    #[serde(deserialize_with = "nullable_entries")]
+    pub messages: Option<Vec<CoreLogEntry>>,
+    /// Additional native fields.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for CoreLogSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreLogSnapshot")
+            .field("entries", &self.messages.as_ref().map(Vec::len))
+            .finish_non_exhaustive()
+    }
+}
+/// A verified native runtime logging configuration level. Unknown response
+/// values are retained but cannot be submitted as a verified setting.
+#[derive(Clone, Eq, PartialEq)]
+pub enum CoreLogLevel {
+    /// Native DEBUG configuration.
+    Debug,
+    /// Native INFO configuration.
+    Info,
+    /// Native WARN configuration.
+    Warn,
+    /// Native ERROR configuration (log entries can use another spelling).
+    Error,
+    /// Unmodeled native response value, omitted from Debug.
+    Other(String),
+}
+impl CoreLogLevel {
+    pub(crate) fn wire(&self) -> Option<&'static str> {
+        match self {
+            Self::Debug => Some("DEBUG"),
+            Self::Info => Some("INFO"),
+            Self::Warn => Some("WARN"),
+            Self::Error => Some("ERROR"),
+            Self::Other(_) => None,
+        }
+    }
+}
+impl<'de> Deserialize<'de> for CoreLogLevel {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        Ok(match String::deserialize(d)?.as_str() {
+            "DEBUG" => Self::Debug,
+            "INFO" => Self::Info,
+            "WARN" => Self::Warn,
+            "ERROR" => Self::Error,
+            value => Self::Other(value.to_owned()),
+        })
+    }
+}
+impl fmt::Debug for CoreLogLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.wire().unwrap_or("CoreLogLevel::Other([REDACTED])"))
+    }
+}
+/// Actual active per-package levels and the native package descriptions.
+#[derive(Clone, Deserialize)]
+pub struct CoreLogLevels {
+    /// Current active levels keyed by exact native package identifiers.
+    pub levels: BTreeMap<String, CoreLogLevel>,
+    /// Native descriptions. Returned strings are untrusted target data.
+    pub packages: BTreeMap<String, String>,
+    /// Additional native fields.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for CoreLogLevels {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreLogLevels")
+            .field("packages", &self.levels.len())
+            .finish_non_exhaustive()
+    }
+}
+/// Fresh runtime level readback after a partial native update.
+#[derive(Clone, Debug)]
+pub struct CoreLogLevelUpdate {
+    /// Actual runtime configuration after the request.
+    pub configuration: CoreLogLevels,
+    /// Every requested package has the submitted observed level.
+    pub requested_levels_match: bool,
+}
+/// Native diagnostic metadata. Target locations are never opened on the
+/// controller and are not interpreted using the controller's path syntax.
+#[derive(Clone)]
+pub struct CoreDiagnostics {
+    /// Exact native databaseSize value; no undocumented unit conversion occurs.
+    pub database_size: u64,
+    /// Explicit target-syntax locations such as confdir and datadir.
+    pub locations: BTreeMap<String, TargetPath>,
+    /// Additional native fields.
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for CoreDiagnostics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreDiagnostics")
+            .field("database_size", &self.database_size)
+            .field("locations", &self.locations.len())
+            .finish_non_exhaustive()
+    }
+}

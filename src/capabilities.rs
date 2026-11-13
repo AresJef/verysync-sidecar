@@ -76,6 +76,9 @@ pub enum Capability {
     ResourceTransfer,
     /// Explicit native directory/file changes, collisions and destructive removal.
     ResourceMutation,
+    /// Explicit core error logs, native log snapshots, package levels and
+    /// diagnostic locations. Destructive database maintenance has separate gates.
+    CoreMaintenance,
     /// Remaining advanced folder settings.
     AdvancedFolderSettings,
     /// Account, configuration and commercial authorization.
@@ -230,6 +233,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::ResourceMutation),
+    LibraryCapability {
+        capability: Capability::CoreMaintenance,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::FileHistory,
         implementation: ImplementationStatus::Typed,

@@ -328,3 +328,5 @@ Project-owned code is licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](L
 
 
 Unreleased [file versioning](docs/public/file-history.md) adds explicit simple/trashcan policies, bounded archive browsing and exact file-version restoration. Global audit recording remains subject to Pro entitlement and separate positive acceptance.
+
+Unreleased [core maintenance](docs/public/core-maintenance.md) exposes native error logs, bounded log snapshots, explicit package-level changes and target-syntax diagnostic locations. These calls do not configure the controller application's logging.

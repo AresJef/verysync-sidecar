@@ -7,6 +7,7 @@ mod file_transfer;
 mod history_control;
 mod ignore_control;
 mod invitation_control;
+mod maintenance_control;
 mod network_control;
 mod recovery;
 mod relay_control;

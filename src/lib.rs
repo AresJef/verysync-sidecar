@@ -57,6 +57,7 @@ mod files;
 mod folders;
 mod ignores;
 mod invitations;
+mod maintenance;
 mod managed;
 mod network;
 mod operations;
@@ -111,6 +112,10 @@ pub use ignores::{IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
 pub use invitations::{
     DeviceIgnoreUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
     PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
+};
+pub use maintenance::{
+    CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
+    CoreLogSnapshot,
 };
 #[cfg(feature = "download")]
 pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};

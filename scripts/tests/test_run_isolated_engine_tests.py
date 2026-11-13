@@ -1,12 +1,14 @@
 """Real loopback safety/credential controls for the explicit test-only proxy."""
 import importlib.util
+import io
 import json
 from pathlib import Path
 import socket
+import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from http.server import BaseHTTPRequestHandler
 
 SOURCE = Path(__file__).resolve().parents[1] / "run-isolated-engine-tests.py"
@@ -16,6 +18,36 @@ SPEC.loader.exec_module(HELPER)
 
 
 class ProxyContracts(unittest.TestCase):
+    def test_unicode_output_survives_legacy_console_and_preserves_failed_exit(self):
+        # Only the subprocess is synthetic. The real wrapper, UTF-8 log file,
+        # console forwarding, private proxy and failure report all execute.
+        output = "native synthetic filename: 二 %\n"
+        console_bytes = io.BytesIO()
+        console = io.TextIOWrapper(console_bytes, encoding="cp1252")
+        process = MagicMock()
+        process.__enter__.return_value = process
+        process.stdout = iter([output])
+        process.wait.return_value = 7
+        with tempfile.TemporaryDirectory() as root:
+            evidence = Path(root) / "evidence"
+            binary = Path(root) / "synthetic-core-not-executed"
+            binary.write_bytes(b"synthetic helper input; never executed")
+            argv = [str(SOURCE), "--toolchain", "synthetic", "--cargo",
+                    str(Path(sys.executable).resolve()), "--test-target",
+                    "engine_control", "--evidence-dir", str(evidence)]
+            with patch.object(HELPER.sys, "argv", argv), \
+                    patch.object(HELPER.sys, "stdout", console), \
+                    patch.dict(HELPER.os.environ, {"VERYSYNC_TEST_BINARY": str(binary),
+                                                   "VERYSYNC_TEST_BINARY_SHA256": "0" * 64}), \
+                    patch.object(HELPER.subprocess, "Popen", return_value=process):
+                self.assertEqual(HELPER.main(), 7)
+                console.flush()
+                self.assertIn(output.encode("utf-8"), console_bytes.getvalue())
+            self.assertEqual((evidence / "engine-control.log").read_text(encoding="utf-8"), output)
+            report = json.loads((evidence / "proxy-observations.json").read_text())
+            self.assertEqual(report["test_exit_code"], 7)
+            self.assertFalse(report["external_forwarding_implemented"])
+
     def test_upgrade_exceptions_require_exact_opt_in_hosts_ports_and_pinned_path(self):
         package = {"filename": "verysync-macos-arm64-v2.33.2.zip"}
         target = "upgrades.verysync.cn:443"

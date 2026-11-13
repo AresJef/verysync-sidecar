@@ -125,6 +125,12 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target file_history_engine --evidence-dir "${{ runner.temp }}/vs-file-history-proxy"
+      - name: Verify explicit core errors, logs, package levels and owned diagnostics
+        id: native_maintenance_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target maintenance_engine --evidence-dir "${{ runner.temp }}/vs-maintenance-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
         id: native_managed_lifetime
         continue-on-error: true

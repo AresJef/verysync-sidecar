@@ -196,12 +196,18 @@ class BlockRequest(socketserver.StreamRequestHandler):
 
 
 def main():
+    # Cargo/native diagnostics are decoded as UTF-8 below. Windows redirected
+    # console defaults can be a legacy code page; preserve Unicode diagnostics
+    # instead of raising while forwarding an otherwise valid test output line.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--toolchain", required=True)
     parser.add_argument("--cargo", default=shutil.which("cargo"))
     parser.add_argument("--evidence-dir", required=True, type=Path)
     suite = parser.add_mutually_exclusive_group(required=True)
-    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine", "files_engine", "file_transfer_engine", "file_history_engine"])
+    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine", "files_engine", "file_transfer_engine", "file_history_engine", "maintenance_engine"])
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
     parser.add_argument("--test-filter")
     parser.add_argument("--allow-private-discovery", action="store_true",
@@ -275,7 +281,7 @@ def main():
         log_path = args.evidence_dir / (label.replace("_", "-") + ".log")
         try:
             if args.test_target:
-                features = "engine-tests,download" if args.test_target in {"download_engine", "cache_engine", "file_transfer_engine"} else "engine-tests"
+                features = "engine-tests,download" if args.test_target in {"download_engine", "cache_engine", "file_transfer_engine", "maintenance_engine"} else "engine-tests"
                 command = [args.cargo, f"+{args.toolchain}", "test", "--features", features,
                            "--test", args.test_target, "--offline", "--locked"]
                 if args.test_filter:

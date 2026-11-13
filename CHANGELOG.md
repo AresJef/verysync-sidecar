@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit native error registration/clearing, bounded log snapshots,
+  partial package-level changes and target-syntax diagnostic locations,
+  with private Debug output and uncertain-write handling.
+
 - Add explicit directory oldest/newest version restoration, including an
   explicit native dot-root selection, with observed nested-file effects.
 
