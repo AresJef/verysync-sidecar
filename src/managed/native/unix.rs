@@ -334,3 +334,15 @@ pub(in crate::managed) fn open_owned_lock(path: &Path) -> io::Result<File> {
     }
     Ok(file)
 }
+
+pub(in crate::managed) fn open_snapshot_input(path: &Path) -> io::Result<File> {
+    let file = options().read(true).open(path)?;
+    let metadata = file.metadata()?;
+    // SAFETY: geteuid only reads the current effective user identity.
+    if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(io::Error::other(
+            "snapshot input must be an owned regular file",
+        ));
+    }
+    Ok(file)
+}

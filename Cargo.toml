@@ -34,13 +34,13 @@ include = [
 flate2 = { version = "1.1.11", default-features = false, features = ["miniz_oxide"], optional = true }
 fs2 = "0.4.3"
 getrandom = "0.4.3"
-reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "multipart", "stream"] }
 rmpv = "1.3.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
 tar = { version = "0.4.46", default-features = false, optional = true }
-tokio = { version = "1.54.1", features = ["rt", "sync", "time", "macros"] }
+tokio = { version = "1.54.1", features = ["rt", "sync", "time", "macros", "fs"] }
 url = "2.5.8"
 rawzip = { version = "0.5.2", optional = true }
 
@@ -167,4 +167,9 @@ required-features = ["engine-tests"]
 [[test]]
 name = "p2p_three_nodes"
 path = "tests/p2p_three_nodes.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "upgrade_engine"
+path = "tests/upgrade_engine.rs"
 required-features = ["engine-tests"]

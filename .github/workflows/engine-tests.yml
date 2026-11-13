@@ -84,6 +84,12 @@ jobs:
           --github-env "${{ github.env }}"
       - name: Run public input and synthetic transport contracts
         run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test devices_contract --test invitations_contract --test network_contract --test sync_observation_contract --test releases --locked
+      - name: Explicitly prepare pinned older upgrade-source fixture
+        run: >-
+          python scripts/prepare-test-engine.py prepare --upgrade-source
+          --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}"
+          --github-env "${{ github.env }}"
       - name: Check explicit preparation and bounded archive contracts
         run: cargo +"$TEST_TOOLCHAIN" test --features download --lib --test download --test cache --locked
       - name: Build public examples explicitly
@@ -134,6 +140,11 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target p2p_three_nodes
           --evidence-dir "${{ runner.temp }}/vs-three-node-proxy"
+      - name: Verify fixed-version upgrades, state restoration and cancellation
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
       - name: Run independent-engine fixture contracts
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
@@ -180,3 +191,6 @@ jobs:
       - name: Confirm no task-owned engine remains
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Confirm no pinned older upgrade-source engine remains
+        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source

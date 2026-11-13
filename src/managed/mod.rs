@@ -2,7 +2,9 @@
 
 #[cfg(feature = "download")]
 mod archive;
+mod backup;
 mod bootstrap;
+pub use backup::{StateBackup, StateBackupInfo, StateBackupOptions};
 #[cfg(feature = "download")]
 mod cache;
 #[cfg(feature = "download")]
@@ -16,13 +18,28 @@ pub use instance::{ManagedExit, ManagedInstance};
 mod native;
 mod process;
 mod restart;
+pub use restart::ProgramTransition;
 mod shutdown;
 mod state;
+mod upgrade;
+pub use upgrade::{KernelUpgradeCommand, KernelUpgradeExit};
 
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use crate::{Error, LocalProgram, ManagementEndpoint, Result};
+use crate::{Error, LocalProgram, ManagementEndpoint, Result, VersionPolicy};
+
+/// Availability of the kernel's explicit release-check endpoint.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ManagedUpgradeChecks {
+    /// Keep the official `--no-upgrade` startup flag (the default). Explicit
+    /// upload/trigger handlers retain their own separately observed behavior.
+    #[default]
+    Disabled,
+    /// Enable manual checks and force the periodic upgrade interval to zero
+    /// before serving. Selecting this value performs no check or download.
+    Manual,
+}
 
 /// Lifetime selected before creating an owned core; never a system service.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -50,6 +67,8 @@ pub struct ManagedOptions {
     pub(crate) timeout: Duration,
     pub(crate) request_timeout: Duration,
     pub(crate) lifetime: ManagedLifetime,
+    pub(crate) version_policy: VersionPolicy,
+    pub(crate) upgrade_checks: ManagedUpgradeChecks,
 }
 
 impl ManagedOptions {
@@ -113,6 +132,8 @@ impl ManagedOptions {
             timeout: Duration::from_secs(30),
             request_timeout: Duration::from_secs(10),
             lifetime: ManagedLifetime::CallerOwned,
+            version_policy: VersionPolicy::ValidatedOnly,
+            upgrade_checks: ManagedUpgradeChecks::Disabled,
         })
     }
 
@@ -125,6 +146,24 @@ impl ManagedOptions {
         }
         self.timeout = timeout;
         Ok(self)
+    }
+
+    /// Explicitly permit an unverified version, for example a selected older
+    /// upgrade source. The default accepts only the fixed baseline. The known
+    /// configuration-schema checks still apply; this grants no compatibility
+    /// or support claim for other versions. CLI and management versions must
+    /// match, and no newer executable is selected or downloaded automatically.
+    pub fn version_policy(mut self, policy: VersionPolicy) -> Self {
+        self.version_policy = policy;
+        self
+    }
+
+    /// Select explicit release-check availability. Manual mode keeps periodic
+    /// upgrades disabled, including for reused state. An in-place upgrade can
+    /// replace its executable; use a dedicated mutable copy for such requests.
+    pub fn upgrade_checks(mut self, checks: ManagedUpgradeChecks) -> Self {
+        self.upgrade_checks = checks;
+        self
     }
 
     /// Set the retained management Client's per-request deadline (default 10s).
@@ -172,6 +211,7 @@ impl ManagedOptions {
         crate::Client::connect(
             crate::ConnectOptions::new(self.endpoint.clone(), key)
                 .expected_device_id(identity)
+                .version_policy(self.version_policy)
                 .request_timeout(self.request_timeout)?,
         )
         .await

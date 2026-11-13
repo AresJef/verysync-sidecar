@@ -64,8 +64,10 @@ pub enum Capability {
     LicensedSelectiveSelection,
     /// Explicit tracked-change reversion, authority override and marker repair.
     FolderRecovery,
-    /// Explicit fixed-program acquisition and upgrades.
+    /// Explicit program sources, optional acquisition/cache and upgrade calls.
     EngineDownloadUpgrade,
+    /// Explicit offline private-state snapshots and fresh-directory restoration.
+    StateBackupRestore,
     /// File management and history.
     FileHistory,
     /// Remaining advanced folder settings.
@@ -201,7 +203,16 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::EngineDownloadUpgrade),
+    LibraryCapability {
+        capability: Capability::EngineDownloadUpgrade,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::StateBackupRestore,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::NetworkControl,
         implementation: ImplementationStatus::Typed,

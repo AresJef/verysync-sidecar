@@ -16,6 +16,29 @@ SPEC.loader.exec_module(HELPER)
 
 
 class ProxyContracts(unittest.TestCase):
+    def test_upgrade_exceptions_require_exact_opt_in_hosts_ports_and_pinned_path(self):
+        package = {"filename": "verysync-macos-arm64-v2.33.2.zip"}
+        target = "upgrades.verysync.cn:443"
+        archive_url = "http://dl.verysync.com/releases/v2.33.2/" + package["filename"]
+        with HELPER.BlockedProxy() as blocked:
+            self.assertIsNone(blocked.upgrade_metadata_target("CONNECT", target))
+            self.assertIsNone(blocked.pinned_archive("GET", archive_url))
+        with HELPER.BlockedProxy(upgrade_metadata=True, upgrade_archive=(Path("unused-test-input"), package)) as enabled:
+            self.assertEqual(enabled.upgrade_metadata_target("CONNECT", target), ("upgrades.verysync.cn", 443))
+            self.assertIsNotNone(enabled.pinned_archive("GET", archive_url))
+            self.assertIsNone(enabled.upgrade_metadata_target("GET", target))
+            self.assertIsNone(enabled.pinned_archive("POST", archive_url))
+            for unsafe in ["upgrades.verysync.cn.attacker.invalid:443", "upgrades.verysync.cn:18886",
+                           "user:secret@upgrades.verysync.cn:443", "upgrades.verysync.cn:443/path",
+                           "upgrades.verysync.cn:443?secret=token", "upgrades.verysync.cn:443#fragment"]:
+                self.assertIsNone(enabled.upgrade_metadata_target("CONNECT", unsafe))
+            for unsafe in [archive_url + "?secret=token", archive_url + "#fragment",
+                           archive_url.replace("dl.verysync.com", "dl.verysync.com.attacker.invalid"),
+                           archive_url.replace("dl.verysync.com", "user:secret@dl.verysync.com"),
+                           archive_url.replace("v2.33.2/", "v2.33.3/"),
+                           archive_url.replace("dl.verysync.com", "dl.verysync.com:18886")]:
+                self.assertIsNone(enabled.pinned_archive("GET", unsafe))
+
     def test_discovery_listener_does_not_call_reverse_dns(self):
         source = SOURCE.with_name("fixture-discovery-server.py")
         spec = importlib.util.spec_from_file_location("private_discovery_fixture", source)

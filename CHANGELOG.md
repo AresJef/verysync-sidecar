@@ -2,6 +2,14 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit version-policy-aware program transitions, kernel check/trigger,
+  fixed-archive streaming upload and contained stopped-owner CLI upgrades.
+  Preserve unknown mutation outcomes and require explicit executable reselection.
+
+- Add bounded private-state snapshots with pinned manifests and file hashes,
+  fresh-directory restoration, cooperative cancellation and incomplete-state
+  admission protection. Keep external synchronized files outside state rollback.
+
 - Add a native three-node read-only handoff scenario with the source stopped,
   an explicit wrong-endpoint failure, complete hashes and peer byte counters.
 

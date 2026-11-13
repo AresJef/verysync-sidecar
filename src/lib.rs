@@ -38,6 +38,7 @@
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
+#![doc = include_str!("../docs/public/program-upgrades.md")]
 
 mod auth;
 mod capabilities;
@@ -65,6 +66,7 @@ mod sharing;
 mod status;
 mod sync_observation;
 mod transports;
+mod upgrades;
 
 pub use auth::{ApiKey, DeviceId};
 pub use capabilities::{
@@ -95,7 +97,11 @@ pub use invitations::{
 pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
-pub use managed::{ManagedExit, ManagedInstance, ManagedLifetime, ManagedOptions};
+pub use managed::{
+    KernelUpgradeCommand, KernelUpgradeExit, ManagedExit, ManagedInstance, ManagedLifetime,
+    ManagedOptions, ManagedUpgradeChecks, ProgramTransition, StateBackup, StateBackupInfo,
+    StateBackupOptions,
+};
 pub use network::{
     ConnectionSnapshot, ConnectionTotals, DeviceTransport, DiscoveryRecord, ListenerStatus,
     NetworkConfig, NetworkPatch, NetworkUpdate, PeerConnection, PeerConnectionType,
@@ -134,6 +140,7 @@ pub use sync_observation::{
 pub use transports::{
     TrackerStatus, TransportConfig, TransportPatch, TransportStatus, TransportUpdate,
 };
+pub use upgrades::KernelUpgradeCheck;
 
 /// The fixed upstream version selected for initial compatibility acceptance.
 ///

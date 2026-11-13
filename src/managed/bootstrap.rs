@@ -11,7 +11,7 @@ use rmpv::Value;
 use sha2::{Digest, Sha256};
 
 use super::{io_error, native, process::OwnedProcess, state::StateLease, ManagedOptions};
-use crate::{ApiKey, DeviceId, Error, ProgramInfo, Result, BASELINE_ENGINE_VERSION};
+use crate::{ApiKey, DeviceId, Error, ProgramInfo, Result, VersionPolicy, BASELINE_ENGINE_VERSION};
 
 pub(super) struct Prepared {
     pub(super) lease: StateLease,
@@ -188,11 +188,16 @@ pub(super) fn prepare(
     let mut versions = version
         .lines()
         .filter_map(|line| line.strip_prefix("verysync "));
-    if versions
+    let actual_version = versions
         .next()
         .and_then(|line| line.split_whitespace().next())
-        != Some(BASELINE_ENGINE_VERSION)
-        || versions.next().is_some()
+        .filter(|value| value.starts_with('v') && value.len() > 1)
+        .ok_or(Error::ProgramRejected {
+            reason: "the program does not report one explicit version",
+        })?;
+    if versions.next().is_some()
+        || (options.version_policy == VersionPolicy::ValidatedOnly
+            && actual_version != BASELINE_ENGINE_VERSION)
     {
         return Err(Error::ProgramRejected {
             reason: "the program does not report the exact v2.33.2 baseline",
@@ -283,7 +288,7 @@ pub(super) fn prepare(
         binary,
         info: ProgramInfo {
             sha256,
-            version: BASELINE_ENGINE_VERSION.to_owned(),
+            version: actual_version.to_owned(),
         },
         key,
         identity,
@@ -305,7 +310,50 @@ fn cli(
     cancel: &Receiver<()>,
     deadline: Instant,
 ) -> Result<String> {
-    check_active(cancel, deadline)?;
+    let (status, mut bytes) = cli_capture(binary, state, args, password, cancel, deadline)?;
+    if !status.success() {
+        let operation = match args.first().copied() {
+            Some("version") => "inspect executable version",
+            Some("generate") => "generate private identity",
+            Some("device-id") => "read persistent device identity",
+            _ => "run metadata helper",
+        };
+        if let Some(password) = password {
+            bytes = String::from_utf8_lossy(&bytes)
+                .replace(password, "[REDACTED]")
+                .into_bytes();
+        }
+        return Err(Error::ManagedProcessExited {
+            operation,
+            code: status.code(),
+            diagnostic: Some(crate::ProcessDiagnostic::new(bytes)),
+        });
+    }
+    String::from_utf8(bytes).map_err(|_| Error::ProgramRejected {
+        reason: "CLI metadata is not UTF-8",
+    })
+}
+
+pub(super) fn cli_capture(
+    binary: &Path,
+    state: &Path,
+    args: &[&str],
+    password: Option<&str>,
+    cancel: &Receiver<()>,
+    deadline: Instant,
+) -> Result<(std::process::ExitStatus, Vec<u8>)> {
+    let active = || {
+        check_active(cancel, deadline).map_err(|error| {
+            if args.first() == Some(&"upgrade") && matches!(error, Error::Timeout { .. }) {
+                Error::Timeout {
+                    operation: "run kernel upgrade CLI",
+                }
+            } else {
+                error
+            }
+        })
+    };
+    active()?;
     let mut entropy = [0; 16];
     getrandom::fill(&mut entropy).map_err(|_| Error::ManagedFailure {
         reason: "temporary capture identity failed",
@@ -316,6 +364,9 @@ fn cli(
         .map_err(|e| io_error("create private CLI capture", e))?;
     let mut command = command(binary, state);
     command.args(args).arg("--home").arg(state);
+    if args.first() == Some(&"upgrade") {
+        command.env_remove("STNOUPGRADE").env("STNORESTART", "yes");
+    }
     let io = super::process::ProcessIo {
         stdin_pipe: password.is_some(),
         stdout: Some(
@@ -346,7 +397,7 @@ fn cli(
             .map_err(|e| io_error("supply private generated credential", e))?;
     }
     let status = loop {
-        check_active(cancel, deadline)?;
+        active()?;
         if capture
             .metadata()
             .map_err(|e| io_error("bound CLI capture", e))?
@@ -379,27 +430,7 @@ fn cli(
             reason: "CLI metadata exceeds its bound",
         });
     }
-    if !status.success() {
-        let operation = match args.first().copied() {
-            Some("version") => "inspect executable version",
-            Some("generate") => "generate private identity",
-            Some("device-id") => "read persistent device identity",
-            _ => "run metadata helper",
-        };
-        if let Some(password) = password {
-            bytes = String::from_utf8_lossy(&bytes)
-                .replace(password, "[REDACTED]")
-                .into_bytes();
-        }
-        return Err(Error::ManagedProcessExited {
-            operation,
-            code: status.code(),
-            diagnostic: Some(crate::ProcessDiagnostic::new(bytes)),
-        });
-    }
-    String::from_utf8(bytes).map_err(|_| Error::ProgramRejected {
-        reason: "CLI metadata is not UTF-8",
-    })
+    Ok((status, bytes))
 }
 
 fn set(value: &mut Value, key: &str, replacement: Value) -> Result<()> {
@@ -569,6 +600,9 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
         // Baseline schema 54 options field 99 is localTunnelAddress. Fresh
         // isolated cores must not use the shared upstream loopback port 18886.
         set(field_mut(&mut root, "5")?, "99", Value::from("127.0.0.1:0"))?;
+    }
+    if options.upgrade_checks == super::ManagedUpgradeChecks::Manual {
+        set(field_mut(&mut root, "5")?, "24", Value::from(0))?;
     }
     let mut encoded = Vec::new();
     rmpv::encode::write_value(&mut encoded, &root).map_err(|_| Error::ManagedFailure {

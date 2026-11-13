@@ -131,6 +131,11 @@ pub enum Error {
         /// A description excluding credentials and captured output.
         reason: &'static str,
     },
+    /// An offline snapshot, its limits or restoration input is not admissible.
+    StateBackupRejected {
+        /// A description without private paths, credentials or manifest data.
+        reason: &'static str,
+    },
     /// The dedicated state already has an exclusive library owner.
     ManagedStateInUse,
     /// The supplied directory is not an admissible library-owned state.
@@ -352,6 +357,7 @@ impl fmt::Display for Error {
             Self::ProgramRejected { reason } => write!(formatter, "selected program rejected: {reason}"),
             Self::ManagedProcessExited { operation, code, .. } => write!(formatter, "owned program exited while attempting to {operation} (code {code:?})"),
             Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),
+            Self::StateBackupRejected { reason } => write!(formatter, "private state copy rejected: {reason}"),
             Self::ManagedStateInUse => formatter.write_str("managed state already has an exclusive owner"),
             Self::UnmanagedState => formatter.write_str("state is not an admissible private library-owned directory"),
             Self::LocalIo { operation, .. } => write!(formatter, "native operation failed while attempting to {operation}"),

@@ -12,6 +12,7 @@ mod scheduling;
 mod selective;
 mod sync_observation;
 mod transport_control;
+mod upgrade_control;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -926,6 +927,15 @@ impl Connection {
         if let Some(body) = body {
             request = request.json(body);
         }
+        self.request_prepared(operation, request, mutation).await
+    }
+
+    async fn request_prepared(
+        &self,
+        operation: &'static str,
+        request: reqwest::RequestBuilder,
+        mutation: bool,
+    ) -> Result<(u16, Vec<u8>)> {
         let RawResponse {
             status,
             body: bytes,

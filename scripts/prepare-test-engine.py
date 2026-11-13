@@ -133,10 +133,13 @@ def download(package, path):
 
 
 def prepare(args):
-    manifest_path = Path(__file__).resolve().parents[1] / "releases" / "verysync-v2.33.2.json"
+    older = getattr(args, "upgrade_source", False)
+    filename = "verysync-upgrade-test-source-v2.33.1.json" if older else "verysync-v2.33.2.json"
+    version = "v2.33.1" if older else "v2.33.2"
+    manifest_path = Path(__file__).resolve().parents[1] / "releases" / filename
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest["version"] != "v2.33.2":
-        raise ValueError("test setup is pinned to v2.33.2")
+    if manifest["version"] != version:
+        raise ValueError("test setup differs from the explicitly selected fixed version")
     packages = [p for p in manifest["packages"] if p["id"] == args.package]
     if len(packages) != 1 or not packages[0]["alpha_target"]:
         raise ValueError("this fixture setup currently covers the six alpha package mappings only")
@@ -164,9 +167,11 @@ def prepare(args):
             if any(c in str(binary) + str(archive) for c in "\r\n"):
                 raise ValueError("test executable path cannot be represented in an environment file")
             with Path(args.github_env).open("a", encoding="utf-8", newline="\n") as output:
-                output.write("VERYSYNC_TEST_BINARY=" + str(binary) + "\n")
-                output.write("VERYSYNC_TEST_BINARY_SHA256=" + binary_hash + "\n")
-                output.write("VERYSYNC_TEST_ARCHIVE=" + str(archive) + "\n")
+                prefix = "VERYSYNC_TEST_UPGRADE_SOURCE" if older else "VERYSYNC_TEST"
+                output.write(prefix + "_BINARY=" + str(binary) + "\n")
+                output.write(prefix + ("_SHA256=" if older else "_BINARY_SHA256=") + binary_hash + "\n")
+                if not older:
+                    output.write("VERYSYNC_TEST_ARCHIVE=" + str(archive) + "\n")
         print(json.dumps(receipt))
     except BaseException:
         shutil.rmtree(directory)
@@ -287,8 +292,11 @@ def owned_processes(binary=None):
     return matches
 
 
-def check_cleanup():
-    matches = owned_processes()
+def check_cleanup(upgrade_source=False):
+    binary = os.environ.get("VERYSYNC_TEST_UPGRADE_SOURCE_BINARY") if upgrade_source else None
+    if upgrade_source and not binary:
+        raise ValueError("explicit upgrade-source executable is required for cleanup verification")
+    matches = owned_processes(binary)
     if matches:
         raise RuntimeError("task-owned test engine processes remain: " + str(len(matches)))
     print("No process remains for the exact task-owned test executable.")
@@ -375,7 +383,9 @@ def main():
     prepare_parser.add_argument("--parent", required=True)
     prepare_parser.add_argument("--archive", help="Optional existing archive; same fixed SHA-256 required")
     prepare_parser.add_argument("--github-env", help="Explicit GitHub environment file to append to")
-    commands.add_parser("check-cleanup")
+    prepare_parser.add_argument("--upgrade-source", action="store_true", help="Explicit pinned v2.33.1 fixture; default baseline remains v2.33.2")
+    cleanup_parser = commands.add_parser("check-cleanup")
+    cleanup_parser.add_argument("--upgrade-source", action="store_true")
     commands.add_parser("list-owned-processes")
     commands.add_parser("list-owned-listeners")
     args = parser.parse_args()
@@ -397,7 +407,7 @@ def main():
                               "errno": error.errno}))
             raise SystemExit(1) from None
     else:
-        check_cleanup()
+        check_cleanup(args.upgrade_source)
 
 
 if __name__ == "__main__":

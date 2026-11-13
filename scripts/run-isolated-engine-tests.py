@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,13 +30,18 @@ class BlockedProxy(socketserver.ThreadingTCPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self, discovery_file=None, discovery_token=None):
+    def __init__(self, discovery_file=None, discovery_token=None, upgrade_metadata=False,
+                 upgrade_archive=None):
         super().__init__(("127.0.0.1", 0), BlockRequest)
         self.observed = {}
         self.errors = 0
         self.discovery_file = discovery_file
         self.discovery_token = discovery_token
         self.forwarded = 0
+        self.upgrade_metadata = upgrade_metadata
+        self.upgrade_connections = 0
+        self.upgrade_archive = upgrade_archive
+        self.upgrade_archives_served = 0
         self.guard = threading.Lock()
 
     def private_discovery_port(self, method, target):
@@ -60,6 +66,34 @@ class BlockedProxy(socketserver.ThreadingTCPServer):
         except (OSError, ValueError, TypeError, AttributeError):
             return None
 
+    def upgrade_metadata_target(self, method, target):
+        if not self.upgrade_metadata or method != "CONNECT":
+            return None
+        try:
+            parsed = urlsplit("//" + target)
+            if (parsed.hostname == "upgrades.verysync.cn" and parsed.port == 443
+                    and not parsed.username and not parsed.password and not parsed.path
+                    and not parsed.query and not parsed.fragment):
+                return ("upgrades.verysync.cn", 443)
+        except ValueError:
+            pass
+        return None
+
+    def pinned_archive(self, method, target):
+        if not self.upgrade_archive or method != "GET":
+            return None
+        try:
+            parsed = urlsplit(target)
+            archive, package = self.upgrade_archive
+            if (parsed.scheme == "http" and parsed.hostname in {"dl.verysync.com", "dl-cn.verysync.com"}
+                    and parsed.port in {None, 80} and not parsed.username and not parsed.password
+                    and parsed.path == "/releases/v2.33.2/" + package["filename"]
+                    and not parsed.query and not parsed.fragment):
+                return archive, package
+        except ValueError:
+            pass
+        return None
+
     def handle_error(self, request, client_address):
         # No request headers, targets, environment or credential-bearing trace.
         with self.guard:
@@ -81,7 +115,42 @@ class BlockRequest(socketserver.StreamRequestHandler):
         except ValueError:
             host = None
         port = self.server.private_discovery_port(method, parts[1])
-        if port is not None:
+        official = self.server.upgrade_metadata_target(method, parts[1])
+        pinned = self.server.pinned_archive(method, parts[1])
+        if pinned is not None:
+            remaining = 16384
+            while remaining > 0:
+                header = self.rfile.readline(min(remaining + 1, 8193))
+                remaining -= len(header)
+                if header == b"\r\n":
+                    break
+                if not header or len(header) > 8192:
+                    return
+            else:
+                return
+            archive, package = pinned
+            try:
+                self.wfile.write(("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                                  "Content-Length: " + str(package["bytes"]) +
+                                  "\r\nConnection: close\r\n\r\n").encode("ascii"))
+                count = 0
+                digest = hashlib.sha256()
+                with archive.open("rb") as source:
+                    while chunk := source.read(65536):
+                        count += len(chunk)
+                        if count > package["bytes"]:
+                            raise ValueError("pinned test archive changed")
+                        digest.update(chunk)
+                        self.wfile.write(chunk)
+                self.wfile.flush()
+                if count != package["bytes"] or digest.hexdigest() != package["sha256"]:
+                    raise ValueError("pinned test archive changed")
+                with self.server.guard:
+                    self.server.upgrade_archives_served += 1
+            except (OSError, ValueError):
+                return
+            return
+        if port is not None or official is not None:
             # Consume bounded CONNECT headers before switching to raw TLS bytes.
             remaining = 16384
             while remaining > 0:
@@ -93,13 +162,19 @@ class BlockRequest(socketserver.StreamRequestHandler):
                     return
             else:
                 return
-            # The original hostname is never resolved or contacted.
+            # Discovery is routed only to its owned fixture. Upgrade metadata
+            # is an explicit exception to one genuine TLS host; TLS stays end to
+            # end and every other external host remains blocked.
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=2) as upstream:
+                target = official or ("127.0.0.1", port)
+                with socket.create_connection(target, timeout=10 if official else 2) as upstream:
                     self.wfile.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     self.wfile.flush()
                     with self.server.guard:
-                        self.server.forwarded += 1
+                        if official:
+                            self.server.upgrade_connections += 1
+                        else:
+                            self.server.forwarded += 1
                     deadline = time.monotonic() + 30
                     while time.monotonic() < deadline:
                         readable, _, _ = select.select([self.request, upstream], [], [], 0.2)
@@ -126,11 +201,15 @@ def main():
     parser.add_argument("--cargo", default=shutil.which("cargo"))
     parser.add_argument("--evidence-dir", required=True, type=Path)
     suite = parser.add_mutually_exclusive_group(required=True)
-    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes"])
+    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine"])
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
     parser.add_argument("--test-filter")
     parser.add_argument("--allow-private-discovery", action="store_true",
                         help="route only allowlisted discovery CONNECTs to a nonce-selected loopback fixture")
+    parser.add_argument("--allow-upgrade-metadata", action="store_true",
+                        help="allow genuine end-to-end TLS only to upgrades.verysync.cn:443")
+    parser.add_argument("--serve-pinned-upgrade-archive", action="store_true",
+                        help="serve only the verified local v2.33.2 archive for its exact official HTTP URL")
     args = parser.parse_args()
     if args.test_target == "managed_lifetime" and sys.platform not in {"darwin", "linux", "win32"}:
         raise RuntimeError("owned-host acceptance requires native macOS, Linux or Windows")
@@ -140,6 +219,8 @@ def main():
         raise ValueError("a test filter requires an explicit Cargo test target")
     if args.allow_private_discovery and args.test_target != "network":
         raise ValueError("private discovery routing is restricted to the explicit network suite")
+    if (args.allow_upgrade_metadata or args.serve_pinned_upgrade_archive) and args.test_target != "upgrade_engine":
+        raise ValueError("upgrade routing is restricted to the explicit upgrade suite")
     if not args.cargo or not Path(args.cargo).is_absolute():
         raise ValueError("an explicit resolved Cargo executable is required")
     binary = os.environ.get("VERYSYNC_TEST_BINARY")
@@ -152,7 +233,24 @@ def main():
     args.evidence_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     discovery_file = args.evidence_dir / "private-discovery-target.json" if args.allow_private_discovery else None
     discovery_token = secrets.token_hex(32) if args.allow_private_discovery else None
-    with BlockedProxy(discovery_file, discovery_token) as proxy:
+    upgrade_archive = None
+    if args.serve_pinned_upgrade_archive:
+        archive = Path(os.environ["VERYSYNC_TEST_ARCHIVE"]).resolve(strict=True)
+        manifest = json.loads((Path(__file__).resolve().parents[1] / "releases" /
+                               "verysync-v2.33.2.json").read_text(encoding="utf-8"))
+        matches = [p for p in manifest["packages"] if p["filename"] == archive.name]
+        if len(matches) != 1:
+            raise ValueError("pinned upgrade archive has no exact fixed catalog identity")
+        package = matches[0]
+        digest = hashlib.sha256()
+        with archive.open("rb") as source:
+            while chunk := source.read(65536):
+                digest.update(chunk)
+        if archive.stat().st_size != package["bytes"] or digest.hexdigest() != package["sha256"]:
+            raise ValueError("pinned upgrade archive differs before testing")
+        upgrade_archive = archive, package
+    with BlockedProxy(discovery_file, discovery_token, args.allow_upgrade_metadata,
+                      upgrade_archive) as proxy:
         server = threading.Thread(target=proxy.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         server.start()
         env = os.environ.copy()
@@ -203,8 +301,12 @@ def main():
                         for (method, host), count in sorted(proxy.observed.items())]
             errors = proxy.errors
         report = {"scope": "test-only HTTP proxy observations; not an OS-wide no-egress proof",
-                  "loopback_only": True, "forwarding_implemented": args.allow_private_discovery,
-                  "external_forwarding_implemented": False,
+                  "loopback_only": not args.allow_upgrade_metadata, "listener_loopback_only": True,
+                  "forwarding_implemented": args.allow_private_discovery or args.allow_upgrade_metadata,
+                  "external_forwarding_implemented": args.allow_upgrade_metadata,
+                  "official_upgrade_metadata_host": "upgrades.verysync.cn:443" if args.allow_upgrade_metadata else None,
+                  "official_upgrade_metadata_connections": proxy.upgrade_connections,
+                  "pinned_upgrade_archives_served": proxy.upgrade_archives_served,
                   "private_discovery_forwarding_enabled": args.allow_private_discovery,
                   "private_connections_forwarded": proxy.forwarded,
                   "requests_blocked": observed, "handler_errors": errors,

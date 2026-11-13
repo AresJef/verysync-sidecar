@@ -14,6 +14,101 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn upgrade_metadata_requires_flags_and_redacts_unknown_values() -> TestResult {
+    let mut replies = vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ];
+    for response in [
+        serde_json::json!({"running":"v2.33.2","latest":"v2.33.2","newer":false}),
+        serde_json::json!({"running":"","latest":"v2.33.2","newer":false,"majorNewer":false}),
+        serde_json::json!({"running":"v2.33.2","latest":"v2.33.2","newer":false,"majorNewer":false,"private":KEY}),
+    ] {
+        replies.push(Reply::json(serde_json::json!({"myID":ID})));
+        replies.push(Reply::json(response));
+    }
+    let server = ScriptedServer::start(replies).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.check_kernel_upgrade().await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    assert!(matches!(
+        client.check_kernel_upgrade().await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    let result = client.check_kernel_upgrade().await?;
+    assert_eq!(result.extra["private"], KEY);
+    assert!(!result.newer && !result.major_newer && !format!("{result:?}").contains(KEY));
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("GET /prefix/rest/system/upgrade "))
+            .count(),
+        3
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn kernel_upgrade_unknown_ack_is_not_retried_and_fixed_ack_is_recognized() -> TestResult {
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"ok":KEY})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"ok":"restarting"})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client.request_server_selected_upgrade().await.unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    client.request_server_selected_upgrade().await?;
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("POST /prefix/rest/system/upgrade "))
+            .count(),
+        2
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn invalid_fixed_archive_is_rejected_before_any_modifying_or_identity_request() -> TestResult
+{
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let asset = verysync_sidecar::official_programs()?
+        .into_iter()
+        .next()
+        .ok_or("fixed asset missing")?;
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("bad-archive");
+    let file = std::fs::File::create(&path)?;
+    file.set_len(asset.archive_bytes())?;
+    drop(file);
+    assert!(matches!(
+        client.upload_kernel_upgrade(&path, &asset).await,
+        Err(Error::ProgramRejected { .. })
+    ));
+    assert!(matches!(
+        client
+            .upload_kernel_upgrade("relative-archive", &asset)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn recovery_nonempty_ack_is_unknown_without_retry_and_pause_is_not_resumed() -> TestResult {
     use verysync_sidecar::FolderId;
     let folder = serde_json::json!({"id":"recovery","label":"synthetic","path":"/synthetic","paused":false,"type":"sendonly"});

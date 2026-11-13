@@ -62,6 +62,24 @@ it does not download or launch an engine when the crate is built or imported.
 Invoking the engine tests without the variables fails. The ordinary `--lib`
 quality check does not run engine tests and cannot establish their acceptance.
 
+The `upgrade_engine` target additionally requires an explicitly prepared pinned
+v2.33.1 `VERYSYNC_TEST_UPGRADE_SOURCE_BINARY` and
+`VERYSYNC_TEST_UPGRADE_SOURCE_SHA256`, plus the verified baseline
+`VERYSYNC_TEST_ARCHIVE`. `prepare --upgrade-source` prepares only the older
+six-target test fixture and exports its separate variables; it does not change
+the default baseline. Its dedicated writable copies are the only executables
+modified by native upgrade tests. `check-cleanup --upgrade-source` independently
+checks the original older fixture image.
+
+Only `upgrade_engine` may select `--allow-upgrade-metadata` and
+`--serve-pinned-upgrade-archive`. This explicit test exception permits end-to-end
+TLS to `upgrades.verysync.cn:443` and serves only the exact already size/SHA-verified
+local v2.33.2 archive for the fixed official HTTP asset URL. Every other external
+host remains blocked by the proxy. Reports accurately mark external metadata
+forwarding and do not claim loopback-only or OS-wide no-egress isolation. The
+tests refuse a changed provider version instead of downloading an unknown
+program. Plain fixture tests retain their default blocking behavior.
+
 For explicit test preparation, `scripts/prepare-test-engine.py prepare` accepts
 one of the six alpha package IDs from the fixed release manifest and a `--parent`
 directory. It downloads with HTTPS validation, verifies archive size/SHA-256,
