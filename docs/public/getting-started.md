@@ -120,7 +120,10 @@ fixed baseline, a paused folder can report an empty state and zero counters;
 Each request has a complete-response deadline and a bounded buffered body.
 Multi-request operations can take longer than one request deadline. Errors
 distinguish authentication, ambiguous access denial, HTTP, typed schema and
-known error-only body envelopes. Diagnostic bodies and raw headers may contain
+known error-only body envelopes. The fixed engine's verified `code: 3000`
+commercial refusal is `LicenseRequired` even when HTTP status is 200; it is not
+a completed operation. Raw requests still retain the exact raw response for
+explicit caller interpretation. Diagnostic bodies and raw headers may contain
 secrets and require explicit inspection before logging.
 
 After `MutationOutcomeUnknown`, read the exact ID before choosing to retry.

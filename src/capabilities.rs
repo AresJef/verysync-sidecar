@@ -58,6 +58,10 @@ pub enum Capability {
     IgnorePatterns,
     /// File pull order, explicit priority pages and global/per-device limits.
     TransferScheduling,
+    /// Actual selective index trees, search pages and selective-mode settings.
+    SelectiveBrowse,
+    /// Explicit conditional selection requests; licensed effects unverified.
+    LicensedSelectiveSelection,
     /// Explicit fixed-program acquisition and upgrades.
     EngineDownloadUpgrade,
     /// File management and history.
@@ -237,6 +241,16 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::EnterpriseRemoteManagement),
+    LibraryCapability {
+        capability: Capability::SelectiveBrowse,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::LicensedSelectiveSelection,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::AuxiliaryControls),
 ];
 

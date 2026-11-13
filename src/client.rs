@@ -8,6 +8,7 @@ mod network_control;
 mod relay_control;
 mod scan_control;
 mod scheduling;
+mod selective;
 mod sync_observation;
 mod transport_control;
 
@@ -947,14 +948,22 @@ impl Connection {
         #[serde(deny_unknown_fields)]
         struct ErrorEnvelope {
             error: String,
+            #[serde(default)]
+            code: Option<i64>,
         }
-        if serde_json::from_slice::<ErrorEnvelope>(&bytes)
-            .is_ok_and(|envelope| !envelope.error.is_empty())
-        {
-            return Err(uncertain(Error::Api {
-                operation,
-                response: ResponseDiagnostic::new(status, bytes),
-            }));
+        if let Ok(envelope) = serde_json::from_slice::<ErrorEnvelope>(&bytes) {
+            if !envelope.error.is_empty() {
+                if envelope.code == Some(3000) {
+                    return Err(Error::LicenseRequired {
+                        code: 3000,
+                        response: ResponseDiagnostic::new(status, bytes),
+                    });
+                }
+                return Err(uncertain(Error::Api {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                }));
+            }
         }
         Ok((status, bytes))
     }

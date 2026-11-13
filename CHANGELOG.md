@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add selective tree/search pages, opaque cursors and mode settings. Recognize
+  known HTTP-success Pro-license refusals without claiming authorized effects.
+
 - Add file pull-order settings, relative-file priority requests and explicit
   global/per-device KiB/s limits with separate queue and byte-cap observations.
 

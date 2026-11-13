@@ -32,6 +32,7 @@
 #![doc = include_str!("../docs/public/scan-control.md")]
 #![doc = include_str!("../docs/public/ignore-patterns.md")]
 #![doc = include_str!("../docs/public/scheduling.md")]
+#![doc = include_str!("../docs/public/selective-sync.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -56,6 +57,7 @@ mod relay;
 mod releases;
 mod scans;
 mod scheduling;
+mod selective;
 mod sharing;
 mod status;
 mod sync_observation;
@@ -110,6 +112,11 @@ pub use scans::{FolderScanConfig, FolderScanPatch, FolderScanUpdate};
 pub use scheduling::{
     BandwidthPatch, BandwidthUpdate, FolderPullOrder, FolderSchedulingConfig,
     FolderSchedulingUpdate, GlobalBandwidthConfig,
+};
+pub use selective::{
+    FolderSelectiveConfig, FolderSelectiveUpdate, SelectiveAcknowledgement, SelectiveAction,
+    SelectiveBrowseOptions, SelectiveEntry, SelectiveMatch, SelectiveScope, SelectiveSearchOptions,
+    SelectiveSearchPage, SelectiveTree,
 };
 pub use sharing::{
     GeneratedShare, JoinFolderOptions, JoinFolderResult, JoinPeerObservation, ShareKey,
