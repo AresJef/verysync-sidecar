@@ -74,6 +74,33 @@ The SDK does not silently sleep, retry, patch the official program or claim to
 fix this engine defect. Functional test fixtures explicitly separate archive
 generations; same-second recovery remains a distinct unresolved condition.
 
+Typed restore calls now refuse a request with `ArchiveRestorePrecondition`
+unless the selected archive timestamps precede a fresh `nowTime` reported by
+the target. RFC3339 offsets are compared as instants; the original native token
+is sent unchanged. The controller's wall clock and timezone are not consulted.
+Same-second/future timestamps, missing or unrecognized target clocks, and
+unrecognized archive timestamps produce no restoring POST. After inspecting the
+target, callers can make another explicit request once the precondition holds.
+There is no implicit sleep, retry or unsafe fallback.
+
+Directory preflight reads the native one-level archive API recursively within
+the explicit scope. It opens no controller files and never constructs a native
+filesystem path from a returned name. It refuses inconsistent hierarchy,
+unobserved or file-valued directory scopes, empty archive selections, or more
+than 1024 relevant entries/records, 64 KiB of logical names/timestamps, or
+30 seconds of inventory work. Every observed archived record in the scope must
+be older than the target's current second; this is deliberately conservative
+even when an oldest-version choice might select an earlier record. No partial
+inventory is silently submitted. Use bounded exact file selections when a
+directory exceeds these preflight limits.
+
+This is a preflight observation, not an atomic transaction or a backup. External
+writers and target-clock changes after the observation still need caller
+coordination. The underlying official engine defect remains, including for raw
+requests that bypass the typed precondition. Real isolated checks verify
+same-second refusal with both the selected archive and current file hashes
+preserved, followed by successful explicit restoration of an older version.
+
 Coordinate active writers and peers before restoration. The SDK does not pause
 them, rescan, retry, create a backup, or roll back partial effects. A cancelled
 future does not establish that a native operation stopped. A failure after POST
@@ -93,8 +120,9 @@ descendants. Coordinate other writers, inspect the per-path report and verify
 actual content. Local isolated tests check nested oldest/newest restoration,
 an unselected root file, a deeper descendant, and explicit root restoration
 against actual bytes/SHA-256. Same-source multi-platform acceptance remains
-pending. This operation does not automatically expand a version browse response
-on the controller or open any controller path.
+pending. The SDK performs the bounded read-only preflight described above;
+the native planner still selects and restores content. No controller filesystem
+path is opened.
 
 These APIs are unreleased. Isolated macOS ARM64 tests have checked actual remote
 overwrites, retention of two versions, trashcan retention after remote deletion,

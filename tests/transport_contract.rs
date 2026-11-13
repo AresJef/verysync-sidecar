@@ -14,6 +14,96 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn archive_restore_refuses_same_future_missing_or_unknown_target_clock_without_post(
+) -> TestResult {
+    use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
+    for clock in [
+        Some("2026-11-14T08:00:00+08:00"),
+        Some("2026-11-13T23:59:59Z"),
+        None,
+        Some("unknown native clock"),
+    ] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let mut now = serde_json::json!({"myID":ID,"private":KEY});
+        if let Some(clock) = clock {
+            now["nowTime"] = clock.into();
+        }
+        let server=ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),
+            Reply::json(serde_json::json!({"folders":[{"id":"private-restore","label":"","path":"/synthetic","paused":false}]})),Reply::json(now),
+        ]).await?;
+        let client = Client::connect(server.options()?).await?;
+        let item = FileVersionRestore::new(
+            TargetPath::remote(PathStyle::Unix, "file.txt")?,
+            "2026-11-14T00:00:00Z",
+        )?;
+        let error = client
+            .restore_file_versions(&FolderId::parse("private-restore")?, &[item])
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::ArchiveRestorePrecondition { .. }));
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 5);
+        assert!(!requests.iter().any(|r| r.starts_with("POST ")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn directory_preflight_refuses_file_scope_and_oversized_inventory_without_post() -> TestResult
+{
+    use verysync_sidecar::{
+        DirectoryVersionOrder, FolderId, PathStyle, TargetPath, VersionedDirectory,
+    };
+    let id = FolderId::parse("bounded-native-restore")?;
+    let version = serde_json::json!({"versionTime":"2026-11-14T00:00:00Z","modTime":"2026-11-13T00:00:00Z","size":3});
+    let mut oversized = serde_json::Map::new();
+    for i in 0..513 {
+        oversized.insert(format!("f{i}.txt"), serde_json::json!([version.clone()]));
+    }
+    for (scope, listing) in [
+        (
+            VersionedDirectory::Path(TargetPath::remote(PathStyle::Unix, "file.txt")?),
+            serde_json::json!({"file.txt":[version]}),
+        ),
+        (
+            VersionedDirectory::FolderRoot,
+            serde_json::Value::Object(oversized),
+        ),
+    ] {
+        let identity =
+            || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));
+        let folder = || {
+            Reply::json(
+                serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"/synthetic","paused":false}]}),
+            )
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            folder(),
+            identity(),
+            folder(),
+            Reply::json(listing),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client
+                .restore_directory_versions(&id, &scope, DirectoryVersionOrder::Oldest)
+                .await,
+            Err(Error::ArchiveRestorePrecondition { .. })
+        ));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 7);
+        assert!(!requests.iter().any(|r| r.starts_with("POST ")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn profiles_validate_duration_preserve_native_bytes_and_metrics_base_path() -> TestResult {
     use verysync_sidecar::CoreProfileRequest;
     let gzip = vec![
@@ -353,24 +443,40 @@ async fn directory_version_restore_requires_explicit_root_and_native_items_body(
     use verysync_sidecar::{
         DirectoryVersionOrder, FolderId, PathStyle, TargetPath, VersionedDirectory,
     };
-    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));
     let id = FolderId::parse("directory versions")?;
     let folder = || {
         Reply::json(
             serde_json::json!({"folders":[{"id":id.as_str(),"path":"/synthetic","label":"","paused":false}]}),
         )
     };
-    let server = ScriptedServer::start(vec![
+    let version = serde_json::json!({"versionTime":"2026-11-14T00:00:00Z","modTime":"2026-11-13T00:00:00Z","size":12});
+    let mut replies = vec![
         Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
         identity(),
+    ];
+    replies.extend([
         identity(),
         folder(),
+        identity(),
+        folder(),
+        Reply::json(serde_json::json!({"root.txt":[version.clone()]})),
+        identity(),
         Reply::json(serde_json::json!({})),
+    ]);
+    replies.extend([identity(), folder()]);
+    for listing in [
+        serde_json::json!({"nested":[]}),
+        serde_json::json!({"nested/二 %":[]}),
+        serde_json::json!({"nested/二 %/file.txt":[version]}),
+    ] {
+        replies.extend([identity(), folder(), Reply::json(listing)]);
+    }
+    replies.extend([
         identity(),
-        folder(),
         Reply::json(serde_json::json!({"native-path":KEY})),
-    ])
-    .await?;
+    ]);
+    let server = ScriptedServer::start(replies).await?;
     let client = Client::connect(server.options()?).await?;
     for path in [".", "..", "/absolute", "nested/../escape"] {
         let scope = VersionedDirectory::Path(TargetPath::remote(PathStyle::Unix, path)?);
@@ -564,11 +670,12 @@ async fn version_policy_preserves_unknown_archive_settings_and_reports_stale_rea
 #[tokio::test]
 async fn exact_version_restore_encodes_native_map_and_retains_partial_errors() -> TestResult {
     use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
-    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));
     let id = FolderId::parse("versions 中文")?;
     let server=ScriptedServer::start(vec![
         Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),
         Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"/synthetic","paused":false}]})),
+        identity(),
         Reply::json(serde_json::json!({"nested/a 二 %.txt":null,"other.txt":KEY})),
     ]).await?;
     let client = Client::connect(server.options()?).await?;
@@ -611,11 +718,12 @@ async fn exact_version_restore_encodes_native_map_and_retains_partial_errors() -
 #[tokio::test]
 async fn malformed_version_restore_ack_is_unknown_and_is_never_retried() -> TestResult {
     use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
-    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));
     let id = FolderId::parse("versioned")?;
     let server=ScriptedServer::start(vec![
         Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),
         Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"/synthetic","paused":false}]})),
+        identity(),
         Reply::json(serde_json::json!([KEY])),
     ]).await?;
     let client = Client::connect(server.options()?).await?;

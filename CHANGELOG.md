@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Refuse unverified/same-second archive restores before native POST using the
+  target's clock and a bounded directory preflight; preserve selected archives
+  and current data in the observed v2.33.2 timestamp-collision case.
+
 - Add explicit bounded native heap/CPU profiles and authenticated Prometheus
   snapshots, preserving private payloads, collection effects and uncertainty.
 

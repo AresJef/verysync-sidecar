@@ -7,6 +7,174 @@ use verysync_sidecar::{
     CreateDeviceOptions, DevicePatch, DeviceTransport, FileVersionRestore, FolderVersioningPolicy,
     JoinFolderOptions, ManagedInstance, TargetPath,
 };
+async fn past_archive_generation(core: &ManagedInstance, stamp: &str) -> TestResult {
+    let selected = chrono::DateTime::parse_from_rfc3339(stamp)?.timestamp();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let status = core.client().system_status().await?;
+            let now = chrono::DateTime::parse_from_rfc3339(
+                status
+                    .now_time
+                    .as_deref()
+                    .ok_or("native current clock absent")?,
+            )?
+            .timestamp();
+            if now > selected {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_same_second_restore_refusal_preserves_selected_old_archive_and_current_bytes(
+) -> TestResult {
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{DirectoryVersionOrder, Error, VersionedDirectory};
+    let root = tempfile::Builder::new().prefix("vguard-").tempdir()?.keep();
+    let data_dir = root.join("data");
+    std::fs::create_dir(&data_dir)?;
+    let old = b"selected old archive bytes";
+    let new = b"current synthetic contents of another size";
+    for name in ["same.txt", "older.txt"] {
+        std::fs::write(data_dir.join(name), new)?;
+    }
+    let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
+    let share = core.client().generate_share().await?;
+    let key = core
+        .client()
+        .validate_share_key(&share.read_write_key)
+        .await?;
+    let folder = core
+        .client()
+        .join_folder(&JoinFolderOptions::new(key, TargetPath::local(&data_dir)))
+        .await?
+        .configuration;
+    core.client()
+        .set_folder_versioning(
+            &folder.id,
+            FolderVersioningPolicy::Simple {
+                keep: 3,
+                cleanout_days: 0,
+                cleanup_interval_seconds: 3600,
+            },
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let state = core.client().folder_status(&folder.id).await?;
+            if state.local_files == Some(2)
+                && state.state == Some(verysync_sidecar::FolderState::Idle)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Ok::<_, verysync_sidecar::Error>(())
+    })
+    .await??;
+    let first = core
+        .client()
+        .system_status()
+        .await?
+        .now_time
+        .ok_or("native clock absent")?;
+    let stamp = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let next = core
+                .client()
+                .system_status()
+                .await?
+                .now_time
+                .ok_or("native clock absent")?;
+            if next != first {
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(next);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    assert!(stamp.is_ascii() && stamp.len() >= 19);
+    let tag = format!(
+        "{}{}{}-{}{}{}",
+        &stamp[0..4],
+        &stamp[5..7],
+        &stamp[8..10],
+        &stamp[11..13],
+        &stamp[14..16],
+        &stamp[17..19]
+    );
+    let archive = data_dir.join(".verysync").join("Archive");
+    std::fs::create_dir_all(&archive)?;
+    let same_archive = archive.join(format!("same~{tag}.txt"));
+    std::fs::write(&same_archive, old)?;
+    std::fs::write(archive.join("older~20000101-000000.txt"), old)?;
+    let listed = core.client().folder_versions(&folder.id, None).await?;
+    let same_stamp = listed.0["same.txt"][0].version_time.clone();
+    let same = FileVersionRestore::new(TargetPath::local(Path::new("same.txt")), same_stamp)?;
+    assert!(matches!(
+        core.client()
+            .restore_file_versions(&folder.id, &[same])
+            .await,
+        Err(Error::ArchiveRestorePrecondition { .. })
+    ));
+    assert!(matches!(
+        core.client()
+            .restore_directory_versions(
+                &folder.id,
+                &VersionedDirectory::FolderRoot,
+                DirectoryVersionOrder::Oldest
+            )
+            .await,
+        Err(Error::ArchiveRestorePrecondition { .. })
+    ));
+    let now = core
+        .client()
+        .system_status()
+        .await?
+        .now_time
+        .ok_or("native clock absent")?;
+    assert_eq!(
+        &stamp[..19],
+        &now[..19],
+        "same-second fixture crossed a target clock boundary"
+    );
+    assert_eq!(std::fs::read(&same_archive)?, old);
+    assert_eq!(std::fs::read(data_dir.join("same.txt"))?, new);
+    assert_eq!(
+        Sha256::digest(std::fs::read(&same_archive)?),
+        Sha256::digest(old)
+    );
+    assert_eq!(
+        Sha256::digest(std::fs::read(data_dir.join("same.txt"))?),
+        Sha256::digest(new)
+    );
+    let older = FileVersionRestore::new(
+        TargetPath::local(Path::new("older.txt")),
+        listed.0["older.txt"][0].version_time.clone(),
+    )?;
+    assert_eq!(
+        core.client()
+            .restore_file_versions(&folder.id, &[older])
+            .await?
+            .error_count(),
+        0
+    );
+    data(&data_dir.join("older.txt"), old).await?;
+    assert_eq!(std::fs::read(&same_archive)?, old);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    eprintln!(
+        "public archive collision guard evidence: {}",
+        serde_json::json!({"actual_same_native_second":true,"actual_file_restore_refused":true,"actual_directory_restore_refused":true,"actual_old_archive_bytes_and_sha_preserved":true,"actual_current_bytes_and_sha_preserved":true,"actual_explicit_older_restore_works":true,"actual_unselected_archive_preserved":true,"actual_normal_owned_tree_exit":true})
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
 async fn listener(core: &ManagedInstance) -> TestResult<String> {
     Ok(tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -253,6 +421,7 @@ async fn public_trashcan_restores_the_last_remotely_deleted_file() -> TestResult
     assert_eq!(history.0[key][0].size, new.len() as u64);
     let exit = a.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    past_archive_generation(&b, &history.0[key][0].version_time).await?;
     let report = b
         .client()
         .restore_file_versions(

@@ -7,9 +7,132 @@ use crate::{
     FolderVersioningConfiguration, FolderVersioningPolicy, FolderVersioningUpdate,
     ResponseDiagnostic, Result, TargetPath,
 };
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
+
+fn restore_precondition(reason: &'static str) -> Error {
+    Error::ArchiveRestorePrecondition { reason }
+}
+fn archive_second(value: &str) -> Result<i64> {
+    if value.len() > 128 {
+        return Err(restore_precondition(
+            "native clock or archive timestamp is not bounded RFC3339",
+        ));
+    }
+    let time = chrono::DateTime::parse_from_rfc3339(value).map_err(|_| {
+        restore_precondition("native clock or archive timestamp is not verified RFC3339")
+    })?;
+    if time.timestamp_subsec_nanos() >= 1_000_000_000 {
+        return Err(restore_precondition(
+            "native leap-second timestamps are not verified",
+        ));
+    }
+    Ok(time.timestamp())
+}
+fn archive_components(value: &str, style: crate::PathStyle) -> Result<Vec<String>> {
+    let path = TargetPath::remote(style, value)?;
+    crate::scans::validate_subpath(&path, style)?;
+    Ok(value
+        .split(|c| c == '/' || (style == crate::PathStyle::Windows && c == '\\'))
+        .map(str::to_owned)
+        .collect())
+}
 
 impl Client {
+    async fn require_past_archive_second(&self, latest: i64) -> Result<()> {
+        // Use the target's fresh clock immediately before writing. Never use
+        // controller wall time or rewrite the native token submitted in POST.
+        let status = self.system_status().await?;
+        let now = archive_second(
+            status
+                .now_time
+                .as_deref()
+                .ok_or_else(|| restore_precondition("target did not report its current clock"))?,
+        )?;
+        if latest >= now {
+            return Err(restore_precondition(
+                "selected archives must precede the target's current whole second",
+            ));
+        }
+        Ok(())
+    }
+    async fn directory_archive_second(
+        &self,
+        folder: &FolderId,
+        scope: &VersionedDirectory,
+    ) -> Result<i64> {
+        let style = self.folder_path_style()?;
+        let selected = match scope {
+            VersionedDirectory::FolderRoot => Vec::new(),
+            VersionedDirectory::Path(path) => archive_components(path.to_protocol()?, style)?,
+        };
+        let mut stack = vec![(None, Vec::<String>::new())];
+        let mut seen = BTreeSet::from([Vec::<String>::new()]);
+        let mut scope_found = selected.is_empty();
+        let mut latest = None::<i64>;
+        let mut count = 0usize;
+        let mut logical_bytes = 0usize;
+        while let Some((prefix, parent)) = stack.pop() {
+            let listing = self.folder_versions(folder, prefix.as_ref()).await?;
+            for (name, versions) in listing.0 {
+                let components = archive_components(&name, style)?;
+                if !components.starts_with(&parent) || components.len() != parent.len() + 1 {
+                    return Err(restore_precondition(
+                        "archive browse returned an inconsistent directory level",
+                    ));
+                }
+                if !components.starts_with(&selected) && !selected.starts_with(&components) {
+                    continue;
+                }
+                count = count.saturating_add(1);
+                logical_bytes = logical_bytes.saturating_add(name.len());
+                if count > 1024 || logical_bytes > 65536 {
+                    return Err(restore_precondition(
+                        "directory preflight exceeds 1024 entries or 64 KiB",
+                    ));
+                }
+                if versions.is_empty() {
+                    if components == selected {
+                        scope_found = true;
+                    }
+                    if !seen.insert(components.clone()) {
+                        return Err(restore_precondition("archive browse repeated a directory"));
+                    }
+                    stack.push((Some(TargetPath::remote(style, name)?), components));
+                } else {
+                    if components == selected {
+                        return Err(restore_precondition(
+                            "explicit directory scope identifies an archived file",
+                        ));
+                    }
+                    if components.starts_with(&selected) {
+                        for version in versions {
+                            count = count.saturating_add(1);
+                            logical_bytes =
+                                logical_bytes.saturating_add(version.version_time.len());
+                            if count > 1024 || logical_bytes > 65536 {
+                                return Err(restore_precondition(
+                                    "directory preflight exceeds 1024 entries or 64 KiB",
+                                ));
+                            }
+                            let second = archive_second(&version.version_time)?;
+                            latest = Some(latest.map_or(second, |prior| prior.max(second)));
+                        }
+                    }
+                }
+            }
+        }
+        if !scope_found {
+            return Err(restore_precondition(
+                "explicit archive directory was not observed",
+            ));
+        }
+        latest.ok_or_else(|| {
+            restore_precondition("no archived file was observed in the explicit directory scope")
+        })
+    }
     /// Request the native directory version restore planner for one explicit
     /// root/directory scope. Current files can be overwritten and errors can be
     /// partial. The SDK does not traverse controller files, pause peers, retry,
@@ -22,6 +145,11 @@ impl Client {
     /// Native second-resolution archive collisions can consume the selected old
     /// version while retaining current bytes with an empty report. Coordinate
     /// writers, preserve independent copies and verify actual target content.
+    /// A bounded read-only archive preflight refuses same-second/future or
+    /// unverified timestamps before POST. It permits at most 1024 relevant
+    /// entries/records, 64 KiB and 30 seconds of inventory work. All observed
+    /// archive records must precede the fresh target clock; no controller clock,
+    /// implicit waiting, partial inventory or unsafe fallback is used.
     pub async fn restore_directory_versions(
         &self,
         folder: &FolderId,
@@ -49,6 +177,13 @@ impl Client {
         if self.folder(folder).await?.paused {
             return Err(Error::FolderPaused { id: folder.clone() });
         }
+        let latest = tokio::time::timeout(
+            Duration::from_secs(30),
+            self.directory_archive_second(folder, scope),
+        )
+        .await
+        .map_err(|_| Error::Timeout { operation })??;
+        self.require_past_archive_second(latest).await?;
         let url = self.connection.management_url(
             "rest/folder/versions/restore",
             &[("folder", folder.as_str())],
@@ -268,6 +403,9 @@ impl Client {
     /// The baseline can replace a selected archive when current-content
     /// archiving collides with its one-second timestamp; preserve independent
     /// copies and coordinate archive generations before destructive restoration.
+    /// Selected RFC3339 timestamps must precede the target's fresh reported
+    /// whole second. Missing/unknown clocks and same-second/future selections
+    /// return ArchiveRestorePrecondition before POST, without an implicit wait.
     pub async fn restore_file_versions(
         &self,
         folder: &FolderId,
@@ -280,8 +418,10 @@ impl Client {
         }
         let style = self.folder_path_style()?;
         let mut selected = BTreeMap::new();
+        let mut latest = i64::MIN;
         let mut bytes = 0usize;
         for item in items {
+            latest = latest.max(archive_second(&item.version_time)?);
             let path = crate::scans::validate_subpath(&item.path, style)?;
             bytes = bytes
                 .saturating_add(path.len())
@@ -302,6 +442,7 @@ impl Client {
         if config.paused {
             return Err(Error::FolderPaused { id: folder.clone() });
         }
+        self.require_past_archive_second(latest).await?;
         let url = self
             .connection
             .management_url("rest/folder/versions", &[("folder", folder.as_str())])?;

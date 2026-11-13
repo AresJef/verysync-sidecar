@@ -132,8 +132,9 @@ pub struct FolderVersioningUpdate {
     pub requested_fields_match: bool,
 }
 
-/// One archived version. The native timestamp is an opaque selection token;
-/// do not reinterpret it in the controller's local timezone.
+/// One archived version. Its native timestamp is retained as an exact selection
+/// token. Typed restore preflight compares its RFC3339 instant with the target's
+/// clock without converting or rewriting it in the controller's timezone.
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchivedFileVersion {
@@ -184,7 +185,9 @@ pub struct FileVersionRestore {
 impl FileVersionRestore {
     /// Retain a relative target path and native timestamp. The path is validated
     /// against the connected target before any request is sent. A timestamp
-    /// should come directly from an archive listing; the kernel parses it.
+    /// should come directly from an archive listing. Connected restore methods
+    /// validate its RFC3339 instant and the target clock before sending the
+    /// unchanged token to the kernel.
     pub fn new(path: TargetPath, version_time: impl Into<String>) -> Result<Self> {
         let version_time = version_time.into();
         if version_time.is_empty()

@@ -297,6 +297,12 @@ pub enum Error {
         /// Exact requested folder, omitted from ordinary formatting.
         id: FolderId,
     },
+    /// Native restore timestamp safety could not be established. No restoring
+    /// POST was sent. Inspect target state before making another explicit call.
+    ArchiveRestorePrecondition {
+        /// Static reason, without private paths or native timestamp values.
+        reason: &'static str,
+    },
     /// A response identified a different folder from the requested one.
     FolderIdentityMismatch {
         /// Requested opaque identifier, omitted from ordinary formatting.
@@ -423,6 +429,7 @@ impl fmt::Display for Error {
             }
             Self::FolderNotFound {..}=>formatter.write_str("folder is not configured"),
             Self::FolderPaused {..}=>formatter.write_str("operation requires an unpaused folder"),
+            Self::ArchiveRestorePrecondition {reason}=>write!(formatter,"archive restore precondition failed: {reason}"),
             Self::FolderIdentityMismatch {..}=>formatter.write_str("response folder identity did not match the requested folder"),
             Self::DeviceNotFound {..}=>formatter.write_str("device is not configured"),
             Self::DeviceAlreadyExists {..}=>formatter.write_str("device ID is already configured; creation did not start"),
