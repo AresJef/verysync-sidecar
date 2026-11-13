@@ -91,6 +91,18 @@ async fn public_stopped_database_commands_capture_counts_metadata_and_reset_effe
             Duration::from_secs(10),
         )
         .await?;
+    if counts.outcome != DatabaseCommandOutcome::Success {
+        eprintln!(
+            "native counts envelope diagnostic: {}",
+            cli_shape(counts.diagnostic.body_bytes())
+        );
+    }
+    if let Some(prefix) = &counts.native_preamble {
+        eprintln!(
+            "retained native counts preamble diagnostic: {}",
+            cli_shape(prefix.body_bytes())
+        );
+    }
     assert_eq!(counts.outcome, DatabaseCommandOutcome::Success);
     let rows = counts.counts.as_ref().ok_or("typed native counts absent")?;
     assert!(rows
@@ -126,6 +138,12 @@ async fn public_stopped_database_commands_capture_counts_metadata_and_reset_effe
             Duration::from_secs(10),
         )
         .await?;
+    if empty.outcome != DatabaseCommandOutcome::FolderNotIndexed {
+        eprintln!(
+            "native missing-index envelope diagnostic: {}",
+            cli_shape(empty.diagnostic.body_bytes())
+        );
+    }
     assert_eq!(empty.outcome, DatabaseCommandOutcome::FolderNotIndexed);
     assert!(empty.counts.is_none());
     assert_eq!(std::fs::read(path.join("sample.txt"))?, bytes);
@@ -231,12 +249,53 @@ fn assert_indexed(oracle: &CountsOracle, size: usize) -> TestResult {
 }
 fn assert_index_absent(oracle: &CountsOracle) -> TestResult {
     assert_eq!(oracle.code, Some(1));
-    assert!(oracle.stdout.is_empty());
+    // Windows emits native stdout before the command response. Absence is the
+    // exact exit-one stderr error, never an invented empty/zero count table.
+    let stdout = std::str::from_utf8(&oracle.stdout)?;
+    if !stdout.is_empty() {
+        eprintln!(
+            "native missing-index stdout diagnostic: {}",
+            cli_shape(&oracle.stdout)
+        );
+    }
+    assert!(!stdout
+        .lines()
+        .any(|line| line.split_whitespace().collect::<Vec<_>>()
+            == ["DEVICE", "TYPE", "FLAGS", "DELETED", "COUNT", "SIZE"]));
     assert_eq!(
         std::str::from_utf8(&oracle.stderr)?.trim(),
         "verysync: error: no such folder"
     );
     Ok(())
+}
+fn cli_shape(bytes: &[u8]) -> serde_json::Value {
+    use sha2::{Digest, Sha256};
+    let text = std::str::from_utf8(bytes);
+    let lines = text.ok().map(|text| text.lines().take(16).map(|line| {
+        let columns = line.split_whitespace().collect::<Vec<_>>();
+        serde_json::json!({"bytes":line.len(),"columns":columns.len(),
+            "header":columns==["DEVICE","TYPE","FLAGS","DELETED","COUNT","SIZE"],
+            "numeric_count_row":columns.len()==6 && columns[4].parse::<u64>().is_ok() && columns[5].parse::<u64>().is_ok(),
+            "known_missing_folder":line.trim()=="verysync: error: no such folder"})
+    }).collect::<Vec<_>>());
+    serde_json::json!({"bytes":bytes.len(),"utf8":text.is_ok(),"sha256":format!("{:x}",Sha256::digest(bytes)),"line_shapes":lines})
+}
+fn oracle_table(oracle: &CountsOracle) -> TestResult<&str> {
+    let text = std::str::from_utf8(&oracle.stdout)?;
+    let mut offset = 0;
+    let mut starts = Vec::new();
+    for line in text.split_inclusive('\n') {
+        if line.split_whitespace().collect::<Vec<_>>()
+            == ["DEVICE", "TYPE", "FLAGS", "DELETED", "COUNT", "SIZE"]
+        {
+            starts.push(offset);
+        }
+        offset += line.len();
+    }
+    if starts.len() != 1 {
+        return Err("independent counts oracle did not have one exact table".into());
+    }
+    Ok(&text[starts[0]..])
 }
 
 #[tokio::test]
@@ -316,7 +375,7 @@ async fn public_scoped_and_all_index_resets_preserve_data_identity_and_configura
     assert_index_absent(&counts_oracle(&core, &folders[0].id).await?)?;
     let retained = counts_oracle(&core, &folders[1].id).await?;
     assert_indexed(&retained, samples[1].len())?;
-    assert_eq!(retained.stdout, original_b.stdout);
+    assert_eq!(oracle_table(&retained)?, oracle_table(&original_b)?);
     core.restart(Duration::from_secs(30)).await?;
     let after: serde_json::Value = serde_json::from_slice(
         core.client()
