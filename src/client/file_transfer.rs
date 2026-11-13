@@ -204,6 +204,15 @@ impl Client {
                     "resource exceeds the explicit transfer byte bound",
                 ));
             }
+            if range.is_some()
+                && response
+                    .content_length()
+                    .is_some_and(|length| Some(length) != expected)
+            {
+                return Err(rejected(
+                    "Content-Length contradicts the requested byte interval",
+                ));
+            }
             let mut output = tokio::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -212,34 +221,42 @@ impl Client {
                 .map_err(|e| local("create new resource output", e))?;
             let mut bytes = 0u64;
             let mut hash = Sha256::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|e| transport_error(operation, e))?
-            {
-                if chunk.len() as u64 > options.max_bytes.saturating_sub(bytes) {
+            let received = async {
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|e| transport_error(operation, e))?
+                {
+                    if chunk.len() as u64 > options.max_bytes.saturating_sub(bytes) {
+                        return Err(rejected(
+                            "resource exceeded the explicit transfer byte bound",
+                        ));
+                    }
+                    for block in chunk.chunks(65536) {
+                        output
+                            .write_all(block)
+                            .await
+                            .map_err(|e| local("write resource output", e))?;
+                        bytes += block.len() as u64;
+                        hash.update(block);
+                    }
+                }
+                if expected.is_some_and(|length| length != bytes) {
                     return Err(rejected(
-                        "resource exceeded the explicit transfer byte bound",
+                        "resource body length differs from the announced interval",
                     ));
                 }
-                for block in chunk.chunks(65536) {
-                    output
-                        .write_all(block)
-                        .await
-                        .map_err(|e| local("write resource output", e))?;
-                    bytes += block.len() as u64;
-                    hash.update(block);
-                }
+                Ok::<(), Error>(())
             }
-            if expected.is_some_and(|length| length != bytes) {
-                return Err(rejected(
-                    "resource body length differs from the announced interval",
-                ));
-            }
+            .await;
+            // Tokio file writes can still be pending after write_all returns.
+            // Ordinary receive failures settle accepted writes before returning.
+            // A deadline/cancel can interrupt this flush and retains that caveat.
             output
                 .flush()
                 .await
                 .map_err(|e| local("flush resource output", e))?;
+            received?;
             Ok(ResourceDownload {
                 bytes,
                 sha256: hash.finalize().into(),

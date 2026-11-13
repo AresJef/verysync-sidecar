@@ -55,7 +55,8 @@ request timeout and buffered-response bound. Streamed payloads bypass the small
 management-body buffer without buffering the complete file. No throughput,
 process-memory or disk-durability guarantee is implied by these limits.
 
-On a download failure or cancellation, a newly created output can remain empty
+Ordinary receive failures flush accepted local writes before returning. A
+deadline can interrupt this flush. On failure or cancellation, a new output can remain empty
 or partial. It is retained for explicit inspection/cleanup. Tokio filesystem
 I/O already submitted to its blocking pool can finish after the future is
 dropped. A successful receipt gives the actual flushed byte count and SHA-256;

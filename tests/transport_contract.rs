@@ -2316,11 +2316,8 @@ async fn resource_download_rejects_wrong_ranges_and_preserves_partial_and_error_
                 ),
                 _ => unreachable!(),
             }
-            if case == 2 {
-                assert_eq!(std::fs::read(&output)?, b"b");
-            } else {
-                assert!(!output.exists());
-            }
+            // A contradictory Content-Length is rejected before local creation.
+            assert!(!output.exists());
         }
     }
     let requests = server.finish().await?;
