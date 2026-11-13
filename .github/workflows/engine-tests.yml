@@ -117,7 +117,7 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target invitations --evidence-dir "${{ runner.temp }}/vs-invitations-proxy"
-      - name: Verify private TCP and actual isolated discovery lookup/cache effects
+      - name: Verify private TCP, UDP/QUIC, relay and isolated discovery effects
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target network --allow-private-discovery

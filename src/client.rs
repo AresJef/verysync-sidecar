@@ -4,6 +4,8 @@ mod device_control;
 mod device_ignore;
 mod invitation_control;
 mod network_control;
+mod relay_control;
+mod transport_control;
 
 use std::collections::BTreeMap;
 use std::fmt;

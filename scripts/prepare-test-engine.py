@@ -173,7 +173,7 @@ def prepare(args):
         raise
 
 
-def windows_retained_process_image(kernel, process):
+def windows_retained_process_image(kernel, process, transition_wait_ms=0):
     """Return an image or a proven native exit; inaccessible live state fails."""
     import ctypes
     from ctypes import wintypes
@@ -185,9 +185,17 @@ def windows_retained_process_image(kernel, process):
     wait = kernel.WaitForSingleObject(process, 0)
     if wait == 0:  # WAIT_OBJECT_0, exact handle
         return None
+    # Image metadata can become inaccessible before the retained process object
+    # signals exit. Only a real signal permits exclusion; timeout still fails.
+    # The caller supplies at most 250 ms from its existing inventory deadline.
+    if error == 5 and wait == 258 and 0 < transition_wait_ms <= 250:
+        wait = kernel.WaitForSingleObject(process, transition_wait_ms)
+        if wait == 0:
+            return None
     failure = ctypes.WinError(error)
     failure.native_operation = "query_full_process_image"
     failure.native_wait = wait
+    failure.native_transition_wait_ms = transition_wait_ms
     raise failure
 
 
@@ -243,7 +251,8 @@ def windows_processes_for_binary(binary):
                         raise failure
                 else:
                     try:
-                        image = windows_retained_process_image(kernel, process)
+                        remaining_ms = max(0, min(250, int((deadline - time.monotonic()) * 1000)))
+                        image = windows_retained_process_image(kernel, process, remaining_ms)
                         if image is not None and ntpath.normcase(ntpath.normpath(image)) == expected:
                             matches.append(entry.th32ProcessID)
                     finally:
@@ -384,6 +393,7 @@ def main():
                               "winerror": getattr(error, "winerror", None),
                               "native_operation": getattr(error, "native_operation", None),
                               "native_wait": getattr(error, "native_wait", None),
+                              "native_transition_wait_ms": getattr(error, "native_transition_wait_ms", None),
                               "errno": error.errno}))
             raise SystemExit(1) from None
     else:

@@ -14,6 +14,137 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn transport_partial_settings_and_relay_unknown_write_are_separate_receipts() -> TestResult {
+    use verysync_sidecar::{RelayServerPatch, TransportPatch};
+    let options = serde_json::json!({"trackerEnabled":false,"udpEnabled":false,"udpPort":12345,"natEnabled":false,"relaysEnabled":false,"tcpPunchEnabled":false,"stunServers":[],"customRelayAddresses":[],"natLeaseMinutes":60,"natRenewalMinutes":30,"natTimeoutSeconds":10,"futureSecret":KEY});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"options":options})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply {
+            status: 500,
+            body: KEY.as_bytes().to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let changed = client
+        .update_transport_configuration(&TransportPatch::default().udp(true))
+        .await?;
+    assert!(!changed.requested_fields_match && !changed.configuration.udp_enabled);
+    assert_eq!(changed.configuration.extra["futureSecret"], KEY);
+    assert!(!format!("{changed:?}").contains(KEY));
+    let error = client
+        .update_relay_server_configuration(&RelayServerPatch::default().enabled(true))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?}").contains(KEY));
+    for patch in [
+        TransportPatch::default(),
+        TransportPatch::default().udp_port(0),
+        TransportPatch::default().stun_servers(vec!["bad\naddress".into()]),
+    ] {
+        assert!(matches!(
+            client.update_transport_configuration(&patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let requests = server.finish().await?;
+    let patches: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(patches.len(), 2);
+    assert!(patches[0].starts_with("PATCH /prefix/rest/config/options "));
+    assert!(patches[1].starts_with("PATCH /prefix/rest/config/relayserver "));
+    for (request, expected) in [
+        (patches[0], serde_json::json!({"udpEnabled":true})),
+        (patches[1], serde_json::json!({"enabled":true})),
+    ] {
+        let body: serde_json::Value =
+            serde_json::from_str(request.split_once("\r\n\r\n").ok_or("body missing")?.1)?;
+        assert_eq!(body, expected);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn relay_changed_readback_is_unknown_and_probe_never_follows_changed_identity() -> TestResult
+{
+    use verysync_sidecar::RelayServerPatch;
+    let different = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"relayServer":null})),
+        Reply::json(serde_json::json!({"myID":different})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client
+            .update_relay_server_configuration(&RelayServerPatch::default().enabled(false))
+            .await,
+        Err(Error::MutationOutcomeUnknown { .. })
+    ));
+    assert!(matches!(
+        client.probe_relay("relay://127.0.0.1:12345/").await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests.iter().filter(|r| r.starts_with("PATCH ")).count(),
+        1
+    );
+    assert!(!requests.iter().any(|r| r.contains("svc/test/relay")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_relay_probe_preserves_unknown_result_and_redacts_sensitive_url() -> TestResult {
+    use verysync_sidecar::RelayProbeResult;
+    let address = format!("relay://127.0.0.1:12345/?token={KEY}&id=synthetic-id");
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"result":KEY,"error":KEY,"futureSecret":KEY})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for invalid in [
+        "https://example.invalid/",
+        "relay://127.0.0.1:0/",
+        "relay://user:password@127.0.0.1:12345/",
+        "relay://127.0.0.1:12345/#fragment",
+    ] {
+        assert!(matches!(
+            client.probe_relay(invalid).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let probe = client.probe_relay(&address).await?;
+    assert_eq!(probe.result, RelayProbeResult::Unknown(KEY.into()));
+    assert_eq!(probe.error.as_deref(), Some(KEY));
+    assert_eq!(probe.extra["futureSecret"], KEY);
+    assert!(!format!("{probe:?}").contains(KEY));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 4);
+    let target = requests[3].lines().next().ok_or("probe target missing")?;
+    assert!(target.starts_with("GET /prefix/rest/svc/test/relay?relay="));
+    assert!(target.contains("relay%3A%2F%2F127.0.0.1%3A12345%2F%3Ftoken%3D"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn network_patch_preserves_partial_body_and_distinguishes_stale_readback() -> TestResult {
     use verysync_sidecar::NetworkPatch;
     let config = serde_json::json!({"options":{

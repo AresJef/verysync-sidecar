@@ -51,6 +51,22 @@ class ProcessInventoryContracts(unittest.TestCase):
                     self.assertEqual(raised.exception.native_wait, wait)
             kernel.WaitForSingleObject.assert_called_once_with(123, 0)
 
+    def test_windows_transition_wait_only_excludes_a_signaled_exact_handle(self):
+        for terminal in [0, 258, 0xffffffff]:
+            kernel = SimpleNamespace(QueryFullProcessImageNameW=Mock(return_value=False),
+                                     WaitForSingleObject=Mock(side_effect=[258, terminal]))
+            with patch.object(ctypes, "get_last_error", return_value=5, create=True), \
+                 patch.object(ctypes, "WinError", side_effect=lambda code: OSError(code, "synthetic query failure"), create=True):
+                if terminal == 0:
+                    self.assertIsNone(HELPER.windows_retained_process_image(kernel, 123, 250))
+                else:
+                    with self.assertRaises(OSError) as raised:
+                        HELPER.windows_retained_process_image(kernel, 123, 250)
+                    self.assertEqual(raised.exception.native_wait, terminal)
+                    self.assertEqual(raised.exception.native_transition_wait_ms, 250)
+            self.assertEqual([tuple(c.args) for c in kernel.WaitForSingleObject.call_args_list],
+                             [(123, 0), (123, 250)])
+
     def test_windows_successful_image_read_does_not_require_or_infer_exit(self):
         image_path = r"C:\private owned\program.exe"
         def query(handle, flags, image, size):

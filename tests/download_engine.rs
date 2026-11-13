@@ -76,10 +76,22 @@ async fn official_fixed_archive_prepares_and_runs_the_exact_native_program(
     std::fs::write(&sample, b"synthetic retained bytes")?;
     let exit = instance.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    // A completed stop releases SDK-owned state handles before returning.
+    // Windows rejects this immediate rename while the capture remains open.
+    let capture = state.join(".verysync-sidecar-core.log");
+    let renamed = state.join("after-exit-diagnostic.log");
+    std::fs::rename(&capture, &renamed).inspect_err(|error| {
+        eprintln!(
+            "post-exit capture rename failed: kind={:?} native_code={:?}",
+            error.kind(),
+            error.raw_os_error()
+        );
+    })?;
+    std::fs::rename(renamed, capture)?;
     assert_eq!(std::fs::read(sample)?, b"synthetic retained bytes");
     println!(
         "public Rust program preparation evidence: {}",
-        serde_json::json!({"fixed_official_runtime_download":true,"complete_archive_sha_verified":true,"exact_inner_sha_matches_independent_fixture":true,"only_regular_executable_materialized":true,"private_executable_permissions":true,"spaces_and_unicode_native_paths":true,"actual_baseline_program_started":true,"actual_management_authenticated":true,"actual_normal_tree_exit":true,"synthetic_sample_retained":true})
+        serde_json::json!({"fixed_official_runtime_download":true,"complete_archive_sha_verified":true,"exact_inner_sha_matches_independent_fixture":true,"only_regular_executable_materialized":true,"private_executable_permissions":true,"spaces_and_unicode_native_paths":true,"actual_baseline_program_started":true,"actual_management_authenticated":true,"actual_normal_tree_exit":true,"diagnostic_handle_released_before_stop_returns":true,"synthetic_sample_retained":true})
     );
     std::fs::remove_dir_all(root)?;
     Ok(())
