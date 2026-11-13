@@ -264,15 +264,6 @@ pub enum Error {
         /// A description excluding file paths, URLs and upstream response bytes.
         reason: &'static str,
     },
-    /// An explicit resource mutation fails a path, kind or observation contract.
-    ResourceMutationRejected {
-        /// A description excluding native paths and upstream private data.
-        reason: &'static str,
-    },
-    /// The requested resource is absent during a mutation preflight.
-    ResourceNotFound,
-    /// A non-overwriting mutation found an existing destination before writing.
-    ResourceAlreadyExists,
     /// The exact peer identity is absent from current configuration.
     DeviceNotFound {
         /// Explicit requested identity, omitted from ordinary formatting.
@@ -360,9 +351,6 @@ impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ResourceTransferRejected { reason } => write!(formatter, "file transfer rejected: {reason}"),
-            Self::ResourceMutationRejected { reason } => write!(formatter,"resource mutation rejected: {reason}"),
-            Self::ResourceNotFound => formatter.write_str("resource was not found"),
-            Self::ResourceAlreadyExists => formatter.write_str("resource already exists; mutation did not start"),
             Self::CacheMiss => formatter.write_str("no complete program is available in the offline cache"),
             Self::CacheCorrupt { reason } => write!(formatter, "program cache is corrupt: {reason}"),
             Self::CacheRejected { reason } => write!(formatter, "program cache rejected: {reason}"),

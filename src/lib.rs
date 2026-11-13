@@ -41,7 +41,7 @@
 #![doc = include_str!("../docs/public/program-upgrades.md")]
 #![doc = include_str!("../docs/public/file-resources.md")]
 #![doc = include_str!("../docs/public/file-transfers.md")]
-#![doc = include_str!("../docs/public/file-mutations.md")]
+#![doc = include_str!("../docs/public/file-history.md")]
 
 mod auth;
 mod capabilities;
@@ -51,7 +51,7 @@ mod endpoint;
 mod engine_source;
 mod error;
 mod events;
-mod file_mutations;
+mod file_history;
 mod file_transfers;
 mod files;
 mod folders;
@@ -93,8 +93,10 @@ pub use events::{
     EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventStreamItem,
     EventSubscription,
 };
-pub use file_mutations::{
-    ResourceConflictPolicy, ResourceDeleteScope, ResourceMutation, ResourceRemoval,
+pub use file_history::{
+    ArchivedFileVersion, AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate,
+    FileVersionRestore, FileVersionRestoreReport, FolderVersionHistory,
+    FolderVersioningConfiguration, FolderVersioningPolicy, FolderVersioningUpdate,
 };
 pub use file_transfers::{
     ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,

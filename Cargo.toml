@@ -191,6 +191,6 @@ path = "tests/file_transfer_engine.rs"
 required-features = ["engine-tests", "download"]
 
 [[test]]
-name = "file_mutation_engine"
-path = "tests/file_mutation_engine.rs"
+name = "file_history_engine"
+path = "tests/file_history_engine.rs"
 required-features = ["engine-tests"]

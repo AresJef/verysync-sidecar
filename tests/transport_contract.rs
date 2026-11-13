@@ -14,6 +14,262 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn audit_settings_report_ignored_enable_and_preserve_null_pages() -> TestResult {
+    use verysync_sidecar::AuditHistorySettings;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),Reply::json(serde_json::json!({})),Reply::json(serde_json::json!({"folderHistoryEnabled":false,"folderHistoryMaxRecords":100000,"private":KEY})),identity(),Reply::json(serde_json::json!({"data":null,"error":null,"total":0}))]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let update = client
+        .set_audit_history_settings(AuditHistorySettings {
+            enabled: true,
+            maximum_records: 100000,
+        })
+        .await?;
+    assert!(!update.requested_fields_match && !update.configuration.enabled);
+    for (page, size) in [(0, 10), (1, 0), (1, 1001)] {
+        assert!(matches!(
+            client.audit_history(page, size).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let page = client.audit_history(2, 10).await?;
+    assert!(page.records.is_none() && page.error.is_none() && page.total == 0);
+    assert!(!format!("{page:?} {update:?}").contains(KEY));
+    let requests = server.finish().await?;
+    assert!(requests
+        .last()
+        .is_some_and(|r| r.starts_with("GET /prefix/rest/history/list?page=2&perpage=10 ")));
+    let patch = requests
+        .iter()
+        .find(|r| r.starts_with("PATCH "))
+        .ok_or("patch")?;
+    let body: serde_json::Value =
+        serde_json::from_str(patch.split("\r\n\r\n").nth(1).ok_or("body")?)?;
+    assert_eq!(
+        body,
+        serde_json::json!({"folderHistoryEnabled":true,"folderHistoryMaxRecords":100000})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn audit_reset_get_requires_identity_explicit_error_field_and_no_retry() -> TestResult {
+    for reply in [
+        serde_json::json!({"error":null}),
+        serde_json::json!({}),
+        serde_json::json!({"error":KEY}),
+    ] {
+        let valid = reply.get("error").is_some_and(serde_json::Value::is_null);
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(reply),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let result = client.reset_audit_history().await;
+        assert_eq!(result.is_ok(), valid);
+        if let Err(error) = result {
+            assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+            assert!(!format!("{error:?} {error}").contains(KEY));
+        }
+        assert_eq!(
+            server
+                .finish()
+                .await?
+                .iter()
+                .filter(|r| r.starts_with("GET /prefix/rest/history/reset "))
+                .count(),
+            1
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn version_policy_preserves_unknown_archive_settings_and_reports_stale_readback() -> TestResult
+{
+    use verysync_sidecar::{FolderId, FolderVersioningPolicy};
+    let id = FolderId::parse("version folder %")?;
+    let versioning = serde_json::json!({"type":"simple","params":{"keep":"9","cleanoutDays":"7","vendor":KEY},"cleanupIntervalS":3600,"fsPath":KEY,"fsType":"basic","vendorSecret":KEY});
+    let folder = |v: serde_json::Value| {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":id.as_str(),"path":"/synthetic","label":"","paused":false,"versioning":v}]}),
+        )
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        folder(versioning.clone()),
+        Reply::json(serde_json::json!({})),
+        folder(versioning),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let result = client
+        .set_folder_versioning(
+            &id,
+            FolderVersioningPolicy::Trashcan {
+                cleanout_days: 0,
+                cleanup_interval_seconds: 7200,
+            },
+        )
+        .await?;
+    assert!(!result.requested_fields_match);
+    assert_eq!(result.configuration.filesystem_path, KEY);
+    assert!(!format!("{result:?}").contains(KEY));
+    assert!(matches!(
+        client
+            .set_folder_versioning(
+                &id,
+                FolderVersioningPolicy::Simple {
+                    keep: 0,
+                    cleanout_days: 0,
+                    cleanup_interval_seconds: 3600
+                }
+            )
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    let requests = server.finish().await?;
+    let patches = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(patches.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_str(patches[0].split("\r\n\r\n").nth(1).ok_or("body")?)?;
+    assert_eq!(body["versioning"]["type"], "trashcan");
+    assert_eq!(body["versioning"]["params"]["keep"], "9");
+    assert_eq!(body["versioning"]["params"]["cleanoutDays"], "0");
+    assert_eq!(body["versioning"]["params"]["vendor"], KEY);
+    assert_eq!(body["versioning"]["fsPath"], KEY);
+    assert_eq!(body["versioning"]["vendorSecret"], KEY);
+    assert_eq!(body["versioning"]["cleanupIntervalS"], 7200);
+    Ok(())
+}
+
+#[tokio::test]
+async fn exact_version_restore_encodes_native_map_and_retains_partial_errors() -> TestResult {
+    use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let id = FolderId::parse("versions 中文")?;
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),
+        Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"/synthetic","paused":false}]})),
+        Reply::json(serde_json::json!({"nested/a 二 %.txt":null,"other.txt":KEY})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let timestamp = "2026-11-14T02:20:15+08:00";
+    let item = FileVersionRestore::new(
+        TargetPath::remote(PathStyle::Unix, "nested/a 二 %.txt")?,
+        timestamp,
+    )?;
+    assert!(!format!("{item:?}").contains("nested"));
+    for items in [vec![], vec![item.clone(), item.clone()]] {
+        assert!(matches!(
+            client.restore_file_versions(&id, &items).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let bad =
+        FileVersionRestore::new(TargetPath::remote(PathStyle::Unix, "../escape")?, timestamp)?;
+    assert!(matches!(
+        client.restore_file_versions(&id, &[bad]).await,
+        Err(Error::InvalidPath { .. })
+    ));
+    let result = client.restore_file_versions(&id, &[item]).await?;
+    assert_eq!(result.error_count(), 1);
+    assert_eq!(result.0["other.txt"].as_deref(), Some(KEY));
+    assert!(!format!("{result:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let posts = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0]
+        .starts_with("POST /prefix/rest/folder/versions?folder=versions+%E4%B8%AD%E6%96%87 "));
+    let body: serde_json::Value =
+        serde_json::from_str(posts[0].split("\r\n\r\n").nth(1).ok_or("body")?)?;
+    assert_eq!(body, serde_json::json!({"nested/a 二 %.txt":timestamp}));
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_version_restore_ack_is_unknown_and_is_never_retried() -> TestResult {
+    use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let id = FolderId::parse("versioned")?;
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),
+        Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"/synthetic","paused":false}]})),
+        Reply::json(serde_json::json!([KEY])),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let item = FileVersionRestore::new(
+        TargetPath::remote(PathStyle::Unix, "version.txt")?,
+        "2026-11-14T00:00:00Z",
+    )?;
+    let error = client
+        .restore_file_versions(&id, &[item])
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("POST "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn version_prefix_null_is_empty_while_malformed_shapes_and_timestamps_are_rejected(
+) -> TestResult {
+    use verysync_sidecar::{
+        ArchivedFileVersion, FileVersionRestore, FolderId, FolderVersionHistory, PathStyle,
+        TargetPath,
+    };
+    assert!(
+        serde_json::from_value::<FolderVersionHistory>(serde_json::Value::Null)?
+            .0
+            .is_empty()
+    );
+    assert!(serde_json::from_value::<FolderVersionHistory>(serde_json::json!([KEY])).is_err());
+    assert!(serde_json::from_value::<ArchivedFileVersion>(
+        serde_json::json!({"versionTime":"t","modTime":"m","size":-1})
+    )
+    .is_err());
+    assert!(
+        FileVersionRestore::new(TargetPath::remote(PathStyle::Unix, "file")?, "bad\nvalue")
+            .is_err()
+    );
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let id = FolderId::parse("versioned")?;
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),"path":"/synthetic","label":"","paused":false}]})),Reply::json(serde_json::Value::Null)]).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(client
+        .folder_versions(&id, Some(&TargetPath::remote(PathStyle::Unix, "a 二%")?))
+        .await?
+        .0
+        .is_empty());
+    let requests = server.finish().await?;
+    assert!(requests.last().is_some_and(|r| r.starts_with(
+        "GET /prefix/rest/folder/versions/browse?folder=versioned&prefix=a+%E4%BA%8C%25 "
+    )));
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_preview_preserves_binary_media_and_rejects_empty_or_non_image_success() -> TestResult
 {
     use verysync_sidecar::{PathStyle, ResourcePath, ResourceVolumeId};
@@ -2492,190 +2748,6 @@ async fn streamed_download_retains_real_partial_files_after_chunk_limit_and_tran
         assert_eq!(tokio::fs::read(&output).await?, b"abc");
         server.await??;
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn resource_mutation_roots_and_cross_volume_ids_are_rejected_before_requests() -> TestResult {
-    use verysync_sidecar::{
-        PathStyle, ResourceConflictPolicy, ResourceDeleteScope, ResourcePath, ResourceVolumeId,
-    };
-    let server = ScriptedServer::start(vec![
-        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
-        Reply::json(serde_json::json!({"myID":ID})),
-    ])
-    .await?;
-    let client = Client::connect(server.options()?).await?;
-    let root = ResourcePath::root(ResourceVolumeId::parse("source-volume")?, PathStyle::Unix);
-    let child = root.clone().child("file")?;
-    let other = ResourcePath::root(ResourceVolumeId::parse("other-volume")?, PathStyle::Unix)
-        .child("file")?;
-    assert!(matches!(
-        client.create_resource_directory(&root).await,
-        Err(Error::InvalidPath { .. })
-    ));
-    assert!(matches!(
-        client
-            .delete_resource(&root, ResourceDeleteScope::RecursiveDirectory)
-            .await,
-        Err(Error::InvalidPath { .. })
-    ));
-    assert!(matches!(
-        client.write_resource_text(&root, "refused").await,
-        Err(Error::InvalidPath { .. })
-    ));
-    assert!(matches!(
-        client
-            .copy_resource(&root, &child, ResourceConflictPolicy::RejectExisting)
-            .await,
-        Err(Error::InvalidPath { .. })
-    ));
-    assert!(matches!(
-        client
-            .move_resource(&child, &root, ResourceConflictPolicy::RejectExisting)
-            .await,
-        Err(Error::InvalidPath { .. })
-    ));
-    assert!(matches!(
-        client
-            .copy_resource(&child, &other, ResourceConflictPolicy::RejectExisting)
-            .await,
-        Err(Error::ResourceMutationRejected { .. })
-    ));
-    assert!(matches!(
-        client
-            .move_resource(&child, &other, ResourceConflictPolicy::OverwriteAndMerge)
-            .await,
-        Err(Error::ResourceMutationRejected { .. })
-    ));
-    assert_eq!(server.finish().await?.len(), 2);
-    Ok(())
-}
-
-#[tokio::test]
-async fn resource_copy_encodes_native_destination_uri_inside_query_and_reads_both_resources(
-) -> TestResult {
-    use verysync_sidecar::{PathStyle, ResourceConflictPolicy, ResourcePath, ResourceVolumeId};
-    let identity = || Reply::json(serde_json::json!({"myID":ID}));
-    let metadata = |name: &str| {
-        Reply::json(
-            serde_json::json!({"path":"/private/metadata","name":name,"size":5,"mode":420,"modified":"native-value","isDir":false}),
-        )
-    };
-    let server = ScriptedServer::start(vec![
-        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
-        identity(),
-        identity(),
-        identity(),
-        metadata("from %.bin"),
-        identity(),
-        Reply {
-            status: 404,
-            body: b"not found".to_vec(),
-            headers: String::new(),
-            delay: Duration::ZERO,
-        },
-        Reply {
-            status: 200,
-            body: b"200 OK\n".to_vec(),
-            headers: String::new(),
-            delay: Duration::ZERO,
-        },
-        identity(),
-        metadata("to 二 %.bin"),
-        identity(),
-        metadata("from %.bin"),
-    ])
-    .await?;
-    let client = Client::connect(server.options()?).await?;
-    let root = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix);
-    let result = client
-        .copy_resource(
-            &root.clone().child("from %.bin")?,
-            &root.child("to 二 %.bin")?,
-            ResourceConflictPolicy::RejectExisting,
-        )
-        .await?;
-    assert_eq!(result.metadata.name, "to 二 %.bin");
-    assert!(!result.generated_name);
-    assert!(!format!("{result:?}").contains("from %"));
-    assert!(!format!("{result:?}").contains("to 二"));
-    let requests = server.finish().await?;
-    let writes = requests
-        .iter()
-        .filter(|r| r.starts_with("PATCH "))
-        .collect::<Vec<_>>();
-    assert_eq!(writes.len(), 1);
-    let request = writes[0].lines().next().ok_or("missing request line")?;
-    let target = request.split_whitespace().nth(1).ok_or("missing target")?;
-    let uri = url::Url::parse(&format!("http://synthetic.invalid{target}"))?;
-    assert_eq!(
-        uri.path(),
-        "/prefix/rest/f/api/resources/volume/from%20%25.bin"
-    );
-    let query = uri
-        .query_pairs()
-        .into_owned()
-        .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(
-        query.get("destination").map(String::as_str),
-        Some("/volume/to%20%E4%BA%8C%20%25.bin")
-    );
-    assert_eq!(query.get("action").map(String::as_str), Some("copy"));
-    assert_eq!(query.get("override").map(String::as_str), Some("false"));
-    assert_eq!(query.get("rename").map(String::as_str), Some("false"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn resource_keep_both_ambiguous_parent_changes_are_unknown_without_retries() -> TestResult {
-    use verysync_sidecar::{PathStyle, ResourceConflictPolicy, ResourcePath, ResourceVolumeId};
-    let identity = || Reply::json(serde_json::json!({"myID":ID}));
-    let file = |name: &str| serde_json::json!({"path":"/private/metadata","name":name,"size":5,"mode":420,"modified":"native-value","isDir":false});
-    let parent = |new: bool| {
-        let mut items = vec![file("source.bin"), file("target.bin")];
-        if new {
-            items.push(file("target(1).bin"));
-            items.push(file("concurrent.bin"));
-        }
-        Reply::json(
-            serde_json::json!({"path":"/","name":"root","size":0,"mode":493,"modified":"native-value","isDir":true,"items":items}),
-        )
-    };
-    let server = ScriptedServer::start(vec![
-        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
-        identity(),
-        identity(),
-        identity(),
-        Reply::json(file("source.bin")),
-        identity(),
-        Reply::json(file("target.bin")),
-        identity(),
-        parent(false),
-        Reply {
-            status: 200,
-            body: b"200 OK\n".to_vec(),
-            headers: String::new(),
-            delay: Duration::ZERO,
-        },
-        identity(),
-        parent(true),
-    ])
-    .await?;
-    let client = Client::connect(server.options()?).await?;
-    let root = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix);
-    assert!(
-        matches!(client.copy_resource(&root.clone().child("source.bin")?,&root.child("target.bin")?,ResourceConflictPolicy::KeepBoth).await,Err(Error::MutationOutcomeUnknown{source,..})if matches!(source.as_ref(),Error::ResourceMutationRejected{..}))
-    );
-    assert_eq!(
-        server
-            .finish()
-            .await?
-            .iter()
-            .filter(|r| r.starts_with("PATCH "))
-            .count(),
-        1
-    );
     Ok(())
 }
 

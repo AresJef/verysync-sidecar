@@ -113,11 +113,10 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target file_transfer_engine
           --evidence-dir "${{ runner.temp }}/vs-file-transfer-proxy"
-      - name: Verify explicit resource mutations, merge effects and cancelled copies
+      - name: Verify actual version retention, deleted-file restoration and free audit conditions
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target file_mutation_engine
-          --evidence-dir "${{ runner.temp }}/vs-file-mutation-proxy"
+          --test-target file_history_engine --evidence-dir "${{ runner.temp }}/vs-file-history-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"

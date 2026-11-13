@@ -1,0 +1,90 @@
+# File versions and restoration
+
+Versioning belongs to a configured synchronization folder, independently from
+file-manager mounts and the global Pro history log. It archives remote changes;
+it is not a backup of arbitrary controller edits or a snapshot of every local
+operation. Existing data can be overwritten by a restore.
+
+```rust,no_run
+# async fn restore(client: &verysync_sidecar::Client,
+# folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+use verysync_sidecar::{FileVersionRestore, FolderVersioningPolicy, TargetPath};
+let update = client.set_folder_versioning(folder, FolderVersioningPolicy::Simple {
+    keep: 2, cleanout_days: 0, cleanup_interval_seconds: 3600,
+}).await?;
+if !update.requested_fields_match {
+    return Ok(()); // Inspect the actual configuration before proceeding.
+}
+let history = client.folder_versions(folder, None).await?;
+if let Some(versions) = history.0.get("report.txt") {
+    if let Some(version) = versions.first() {
+        let selection = FileVersionRestore::new(
+            TargetPath::local(std::path::Path::new("report.txt")),
+            version.version_time.clone(),
+        )?;
+        let report = client.restore_file_versions(folder, &[selection]).await?;
+        // Inspect report.0 for native per-path errors, then verify actual bytes.
+        assert_eq!(report.error_count(), 0);
+    }
+}
+# Ok(())
+# }
+```
+
+`Disabled`, `Simple` and `Trashcan` select explicit policies. Simple keeps a
+positive number of versions. Trashcan keeps the last archived version. A zero
+cleanout age disables age-based expiry. Positive cleanup intervals are whole
+seconds. These settings describe native retention; the SDK runs no cleanup job.
+The archive filesystem/location, unknown fields and inactive policy parameters
+are preserved. Native PATCH merges parameter maps, so disabling a policy retains
+its unused values. Check `requested_fields_match` and the actual configuration.
+Disabling versioning does not delete existing archives; re-enabling can expose
+them again. Access while disabled is subject to the kernel's versioner state.
+
+Archive browsing returns one bounded native response. `None` selects the root;
+an explicit relative target path selects a prefix. Prefix browsing lists
+descendants, so using a file as the prefix can produce an empty listing. A
+native null is an observed empty listing. Returned paths and timestamps remain
+untrusted data and are never opened as controller paths. Use `TargetPath::remote`
+with the target's syntax when controlling another system.
+
+Restoration submits a bounded map of 1–1024 unique relative files and exact
+native timestamps through POST `/rest/folder/versions`. Logical selection text
+is limited to 64 KiB. Timestamps should come from a fresh archive listing and
+are not converted to the controller's timezone. A per-path error map can report
+partial failure. An empty map acknowledges the request; it does not prove that
+data changed. Confirm actual content separately. Native archive timestamps
+have one-second resolution; closely spaced edits require particular care when
+selecting and checking a historical version.
+
+Coordinate active writers and peers before restoration. The SDK does not pause
+them, rescan, retry, create a backup, or roll back partial effects. A cancelled
+future does not establish that a native operation stopped. A failure after POST
+can leave an unknown outcome. A later synchronization can change restored data
+again. Folder root restoration and the separate GUI items-based restore entry
+retain their own verification requirements.
+
+These APIs are unreleased. Isolated macOS ARM64 tests have checked actual remote
+overwrites, retention of two versions, trashcan retention after remote deletion,
+restored bytes/SHA-256, unchanged stopped-source data and owned process exits.
+Complete acceptance on the same candidate across six native targets is pending.
+The separate global history setting is Pro-gated in the fixed GUI; the free
+isolated instance did not retain an attempted enable. Positive licensed history
+recording, pagination and reset are pending and are not implied by file-version
+restoration.
+
+`audit_history_settings` observes global audit configuration.
+`set_audit_history_settings` submits only the enabled flag and retention ceiling,
+then reports actual readback. Zero retention explicitly requests unlimited native
+history. An attempted enable can remain false on a free instance; a successful
+HTTP response does not establish entitlement. `audit_history(page, per_page)`
+reads one positive numbered page of 1–1000 requested records. Native null, empty
+arrays, reported totals and errors remain distinguishable. Record contents stay
+opaque until their separate licensed schema/effects have been verified. The raw
+request entry point remains available for unmodeled native filters.
+
+`reset_audit_history` deliberately treats native GET `/rest/history/reset` as a
+mutation. It checks fresh identity, serializes with other writes, requires the
+native error-free response, and never retries. It clears the global audit log,
+independently from version archives. Follow-up totals are a separate observation;
+an empty free-instance reset is not evidence of removing real recorded history.

@@ -1,0 +1,255 @@
+//! Explicit versioning policies and native archive operations, without retries.
+use super::{mutation_error, Client};
+use crate::{AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate};
+use crate::{
+    Error, FileVersionRestore, FileVersionRestoreReport, FolderId, FolderVersionHistory,
+    FolderVersioningConfiguration, FolderVersioningPolicy, FolderVersioningUpdate,
+    ResponseDiagnostic, Result, TargetPath,
+};
+use std::collections::BTreeMap;
+
+impl Client {
+    /// Read native audit-log settings, without inferring actual entitlement or
+    /// successful recording from an enabled flag alone.
+    pub async fn audit_history_settings(&self) -> Result<AuditHistorySettings> {
+        self.system_status().await?;
+        self.connection
+            .get_json("read global file audit settings", "rest/config/options")
+            .await
+    }
+    /// Attempt explicit audit recording/retention settings once, then read back
+    /// actual values. The SDK does not enable a license or bypass Pro checks.
+    /// A zero maximum_records explicitly requests unlimited native retention.
+    pub async fn set_audit_history_settings(
+        &self,
+        settings: AuditHistorySettings,
+    ) -> Result<AuditHistoryUpdate> {
+        if settings.maximum_records > i32::MAX as u32 {
+            return Err(Error::InvalidConfiguration {
+                reason: "audit retention exceeds the native signed integer bound",
+            });
+        }
+        let operation = "set global file audit settings";
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let url = self.connection.management_url("rest/config/options", &[])?;
+        self.connection.request_bytes(operation,reqwest::Method::PATCH,url,Some(&serde_json::json!({"folderHistoryEnabled":settings.enabled,"folderHistoryMaxRecords":settings.maximum_records})),true).await?;
+        let configuration: AuditHistorySettings = self
+            .connection
+            .get_json(operation, "rest/config/options")
+            .await
+            .map_err(|e| mutation_error(operation, true, e))?;
+        Ok(AuditHistoryUpdate {
+            requested_fields_match: settings == configuration,
+            configuration,
+        })
+    }
+    /// Read one explicit global audit-log page. Page numbers start at one and
+    /// requested page sizes are bounded to 1..=1000. There is no automatic
+    /// pagination, filtering, licensing inference or controller file access.
+    pub async fn audit_history(&self, page: u32, per_page: u16) -> Result<AuditHistoryPage> {
+        if page == 0 || !(1..=1000).contains(&per_page) {
+            return Err(Error::InvalidConfiguration {
+                reason: "audit page must be positive and page size between one and 1000",
+            });
+        }
+        self.system_status().await?;
+        self.connection
+            .get_json_with_query(
+                "read global file audit page",
+                "rest/history/list",
+                &[
+                    ("page", &page.to_string()),
+                    ("perpage", &per_page.to_string()),
+                ],
+            )
+            .await
+    }
+    /// Request global audit-log reset once. The native GET modifies data and is
+    /// deliberately treated as a mutation, with identity checking and no retry.
+    /// Ok acknowledges the native error-free response. Verify reported totals
+    /// separately; resetting an already empty free-instance log does not prove
+    /// licensed recording or removal of real history records.
+    pub async fn reset_audit_history(&self) -> Result<()> {
+        #[derive(serde::Deserialize)]
+        struct Reset {
+            error: serde_json::Value,
+        }
+        let operation = "reset global file audit history";
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let url = self.connection.management_url("rest/history/reset", &[])?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(operation, reqwest::Method::GET, url, None, true)
+            .await?;
+        let response: Reset = serde_json::from_slice(&bytes).map_err(|_| {
+            mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes.clone()),
+                },
+            )
+        })?;
+        if !response.error.is_null() && response.error.as_str() != Some("") {
+            return Err(mutation_error(
+                operation,
+                true,
+                Error::Api {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                },
+            ));
+        }
+        Ok(())
+    }
+    /// Read the actual versioner policy and archive location. This is not proof
+    /// that historical files exist or that a custom backend is usable.
+    pub async fn folder_versioning(
+        &self,
+        folder: &FolderId,
+    ) -> Result<FolderVersioningConfiguration> {
+        self.system_status().await?;
+        self.read_folder_versioning(folder).await
+    }
+    async fn read_folder_versioning(
+        &self,
+        folder: &FolderId,
+    ) -> Result<FolderVersioningConfiguration> {
+        let config = self.folder(folder).await?;
+        let value = config
+            .extra
+            .get("versioning")
+            .cloned()
+            .ok_or(Error::InvalidConfiguration {
+                reason: "native folder versioning configuration is absent",
+            })?;
+        serde_json::from_value(value).map_err(|_| Error::InvalidConfiguration {
+            reason: "native folder versioning configuration has an unknown schema",
+        })
+    }
+    /// Change only the built-in policy, preserving the actual archive location
+    /// and unknown/inactive parameters. Native PATCH merges parameter maps;
+    /// disabling a policy therefore retains its unused parameter values.
+    /// No cleanup, restart, retry or rollback is
+    /// implicit. Readback is separate from actual archival/retention effects.
+    pub async fn set_folder_versioning(
+        &self,
+        folder: &FolderId,
+        policy: FolderVersioningPolicy,
+    ) -> Result<FolderVersioningUpdate> {
+        policy.validate()?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let mut expected = self.read_folder_versioning(folder).await?;
+        policy.apply(&mut expected)?;
+        let operation = "set folder versioning policy";
+        let url = self.connection.folder_url(folder)?;
+        self.connection
+            .request_bytes(
+                operation,
+                reqwest::Method::PATCH,
+                url,
+                Some(&serde_json::json!({"versioning":expected})),
+                true,
+            )
+            .await?;
+        let configuration = self
+            .read_folder_versioning(folder)
+            .await
+            .map_err(|e| mutation_error(operation, true, e))?;
+        Ok(FolderVersioningUpdate {
+            requested_fields_match: configuration == expected,
+            configuration,
+        })
+    }
+    /// Browse archived versions at the root (None) or one explicit relative
+    /// prefix. The management byte limit bounds the single response; there is
+    /// no automatic recursive traversal or controller filesystem access. A
+    /// native null denotes an observed empty prefix listing. Prefix browsing
+    /// lists descendants; a file used as prefix can therefore return no entries.
+    pub async fn folder_versions(
+        &self,
+        folder: &FolderId,
+        prefix: Option<&TargetPath>,
+    ) -> Result<FolderVersionHistory> {
+        let prefix = prefix
+            .map(|p| crate::scans::validate_subpath(p, self.folder_path_style()?))
+            .transpose()?;
+        self.system_status().await?;
+        self.folder(folder).await?;
+        let mut query = vec![("folder", folder.as_str())];
+        if let Some(prefix) = prefix {
+            query.push(("prefix", prefix));
+        }
+        self.connection
+            .get_json_with_query(
+                "browse folder versions",
+                "rest/folder/versions/browse",
+                &query,
+            )
+            .await
+    }
+    /// Restore 1..=1024 exact file versions through the verified native map
+    /// endpoint. Current data can be overwritten. Peer activity can subsequently
+    /// change it again; coordinate writers explicitly. The SDK does not pause
+    /// peers, scan, retry, create a backup or roll back partial effects.
+    ///
+    /// A successful report with zero native errors is an acknowledgement only.
+    /// Verify actual file content separately. Cancellation/transport failure
+    /// after POST leaves a possible partial, unknown outcome.
+    pub async fn restore_file_versions(
+        &self,
+        folder: &FolderId,
+        items: &[FileVersionRestore],
+    ) -> Result<FileVersionRestoreReport> {
+        if !(1..=1024).contains(&items.len()) {
+            return Err(Error::InvalidConfiguration {
+                reason: "restore requires between one and 1024 explicit file versions",
+            });
+        }
+        let style = self.folder_path_style()?;
+        let mut selected = BTreeMap::new();
+        let mut bytes = 0usize;
+        for item in items {
+            let path = crate::scans::validate_subpath(&item.path, style)?;
+            bytes = bytes
+                .saturating_add(path.len())
+                .saturating_add(item.version_time.len());
+            if selected.insert(path, item.version_time.as_str()).is_some() || bytes > 65536 {
+                return Err(Error::InvalidConfiguration {
+                    reason: "restore paths must be unique within a 64 KiB logical selection bound",
+                });
+            }
+        }
+        let operation = "restore explicit file versions";
+        let body = serde_json::to_value(selected).map_err(|_| Error::InvalidConfiguration {
+            reason: "restore selection cannot be encoded",
+        })?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let config = self.folder(folder).await?;
+        if config.paused {
+            return Err(Error::FolderPaused { id: folder.clone() });
+        }
+        let url = self
+            .connection
+            .management_url("rest/folder/versions", &[("folder", folder.as_str())])?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(operation, reqwest::Method::POST, url, Some(&body), true)
+            .await?;
+        serde_json::from_slice(&bytes).map_err(|_| {
+            mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                },
+            )
+        })
+    }
+}

@@ -130,16 +130,6 @@ impl ResourcePath {
         self.components.push(name);
         Ok(self)
     }
-    /// Return the logical parent, including the volume root for a direct child.
-    /// A volume root has no parent; no native filesystem is accessed.
-    pub fn parent(&self) -> Option<Self> {
-        if self.components.is_empty() {
-            return None;
-        }
-        let mut parent = self.clone();
-        parent.components.pop();
-        Some(parent)
-    }
     /// Borrow the explicit mount ID without exposing a local filesystem path.
     pub fn volume(&self) -> &ResourceVolumeId {
         &self.volume

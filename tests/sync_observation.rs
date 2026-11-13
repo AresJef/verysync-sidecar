@@ -877,7 +877,7 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     a.client().request_scan(&af.configuration.id).await?;
     b.client().resume_folder(folder).await?;
     let page = ListPage::new(1, 1000)?;
-    let need = tokio::time::timeout(Duration::from_secs(20), async {
+    let need_result = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let n = b.client().folder_need(folder, page).await?;
             if n.queued.len() >= 2 && n.queued.iter().any(|f| f.name == "zz priority %.bin") {
@@ -886,7 +886,21 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??;
+    .await;
+    if need_result.is_err() {
+        sync_stage_diagnostic(
+            "legacy-priority-queue-prepare",
+            &[(&a, &af.configuration.id, &b_id), (&b, folder, &a_id)],
+        )
+        .await;
+        if let Ok(observed) = b.client().folder_need(folder, page).await {
+            eprintln!(
+                "private priority queue preparation diagnostic: {}",
+                json!({"queued":observed.queued.len(),"progress":observed.progress.len(),"rest":observed.rest.len(),"target_queued":observed.queued.iter().any(|f|f.name=="zz priority %.bin"),"target_progress":observed.progress.iter().any(|f|f.name=="zz priority %.bin"),"target_rest":observed.rest.iter().any(|f|f.name=="zz priority %.bin")})
+            );
+        }
+    }
+    let need = need_result??;
     let target = "zz priority %.bin";
     assert!(need
         .queued

@@ -229,12 +229,12 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
+    planned(Capability::ResourceMutation),
     LibraryCapability {
-        capability: Capability::ResourceMutation,
+        capability: Capability::FileHistory,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::FileHistory),
     LibraryCapability {
         capability: Capability::ResourceBrowse,
         implementation: ImplementationStatus::Typed,

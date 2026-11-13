@@ -2,9 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
-- Add explicit native resource directory creation, copy/move with collision
-  and merge policies, existing text edits and scoped filesystem deletion.
-  Reconcile generated names and refuse unsafe cross-volume native routing.
+- Add explicit file versioning policies, native archive listings and exact file
+  restoration, with bounded selection and per-path errors. Preserve unknown
+  archive settings and expose conditional audit-log settings/pages/reset.
 
 - Add bounded streamed file uploads/downloads, exact finite byte ranges and all
   seven native archive formats, with caller-selected new output paths, verified
