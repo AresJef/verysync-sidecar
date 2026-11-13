@@ -11,6 +11,173 @@ use verysync_sidecar::{
     ManagedInstance, SyncFileKind, TargetPath,
 };
 
+async fn indexed_files(
+    client: &verysync_sidecar::Client,
+    folder: &FolderId,
+    count: u64,
+) -> TestResult {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let status = client.folder_status(folder).await?;
+            if status.local_files == Some(count)
+                && status.state == Some(verysync_sidecar::FolderState::Idle)
+            {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_scan_scopes_schedule_and_watcher_preserve_files() -> TestResult {
+    use verysync_sidecar::FolderScanPatch;
+    let root = tempfile::Builder::new()
+        .prefix("vss-scan-")
+        .tempdir()?
+        .keep();
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let a = FolderId::parse("scan-scope-a")?;
+    let b = FolderId::parse("scan-scope-b")?;
+    let a_path = root.join("a files");
+    let b_path = root.join("b files");
+    std::fs::create_dir_all(a_path.join("one"))?;
+    std::fs::create_dir(&b_path)?;
+    let stopped = FolderScanPatch::default()
+        .rescan_interval_seconds(0)
+        .watcher(false)
+        .watcher_delay_seconds(1.5)
+        .watcher_timeout_seconds(2)
+        .progress_interval_seconds(1)
+        .disable_initial_scan(false);
+    for (id, path) in [(&a, &a_path), (&b, &b_path)] {
+        core.client()
+            .create_folder(
+                &CreateFolderOptions::new(id.clone(), TargetPath::local(path)).paused(true),
+            )
+            .await?;
+        let changed = core
+            .client()
+            .update_folder_scan_configuration(id, &stopped)
+            .await?;
+        assert!(changed.requested_fields_match);
+        assert_eq!(changed.configuration.watcher_delay_seconds, 1.5);
+        core.client().resume_folder(id).await?;
+        indexed_files(core.client(), id, 0).await?;
+    }
+    let first = Path::new("one").join("二 ?%.bin");
+    let second = Path::new("two.bin");
+    for path in [&first, second, Path::new("unselected.bin")] {
+        std::fs::write(a_path.join(path), b"scope bytes")?;
+    }
+    std::fs::write(b_path.join("other.bin"), b"other folder bytes")?;
+    core.client()
+        .request_scan_subpaths(&a, &[TargetPath::local(&first), TargetPath::local(second)])
+        .await?;
+    indexed_files(core.client(), &a, 2).await?;
+    assert_eq!(core.client().folder_status(&b).await?.local_files, Some(0));
+    core.client().request_scan(&a).await?;
+    indexed_files(core.client(), &a, 3).await?;
+    assert_eq!(core.client().folder_status(&b).await?.local_files, Some(0));
+    core.client().request_all_scans().await?;
+    indexed_files(core.client(), &b, 1).await?;
+    core.client().pause_folder(&a).await?;
+    std::fs::write(a_path.join("paused.bin"), b"paused folder bytes")?;
+    assert!(matches!(
+        core.client()
+            .request_scan_subpaths(&a, &[TargetPath::local("paused.bin")])
+            .await,
+        Err(Error::ScanNotIdle)
+    ));
+    for invalid in [TargetPath::local("../escape"), TargetPath::local(&a_path)] {
+        assert!(matches!(
+            core.client().request_scan_subpaths(&b, &[invalid]).await,
+            Err(Error::InvalidPath { .. })
+        ));
+    }
+    assert!(matches!(
+        core.client()
+            .request_scan_subpaths(&FolderId::parse("missing")?, &[TargetPath::local("file")])
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    core.client().request_all_scans().await?;
+    assert!(core.client().folder(&a).await?.paused);
+    core.client().resume_folder(&a).await?;
+    core.client().request_scan(&a).await?;
+    indexed_files(core.client(), &a, 4).await?;
+    assert!(
+        core.client()
+            .update_folder_scan_configuration(
+                &b,
+                &FolderScanPatch::default().rescan_interval_seconds(1)
+            )
+            .await?
+            .requested_fields_match
+    );
+    std::fs::write(b_path.join("scheduled.bin"), b"automatic rescan bytes")?;
+    indexed_files(core.client(), &b, 2).await?;
+    assert!(
+        core.client()
+            .update_folder_scan_configuration(
+                &b,
+                &FolderScanPatch::default()
+                    .rescan_interval_seconds(0)
+                    .watcher(true)
+                    .watcher_delay_seconds(1.5)
+                    .disable_initial_scan(true)
+            )
+            .await?
+            .requested_fields_match
+    );
+    core.restart(Duration::from_secs(30)).await?;
+    indexed_files(core.client(), &b, 2).await?;
+    let settings = core.client().folder_scan_configuration(&b).await?;
+    assert_eq!(settings.rescan_interval_seconds, 0);
+    assert!(settings.watcher_enabled);
+    assert_eq!(settings.watcher_delay_seconds, 1.5);
+    assert!(settings.disable_initial_scan);
+    let mut settle = core.client().observe_next_scan(&b).await?;
+    let (requested, completed) = tokio::join!(
+        core.client().request_scan(&b),
+        settle.wait(Duration::from_secs(15)),
+    );
+    settle.close().await?;
+    requested?;
+    completed?;
+    std::fs::write(b_path.join("watched.bin"), b"filesystem notification bytes")?;
+    indexed_files(core.client(), &b, 3).await?;
+    for path in [&first, second, Path::new("unselected.bin")] {
+        assert_eq!(std::fs::read(a_path.join(path))?, b"scope bytes");
+    }
+    assert_eq!(
+        std::fs::read(a_path.join("paused.bin"))?,
+        b"paused folder bytes"
+    );
+    assert_eq!(
+        std::fs::read(b_path.join("other.bin"))?,
+        b"other folder bytes"
+    );
+    assert_eq!(
+        std::fs::read(b_path.join("scheduled.bin"))?,
+        b"automatic rescan bytes"
+    );
+    assert_eq!(
+        std::fs::read(b_path.join("watched.bin"))?,
+        b"filesystem notification bytes"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public scan scope evidence: {}",
+        json!({"actual_partial_settings_readback":true,"actual_fractional_watcher_delay":true,"actual_two_subpaths_index_only_selected_files":true,"subpaths_preserve_other_folder_index":true,"actual_whole_folder_indexes_remainder":true,"whole_folder_preserves_other_index":true,"actual_all_folder_scan":true,"paused_subpath_rejected":true,"invalid_scope_rejected":true,"missing_folder_rejected":true,"all_scan_does_not_resume_paused_folder":true,"explicit_resume_and_index":true,"actual_scheduled_scan_without_request":true,"settings_persist_after_restart":true,"startup_scan_disabled_before_watch_sample":true,"actual_settle_scan_observed_before_watch_sample":true,"actual_watcher_scan_without_request":true,"all_original_synthetic_bytes_preserved":true,"actual_normal_tree_exit":true})
+    );
+    Ok(())
+}
+
 struct BlockedFile {
     #[cfg(unix)]
     path: PathBuf,

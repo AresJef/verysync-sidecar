@@ -48,3 +48,26 @@ fn explicit_pages_reject_zero_excessive_or_overflowing_requests() {
         assert!(ListPage::new(page, limit).is_err());
     }
 }
+
+#[test]
+fn scan_settings_preserve_fractional_seconds_and_patch_only_explicit_fields() {
+    use verysync_sidecar::{FolderScanConfig, FolderScanPatch};
+    let config: FolderScanConfig = serde_json::from_value(json!({
+        "rescanIntervalS":0,"fsWatcherEnabled":false,"fsWatcherDelayS":1.5,
+        "fsWatcherTimeoutS":2,"scanProgressIntervalS":-1,"disableInitialScan":false,
+        "future":"private-value"
+    }))
+    .unwrap();
+    assert_eq!(config.watcher_delay_seconds, 1.5);
+    assert_eq!(config.rescan_interval_seconds, 0);
+    assert_eq!(config.extra["future"], "private-value");
+    assert!(!format!("{config:?}").contains("private-value"));
+    let patch = FolderScanPatch::default()
+        .rescan_interval_seconds(0)
+        .watcher(false)
+        .watcher_delay_seconds(1.5);
+    assert_eq!(
+        serde_json::to_value(patch).unwrap(),
+        json!({"rescanIntervalS":0,"fsWatcherEnabled":false,"fsWatcherDelayS":1.5})
+    );
+}

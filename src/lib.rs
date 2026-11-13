@@ -29,6 +29,7 @@
 #![doc = include_str!("../docs/public/transports.md")]
 #![doc = include_str!("../docs/public/relay.md")]
 #![doc = include_str!("../docs/public/sync-observation.md")]
+#![doc = include_str!("../docs/public/scan-control.md")]
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
@@ -50,6 +51,7 @@ mod path;
 mod raw;
 mod relay;
 mod releases;
+mod scans;
 mod sharing;
 mod status;
 mod sync_observation;
@@ -99,6 +101,7 @@ pub use releases::{
     official_programs, ArchiveFormat, BuildVariant, OfficialProgram, PinnedVersion, ProgramAbi,
     ProgramArchitecture, ProgramOs, ProgramTarget,
 };
+pub use scans::{FolderScanConfig, FolderScanPatch, FolderScanUpdate};
 pub use sharing::{
     GeneratedShare, JoinFolderOptions, JoinFolderResult, JoinPeerObservation, ShareKey,
     SharePermission, ValidatedShare,

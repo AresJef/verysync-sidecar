@@ -122,7 +122,7 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target network --allow-private-discovery
           --evidence-dir "${{ runner.temp }}/vs-network-proxy"
-      - name: Verify actual synchronization snapshots, pages, file errors and local edits
+      - name: Verify actual synchronization snapshots, pages, scan scopes and automatic scans
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target sync_observation

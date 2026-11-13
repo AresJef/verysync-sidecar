@@ -57,6 +57,10 @@ preserve completion uncertainty, explicit need/change/error pages and actual
 device/folder statistics. Synthetic file/index, active need and local-change
 effects have dedicated native tests; snapshots do not certify business batches.
 
+The unreleased [scan control API](docs/public/scan-control.md) adds explicit
+relative subpaths, all-folder requests and partial periodic/watcher settings,
+with actual index changes checked separately from configuration readback.
+
 [Fixed program sources](docs/public/program-sources.md) distinguish local paths
 from explicitly selected official v2.33.2 artifacts, standard/legacy builds and
 their ABI evidence. Selecting a source performs no download or execution.
