@@ -14,6 +14,78 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn native_preview_preserves_binary_media_and_rejects_empty_or_non_image_success() -> TestResult
+{
+    use verysync_sidecar::{PathStyle, ResourcePath, ResourceVolumeId};
+    let reply = |body: Vec<u8>, headers: String| Reply {
+        status: 200,
+        body,
+        headers,
+        delay: Duration::ZERO,
+    };
+    let image = b"\x89PNG\r\n\x1a\nsynthetic-contract-bytes".to_vec();
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        reply(
+            image.clone(),
+            format!("Content-Type: image/png; private={KEY}\r\n"),
+        ),
+        Reply::json(serde_json::json!({"myID":ID})),
+        reply(Vec::new(), "Content-Type: image/png\r\n".into()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        reply(
+            KEY.as_bytes().to_vec(),
+            "Content-Type: text/plain\r\n".into(),
+        ),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("image-volume")?, PathStyle::Unix)
+        .child("preview %.png")?;
+    let result = client.resource_thumbnail(&path).await?;
+    assert_eq!(result.body_bytes(), image);
+    assert!(result.media_type().contains(KEY));
+    assert!(!format!("{result:?}").contains(KEY));
+    assert!(matches!(
+        client.resource_thumbnail(&path).await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    let error = client.resource_thumbnail(&path).await.unwrap_err();
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(matches!(error, Error::InvalidResponse { .. }));
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with(
+                "GET /prefix/rest/f/api/preview/thumb/image-volume/preview%20%25.png?inline=true "
+            ))
+            .count(),
+        3
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unix_newline_resource_name_is_percent_encoded_without_normalization() -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourcePath, ResourceVolumeId};
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"path":"line\nbreak.txt","name":"line\nbreak.txt","size":4,"mode":420,"modified":"opaque","isDir":false}))]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("mount")?, PathStyle::Unix)
+        .child("line\nbreak.txt")?;
+    client.resource_info(&path).await?;
+    assert!(server
+        .finish()
+        .await?
+        .last()
+        .unwrap()
+        .starts_with("GET /prefix/rest/f/api/resources/mount/line%0Abreak.txt "));
+    Ok(())
+}
+
+#[tokio::test]
 async fn known_provider_release_absence_is_typed_without_retry_or_erasing_other_failures(
 ) -> TestResult {
     let missing = b"couldn't find a release to download\n".to_vec();
@@ -53,6 +125,35 @@ async fn known_provider_release_absence_is_typed_without_retry_or_erasing_other_
             .count(),
         2
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_paths_are_encoded_once_and_missing_checksums_keep_private_diagnostics(
+) -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourceChecksum, ResourcePath, ResourceVolumeId};
+    let node = serde_json::json!({"path":"nested/二 ?%2e%2e.txt","name":"二 ?%2e%2e.txt","size":4,"mode":420,"modified":"unparsed-private-time","isDir":false,"checksums":{"sha256":"bad"},"private":KEY});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(node),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("mount ?%")?, PathStyle::Unix)
+        .child("nested")?
+        .child("二 ?%2e%2e.txt")?;
+    let error = client
+        .resource_checksum(&path, ResourceChecksum::Sha256)
+        .await
+        .unwrap_err();
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(
+        matches!(error,Error::InvalidResponse{response,..}if response.body_bytes().windows(KEY.len()).any(|s|s==KEY.as_bytes()))
+    );
+    let requests = server.finish().await?;
+    assert!(requests.last().unwrap().starts_with("GET /prefix/rest/f/api/resources/mount%20%3F%25/nested/%E4%BA%8C%20%3F%252e%252e.txt?checksum=sha256 "));
     Ok(())
 }
 
@@ -2130,5 +2231,269 @@ async fn capabilities_report_is_a_snapshot_without_optional_feature_probes() -> 
         2,
         "report must not add management or license probes"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_download_rejects_wrong_ranges_and_preserves_partial_and_error_semantics(
+) -> TestResult {
+    use verysync_sidecar::{
+        PathStyle, ResourceByteRange, ResourcePath, ResourceTransferOptions, ResourceVolumeId,
+    };
+    let body = |status, bytes: &[u8], headers: &str| Reply {
+        status,
+        body: bytes.to_vec(),
+        headers: headers.into(),
+        delay: Duration::ZERO,
+    };
+    let pairs = vec![
+        body(200, b"abc", ""),
+        body(206, b"bc", "Content-Range: bytes 0-1/3\r\n"),
+        body(206, b"b", "Content-Range: bytes 1-2/3\r\n"),
+        body(
+            200,
+            b"{\"error\":\"literal file bytes\"}",
+            "Content-Type: application/json\r\n",
+        ),
+        body(401, KEY.as_bytes(), ""),
+        body(403, KEY.as_bytes(), ""),
+        body(404, KEY.as_bytes(), ""),
+        body(206, b"abc", "Content-Range: bytes 0-2/3\r\n"),
+        body(200, b"abcd", ""),
+    ];
+    let mut replies = vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ];
+    for reply in pairs {
+        replies.push(Reply::json(serde_json::json!({"myID":ID})));
+        replies.push(reply);
+    }
+    let server = ScriptedServer::start(replies).await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("private-volume")?, PathStyle::Unix)
+        .child("literal %.bin")?;
+    let root = tempfile::tempdir()?;
+    let options = ResourceTransferOptions {
+        max_bytes: 1024,
+        deadline: Duration::from_secs(2),
+    };
+    for case in 0..9 {
+        let output = root.path().join(format!("result-{case}.bin"));
+        let range = if case < 3 {
+            Some(ResourceByteRange::new(1, 2)?)
+        } else {
+            None
+        };
+        let opts = if case == 8 {
+            ResourceTransferOptions {
+                max_bytes: 2,
+                ..options.clone()
+            }
+        } else {
+            options.clone()
+        };
+        let result = client.download_resource(&path, &output, range, &opts).await;
+        if case == 3 {
+            assert_eq!(
+                std::fs::read(&output)?,
+                b"{\"error\":\"literal file bytes\"}"
+            );
+            assert_eq!(result?.bytes, 30);
+        } else {
+            let error = result.unwrap_err();
+            assert!(!format!("{error:?} {error}").contains(KEY));
+            match case {
+                0 | 1 | 2 | 7 | 8 => {
+                    assert!(matches!(error, Error::ResourceTransferRejected { .. }))
+                }
+                4 => assert!(matches!(error, Error::Authentication { status: 401 })),
+                5 => assert!(
+                    matches!(error,Error::AccessDenied{response} if response.status()==403 && response.body_bytes()==KEY.as_bytes())
+                ),
+                6 => assert!(
+                    matches!(error,Error::Http{response} if response.status()==404 && response.body_bytes()==KEY.as_bytes())
+                ),
+                _ => unreachable!(),
+            }
+            if case == 2 {
+                assert_eq!(std::fs::read(&output)?, b"b");
+            } else {
+                assert!(!output.exists());
+            }
+        }
+    }
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(
+                |r| r.starts_with("GET /prefix/rest/f/api/raw/private-volume/literal%20%25.bin ")
+            )
+            .count(),
+        9
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.to_ascii_lowercase().contains("range: bytes=1-2\r\n"))
+            .count(),
+        3
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_upload_keeps_unknown_ack_or_digest_outcomes_and_preflight_timeout_separate(
+) -> TestResult {
+    use verysync_sidecar::{
+        PathStyle, ResourcePath, ResourceTransferOptions, ResourceUploadConflict, ResourceVolumeId,
+    };
+    let ack = |bytes: &[u8]| Reply {
+        status: 200,
+        body: bytes.to_vec(),
+        headers: String::new(),
+        delay: Duration::ZERO,
+    };
+    let mut slow = Reply::json(serde_json::json!({"myID":ID}));
+    slow.delay = Duration::from_millis(100);
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),ack(b"200 OK\n"),Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"path":"/private/target","name":"target","size":5,"mode":420,"modified":"native-value","isDir":false,"checksums":{"sha256":"00".repeat(32)}})),
+        Reply::json(serde_json::json!({"myID":ID})),ack(KEY.as_bytes()),slow,
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("private-volume")?, PathStyle::Unix)
+        .child("target")?;
+    let root = tempfile::tempdir()?;
+    let input = root.path().join("source.bin");
+    std::fs::write(&input, b"hello")?;
+    let options = ResourceTransferOptions {
+        max_bytes: 5,
+        deadline: Duration::from_secs(2),
+    };
+    assert!(
+        matches!(client.upload_resource(&path,&input,ResourceUploadConflict::RejectExisting,&options).await,
+        Err(Error::MutationOutcomeUnknown{source,..}) if matches!(*source,Error::ResourceTransferRejected{..}))
+    );
+    let error = client
+        .upload_resource(&path, &input, ResourceUploadConflict::Replace, &options)
+        .await
+        .unwrap_err();
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(
+        matches!(error,Error::MutationOutcomeUnknown{source,..} if matches!(source.as_ref(),Error::InvalidResponse{response,..} if response.body_bytes()==KEY.as_bytes()))
+    );
+    assert!(matches!(
+        client
+            .upload_resource(
+                &path,
+                &input,
+                ResourceUploadConflict::Replace,
+                &ResourceTransferOptions {
+                    deadline: Duration::from_millis(20),
+                    ..options
+                }
+            )
+            .await,
+        Err(Error::Timeout { .. })
+    ));
+    assert_eq!(std::fs::read(&input)?, b"hello");
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 2);
+    assert!(writes[0]
+        .starts_with("POST /prefix/rest/f/api/resources/private-volume/target?override=false "));
+    assert!(writes[1]
+        .starts_with("POST /prefix/rest/f/api/resources/private-volume/target?override=true "));
+    for request in writes {
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("content-length: 5\r\n"));
+        assert!(request.ends_with("hello"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn streamed_download_retains_real_partial_files_after_chunk_limit_and_transport_failure(
+) -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourcePath, ResourceTransferOptions, ResourceVolumeId};
+    for chunked in [false, true] {
+        let root = tempfile::tempdir()?;
+        let output = root.path().join("partial.bin");
+        let observed = output.clone();
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let endpoint = ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?;
+        let server = tokio::spawn(async move {
+            for stage in 0..4 {
+                let (mut stream, _) =
+                    tokio::time::timeout(Duration::from_secs(3), listener.accept()).await??;
+                let mut request = Vec::new();
+                while !request.windows(4).any(|v| v == b"\r\n\r\n") {
+                    let mut block = [0; 1024];
+                    let n = stream.read(&mut block).await?;
+                    if n == 0 || request.len() + n > 16384 {
+                        return Err("invalid stream fixture request".into());
+                    }
+                    request.extend_from_slice(&block[..n]);
+                }
+                if stage < 3 {
+                    let body = if stage == 0 {
+                        serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})
+                    } else {
+                        serde_json::json!({"myID":ID})
+                    };
+                    let bytes = serde_json::to_vec(&body)?;
+                    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",bytes.len()).as_bytes()).await?;
+                    stream.write_all(&bytes).await?;
+                } else if chunked {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n").await?;
+                    tokio::time::timeout(Duration::from_secs(2), async {
+                        loop {
+                            if tokio::fs::metadata(&observed)
+                                .await
+                                .is_ok_and(|m| m.len() == 3)
+                            {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                    })
+                    .await?;
+                    let _ = stream.write_all(b"3\r\ndef\r\n0\r\n\r\n").await;
+                } else {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nabc").await?;
+                }
+            }
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        });
+        let client = Client::connect(ConnectOptions::new(endpoint, ApiKey::new(KEY)?)).await?;
+        let path = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix)
+            .child("file")?;
+        let error = client
+            .download_resource(
+                &path,
+                &output,
+                None,
+                &ResourceTransferOptions {
+                    max_bytes: if chunked { 4 } else { 1024 },
+                    deadline: Duration::from_secs(3),
+                },
+            )
+            .await
+            .unwrap_err();
+        if chunked {
+            assert!(matches!(error, Error::ResourceTransferRejected { .. }));
+        } else {
+            assert!(matches!(error, Error::Transport { .. }));
+        }
+        assert_eq!(tokio::fs::read(&output).await?, b"abc");
+        server.await??;
+    }
     Ok(())
 }

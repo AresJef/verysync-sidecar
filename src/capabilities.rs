@@ -70,6 +70,10 @@ pub enum Capability {
     StateBackupRestore,
     /// File management and history.
     FileHistory,
+    /// Native local file-manager mounts, bounded metadata and remote checksums.
+    ResourceBrowse,
+    /// Explicit bounded file streaming, ranges and native archives.
+    ResourceTransfer,
     /// Remaining advanced folder settings.
     AdvancedFolderSettings,
     /// Account, configuration and commercial authorization.
@@ -218,7 +222,17 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
+    LibraryCapability {
+        capability: Capability::ResourceTransfer,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::FileHistory),
+    LibraryCapability {
+        capability: Capability::ResourceBrowse,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::TransportControl,
         implementation: ImplementationStatus::Typed,

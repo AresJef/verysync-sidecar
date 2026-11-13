@@ -259,6 +259,11 @@ pub enum Error {
         /// A description that excludes the supplied identifier.
         reason: &'static str,
     },
+    /// A file transfer input or response violates its explicit safety contract.
+    ResourceTransferRejected {
+        /// A description excluding file paths, URLs and upstream response bytes.
+        reason: &'static str,
+    },
     /// The exact peer identity is absent from current configuration.
     DeviceNotFound {
         /// Explicit requested identity, omitted from ordinary formatting.
@@ -345,6 +350,7 @@ impl fmt::Debug for Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ResourceTransferRejected { reason } => write!(formatter, "file transfer rejected: {reason}"),
             Self::CacheMiss => formatter.write_str("no complete program is available in the offline cache"),
             Self::CacheCorrupt { reason } => write!(formatter, "program cache is corrupt: {reason}"),
             Self::CacheRejected { reason } => write!(formatter, "program cache rejected: {reason}"),

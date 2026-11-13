@@ -39,6 +39,8 @@
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
 #![doc = include_str!("../docs/public/program-upgrades.md")]
+#![doc = include_str!("../docs/public/file-resources.md")]
+#![doc = include_str!("../docs/public/file-transfers.md")]
 
 mod auth;
 mod capabilities;
@@ -48,6 +50,8 @@ mod endpoint;
 mod engine_source;
 mod error;
 mod events;
+mod file_transfers;
+mod files;
 mod folders;
 mod ignores;
 mod invitations;
@@ -86,6 +90,13 @@ pub use error::{Error, ProcessDiagnostic, ResponseDiagnostic, Result};
 pub use events::{
     EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventStreamItem,
     EventSubscription,
+};
+pub use file_transfers::{
+    ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,
+    ResourceUpload, ResourceUploadConflict,
+};
+pub use files::{
+    ResourceChecksum, ResourceInfo, ResourcePath, ResourcePreview, ResourceVolume, ResourceVolumeId,
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
 pub use ignores::{IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};

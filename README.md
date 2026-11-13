@@ -1,11 +1,19 @@
 # verysync-sidecar
 
+Unreleased [file transfers](docs/public/file-transfers.md) stream explicit local
+inputs/outputs with finite bounds, inclusive ranges, all seven native archive
+formats and post-upload digest verification. Complete native acceptance is pending.
+
 A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
 
 The unreleased [program upgrade and state snapshot API](docs/public/program-upgrades.md)
 separates explicit executable selection, kernel upgrade requests and offline
 state restoration. A restored old snapshot is distinct from opening a migrated
 database with an older executable.
+
+The unreleased [file-manager read API](docs/public/file-resources.md) separates
+opaque mounted-volume IDs from sync-folder IDs, preserves target path syntax,
+and exposes bounded resource metadata and actual file checksums.
 
 The unreleased optional [`download` feature](docs/public/program-preparation.md)
 adds explicit fixed-version transfer, full archive SHA-256 verification and

@@ -2,6 +2,8 @@
 
 mod device_control;
 mod device_ignore;
+mod file_control;
+mod file_transfer;
 mod ignore_control;
 mod invitation_control;
 mod network_control;
@@ -936,10 +938,22 @@ impl Connection {
         request: reqwest::RequestBuilder,
         mutation: bool,
     ) -> Result<(u16, Vec<u8>)> {
+        let response = self
+            .request_prepared_response(operation, request, mutation)
+            .await?;
+        Ok((response.status, response.body))
+    }
+
+    async fn request_prepared_response(
+        &self,
+        operation: &'static str,
+        request: reqwest::RequestBuilder,
+        mutation: bool,
+    ) -> Result<RawResponse> {
         let RawResponse {
             status,
             body: bytes,
-            ..
+            headers,
         } = self.receive_response(operation, request, mutation).await?;
         if status == 401 {
             return Err(Error::Authentication { status });
@@ -976,7 +990,11 @@ impl Connection {
                 }));
             }
         }
-        Ok((status, bytes))
+        Ok(RawResponse {
+            status,
+            headers,
+            body: bytes,
+        })
     }
 
     async fn receive_response(

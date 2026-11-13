@@ -2,6 +2,14 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add bounded streamed file uploads/downloads, exact finite byte ranges and all
+  seven native archive formats, with caller-selected new output paths, verified
+  post-upload digests and explicit cancellation/unknown-mutation semantics.
+
+- Add explicit file-manager mount/path values, bounded directory/text metadata
+  and native checksums plus bounded native image previews, with target-system
+  path guards, exact encoded control filenames and private diagnostics.
+
 - Add explicit version-policy-aware program transitions, kernel check/trigger,
   fixed-archive streaming upload and contained stopped-owner CLI upgrades.
   Preserve unknown mutation outcomes and require explicit executable reselection.
