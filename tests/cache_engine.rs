@@ -280,11 +280,54 @@ async fn shared_preparation_offline_hit_and_corrupt_index_repair_preserve_a_runn
     assert_ne!(first.program().path(), repaired.program().path());
     assert_eq!(mirror.requests.load(Ordering::SeqCst), 2);
     assert_eq!(generation_count(&cache_root), 2);
-    assert_eq!(
-        <[u8; 32]>::from(Sha256::digest(std::fs::read(first.program().path())?)),
-        old_digest
-    );
-    let _still_authenticated = instance.client().system_status().await?;
+    let old_program = first.program().path().to_owned();
+    let runtime_thread = std::thread::current().id();
+    let (observed_digest, hashing_thread) =
+        tokio::task::spawn_blocking(move || -> TestResult<_> {
+            use std::io::Read;
+            let mut file = std::fs::File::open(old_program)?;
+            let mut digest = Sha256::new();
+            let mut buffer = [0; 64 * 1024];
+            loop {
+                let n = file.read(&mut buffer)?;
+                if n == 0 {
+                    break;
+                }
+                digest.update(&buffer[..n]);
+            }
+            Ok((
+                <[u8; 32]>::from(digest.finalize()),
+                std::thread::current().id(),
+            ))
+        })
+        .await??;
+    assert_ne!(runtime_thread, hashing_thread);
+    assert_eq!(observed_digest, old_digest);
+    if let Err(error) = instance.client().system_status().await {
+        use std::error::Error as _;
+        let mut native_errors = Vec::new();
+        let mut cause = error.source();
+        for _ in 0..8 {
+            let Some(current) = cause else {
+                break;
+            };
+            if let Some(io) = current.downcast_ref::<std::io::Error>() {
+                native_errors.push(
+                    serde_json::json!({"kind":format!("{:?}",io.kind()),"code":io.raw_os_error()}),
+                );
+            }
+            cause = current.source();
+        }
+        let exited = matches!(
+            tokio::time::timeout(Duration::from_millis(50), instance.wait_for_exit()).await,
+            Ok(Ok(_))
+        );
+        eprintln!(
+            "cache preservation diagnostic: {}",
+            serde_json::json!({"actual_exit_observed":exited,"native_errors":native_errors,"error_classification":error.to_string()})
+        );
+        return Err(error.into());
+    }
     let exit = instance.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     println!(
