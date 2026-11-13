@@ -30,6 +30,58 @@ fn report(stage: &str, error: &Error) {
         _ => {}
     }
 }
+async fn diagnose_owned_paths(
+    core: &ManagedInstance,
+    stage: &str,
+    paths: &[(&ResourcePath, &std::path::Path)],
+) {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek, SeekFrom};
+    for (role, (resource, native)) in paths.iter().enumerate() {
+        let result = core.client().resource_info(resource).await;
+        let status = match &result {
+            Err(Error::Http { response } | Error::AccessDenied { response }) => {
+                Some(response.status())
+            }
+            _ => None,
+        };
+        let parent = resource.parent();
+        let parent_info = if let Some(parent) = &parent {
+            core.client().resource_info(parent).await.ok()
+        } else {
+            None
+        };
+        let parent_contains = parent_info
+            .as_ref()
+            .and_then(|i| i.items.as_ref())
+            .map(|items| {
+                items.iter().any(|item| {
+                    Some(item.name.as_str()) == native.file_name().and_then(|n| n.to_str())
+                })
+            });
+        eprintln!(
+            "private mutation path diagnostic: {}",
+            serde_json::json!({"stage":stage,"role":role,"native_exists":native.exists(),"native_directory":native.is_dir(),"native_child_count":std::fs::read_dir(native).ok().map(|d|d.count()),"resource_read_ok":result.is_ok(),"resource_read_http_status":status,"parent_contains_exact_name":parent_contains})
+        );
+    }
+    let tail = (|| -> std::io::Result<Vec<u8>> {
+        let mut file =
+            std::fs::File::open(core.state_directory().join(".verysync-sidecar-core.log"))?;
+        let size = file.metadata()?.len();
+        file.seek(SeekFrom::Start(size.saturating_sub(65536)))?;
+        let mut bytes = Vec::new();
+        file.take(65536).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })();
+    if let Ok(tail) = tail {
+        let text = String::from_utf8_lossy(&tail);
+        let hits = |needle: &str| text.matches(needle).count();
+        eprintln!(
+            "private mutation log diagnostic: {}",
+            serde_json::json!({"stage":stage,"bytes":tail.len(),"sha256":format!("{:x}",Sha256::digest(&tail)),"sharing_violation":hits("used by another process"),"access_denied":hits("Access is denied"),"path_missing":hits("cannot find the path"),"directory_not_empty":hits("directory is not empty"),"panic":hits("panic:")})
+        );
+    }
+}
 #[tokio::test]
 async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthetic_bytes(
 ) -> TestResult {
@@ -234,11 +286,15 @@ async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthet
         std::fs::read(native.join("source.bin"))?,
         b"source original bytes"
     );
-    let removed = core
+    let removal = core
         .client()
         .delete_resource(&base, ResourceDeleteScope::RecursiveDirectory)
-        .await
-        .inspect_err(|e| report("move-resource", e))?;
+        .await;
+    if let Err(e) = &removal {
+        report("delete-directory", e);
+        diagnose_owned_paths(&core, "delete-directory", &[(&base, &native)]).await;
+    }
+    let removed = removal?;
     assert!(removed.previous.is_dir);
     assert!(!native.exists());
     let exit = core.shutdown(Duration::from_secs(10)).await?;
@@ -344,14 +400,25 @@ async fn public_directory_merges_preserve_destination_children_and_reject_cross_
         native.join("move-destination").join("extra.txt"),
         b"moving destination-only bytes",
     )?;
-    core.client()
-        .move_resource(
-            &base.clone().child("moving")?,
-            &base.clone().child("move-destination")?,
-            Conflict::OverwriteAndMerge,
+    let moving = base.clone().child("moving")?;
+    let destination = base.clone().child("move-destination")?;
+    let movement = core
+        .client()
+        .move_resource(&moving, &destination, Conflict::OverwriteAndMerge)
+        .await;
+    if let Err(e) = &movement {
+        report("move-directory-merge", e);
+        diagnose_owned_paths(
+            &core,
+            "move-directory-merge",
+            &[
+                (&moving, &native.join("moving")),
+                (&destination, &native.join("move-destination")),
+            ],
         )
-        .await
-        .inspect_err(|e| report("move-resource", e))?;
+        .await;
+    }
+    movement?;
     assert!(!native.join("moving").exists());
     assert_eq!(
         std::fs::read(native.join("move-destination").join("source.txt"))?,
