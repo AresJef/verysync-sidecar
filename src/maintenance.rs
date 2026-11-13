@@ -154,3 +154,72 @@ impl fmt::Debug for CoreDiagnostics {
             .finish_non_exhaustive()
     }
 }
+
+/// Explicit native profiling activity. Both variants can change core runtime
+/// state; a heap profile triggers native garbage collection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CoreProfileRequest {
+    /// Collect the native heap profile, including the core's explicit GC.
+    Heap,
+    /// Collect native CPU activity for 1..=30 whole seconds. The connection's
+    /// request deadline still applies and is not silently increased.
+    Cpu {
+        /// Explicit whole-second sampling duration.
+        duration_seconds: u8,
+    },
+}
+
+/// Bounded, unchanged compressed native pprof data. Private profile bytes are
+/// never included in Debug and are not automatically written to a local file.
+#[derive(Clone)]
+pub struct CoreProfile {
+    /// The explicitly requested native profiling activity.
+    pub request: CoreProfileRequest,
+    pub(crate) bytes: Vec<u8>,
+}
+impl CoreProfile {
+    /// Borrow the exact native gzip-compressed pprof response. The SDK checks
+    /// its gzip signature/minimum length, not its CRC, protobuf contents or
+    /// symbol/debug information. Decode/validate before using it in tooling.
+    pub fn body_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    /// Take the unchanged compressed native bytes for explicit caller storage.
+    pub fn into_body_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+impl fmt::Debug for CoreProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreProfile")
+            .field("request", &self.request)
+            .field("compressed_bytes", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// One bounded UTF-8 Prometheus exposition snapshot from the authenticated
+/// management endpoint. Missing metrics, units, rates and timestamps are not
+/// invented. Parsing/aggregation follows the caller's chosen metrics tooling.
+#[derive(Clone)]
+pub struct CoreMetricsSnapshot {
+    pub(crate) text: String,
+}
+impl CoreMetricsSnapshot {
+    /// Borrow the exact native exposition text, including unknown metric
+    /// families, labels and comments. These strings can contain private data.
+    pub fn native_text(&self) -> &str {
+        &self.text
+    }
+    /// Take the unchanged text for the caller's explicit metrics integration.
+    pub fn into_native_text(self) -> String {
+        self.text
+    }
+}
+impl fmt::Debug for CoreMetricsSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreMetricsSnapshot")
+            .field("text_bytes", &self.text.len())
+            .finish_non_exhaustive()
+    }
+}

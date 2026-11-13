@@ -115,7 +115,7 @@ pub use invitations::{
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
-    CoreLogSnapshot,
+    CoreLogSnapshot, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest,
 };
 #[cfg(feature = "download")]
 pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};

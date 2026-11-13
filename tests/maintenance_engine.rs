@@ -5,6 +5,103 @@ use managed_fixture::{options, TestResult};
 use std::{collections::BTreeMap, time::Duration};
 use verysync_sidecar::{CoreLogLevel, ManagedInstance};
 
+fn decode_profile(profile: &verysync_sidecar::CoreProfile) -> TestResult<Vec<u8>> {
+    use std::io::Read;
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(profile.body_bytes())
+        .take(32 * 1024 * 1024 + 1)
+        .read_to_end(&mut decoded)?;
+    assert!(!decoded.is_empty() && decoded.len() <= 32 * 1024 * 1024);
+    Ok(decoded)
+}
+
+#[tokio::test]
+async fn public_profiles_metrics_and_clone_serialization_preserve_the_owned_core() -> TestResult {
+    use verysync_sidecar::{CoreProfileRequest, RawMethod, RawRequest, RequestEffect};
+    let root = tempfile::Builder::new().prefix("vpr-").tempdir()?.keep();
+    let options = options(&root.join("c"))?;
+    let endpoint = options.management_endpoint().clone();
+    let mut core = ManagedInstance::start(options).await?;
+    let identity = core.client().instance().device_id.clone();
+    let before = core.client().core_metrics().await?;
+    assert!(before.native_text().contains("# TYPE go_goroutines gauge"));
+    let gc_count = |text: &str| -> TestResult<f64> {
+        Ok(text
+            .lines()
+            .find_map(|line| line.strip_prefix("go_gc_duration_seconds_count "))
+            .ok_or("native GC count absent")?
+            .parse::<f64>()?)
+    };
+    let gc_before = gc_count(before.native_text())?;
+    let heap = core
+        .client()
+        .collect_core_profile(CoreProfileRequest::Heap)
+        .await?;
+    assert_eq!(heap.request, CoreProfileRequest::Heap);
+    let heap_decoded = decode_profile(&heap)?;
+    let after = core.client().core_metrics().await?;
+    assert!(gc_count(after.native_text())? > gc_before);
+    let start = std::time::Instant::now();
+    let a = core.client().clone();
+    let b = core.client().clone();
+    let cpu = CoreProfileRequest::Cpu {
+        duration_seconds: 1,
+    };
+    let (one, two) = tokio::join!(a.collect_core_profile(cpu), b.collect_core_profile(cpu));
+    let one = one?;
+    let two = two?;
+    assert!(start.elapsed() >= Duration::from_secs(2));
+    assert_eq!(one.request, cpu);
+    assert_eq!(two.request, cpu);
+    let cpu_decoded = decode_profile(&one)?;
+    decode_profile(&two)?;
+    assert!(format!("{heap:?} {one:?} {before:?}").len() < 512);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let gui = core
+        .client()
+        .raw_request(&RawRequest::new(
+            RawMethod::Get,
+            ["rest", "config", "gui"],
+            RequestEffect::ReadOnly,
+        )?)
+        .await?;
+    let gui: serde_json::Value = serde_json::from_slice(gui.body_bytes())?;
+    assert_eq!(gui["metricsWithoutAuth"], false);
+    let builder = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(3));
+    #[cfg(unix)]
+    let builder = if let Some(socket) = endpoint.socket_path() {
+        builder.unix_socket(socket)
+    } else {
+        builder
+    };
+    let url = if let Some(base) = endpoint.http_url() {
+        base.join("metrics")?
+    } else {
+        "http://localhost/metrics".parse()?
+    };
+    let unauthenticated = builder.build()?.get(url).send().await?;
+    assert!(matches!(unauthenticated.status().as_u16(), 401 | 403));
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    eprintln!(
+        "public core profile and metrics evidence: {}",
+        serde_json::json!({
+            "actual_nonempty_native_metrics":true,"actual_native_goroutine_descriptor":true,
+            "actual_native_gc_count_increased":true,"actual_heap_profile_gzip_crc":true,
+            "actual_two_cpu_profiles_gzip_crc":true,"actual_clone_profile_serialization":true,
+            "actual_selected_request_kinds_preserved":true,"actual_authenticated_metrics":true,
+            "actual_unauthenticated_metrics_denied":true,"actual_metrics_without_auth_remains_disabled":true,
+            "actual_owned_identity_retained":true,"actual_normal_owned_tree_exit":true,
+            "heap_decoded_bytes":heap_decoded.len(),"cpu_decoded_bytes":cpu_decoded.len()
+        })
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn public_core_errors_logs_levels_and_owned_diagnostics() -> TestResult {
     let root = tempfile::Builder::new().prefix("vmt-").tempdir()?.keep();

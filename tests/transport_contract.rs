@@ -13,6 +13,120 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
+#[tokio::test]
+async fn profiles_validate_duration_preserve_native_bytes_and_metrics_base_path() -> TestResult {
+    use verysync_sidecar::CoreProfileRequest;
+    let gzip = vec![
+        31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 43, 174, 204, 43, 201, 72, 45, 201, 76, 214, 45, 41, 74,
+        204, 43, 46, 200, 47, 42, 209, 205, 78, 173, 4, 0, 65, 73, 34, 84, 23, 0, 0, 0,
+    ];
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let metrics = format!("# HELP synthetic private {KEY}\n# TYPE synthetic gauge\nsynthetic 1\n");
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply {
+            body: gzip.clone(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+        identity(),
+        Reply {
+            body: metrics.as_bytes().to_vec(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for duration_seconds in [0, 31, 255] {
+        assert!(matches!(
+            client
+                .collect_core_profile(CoreProfileRequest::Cpu { duration_seconds })
+                .await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let profile = client
+        .collect_core_profile(CoreProfileRequest::Cpu {
+            duration_seconds: 1,
+        })
+        .await?;
+    assert_eq!(profile.body_bytes(), gzip);
+    assert!(!format!("{profile:?}").contains(KEY));
+    assert_eq!(profile.into_body_bytes(), gzip);
+    let snapshot = client.core_metrics().await?;
+    assert_eq!(snapshot.native_text(), metrics);
+    assert!(!format!("{snapshot:?}").contains(KEY));
+    assert_eq!(snapshot.into_native_text(), metrics);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    assert!(requests[3].starts_with("GET /prefix/rest/debug/cpuprof?duration=1s "));
+    assert!(requests[5].starts_with("GET /prefix/metrics "));
+    assert!(requests[5]
+        .to_ascii_lowercase()
+        .contains("x-api-key: synthetic-transport-key"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_profile_success_is_unknown_once_and_metrics_html_is_not_a_snapshot() -> TestResult
+{
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply {
+            body: KEY.as_bytes().to_vec(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+        identity(),
+        Reply {
+            body: b"<html>not metrics</html>".to_vec(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .collect_core_profile(verysync_sidecar::CoreProfileRequest::Heap)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(matches!(
+        client.core_metrics().await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("GET /prefix/rest/debug/heapprof "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_profile_identity_prevents_native_profiling_request() -> TestResult {
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":"BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB"})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client
+            .collect_core_profile(verysync_sidecar::CoreProfileRequest::Heap)
+            .await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 3);
+    Ok(())
+}
+
 #[test]
 fn maintenance_schema_preserves_null_unknown_levels_and_redacts_private_data() -> TestResult {
     use verysync_sidecar::{CoreErrorLog, CoreLogLevel, CoreLogLevels, CoreLogSnapshot};

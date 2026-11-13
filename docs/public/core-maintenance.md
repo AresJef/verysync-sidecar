@@ -63,5 +63,47 @@ already have occurred. External writers still require application coordination.
 Local macOS arm64 isolated public-API effects have been observed with fixed
 VerySync v2.33.2 and no commercial entitlement. Final same-source native Windows,
 Linux and macOS gates remain pending for this slice. No destructive database
-reset, profile collection, conflict resolution, licensed behavior, remote
+reset, conflict resolution, licensed behavior, remote
 filesystem access, or OS-wide isolation claim follows from these log APIs.
+
+## Explicit native profiles and metrics
+
+`collect_core_profile(CoreProfileRequest::Heap)` explicitly triggers the official
+core's garbage collection and returns its gzip-compressed heap pprof data.
+`CoreProfileRequest::Cpu { duration_seconds }` collects 1–30 whole seconds of
+native CPU activity. Both GET endpoints are treated as mutations, use a fresh
+identity check, serialize between clones of one connection and never retry.
+They do not profile the controller application, install a global profiler,
+change logging, store files or restart either process.
+
+The selected connection's response-size limit and request deadline remain in
+force. Choose a longer connection deadline explicitly when collecting a longer
+CPU profile. A timeout, cancelled future or failed response does not prove that
+native sampling stopped. Coordinate subsequent profiling and external writers
+after an unknown outcome; there is no invented native cancellation endpoint.
+
+`CoreProfile::body_bytes()` borrows the unchanged compressed response;
+`into_body_bytes()` transfers ownership for explicit caller handling. The SDK
+checks the gzip signature and minimum length, rather than decoding the CRC,
+protobuf records or symbols. Decode and validate the data with your profiling
+tool before use. Native test evidence independently decompresses complete gzip
+members and checks CRCs; an HTTP-success JSON or HTML response is not a profile.
+Profiles can contain private target paths, addresses and symbols. `Debug` shows
+only the requested kind/duration and compressed size.
+
+`core_metrics()` reads one authenticated, bounded UTF-8 Prometheus exposition
+snapshot from `/metrics` under the selected management base path. The fixed
+program's `/rest/metrics` route returns 404. `CoreMetricsSnapshot::native_text()`
+preserves native families, values, labels and comments; callers can use their
+chosen metrics parser. The SDK recognizes the observed HELP/TYPE text envelope,
+rejects HTML or invalid UTF-8, and invents no missing sample, unit, timestamp,
+rate or aggregation. Default `Debug` omits the text and labels.
+
+This API attaches the connection's API key normally. It does not enable
+`metricsWithoutAuth`, expose another listener, start an exporter or change the
+caller's telemetry configuration. The isolated local native case verifies both
+authenticated collection and denied unauthenticated collection while that flag
+remains false. It also checks native GC count observation, complete heap/CPU
+gzip data, clone serialization, unchanged instance identity and normal owned
+process exit. Same-source six-native acceptance for profiles and metrics remains
+pending; these observations are functional evidence, not a performance score.

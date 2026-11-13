@@ -2,11 +2,100 @@
 use super::{mutation_error, Client};
 use crate::{
     CoreDiagnostics, CoreErrorLog, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
-    CoreLogSnapshot, Error, ResponseDiagnostic, Result, TargetPath,
+    CoreLogSnapshot, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest, Error,
+    ResponseDiagnostic, Result, TargetPath,
 };
 use std::collections::BTreeMap;
 
 impl Client {
+    /// Collect one explicitly requested native profile. This GET is treated as
+    /// a mutation: heap collection invokes native GC and CPU collection changes
+    /// native profiler state. No automatic retry, storage, global controller
+    /// profiling or program restart occurs. Native gzip bytes remain unchanged.
+    ///
+    /// The connection's configured deadline/response bound still applies. A CPU
+    /// duration must be 1..=30 whole seconds; choose a longer request deadline
+    /// explicitly when needed. Cancellation or a transport failure can leave
+    /// profiling active on the target until its native duration ends; dropping
+    /// this future does not prove native cancellation.
+    ///
+    /// ```rust,no_run
+    /// # async fn example(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+    /// use verysync_sidecar::CoreProfileRequest;
+    /// let profile = client.collect_core_profile(CoreProfileRequest::Cpu {
+    ///     duration_seconds: 1,
+    /// }).await?;
+    /// // Explicit access can reveal private native profiling data.
+    /// assert!(!profile.body_bytes().is_empty());
+    /// # Ok(()) }
+    /// ```
+    pub async fn collect_core_profile(&self, request: CoreProfileRequest) -> Result<CoreProfile> {
+        let (operation, endpoint, duration) = match request {
+            CoreProfileRequest::Heap => {
+                ("collect native heap profile", "rest/debug/heapprof", None)
+            }
+            CoreProfileRequest::Cpu { duration_seconds } => {
+                if !(1..=30).contains(&duration_seconds) {
+                    return Err(invalid("CPU profile duration must be 1..=30 whole seconds"));
+                }
+                (
+                    "collect native CPU profile",
+                    "rest/debug/cpuprof",
+                    Some(format!("{duration_seconds}s")),
+                )
+            }
+        };
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let query = duration
+            .as_ref()
+            .map(|d| vec![("duration", d.as_str())])
+            .unwrap_or_default();
+        let url = self.connection.management_url(endpoint, &query)?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(operation, reqwest::Method::GET, url, None, true)
+            .await?;
+        // A gzip member has at least a fixed header and CRC/size trailer. Do not
+        // turn an empty body or an HTTP-success JSON/HTML error into a profile.
+        if bytes.len() < 18 || !bytes.starts_with(&[0x1f, 0x8b, 0x08]) {
+            return Err(mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                },
+            ));
+        }
+        Ok(CoreProfile { request, bytes })
+    }
+
+    /// Read one bounded native metrics exposition from `metrics` under the
+    /// selected management base path. The API key is attached normally. This
+    /// does not enable unauthenticated metrics, open another listener, parse
+    /// rates, convert units or configure the caller's metrics exporter.
+    pub async fn core_metrics(&self) -> Result<CoreMetricsSnapshot> {
+        self.system_status().await?;
+        let operation = "read native core metrics";
+        let url = self.connection.management_url("metrics", &[])?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(operation, reqwest::Method::GET, url, None, false)
+            .await?;
+        let text = String::from_utf8(bytes).map_err(|error| Error::InvalidResponse {
+            operation,
+            response: ResponseDiagnostic::new(status, error.into_bytes()),
+        })?;
+        if !text.starts_with("# HELP ") || !text.lines().any(|line| line.starts_with("# TYPE ")) {
+            return Err(Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(status, text.into_bytes()),
+            });
+        }
+        Ok(CoreMetricsSnapshot { text })
+    }
+
     /// Read the actual core error log. Native null is retained; malformed or
     /// missing error containers are errors, not successful empty logs.
     pub async fn core_errors(&self) -> Result<CoreErrorLog> {

@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit bounded native heap/CPU profiles and authenticated Prometheus
+  snapshots, preserving private payloads, collection effects and uncertainty.
+
 - Add explicit native error registration/clearing, bounded log snapshots,
   partial package-level changes and target-syntax diagnostic locations,
   with private Debug output and uncertain-write handling.

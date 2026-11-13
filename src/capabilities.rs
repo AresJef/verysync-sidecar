@@ -76,8 +76,8 @@ pub enum Capability {
     ResourceTransfer,
     /// Explicit native directory/file changes, collisions and destructive removal.
     ResourceMutation,
-    /// Explicit core error logs, native log snapshots, package levels and
-    /// diagnostic locations. Destructive database maintenance has separate gates.
+    /// Explicit core logs, package levels, diagnostic locations, native profiles
+    /// and authenticated metrics. Destructive maintenance has separate gates.
     CoreMaintenance,
     /// Remaining advanced folder settings.
     AdvancedFolderSettings,
