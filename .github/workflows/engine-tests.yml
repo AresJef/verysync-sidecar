@@ -31,7 +31,7 @@ jobs:
   fixture:
     name: ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -103,6 +103,21 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_instance --test-filter restart_preserves_identity_folders_settings_and_samples
           --evidence-dir "${{ runner.temp }}/vs-managed-ui-proxy"
+      - name: Verify mounted resource metadata, checksums and native previews
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target files_engine
+          --evidence-dir "${{ runner.temp }}/vs-file-resources-proxy"
+      - name: Verify bounded file streaming, archive contents and actual cancellation
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_transfer_engine
+          --evidence-dir "${{ runner.temp }}/vs-file-transfer-proxy"
+      - name: Verify explicit resource mutations, merge effects and cancelled copies
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_mutation_engine
+          --evidence-dir "${{ runner.temp }}/vs-file-mutation-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
@@ -145,16 +160,6 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
           --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
-      - name: Verify mounted resource metadata, checksums and native previews
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target files_engine
-          --evidence-dir "${{ runner.temp }}/vs-file-resources-proxy"
-      - name: Verify bounded file streaming, archive contents and actual cancellation
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target file_transfer_engine
-          --evidence-dir "${{ runner.temp }}/vs-file-transfer-proxy"
       - name: Run independent-engine fixture contracts
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"

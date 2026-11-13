@@ -41,6 +41,7 @@
 #![doc = include_str!("../docs/public/program-upgrades.md")]
 #![doc = include_str!("../docs/public/file-resources.md")]
 #![doc = include_str!("../docs/public/file-transfers.md")]
+#![doc = include_str!("../docs/public/file-mutations.md")]
 
 mod auth;
 mod capabilities;
@@ -50,6 +51,7 @@ mod endpoint;
 mod engine_source;
 mod error;
 mod events;
+mod file_mutations;
 mod file_transfers;
 mod files;
 mod folders;
@@ -90,6 +92,9 @@ pub use error::{Error, ProcessDiagnostic, ResponseDiagnostic, Result};
 pub use events::{
     EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventStreamItem,
     EventSubscription,
+};
+pub use file_mutations::{
+    ResourceConflictPolicy, ResourceDeleteScope, ResourceMutation, ResourceRemoval,
 };
 pub use file_transfers::{
     ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,

@@ -3,6 +3,8 @@
 mod managed_fixture;
 #[path = "common/peer_proxy.rs"]
 mod peer_proxy;
+#[path = "common/sync_diagnostics.rs"]
+mod sync_diagnostics;
 use managed_fixture::{options, TestResult};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, time::Duration};
@@ -471,8 +473,24 @@ async fn actual_folder_offer_dismiss_ignore_unignore_and_explicit_read_only_acce
     }
     let first_local = folders[0].clone();
     eprintln!("private invitation stage: observe actual named remote offers");
-    let first_remote = named_offer(b.client(), &a_id, "First synthetic offer").await?;
-    let second_remote = named_offer(b.client(), &a_id, "Second synthetic offer").await?;
+    let first_observed = named_offer(b.client(), &a_id, "First synthetic offer").await;
+    if first_observed.is_err() {
+        sync_diagnostics::report(
+            "invitation-first-named-offer",
+            &[(&a, &folders[0], &b_id), (&b, &folders[0], &a_id)],
+        )
+        .await;
+    }
+    let first_remote = first_observed?;
+    let second_observed = named_offer(b.client(), &a_id, "Second synthetic offer").await;
+    if second_observed.is_err() {
+        sync_diagnostics::report(
+            "invitation-second-named-offer",
+            &[(&a, &folders[0], &b_id), (&b, &folders[0], &a_id)],
+        )
+        .await;
+    }
+    let second_remote = second_observed?;
     let first = &first_remote;
     let second = &second_remote;
     let pending = offer(b.client(), first, &a_id, true).await?;
@@ -496,7 +514,15 @@ async fn actual_folder_offer_dismiss_ignore_unignore_and_explicit_read_only_acce
     assert!(!received.exists() && b.client().folders().await?.is_empty());
     reconnect(a.client(), b.client(), &a_id, &b_id).await?;
     eprintln!("private invitation stage: observe reannouncement and persist first ignore");
-    offer(b.client(), first, &a_id, true).await?;
+    let reannounced = offer(b.client(), first, &a_id, true).await;
+    if reannounced.is_err() {
+        sync_diagnostics::report(
+            "invitation-reannounce-after-dismiss-and-reconnect",
+            &[(&a, &folders[0], &b_id), (&b, &folders[0], &a_id)],
+        )
+        .await;
+    }
+    reannounced?;
     let ignored = b.client().ignore_folder_offer(first, &a_id).await?;
     assert!(ignored.is_ignored);
     offer(b.client(), first, &a_id, false).await?;
@@ -548,7 +574,15 @@ async fn actual_folder_offer_dismiss_ignore_unignore_and_explicit_read_only_acce
         Err(Error::FolderNotIgnored)
     ));
     reconnect(a.client(), b.client(), &a_id, &b_id).await?;
-    let announced = offer(b.client(), first, &a_id, true).await?;
+    let announced = offer(b.client(), first, &a_id, true).await;
+    if announced.is_err() {
+        sync_diagnostics::report(
+            "invitation-reannounce-after-unignore-and-reconnect",
+            &[(&a, &folders[0], &b_id), (&b, &folders[0], &a_id)],
+        )
+        .await;
+    }
+    let announced = announced?;
     assert!(!announced.contains_key(second));
     let remaining = b.client().ignored_folders(&a_id).await?;
     assert_eq!(remaining.len(), 1);

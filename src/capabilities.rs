@@ -74,6 +74,8 @@ pub enum Capability {
     ResourceBrowse,
     /// Explicit bounded file streaming, ranges and native archives.
     ResourceTransfer,
+    /// Explicit native directory/file changes, collisions and destructive removal.
+    ResourceMutation,
     /// Remaining advanced folder settings.
     AdvancedFolderSettings,
     /// Account, configuration and commercial authorization.
@@ -224,6 +226,11 @@ static CATALOG: &[LibraryCapability] = &[
     },
     LibraryCapability {
         capability: Capability::ResourceTransfer,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::ResourceMutation,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },

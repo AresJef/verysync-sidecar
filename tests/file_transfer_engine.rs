@@ -1,6 +1,8 @@
 //! Actual file payloads through public APIs, independent of raw characterization.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/resource_fixture.rs"]
+mod resource_fixture;
 use managed_fixture::{options, TestResult};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Read, path::Path, time::Duration};
@@ -10,18 +12,8 @@ use verysync_sidecar::{
 };
 
 async fn mount(core: &ManagedInstance) -> TestResult<(std::path::PathBuf, ResourcePath)> {
-    let profile = std::fs::canonicalize(core.state_directory().join("profile"))?;
     let volumes = core.client().resource_volumes().await?;
-    let volume = volumes
-        .into_iter()
-        .find(|v| {
-            v.kind == "local" && std::fs::canonicalize(&v.path).ok().as_ref() == Some(&profile)
-        })
-        .ok_or("exact private resource mount absent")?;
-    Ok((
-        profile,
-        ResourcePath::root(volume.id, TargetPath::local(Path::new("sample")).style()),
-    ))
+    resource_fixture::owned_base(core, &volumes)
 }
 fn digest(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()

@@ -325,3 +325,8 @@ Compatibility commitments begin with the first formal release. Compatible update
 ## Licensing
 
 Project-owned code is licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. The official VerySync program and third-party dependencies remain subject to their own terms. The controller's license does not grant redistribution rights for the official program. No official executable is included in this repository or crate.
+
+Unreleased [resource mutations](docs/public/file-mutations.md) explicitly create,
+copy, move, edit and remove filesystem resources. Directory overwrite merges;
+different native volume IDs are refused before mutation because the fixed
+backend can misroute their destinations. Complete native acceptance is pending.

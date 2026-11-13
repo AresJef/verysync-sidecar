@@ -1077,8 +1077,21 @@ async fn cancelled_cli_download_stops_exact_helper_without_program_or_state_repl
     let root = tempfile::Builder::new().prefix("vcc-").tempdir()?.keep();
     let old = upgrade_source()?;
     let program = root.join(old.path().file_name().ok_or("program basename missing")?);
-    std::fs::copy(old.path(), &program)?;
-    let sha: [u8; 32] = Sha256::digest(std::fs::read(&program)?).into();
+    std::fs::copy(old.path(), &program).inspect_err(|e| {
+        eprintln!(
+            "cancelled CLI IO stage: copy-private-program kind={:?} code={:?}",
+            e.kind(),
+            e.raw_os_error()
+        )
+    })?;
+    let sha: [u8; 32] = Sha256::digest(std::fs::read(&program).inspect_err(|e| {
+        eprintln!(
+            "cancelled CLI IO stage: read-private-program kind={:?} code={:?}",
+            e.kind(),
+            e.raw_os_error()
+        )
+    })?)
+    .into();
     let base = options(&root.join("c"))?;
     let settings = ManagedOptions::new(
         LocalProgram::new(&program)?.expected_sha256(sha),
@@ -1090,7 +1103,13 @@ async fn cancelled_cli_download_stops_exact_helper_without_program_or_state_repl
     let identity = core.client().system_status().await?.device_id;
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
-    let config = std::fs::read(base.state_directory().join("setting.dat"))?;
+    let config = std::fs::read(base.state_directory().join("setting.dat")).inspect_err(|e| {
+        eprintln!(
+            "cancelled CLI IO stage: read-private-setting kind={:?} code={:?}",
+            e.kind(),
+            e.raw_os_error()
+        )
+    })?;
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     let archive_name = baseline_asset()?.archive_filename().to_owned();
     let url = url::Url::parse(&format!(
@@ -1146,10 +1165,24 @@ async fn cancelled_cli_download_stops_exact_helper_without_program_or_state_repl
         }
     })
     .await??;
-    released_copy_lease(&base.state_directory().join(".verysync-sidecar-lease")).await?;
-    assert_eq!(Sha256::digest(std::fs::read(&program)?).as_slice(), sha);
+    released_copy_lease(&base.state_directory().join(".verysync-sidecar-lease"))
+        .await
+        .inspect_err(|_| eprintln!("cancelled CLI IO stage: await-real-copy-lease-release"))?;
     assert_eq!(
-        std::fs::read(base.state_directory().join("setting.dat"))?,
+        Sha256::digest(std::fs::read(&program).inspect_err(|e| eprintln!(
+            "cancelled CLI IO stage: read-private-program kind={:?} code={:?}",
+            e.kind(),
+            e.raw_os_error()
+        ))?)
+        .as_slice(),
+        sha
+    );
+    assert_eq!(
+        std::fs::read(base.state_directory().join("setting.dat")).inspect_err(|e| eprintln!(
+            "cancelled CLI IO stage: read-private-setting kind={:?} code={:?}",
+            e.kind(),
+            e.raw_os_error()
+        ))?,
         config
     );
     core.restart(Duration::from_secs(30)).await?;
@@ -1157,7 +1190,13 @@ async fn cancelled_cli_download_stops_exact_helper_without_program_or_state_repl
     assert_eq!(core.client().system_status().await?.device_id, identity);
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
-    std::fs::remove_dir_all(root)?;
+    std::fs::remove_dir_all(root).inspect_err(|e| {
+        eprintln!(
+            "cancelled CLI IO stage: remove-private-root-after-normal-exit kind={:?} code={:?}",
+            e.kind(),
+            e.raw_os_error()
+        )
+    })?;
     println!(
         "public cancelled CLI upgrade evidence: {}",
         serde_json::json!({

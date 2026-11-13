@@ -3,6 +3,7 @@
 mod device_control;
 mod device_ignore;
 mod file_control;
+mod file_mutation;
 mod file_transfer;
 mod ignore_control;
 mod invitation_control;

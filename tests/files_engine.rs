@@ -1,8 +1,10 @@
 //! Public file-manager effects use only one task-owned native profile volume.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/resource_fixture.rs"]
+mod resource_fixture;
 use managed_fixture::{options, TestResult};
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 use verysync_sidecar::{Error, ManagedInstance, ResourceChecksum, ResourcePath, TargetPath};
 
 #[tokio::test]
@@ -26,19 +28,12 @@ async fn public_file_metadata_browses_owned_volume_and_hashes_actual_samples() -
     )?;
     let volumes = core.client().resource_volumes().await?;
     assert!(!volumes.is_empty());
-    let volume = volumes
-        .iter()
-        .find(|v| {
-            v.kind == "local" && std::fs::canonicalize(&v.path).ok().as_ref() == Some(&profile)
-        })
-        .ok_or("exact private profile mount missing")?;
+    let (_, mount) = resource_fixture::owned_base(&core, &volumes)?;
     assert!(!format!("{volumes:?}").contains(root.to_str().ok_or("temporary root encoding")?));
     let style = TargetPath::local(&directory).style();
-    let mount = ResourcePath::root(volume.id.clone(), style);
     let info = core.client().resource_info(&mount).await?;
     assert!(info.is_dir && info.items.is_some());
-    let relative = TargetPath::local(Path::new("web-samples"));
-    let folder = ResourcePath::relative(volume.id.clone(), &relative)?;
+    let folder = mount.clone().child("web-samples")?;
     let listing = core.client().resource_info(&folder).await?;
     assert!(listing.is_dir);
     let items = listing.items.ok_or("actual directory entries missing")?;
@@ -100,7 +95,7 @@ async fn public_file_metadata_browses_owned_volume_and_hashes_actual_samples() -
     };
     assert!(matches!(
         core.client()
-            .resource_info(&ResourcePath::root(volume.id.clone(), wrong_style))
+            .resource_info(&ResourcePath::root(mount.volume().clone(), wrong_style))
             .await,
         Err(Error::InvalidPath { .. })
     ));
@@ -116,7 +111,7 @@ async fn public_file_metadata_browses_owned_volume_and_hashes_actual_samples() -
     println!(
         "public resource browse evidence: {}",
         serde_json::json!({
-        "actual_mount_ids_and_exact_private_profile_volume":true,"actual_logical_volume_root_listing":true,
+        "actual_mount_ids_and_exact_private_profile_volume":true,"actual_exact_owned_base_listing":true,
         "actual_directory_and_native_names":true,"actual_text_content_and_byte_size":true,
         "actual_unicode_and_literal_percent_names":true,"actual_empty_directory_observation":true,
         "actual_md5_sha1_sha256_sha512_match_sample_bytes":true,"actual_missing_resource_is_error":true,
@@ -132,13 +127,8 @@ async fn public_native_thumbnails_read_actual_image_content_and_preserve_sources
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
     let profile = std::fs::canonicalize(core.state_directory().join("profile"))?;
     let volumes = core.client().resource_volumes().await?;
-    let volume = volumes
-        .iter()
-        .find(|v| {
-            v.kind == "local" && std::fs::canonicalize(&v.path).ok().as_ref() == Some(&profile)
-        })
-        .ok_or("private profile mount missing")?;
-    let base = ResourcePath::root(volume.id.clone(), TargetPath::local(&profile).style());
+    let (_, mount) = resource_fixture::owned_base(&core, &volumes)?;
+    let base = mount;
     let mut previews = Vec::new();
     const IMAGE_0: &[u8] = &[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 2, 0, 0, 0, 1, 0, 8, 6,
@@ -309,4 +299,41 @@ fn raster_dimensions(bytes: &[u8]) -> TestResult<(u32, u32)> {
         }
     }
     Err("native preview is not a complete identified PNG/JPEG raster".into())
+}
+
+#[tokio::test]
+async fn public_owned_resource_volume_probe_reads_only_the_exact_private_sample() -> TestResult {
+    let root = tempfile::Builder::new().prefix("vfp-").tempdir()?.keep();
+    let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
+    let volumes = core.client().resource_volumes().await?;
+    let (profile, base) = resource_fixture::owned_base(&core, &volumes)?;
+    let sample = b"explicit owned volume probe bytes";
+    std::fs::write(profile.join("owned-volume-probe.txt"), sample)?;
+    let info = core
+        .client()
+        .resource_info(&base.clone().child("owned-volume-probe.txt")?)
+        .await?;
+    assert!(
+        !info.is_dir
+            && info.size == sample.len() as u64
+            && info.content.as_deref() == Some(std::str::from_utf8(sample)?)
+    );
+    let missing = core
+        .client()
+        .resource_info(&base.clone().child("missing-owned-probe")?)
+        .await;
+    let missing_status = match missing {
+        Err(Error::Http { response }) | Err(Error::AccessDenied { response }) => response.status(),
+        Err(e) => return Err(e.into()),
+        Ok(_) => return Err("missing sample unexpectedly present".into()),
+    };
+    assert!(missing_status == 404 || missing_status == 403);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public resource volume probe evidence: {}",
+        serde_json::json!({"actual_only_owned_profile_sample_read":true,"actual_missing_resource_is_error":true,"actual_normal_owned_tree_exit":true,"missing_status":missing_status})
+    );
+    Ok(())
 }
