@@ -122,6 +122,16 @@ a request future does not prove native work stopped. No automatic mutation retry
 
 ## In-flight control and Local Sync events
 
+A native `paused` state does not cancel an already opened file transfer. In one
+macOS ARM native run, an existing temporary payload committed more than one
+second after the pause readback. The SDK reports actual state and makes no
+immediate filesystem-quiescence promise. The dedicated SFTP test retains its initial one-second settling period, then
+waits up to five additional seconds for an already-open native temporary payload
+to commit. It then
+asserts one unchanged 500ms full-directory hash window while paused; it does not
+ignore temporary files, retry a failed stability window or change the workload.
+
+
 `control_local_sync_operation()` requires the reviewed job and operation IDs and
 an explicit pause, resume or stop choice. Client clones serialize the identity
 preflight, known acknowledgement and fresh status readback. Another management
