@@ -66,11 +66,12 @@ Disabling the native GUI server does not prove the core stopped. A borrowed
 connection owns no process. An owned instance can still be observed with
 `wait_for_exit()` or explicitly terminated with `force_stop()`; neither action
 is selected implicitly by the listener write. Existing owner and Client values
-retain their prior endpoint. Manage the changed endpoint explicitly. An explicit
+retain their prior endpoint until the caller explicitly reconnects. An owned
+instance can use `reconnect_management()` to authenticate the same identity and
+adopt a direct local endpoint without changing process ownership. An explicit
 managed startup selects and enables its configured management endpoint again;
-this is separate from the stored disabled-server state. Managed HTTPS startup
-and owner endpoint adoption have separate pending implementation/acceptance
-conditions and are not inferred from the borrowed Client operations.
+this is separate from the stored disabled-server state. Managed HTTPS startup and owner endpoint adoption have separate native
+acceptance conditions and are not inferred from borrowed Client operations.
 
 The controlled native cases verify direct TLS enable/revert, explicit address
 migration, actual GUI disable with separately chosen process cleanup, retained

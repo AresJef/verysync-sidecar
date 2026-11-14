@@ -4,6 +4,15 @@ use crate::{ApiKey, ApiKeyRotation, ConnectOptions, Error, GuiAuthenticationConf
 use std::time::Duration;
 
 impl Client {
+    pub(crate) async fn connect_management_replacement(
+        &self,
+        options: ConnectOptions,
+    ) -> Result<Client> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        let mut client = Client::connect(options).await?;
+        client.connection.mutation_lock = self.connection.mutation_lock.clone();
+        Ok(client)
+    }
     /// Select local GUI authentication with one explicit username/password PATCH,
     /// then read configuration through the unchanged API key after GUI reload.
     /// Password presence is separate from actual password/login verification.

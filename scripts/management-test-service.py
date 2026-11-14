@@ -9,6 +9,7 @@ import datetime
 import hmac
 import http.client
 import http.server
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -63,7 +64,19 @@ leaf = (x509.CertificateBuilder()
         .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
         .sign(ca_key, hashes.SHA256()))
+# A separate native-core certificate keeps the origin's localhost-only
+# certificate available for the wrong-hostname test above.
+native_leaf = (x509.CertificateBuilder().subject_name(x509.Name([
+    x509.NameAttribute(NameOID.COMMON_NAME, "isolated-native-management")]))
+    .issuer_name(ca_name).public_key(leaf_key.public_key())
+    .serial_number(x509.random_serial_number())
+    .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=2))
+    .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+    .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+    .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+    .sign(ca_key, hashes.SHA256()))
 for name, data in [
+    ("native-server.pem", native_leaf.public_bytes(serialization.Encoding.PEM)),
     ("ca.pem", ca.public_bytes(serialization.Encoding.PEM)),
     ("ca.der", ca.public_bytes(serialization.Encoding.DER)),
     ("server.pem", leaf.public_bytes(serialization.Encoding.PEM)),

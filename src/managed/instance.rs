@@ -130,6 +130,7 @@ impl ManagedInstance {
                     });
                 }
                 let connection = ConnectOptions::new(options.endpoint.clone(), context.key.clone())
+                    .transport(options.transport.clone())
                     .expected_device_id(context.identity.clone())
                     .version_policy(options.version_policy)
                     .request_timeout(options.request_timeout)?;
@@ -235,6 +236,67 @@ impl ManagedInstance {
     /// Performs no key change, restart or process termination.
     pub async fn reconnect_with_api_key(&mut self, key: ApiKey) -> Result<()> {
         let client = self.client.reconnect_with_api_key(key).await?;
+        self.client = client;
+        Ok(())
+    }
+
+    /// Explicitly authenticate and adopt a new direct local management endpoint
+    /// for this same owned identity. Preserve process ownership and the shared
+    /// mutation lock; no configuration write, restart or process action follows.
+    /// Successful adoption also selects the endpoint/trust for future owned
+    /// starts. Active connection request limits come from the supplied options;
+    /// configured managed-start deadlines keep their independent selections.
+    /// Failure leaves the old client and startup selections intact.
+    pub async fn reconnect_management(&mut self, options: ConnectOptions) -> Result<()> {
+        if self.exit_snapshot().is_some() {
+            return Err(Error::ManagedFailure {
+                reason: "cannot adopt a management connection after owned exit",
+            });
+        }
+        if options
+            .expected_device_id
+            .as_ref()
+            .is_some_and(|id| id != &self.client.instance().device_id)
+        {
+            return Err(Error::InvalidConfiguration {
+                reason: "replacement management options conflict with the owned identity",
+            });
+        }
+        let state = if options.endpoint.socket_path()
+            == Some(self.options.state.join("gui.sock").as_path())
+        {
+            self.options.state.clone()
+        } else {
+            self.state.clone()
+        };
+        // Reuse the same local ownership address constraints before connecting;
+        // remote/prefixed endpoints cannot become a managed startup selection.
+        let selected = ManagedOptions::new(
+            self.options.program.clone(),
+            state,
+            options.endpoint.clone(),
+        )?;
+        let endpoint = options.endpoint.clone();
+        let transport = options.transport.clone();
+        let client = self
+            .client
+            .connect_management_replacement(
+                options.expected_device_id(self.client.instance().device_id.clone()),
+            )
+            .await?;
+        if self.exit_snapshot().is_some() {
+            return Err(Error::ManagedFailure {
+                reason: "owned instance exited during management reconnection",
+            });
+        }
+        if client.instance().version.version != self.info.version {
+            return Err(Error::ProgramRejected {
+                reason: "replacement management version differs from the owned program",
+            });
+        }
+        self.options.state = selected.state;
+        self.options.endpoint = endpoint;
+        self.options.transport = transport;
         self.client = client;
         Ok(())
     }

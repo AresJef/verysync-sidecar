@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Select native managed HTTPS with explicit per-instance transport policy and
+  same-identity owner connection adoption. Retain trust/endpoints across normal
+  startup, stop, restart and existing-state connection without transferring
+  process ownership or changing global trust.
+
 - Add typed native GUI listener selections and single explicit listener changes.
   Keep acknowledgement, caller reconnection, actual TLS/bind/socket-mode effects
   and process ownership separate; retain private unknown selectors on reads.

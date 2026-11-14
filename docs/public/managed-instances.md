@@ -35,7 +35,7 @@ async fn open_dedicated(
 The caller supplies a Tokio runtime with I/O/timers, an absolute executable path,
 an absolute state path whose parent already exists, and an explicit endpoint.
 On Unix use `state.join("gui.sock")`; the portable socket path limit is checked.
-HTTP uses a literal loopback IP and an explicit nondefault port, with no proxy
+HTTP(S) uses a literal loopback IP and an explicit nondefault port, with no proxy
 prefix or TLS. Startup does not discover a running instance or choose a default
 management address. State must be representable losslessly by the program's
 UTF-8 configuration protocol; local filesystem operations retain native paths.
@@ -351,3 +351,38 @@ hide the caller's existing console.
 from `ManagedStateLock::EngineLock`. These report which admission lock was busy,
 without exposing private paths or authorizing deletion, takeover or termination.
 The error does not imply that the native engine lock has a library owner.
+
+## Explicit owned HTTPS and endpoint adoption (unreleased)
+
+`ManagedOptions` accepts an explicit HTTP or HTTPS URL with a literal loopback
+IP, a nondefault port and no prefix. HTTPS requires the `tls` feature. Supply
+client trust and an explicit proxy through `management_transport()`; normal
+certificate and hostname verification stays enabled. The fixed native GUI TLS
+flag is selected from the managed endpoint on each explicit startup.
+
+Server certificate/key provisioning is separate. The native automatically
+generated GUI certificate names its host and may not match a loopback-IP URL.
+Prepare matching native certificate/key material with private permissions in
+the controlled owned state while its core is stopped, and supply the appropriate
+client trust. This API does not install certificates, change system trust or
+silently bypass a mismatch. A default HTTP/Unix startup can establish owned
+state before that explicit provisioning. The synchronization identity key pair
+is separate from the GUI TLS pair.
+
+`ManagedInstance::reconnect_management(ConnectOptions)` performs read-only
+authentication and requires the original owned device identity and program
+version. A conflicting expected ID, remote/prefixed endpoint or socket outside
+the selected private state is rejected. The exact native process owner and
+mutation lock shared with existing clients remain in place. Failure retains
+the prior client and startup selections. An exited owner cannot adopt another
+connection. This method does not update native GUI configuration, issue a
+shutdown or transfer ownership to an arbitrary running process.
+
+After successful explicit adoption, future owned starts retain the selected
+local endpoint and management trust/proxy policy. Active connection limits
+come from the supplied ConnectOptions; managed-start deadlines keep their
+independent configuration. `connect_existing()` also checks the stored native
+TLS selection and uses the selected transport. A plaintext selection does not
+match persisted HTTPS state. Native normal start, stop, same-state restart and
+read-only existing connection are tested separately from the earlier listener
+write and from complete same-source platform acceptance, which remains pending.

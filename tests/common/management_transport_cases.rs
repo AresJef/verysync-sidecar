@@ -383,3 +383,130 @@ async fn native_gui_socket_modes_are_observed_on_the_actual_owned_socket() -> Te
     println!("native_gui_socket_mode_effects=8");
     Ok(())
 }
+
+#[tokio::test]
+async fn owned_https_adoption_restart_and_existing_connection_retain_identity_and_trust(
+) -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-owned-tls-")
+        .tempdir()?
+        .keep();
+    let base = options(&root.join("core"))?;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let initial = listener.local_addr()?;
+    assert_ne!(initial.port(), 18886);
+    drop(listener);
+    let base = ManagedOptions::new(
+        base.program().clone(),
+        base.state_directory(),
+        ManagementEndpoint::http(&format!("http://{initial}/"))?,
+    )?;
+    let mut core = ManagedInstance::start(base.clone()).await?;
+    let id = core.client().instance().device_id.clone();
+    let key = core.client().gui_authentication().await?.api_key()?;
+    let sentinel = root.join("sentinel.bin");
+    std::fs::write(&sentinel, b"owned HTTPS transitions retain original data")?;
+    let mut certificates =
+        management_service::ManagementService::start(&root.join("peer"), initial.port())?;
+    let trust = ManagementTransport::default().trusted_certificates_pem(&certificates.pem()?)?;
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::write(
+        core.state_directory().join("https-cert.pem"),
+        std::fs::read(root.join("peer/native-server.pem"))?,
+    )?;
+    std::fs::write(
+        core.state_directory().join("https-key.pem"),
+        std::fs::read(root.join("peer/server.key"))?,
+    )?;
+    certificates.stop()?;
+    core.restart(Duration::from_secs(30)).await?;
+    let first_tls = ManagementEndpoint::http(&format!("https://{initial}/"))?;
+    let mut foreign = id.as_str().as_bytes().to_vec();
+    foreign[0] = if foreign[0] == b'A' { b'B' } else { b'A' };
+    let foreign = DeviceId::parse(std::str::from_utf8(&foreign)?)?;
+    assert!(matches!(
+        core.reconnect_management(
+            ConnectOptions::new(core.client().endpoint().clone(), key.clone())
+                .expected_device_id(foreign)
+        )
+        .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert!(matches!(
+        core.reconnect_management(ConnectOptions::new(
+            ManagementEndpoint::http("http://192.0.2.10:42391/")?,
+            key.clone()
+        ))
+        .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+
+    let wrong_key = ConnectOptions::new(
+        core.client().endpoint().clone(),
+        ApiKey::new("synthetic-wrong-owned-management-key")?,
+    );
+    assert!(core.reconnect_management(wrong_key).await.is_err());
+    assert_eq!(core.client().system_status().await?.device_id, id);
+    core.client()
+        .update_gui_listener(&GuiListenerPatch::default().use_tls(true))
+        .await?;
+    let adoption_pid = core.process_id();
+    let options = ConnectOptions::new(first_tls.clone(), key.clone()).transport(trust.clone());
+    // The caller selects the new endpoint explicitly after its single write.
+    // This bounded readiness loop repeats only read-only reconnection attempts.
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match core.reconnect_management(options.clone()).await {
+                Ok(()) => return Ok::<_, Error>(()),
+                Err(Error::Transport { .. } | Error::Timeout { .. }) => {
+                    tokio::time::sleep(Duration::from_millis(25)).await
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    })
+    .await??;
+    assert_eq!(core.process_id(), adoption_pid);
+    assert_eq!(core.client().endpoint(), &first_tls);
+    assert!(core.client().gui_listener().await?.use_tls);
+    let before_pid = core.process_id();
+    core.restart(Duration::from_secs(30)).await?;
+    assert_ne!(core.process_id(), before_pid);
+    assert_eq!(core.client().endpoint(), &first_tls);
+    assert!(core.client().gui_listener().await?.use_tls);
+    assert_eq!(core.client().instance().device_id, id);
+    let existing = ManagedOptions::new(
+        base.program().clone(),
+        base.state_directory(),
+        first_tls.clone(),
+    )?
+    .management_transport(trust.clone());
+    assert_eq!(existing.connect_existing().await?.instance().device_id, id);
+    assert!(
+        matches!(
+            base.connect_existing().await,
+            Err(Error::InvalidConfiguration { .. })
+        ),
+        "plaintext selection accepted persisted native TLS policy"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    let mut secure = ManagedInstance::start(existing).await?;
+    assert_eq!(secure.client().instance().device_id, id);
+    assert!(secure.client().gui_listener().await?.use_tls);
+    assert_eq!(
+        std::fs::read(&sentinel)?,
+        b"owned HTTPS transitions retain original data"
+    );
+    let exit = secure.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    assert!(matches!(
+        secure
+            .reconnect_management(ConnectOptions::new(first_tls, key))
+            .await,
+        Err(Error::ManagedFailure { .. })
+    ));
+    println!("native_owned_https_effects=20 normal_tls_start_stop_restart_and_existing=true");
+    Ok(())
+}
