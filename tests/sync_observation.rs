@@ -3,6 +3,8 @@
 mod managed_fixture;
 #[path = "common/private_redial.rs"]
 mod private_redial;
+#[path = "common/shutdown_diagnostic.rs"]
+mod shutdown_diagnostic;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 #[cfg(unix)]
@@ -1554,10 +1556,17 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
     // its original ten-second normal-exit requirement; no force fallback.
     for (name, core) in [("sender", &mut a), ("receiver", &mut b)] {
         eprintln!("selective owned normal shutdown: core={name} begin");
+        let native_snapshot = shutdown_diagnostic::Snapshot::capture(core.process_id());
+        eprintln!(
+            "selective owned pre-shutdown process observations: core={name} {}",
+            native_snapshot.observe()
+        );
         let began = std::time::Instant::now();
         let exit = match core.shutdown(Duration::from_secs(10)).await {
             Ok(exit) => exit,
             Err(error) => {
+                let observation_started = std::time::Instant::now();
+                let native_processes = native_snapshot.observe();
                 // One immediate observation after the original failure. This
                 // does not extend the normal-exit window or turn failure into
                 // success, retry shutdown, signal a PID or inspect other cores.
@@ -1597,7 +1606,7 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
                 };
                 eprintln!(
                     "selective failed normal shutdown evidence: {}",
-                    json!({"core":name,"elapsed_millis":began.elapsed().as_millis(),"owner":owner,"private_capture":diagnostic,"original_failure_retained":true,"extra_exit_wait_millis":0})
+                    json!({"core":name,"elapsed_millis":began.elapsed().as_millis(),"owner":owner,"private_capture":diagnostic,"native_processes":native_processes,"failure_observation_millis":observation_started.elapsed().as_millis(),"original_failure_retained":true,"extra_exit_wait_millis":0})
                 );
                 return Err(error.into());
             }
