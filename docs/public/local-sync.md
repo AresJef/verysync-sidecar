@@ -174,7 +174,10 @@ exact remote payload/source retention and registration removal preserving data.
 These are bounded modern macOS observations, with independent loopback peers,
 not full protocol/platform acceptance. The SMB test peer corrects two known
 Impacket 0.13.1 wire details: it retains session identity in LOGOFF responses and
-returns a named-object absence error for a missing CREATE/OPEN name. Real
+returns a named-object absence error for a missing CREATE/OPEN name. On Windows its
+share-file handles also grant native delete sharing, so server-side rename can
+commit an open request FileId. A real fd read/write/rename check runs before peer
+readiness; the global Python `os` module and SDK behavior are unchanged. Real
 credential validation, logout and filesystem effects remain in the peer; no
 native error is converted into success.
 
