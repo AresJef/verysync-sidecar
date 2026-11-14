@@ -185,3 +185,94 @@ async fn public_webdav_uses_the_native_core_for_actual_authenticated_data_effect
 async fn public_smb_uses_the_native_core_for_actual_authenticated_data_effects() -> TestResult {
     protocol_effects(StorageProtocol::Smb).await
 }
+
+#[tokio::test]
+async fn public_https_webdav_rejects_untrusted_certificate_and_requires_explicit_bypass_for_data(
+) -> TestResult {
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::Error;
+    let root = tempfile::Builder::new()
+        .prefix("vs-dav-tls-")
+        .tempdir()?
+        .keep();
+    let source = root.join("source");
+    std::fs::create_dir(&source)?;
+    let payload = vec![0x7b; 262144];
+    std::fs::write(source.join("tls-payload.bin"), &payload)?;
+    let mut peer = storage_service::Service::start_https(&root)?;
+    std::fs::write(peer.share.join("sentinel.bin"), b"TLS target-only")?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let checked = peer.endpoint.clone().insecure_tls(false)?;
+    let refused = core
+        .client()
+        .probe_storage_endpoint(&checked)
+        .await
+        .unwrap_err();
+    let Error::MutationOutcomeUnknown {
+        source: refusal, ..
+    } = refused
+    else {
+        return Err("expected a completed native TLS refusal, not a management timeout".into());
+    };
+    let response = match refusal.as_ref() {
+        Error::Api { response, .. } | Error::Http { response } => response,
+        error => return Err(format!("expected native TLS response, observed {error:?}").into()),
+    };
+    let text = String::from_utf8_lossy(response.body_bytes()).to_ascii_lowercase();
+    assert!(
+        text.contains("certificate")
+            && (text.contains("unknown authority") || text.contains("untrusted"))
+    );
+    assert!(!peer.share.join("tls-payload.bin").exists());
+    let permitted = checked.insecure_tls(true)?;
+    core.client().probe_storage_endpoint(&permitted).await?;
+    let credentials_error = core
+        .client()
+        .probe_storage_endpoint(&peer.bad_endpoint.clone().insecure_tls(true)?)
+        .await
+        .expect_err("TLS bypass must not bypass authentication");
+    let credentials_cause = match &credentials_error {
+        Error::MutationOutcomeUnknown { source, .. } => source.as_ref(),
+        error => error,
+    };
+    assert!(
+        matches!(
+            credentials_cause,
+            Error::Api { .. } | Error::Http { .. } | Error::AccessDenied { .. }
+        ),
+        "expected a completed authentication refusal, observed {credentials_cause:?}"
+    );
+    let job = core
+        .client()
+        .create_local_sync_job(
+            &CreateLocalSyncJob::new(
+                "explicit synthetic TLS",
+                StorageEndpoint::local(TargetPath::local(&source))?,
+                permitted,
+                LocalSyncMode::MirrorAToB,
+            )?
+            .ignore_permissions(true),
+        )
+        .await?;
+    let run = execute(&core, &job.job_id).await?;
+    assert_eq!(run.summary.failed, 0);
+    assert_eq!(std::fs::read(peer.share.join("tls-payload.bin"))?, payload);
+    assert_eq!(std::fs::read(source.join("tls-payload.bin"))?, payload);
+    assert_eq!(
+        std::fs::read(peer.share.join("sentinel.bin"))?,
+        b"TLS target-only"
+    );
+    core.client().delete_local_sync_job(&job.job_id).await?;
+    assert_eq!(std::fs::read(peer.share.join("tls-payload.bin"))?, payload);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    peer.stop()?;
+    println!(
+        "public HTTPS storage boundary evidence: {}",
+        serde_json::json!({"actual_private_tls_listener":true,"actual_unknown_certificate_refused":true,"actual_no_copy_before_explicit_choice":true,"actual_explicit_insecure_probe_succeeds":true,"actual_wrong_credentials_still_refused":true,"actual_exact_native_preview_and_run":true,"actual_all_source_and_target_payload_bytes":true,"actual_target_only_sentinel_retained":true,"actual_registration_removal_keeps_data":true,"actual_same_identity_and_normal_owned_exit":true,"certificate_pem_sha256":format!("{:x}",Sha256::digest(std::fs::read(root.join("synthetic-webdav-cert.pem"))?)),"trusted_identity_positive_claimed":false,"system_trust_modified":false})
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}

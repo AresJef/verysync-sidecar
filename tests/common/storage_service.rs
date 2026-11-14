@@ -23,6 +23,18 @@ impl Service {
         root: &Path,
         write_delay: Duration,
     ) -> TestResult<Self> {
+        Self::configured(protocol, root, write_delay, false)
+    }
+    #[allow(dead_code)] // Shared fixture modules are compiled by separate targets.
+    pub fn start_https(root: &Path) -> TestResult<Self> {
+        Self::configured(StorageProtocol::WebDav, root, Duration::ZERO, true)
+    }
+    fn configured(
+        protocol: StorageProtocol,
+        root: &Path,
+        write_delay: Duration,
+        tls: bool,
+    ) -> TestResult<Self> {
         if write_delay.as_millis() > 100 {
             return Err("bounded write delay is test-only".into());
         }
@@ -72,7 +84,7 @@ impl Service {
         let mut input = child.stdin.take().ok_or("private service stdin absent")?;
         serde_json::to_writer(
             &mut input,
-            &serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis()}),
+            &serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis(),"tls":tls}),
         )?;
         input.write_all(b"\n")?;
         drop(input);
@@ -104,7 +116,7 @@ impl Service {
             .as_u64()
             .filter(|p| *p > 0 && *p <= 65535 && *p != 18886)
             .ok_or("invalid private service port")?;
-        if ready["ready"] != true || ready["loopback_only"] != true {
+        if ready["ready"] != true || ready["loopback_only"] != true || ready["tls"] != tls {
             return Err("service has no explicit private readiness".into());
         }
         service.python_platform = ready["python_platform"]
@@ -112,7 +124,11 @@ impl Service {
             .ok_or("helper platform classification absent")?
             .to_owned();
         let scheme = if protocol == StorageProtocol::WebDav {
-            "http"
+            if tls {
+                "https"
+            } else {
+                "http"
+            }
         } else {
             name
         };

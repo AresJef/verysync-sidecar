@@ -404,3 +404,17 @@ accepted a probe despite a conflicting synthetic host key in its private-profile
 failed before positive identity/copy acceptance, and no system or controller SSH
 configuration was changed. Do not infer verified host identity from a successful
 probe or this flag alone; the native trust mechanism still needs separate proof.
+
+## HTTPS WebDAV certificate boundary
+
+A separate private HTTPS case has observed the fixed core reject an untrusted
+self-signed server certificate with verification selected. Explicitly selecting
+`insecure_tls(true)` then allowed the probe and exact file copy; wrong credentials
+still produced an actual native refusal. Source data, target-only data and copied
+bytes remained intact, and owned teardown completed normally.
+
+This deliberately insecure synthetic endpoint does not establish positive
+trusted-CA/server-identity acceptance. The SDK installs no CA, changes no system
+trust store and makes no universal trust-configuration promise for the target
+kernel. Final source/platform acceptance and a correctly trusted identity retain
+their separate gates; configuration flags are not certificate verification proof.
