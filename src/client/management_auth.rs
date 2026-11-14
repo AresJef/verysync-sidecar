@@ -135,6 +135,7 @@ impl Client {
     /// their old credential. The new connection shares their mutation lock.
     pub async fn reconnect_with_api_key(&self, key: ApiKey) -> Result<Client> {
         let options = ConnectOptions::new(self.connection.endpoint.clone(), key)
+            .transport(self.connection.transport.clone())
             .expected_device_id(self.instance.device_id.clone())
             .version_policy(self.connection.version_policy)
             .request_timeout(self.connection.timeout)?

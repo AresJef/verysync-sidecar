@@ -117,6 +117,8 @@ pub enum Capability {
     EnterpriseRemoteManagement,
     /// Explicit native peer tunnel probes and target-identity gateway connections.
     RemoteManagement,
+    /// Per-connection trusted certificates and explicit HTTP(S) proxy routing.
+    ManagementTransport,
     /// Other explicit system and resource operations.
     AuxiliaryControls,
 }
@@ -388,6 +390,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::EnterpriseRemoteManagement),
+    LibraryCapability {
+        capability: Capability::ManagementTransport,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::RemoteManagement,
         implementation: ImplementationStatus::Typed,

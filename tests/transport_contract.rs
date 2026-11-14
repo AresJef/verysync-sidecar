@@ -13,6 +13,9 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
+#[path = "common/management_transport_contracts.rs"]
+mod management_transport_contracts;
+
 #[tokio::test]
 async fn remote_tunnel_connection_preserves_prefix_and_requires_target_identity() -> TestResult {
     use verysync_sidecar::DeviceId;

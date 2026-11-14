@@ -47,6 +47,7 @@
 #![doc = include_str!("../docs/public/official-accounts.md")]
 #![doc = include_str!("../docs/public/licenses.md")]
 #![doc = include_str!("../docs/public/remote-management.md")]
+#![doc = include_str!("../docs/public/management-transport.md")]
 
 mod auth;
 mod capabilities;
@@ -74,6 +75,7 @@ mod local_sync_events;
 mod maintenance;
 mod managed;
 mod management_auth;
+mod management_transport;
 mod network;
 mod official_account;
 mod operations;
@@ -180,6 +182,7 @@ pub use managed::{
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
 pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
+pub use management_transport::{ManagementProxy, ManagementTransport};
 pub use network::{
     ConnectionSnapshot, ConnectionTotals, DeviceTransport, DiscoveryRecord, ListenerStatus,
     NetworkConfig, NetworkPatch, NetworkUpdate, PeerConnection, PeerConnectionType,

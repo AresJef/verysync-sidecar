@@ -1,5 +1,10 @@
 # verysync-sidecar
 
+Unreleased [management transport policy](docs/public/management-transport.md)
+accepts per-connection trusted certificates and explicit authenticated HTTP(S)
+proxies. Certificate/hostname verification and reconnect policy remain explicit;
+full same-source platform acceptance is pending.
+
 The unreleased [remote-management API](docs/public/remote-management.md) keeps
 native permissions, explicit tunnel probes and target-identity gateway
 connections separate. Licensed native sessions and cross-network acceptance
