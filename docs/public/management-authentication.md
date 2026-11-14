@@ -226,3 +226,13 @@ in the tls.Config`; it does not reach certificate validation in this case. The
 library preserves this native limitation and performs no automatic downgrade or
 bypass. A trusted-certificate positive path, further directory conditions and full
 same-source platform evidence remain required before broad support claims.
+
+The separate `ldap_trusted_ca_engine` target prepares an ephemeral CA and a
+localhost-only LDAP certificate on an explicitly selected disposable GitHub-hosted
+VM. Its test helper temporarily provisions only that CA in the VM's trust store
+and removes it by fingerprint after the native core exits. It refuses ordinary
+local and self-hosted environments before running trust commands. This target
+requires strict chain/hostname verification, encrypted correct-password acceptance,
+wrong-password and wrong-hostname refusal, persisted policy and exact CA cleanup.
+Its same-source native results remain a separate acceptance gate; fixture-only
+certificate checks do not establish that the Rust/native authentication passed.

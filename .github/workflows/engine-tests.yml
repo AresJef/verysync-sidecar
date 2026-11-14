@@ -130,6 +130,16 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
+      - name: Verify strict trusted-CA LDAP and exact temporary VM trust cleanup
+        id: native_ldap_trusted_ca_engine
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          VERYSYNC_TEST_EPHEMERAL_CA_TRUST: selected
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target ldap_trusted_ca_engine
+          --evidence-dir "${{ runner.temp }}/vs-ldap-trusted-ca-proxy"
       - name: Verify actual sync, selective browse, recovery and bounded transfers
         id: native_sync_observation
         continue-on-error: true
