@@ -6,6 +6,8 @@ mod managed_fixture;
 #[cfg(feature = "tls")]
 #[path = "common/management_transport_cases.rs"]
 mod management_transport_cases;
+#[path = "common/private_redial.rs"]
+mod private_redial;
 use managed_fixture::{options, TestResult};
 use std::time::Duration;
 use verysync_sidecar::*;
@@ -43,6 +45,21 @@ async fn native_tunnel_permissions_negative_probe_and_restart_preserve_owned_dat
         })
         .await??)
     }
+    async fn connected(a: &Client, peer_a: &DeviceId, b: &Client, peer_b: &DeviceId) -> TestResult {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let (first, second) = tokio::join!(a.connections(), b.connections());
+                if first?.connections.get(peer_a).is_some_and(|p| p.connected)
+                    && second?.connections.get(peer_b).is_some_and(|p| p.connected)
+                {
+                    return Ok::<_, Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await??;
+        Ok(())
+    }
     let root = tempfile::Builder::new()
         .prefix("vs-tunnel-")
         .tempdir()?
@@ -62,9 +79,12 @@ async fn native_tunnel_permissions_negative_probe_and_restart_preserve_owned_dat
     )?
     .startup_timeout(Duration::from_secs(25))?;
     let mut b = ManagedInstance::start(b_options).await?;
+    // One explicit active dialer avoids competing private connection epochs.
+    // Both authorization assertions require actual peer connections first.
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
     let aid = a.client().instance().device_id.clone();
     let bid = b.client().instance().device_id.clone();
-    let aa = address(a.client()).await?;
     let ba = address(b.client()).await?;
     let template = a
         .client()
@@ -77,7 +97,10 @@ async fn native_tunnel_permissions_negative_probe_and_restart_preserve_owned_dat
     assert!(template.requested_fields_match);
     assert_eq!(template.configuration.allow_tunnel, Some(false));
     assert_eq!(template.configuration.remote_gui_port, Some(b_addr.port()));
-    for (client, peer, addr) in [(a.client(), &bid, ba), (b.client(), &aid, aa)] {
+    for (client, peer, addr) in [
+        (a.client(), &bid, ba),
+        (b.client(), &aid, "dynamic".to_owned()),
+    ] {
         let patch = DevicePatch::default().addresses(vec![addr]).paused(false);
         let patch = if *peer == bid {
             patch
@@ -95,6 +118,7 @@ async fn native_tunnel_permissions_negative_probe_and_restart_preserve_owned_dat
     let original = a.client().device(&bid).await?;
     assert_eq!(original.allow_tunnel, Some(false));
     assert_eq!(original.remote_gui_port, Some(b_addr.port()));
+    connected(a.client(), &bid, b.client(), &aid).await?;
     let denied = a.client().probe_device_tunnel(&bid).await?;
     assert_eq!(denied.device_id(), &bid);
     assert!(!denied.tunnel_available());
@@ -146,6 +170,7 @@ async fn native_tunnel_permissions_negative_probe_and_restart_preserve_owned_dat
                 .requested_fields_match
         );
     }
+    connected(a.client(), &bid, b.client(), &aid).await?;
     let revoked = a.client().probe_device_tunnel(&bid).await?;
     assert!(!revoked.tunnel_available());
     assert_eq!(revoked.native_error(), Some("no authorization"));

@@ -58,8 +58,9 @@ to use. An owned instance's isolated auxiliary listener and the management
 listener are distinct resources. A local tunnel probe or a synthetic gateway
 handshake does not establish cross-network remote management.
 
-On isolated unlicensed native instances, a denied probe reports a false tunnel
-and a native authorization diagnostic. After explicitly granting the native
+With a confirmed private peer connection on isolated unlicensed native
+instances, a denied probe reports a false tunnel and a native authorization
+diagnostic. After explicitly granting the native
 permission, the probe can report availability or a transient native failure;
 neither establishes a commercial license or completed session. The tests retain
 the actual result and verify permission revocation,
