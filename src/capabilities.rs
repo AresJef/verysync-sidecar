@@ -107,6 +107,8 @@ pub enum Capability {
     AccountLicense,
     /// Explicit official-account status, login and logout, separate from GUI auth.
     OfficialAccount,
+    /// Native license metadata and explicitly selected refresh/trial requests.
+    LicenseControl,
     /// Storage protocol integrations.
     StorageProtocols,
     /// LocalSync controls.
@@ -313,6 +315,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::LicenseControl,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::OfficialAccount,
         implementation: ImplementationStatus::Typed,

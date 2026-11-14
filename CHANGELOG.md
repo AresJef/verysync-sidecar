@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add identity-checked native license observations and explicit refresh/Pro-trial
+  requests. Preserve collection shapes, private metadata and actual uncertainty;
+  compare expiry only against a caller-selected Unix-second reference, without
+  inferring licensed effects from configuration or an acknowledgement.
+
 - Add explicit official-account status, login and logout with typed native
   rejection codes, private credential/session formatting and fresh observed
   state. Keep GUI authentication and commercial entitlements separate; do not

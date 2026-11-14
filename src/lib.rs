@@ -45,6 +45,7 @@
 #![doc = include_str!("../docs/public/configuration.md")]
 #![doc = include_str!("../docs/public/management-authentication.md")]
 #![doc = include_str!("../docs/public/official-accounts.md")]
+#![doc = include_str!("../docs/public/licenses.md")]
 
 mod auth;
 mod capabilities;
@@ -66,6 +67,7 @@ mod gui_session;
 mod ignores;
 mod invitations;
 mod ldap;
+mod licenses;
 mod local_sync;
 mod local_sync_events;
 mod maintenance;
@@ -141,6 +143,9 @@ pub use invitations::{
     PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
 };
 pub use ldap::{GuiAuthModeUpdate, LdapConfiguration, LdapPatch, LdapTransport};
+pub use licenses::{
+    LicenseChange, LicenseEntries, LicenseExpiry, LicenseRecord, LicenseRequestKind, LicenseStatus,
+};
 pub use local_sync::{
     CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncActionResult,
     LocalSyncCalendarRule, LocalSyncCalendarRuleInfo, LocalSyncConfiguration,
