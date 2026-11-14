@@ -95,6 +95,8 @@ pub enum Capability {
     ManagementKeyRotation,
     /// Local GUI credential configuration and explicit native cookie sessions.
     GuiAuthentication,
+    /// Native directory configuration and GUI LDAP-mode selection.
+    LdapAuthentication,
     /// Account, configuration and commercial authorization.
     AccountLicense,
     /// Storage protocol integrations.
@@ -303,6 +305,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::LdapAuthentication,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::GuiAuthentication,
         implementation: ImplementationStatus::Typed,

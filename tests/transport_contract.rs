@@ -14,6 +14,76 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn ldap_patch_preserves_other_settings_and_never_selects_gui_mode() -> TestResult {
+    use verysync_sidecar::LdapPatch;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"address":"private-directory.invalid:389","bindDN":"uid=%s,dc=private","transport":"plain","insecureSkipVerify":false,"searchBaseDN":"","searchFilter":"(uid=%s)","futureSecret":KEY})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let updated = client
+        .update_ldap_configuration(&LdapPatch::default().search_filter("(uid=%s)"))
+        .await?;
+    assert!(updated.requested_fields_match);
+    assert_eq!(updated.configuration.extra["futureSecret"], KEY);
+    let debug = format!("{updated:?}");
+    assert!(!debug.contains(KEY) && !debug.contains("private-directory"));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with("PATCH /prefix/rest/config/ldap "));
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split_once("\r\n\r\n")
+            .ok_or("missing LDAP patch")?
+            .1,
+    )?;
+    assert_eq!(body, serde_json::json!({"searchFilter":"(uid=%s)"}));
+    assert!(!requests
+        .iter()
+        .any(|r| r.starts_with("PATCH /prefix/rest/config/gui ")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn ldap_and_gui_mode_invalid_changes_are_rejected_before_any_write() -> TestResult {
+    use verysync_sidecar::{GuiAuthMode, LdapPatch, LdapTransport};
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for patch in [
+        LdapPatch::default(),
+        LdapPatch::default().address("user:password@host:389"),
+        LdapPatch::default().address("host:0"),
+        LdapPatch::default().bind_dn("invalid\0value"),
+        LdapPatch::default().transport(LdapTransport::Unknown(KEY.to_owned())),
+    ] {
+        assert!(matches!(
+            client.update_ldap_configuration(&patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert!(matches!(
+        client
+            .set_gui_auth_mode(
+                &GuiAuthMode::Unknown(KEY.to_owned()),
+                Duration::from_secs(1)
+            )
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn gui_session_uses_scoped_csrf_cookies_without_api_keys_and_verifies_logout() -> TestResult {
     use verysync_sidecar::{GuiCredentials, GuiLoginOptions, GuiSession};
     let csrf = "synthetic-private-csrf";

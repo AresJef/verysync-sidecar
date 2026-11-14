@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 
 /// Native management GUI authentication selector.
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GuiAuthMode {
     /// Locally configured GUI username/password.

@@ -174,6 +174,18 @@ impl ManagedInstance {
         &self.client
     }
 
+    /// Select a native GUI authentication mode once and adopt the API-key
+    /// connection after GUI reload. Actual LDAP login is verified separately.
+    pub async fn set_gui_auth_mode(
+        &mut self,
+        mode: &crate::GuiAuthMode,
+        timeout: Duration,
+    ) -> Result<crate::GuiAuthModeUpdate> {
+        let update = self.client.set_gui_auth_mode(mode, timeout).await?;
+        self.client = update.client.clone();
+        Ok(update)
+    }
+
     /// Set local GUI credentials once and adopt the authenticated API-key
     /// connection after native GUI reload. No core restart or force is used.
     /// A separate GUI login verifies the supplied password.

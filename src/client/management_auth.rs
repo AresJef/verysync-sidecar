@@ -13,30 +13,72 @@ impl Client {
         credentials: &crate::GuiCredentials,
         timeout: Duration,
     ) -> Result<crate::GuiCredentialUpdate> {
+        let body = serde_json::json!({"user":credentials.username,"password":credentials.password,"authMode":"static"});
+        let (client, configuration, write_acknowledged) = self
+            .patch_gui_authentication(body, timeout, "set local GUI credentials")
+            .await?;
+        Ok(crate::GuiCredentialUpdate {
+            username_matches: configuration.username == credentials.username,
+            configuration,
+            client,
+            write_acknowledged,
+        })
+    }
+
+    /// Select static or LDAP GUI authentication with one PATCH. LDAP directory
+    /// configuration is a separate operation and this readback is not login proof.
+    pub async fn set_gui_auth_mode(
+        &self,
+        mode: &crate::GuiAuthMode,
+        timeout: Duration,
+    ) -> Result<crate::GuiAuthModeUpdate> {
+        if matches!(mode, crate::GuiAuthMode::Unknown(_)) {
+            return Err(Error::InvalidConfiguration {
+                reason: "unknown GUI authentication mode cannot be submitted",
+            });
+        }
+        let (client, configuration, write_acknowledged) = self
+            .patch_gui_authentication(
+                serde_json::json!({"authMode":mode}),
+                timeout,
+                "set native GUI authentication mode",
+            )
+            .await?;
+        Ok(crate::GuiAuthModeUpdate {
+            requested_mode_matches: configuration.mode == *mode,
+            configuration,
+            client,
+            write_acknowledged,
+        })
+    }
+
+    async fn patch_gui_authentication(
+        &self,
+        body: serde_json::Value,
+        timeout: Duration,
+        operation: &'static str,
+    ) -> Result<(Client, GuiAuthenticationConfig, bool)> {
         if timeout.is_zero() || std::time::Instant::now().checked_add(timeout).is_none() {
             return Err(Error::InvalidConfiguration {
-                reason: "GUI credential update requires a nonzero representable deadline",
+                reason: "GUI change requires a nonzero representable deadline",
             });
         }
         tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
-            reason: "GUI credential update requires a Tokio runtime with I/O and timers",
+            reason: "GUI change requires a Tokio runtime with I/O and timers",
         })?;
-        let body = serde_json::json!({"user":credentials.username,"password":credentials.password,"authMode":"static"});
+        let unknown = |source| Error::MutationOutcomeUnknown {
+            operation,
+            source: Box::new(source),
+        };
         let mut write_started = false;
-        let operation = async {
+        let change = async {
             let _guard = self.connection.mutation_lock.lock().await;
             self.system_status().await?;
             let url = self.connection.management_url("rest/config/gui", &[])?;
             write_started = true;
-            let write_acknowledged = match self
+            let acknowledged = match self
                 .connection
-                .request_bytes(
-                    "set local GUI credentials",
-                    reqwest::Method::PATCH,
-                    url,
-                    Some(&body),
-                    true,
-                )
+                .request_bytes(operation, reqwest::Method::PATCH, url, Some(&body), true)
                 .await
             {
                 Ok(_) => true,
@@ -53,38 +95,29 @@ impl Client {
                         tokio::time::sleep(Duration::from_millis(50)).await;
                         continue;
                     }
-                    Err(Error::IncompatibleVersion { actual }) => {
-                        return Err(gui_credential_unknown(Error::IncompatibleVersion {
-                            actual: actual
-                                .replace(&credentials.password, "[REDACTED]")
-                                .replace(&credentials.username, "[REDACTED]"),
-                        }))
+                    Err(Error::IncompatibleVersion { mut actual }) => {
+                        for field in ["user", "password"] {
+                            if let Some(value) = body
+                                .get(field)
+                                .and_then(serde_json::Value::as_str)
+                                .filter(|s| !s.is_empty())
+                            {
+                                actual = actual.replace(value, "[REDACTED]");
+                            }
+                        }
+                        return Err(unknown(Error::IncompatibleVersion { actual }));
                     }
-                    Err(error) => return Err(gui_credential_unknown(error)),
+                    Err(error) => return Err(unknown(error)),
                 };
-                let configuration = client
-                    .gui_authentication()
-                    .await
-                    .map_err(gui_credential_unknown)?;
-                return Ok(crate::GuiCredentialUpdate {
-                    username_matches: configuration.username == credentials.username,
-                    configuration,
-                    client,
-                    write_acknowledged,
-                });
+                let configuration = client.gui_authentication().await.map_err(unknown)?;
+                return Ok((client, configuration, acknowledged));
             }
         };
-        tokio::time::timeout(timeout, operation)
+        tokio::time::timeout(timeout, change)
             .await
             .unwrap_or_else(|_| {
-                let error = Error::Timeout {
-                    operation: "set local GUI credentials",
-                };
-                Err(if write_started {
-                    gui_credential_unknown(error)
-                } else {
-                    error
-                })
+                let error = Error::Timeout { operation };
+                Err(if write_started { unknown(error) } else { error })
             })
     }
 
@@ -225,13 +258,6 @@ fn retry_read(error: &Error) -> bool {
 fn rotation_unknown(source: Error) -> Error {
     Error::MutationOutcomeUnknown {
         operation: "reconcile management API key rotation",
-        source: Box::new(source),
-    }
-}
-
-fn gui_credential_unknown(source: Error) -> Error {
-    Error::MutationOutcomeUnknown {
-        operation: "reconcile local GUI credential update",
         source: Box::new(source),
     }
 }

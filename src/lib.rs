@@ -62,6 +62,7 @@ mod folders;
 mod gui_session;
 mod ignores;
 mod invitations;
+mod ldap;
 mod local_sync;
 mod local_sync_events;
 mod maintenance;
@@ -131,6 +132,7 @@ pub use invitations::{
     DeviceIgnoreUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
     PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
 };
+pub use ldap::{GuiAuthModeUpdate, LdapConfiguration, LdapPatch, LdapTransport};
 pub use local_sync::{
     CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncActionResult,
     LocalSyncCalendarRule, LocalSyncCalendarRuleInfo, LocalSyncConfiguration,
