@@ -1,6 +1,11 @@
 //! Failure-only private peer/core observations with no raw sensitive output.
 use serde_json::json;
 use verysync_sidecar::{FolderId, ManagedInstance};
+fn private_tcp_endpoint(value: &str) -> Option<std::net::SocketAddr> {
+    let endpoint: std::net::SocketAddr = value.strip_prefix("tcp://")?.parse().ok()?;
+    (endpoint.ip().is_loopback() && endpoint.port() != 0 && endpoint.port() != 18886)
+        .then_some(endpoint)
+}
 // Failure-only bounded diagnostics; no identity/address/path/log content is printed.
 // Original observation deadlines, workload and frozen rate windows stay unchanged.
 pub async fn report(
@@ -17,6 +22,38 @@ pub async fn report(
             .ok()
             .and_then(|c| c.connections.get(peer));
         let config = core.client().folder(folder).await;
+        let configured_peer = core.client().device(peer).await;
+        let peer_core = cores
+            .iter()
+            .find(|(candidate, _, _)| &candidate.client().instance().device_id == *peer)
+            .map(|(candidate, _, _)| *candidate);
+        let peer_listeners = if let Some(peer_core) = peer_core {
+            peer_core
+                .client()
+                .listener_status()
+                .await
+                .ok()
+                .map(|statuses| {
+                    statuses
+                        .into_values()
+                        .flat_map(|status| status.lan_addresses)
+                        .filter_map(|address| private_tcp_endpoint(&address))
+                        .collect::<std::collections::BTreeSet<_>>()
+                })
+        } else {
+            None
+        };
+        let address_matches_live_listener = configured_peer
+            .as_ref()
+            .ok()
+            .zip(peer_listeners.as_ref())
+            .map(|(configured, current)| {
+                configured
+                    .addresses
+                    .iter()
+                    .filter_map(|address| private_tcp_endpoint(address))
+                    .any(|address| current.contains(&address))
+            });
         let log = (|| -> std::io::Result<Vec<u8>> {
             let mut file =
                 std::fs::File::open(core.state_directory().join(".verysync-sidecar-core.log"))?;
@@ -41,11 +78,16 @@ pub async fn report(
                 "peer_record_present":live.is_some(),"peer_connected":live.map(|p|p.connected),
                 "peer_paused":live.and_then(|p|p.paused),"peer_in_bytes":live.and_then(|p|p.in_bytes_total),
                 "peer_out_bytes":live.and_then(|p|p.out_bytes_total),
+                "configured_peer_address_count":configured_peer.as_ref().ok().map(|peer|peer.addresses.len()),
+                "remote_live_private_tcp_count":peer_listeners.as_ref().map(|addresses|addresses.len()),
+                "configured_peer_address_matches_live_listener":address_matches_live_listener,
                 "core_log_tail_bytes":log.as_ref().ok().map(Vec::len),
                 "core_log_tail_sha256":log.as_ref().ok().map(|b|format!("{:x}",Sha256::digest(b))),
                 "panic_lines":hits("panic:"),"runtime_error_lines":hits("runtime error:"),
                 "folder_not_running_lines":hits("folder is not running"),
-                "connection_replacing_lines":hits("Replacing"),"scan_complete_lines":hits("Completed initial scan")
+                "connection_replacing_lines":hits("Replacing"),"scan_complete_lines":hits("Completed initial scan"),
+                "connection_refused_lines":hits("connection refused"),"connection_closed_lines":hits("closed"),
+                "tls_handshake_lines":hits("TLS handshake"),"unknown_device_lines":hits("unknown device")
             })
         );
     }

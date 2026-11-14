@@ -3554,3 +3554,187 @@ async fn resource_selection_uses_root_route_and_nested_escaped_volume_relative_u
     assert_eq!(query.get("files").map(String::as_str),Some("base%20%E4%BA%8C%20%25%2Cdir/reports/%E4%BA%8C%25%2Cx.txt,base%20%E4%BA%8C%20%25%2Cdir/line%0Abreak.txt"));
     Ok(())
 }
+
+#[tokio::test]
+async fn resource_mutation_roots_and_cross_volume_ids_are_rejected_before_requests() -> TestResult {
+    use verysync_sidecar::{
+        PathStyle, ResourceConflictPolicy, ResourceDeleteScope, ResourcePath, ResourceVolumeId,
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let root = ResourcePath::root(ResourceVolumeId::parse("source-volume")?, PathStyle::Unix);
+    let child = root.clone().child("file")?;
+    let other = ResourcePath::root(ResourceVolumeId::parse("other-volume")?, PathStyle::Unix)
+        .child("file")?;
+    assert!(matches!(
+        client.create_resource_directory(&root).await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client
+            .delete_resource(&root, ResourceDeleteScope::RecursiveDirectory)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client.write_resource_text(&root, "refused").await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client
+            .copy_resource(&root, &child, ResourceConflictPolicy::RejectExisting)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client
+            .move_resource(&child, &root, ResourceConflictPolicy::RejectExisting)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client
+            .copy_resource(&child, &other, ResourceConflictPolicy::RejectExisting)
+            .await,
+        Err(Error::ResourceMutationRejected { .. })
+    ));
+    assert!(matches!(
+        client
+            .move_resource(&child, &other, ResourceConflictPolicy::OverwriteAndMerge)
+            .await,
+        Err(Error::ResourceMutationRejected { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_copy_encodes_native_destination_uri_inside_query_and_reads_both_resources(
+) -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourceConflictPolicy, ResourcePath, ResourceVolumeId};
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let metadata = |name: &str| {
+        Reply::json(
+            serde_json::json!({"path":"/private/metadata","name":name,"size":5,"mode":420,"modified":"native-value","isDir":false}),
+        )
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        identity(),
+        metadata("from %.bin"),
+        identity(),
+        Reply {
+            status: 404,
+            body: b"not found".to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        Reply {
+            status: 200,
+            body: b"200 OK\n".to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        identity(),
+        metadata("to 二 %.bin"),
+        identity(),
+        metadata("from %.bin"),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let root = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix);
+    let result = client
+        .copy_resource(
+            &root.clone().child("from %.bin")?,
+            &root.child("to 二 %.bin")?,
+            ResourceConflictPolicy::RejectExisting,
+        )
+        .await?;
+    assert_eq!(result.metadata.name, "to 二 %.bin");
+    assert!(!result.generated_name);
+    assert!(!format!("{result:?}").contains("from %"));
+    assert!(!format!("{result:?}").contains("to 二"));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    let request = writes[0].lines().next().ok_or("missing request line")?;
+    let target = request.split_whitespace().nth(1).ok_or("missing target")?;
+    let uri = url::Url::parse(&format!("http://synthetic.invalid{target}"))?;
+    assert_eq!(
+        uri.path(),
+        "/prefix/rest/f/api/resources/volume/from%20%25.bin"
+    );
+    let query = uri
+        .query_pairs()
+        .into_owned()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        query.get("destination").map(String::as_str),
+        Some("/volume/to%20%E4%BA%8C%20%25.bin")
+    );
+    assert_eq!(query.get("action").map(String::as_str), Some("copy"));
+    assert_eq!(query.get("override").map(String::as_str), Some("false"));
+    assert_eq!(query.get("rename").map(String::as_str), Some("false"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_keep_both_ambiguous_parent_changes_are_unknown_without_retries() -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourceConflictPolicy, ResourcePath, ResourceVolumeId};
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let file = |name: &str| serde_json::json!({"path":"/private/metadata","name":name,"size":5,"mode":420,"modified":"native-value","isDir":false});
+    let parent = |new: bool| {
+        let mut items = vec![file("source.bin"), file("target.bin")];
+        if new {
+            items.push(file("target(1).bin"));
+            items.push(file("concurrent.bin"));
+        }
+        Reply::json(
+            serde_json::json!({"path":"/","name":"root","size":0,"mode":493,"modified":"native-value","isDir":true,"items":items}),
+        )
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        identity(),
+        Reply::json(file("source.bin")),
+        identity(),
+        Reply::json(file("target.bin")),
+        identity(),
+        parent(false),
+        Reply {
+            status: 200,
+            body: b"200 OK\n".to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        identity(),
+        parent(true),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let root = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix);
+    assert!(
+        matches!(client.copy_resource(&root.clone().child("source.bin")?,&root.child("target.bin")?,ResourceConflictPolicy::KeepBoth).await,Err(Error::MutationOutcomeUnknown{source,..})if matches!(source.as_ref(),Error::ResourceMutationRejected{..}))
+    );
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .count(),
+        1
+    );
+    Ok(())
+}

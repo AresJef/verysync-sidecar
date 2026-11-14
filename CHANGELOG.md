@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit resource directory creation, same-volume copy/move, existing-file
+  UTF-8 replacement and scoped deletion with collision/merge policies. Keep
+  observed Windows directory partial failures and required positive acceptance
+  separate; cancellation does not imply native rollback or copy termination.
+
 - Add native staggered/external versioners and explicit basic/default archive
   locations, preserving earlier archive data when selecting a location. Observe
   actual external callbacks and native failure effects separately from config.

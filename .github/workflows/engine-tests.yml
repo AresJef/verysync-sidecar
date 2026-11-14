@@ -112,6 +112,13 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target files_engine
           --evidence-dir "${{ runner.temp }}/vs-file-resources-proxy"
+      - name: Verify resource file mutations and exact native directory conditions
+        id: native_file_mutation_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_mutation_engine
+          --evidence-dir "${{ runner.temp }}/vs-file-mutation-proxy"
       - name: Verify bounded file streaming, archive contents and actual cancellation
         id: native_file_transfer_engine
         continue-on-error: true

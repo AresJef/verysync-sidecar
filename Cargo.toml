@@ -197,6 +197,11 @@ path = "tests/file_history_engine.rs"
 required-features = ["engine-tests"]
 
 [[test]]
+name = "file_mutation_engine"
+path = "tests/file_mutation_engine.rs"
+required-features = ["engine-tests"]
+
+[[test]]
 name = "maintenance_engine"
 path = "tests/maintenance_engine.rs"
 required-features = ["engine-tests", "download"]

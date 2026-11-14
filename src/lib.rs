@@ -52,6 +52,7 @@ mod engine_source;
 mod error;
 mod events;
 mod file_history;
+mod file_mutations;
 mod file_transfers;
 mod files;
 mod folders;
@@ -99,6 +100,9 @@ pub use file_history::{
     DirectoryVersionOrder, ExternalVersioningCommand, FileVersionRestore, FileVersionRestoreReport,
     FolderVersionHistory, FolderVersioningConfiguration, FolderVersioningPolicy,
     FolderVersioningUpdate, VersionArchiveLocation, VersionedDirectory,
+};
+pub use file_mutations::{
+    ResourceConflictPolicy, ResourceDeleteScope, ResourceMutation, ResourceRemoval,
 };
 pub use file_transfers::{
     ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,

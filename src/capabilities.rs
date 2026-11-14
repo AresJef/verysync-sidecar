@@ -236,7 +236,11 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::ResourceMutation),
+    LibraryCapability {
+        capability: Capability::ResourceMutation,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::SynchronizationIndexReset,
         implementation: ImplementationStatus::Typed,
