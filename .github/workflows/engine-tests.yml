@@ -184,6 +184,12 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target local_sync_automation_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-automation-proxy"
+      - name: Verify actual marker and incompatible baseline recovery without implicit execution
+        id: native_local_sync_repair_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_repair_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-repair-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
         id: native_managed_lifetime
         continue-on-error: true

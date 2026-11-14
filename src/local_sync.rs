@@ -760,22 +760,22 @@ pub struct LocalSyncJobPatch {
     pub(crate) label: Option<String>,
     pub(crate) group: Option<String>,
     pub(crate) enabled: Option<bool>,
-    pub(crate) automation: Extra,
+    pub(crate) settings: Extra,
 }
 impl LocalSyncJobPatch {
     /// Explicitly request startup synchronization. Enabling it can cause writes
     /// immediately or at a future core start; inspect actual readback separately.
     pub fn sync_on_startup(mut self, enabled: bool) -> Self {
-        self.automation
+        self.settings
             .insert("syncOnStartup".to_owned(), enabled.into());
         self
     }
     /// Request native watching and full-check minutes. No SDK watcher is started.
     pub fn watch_changes(mut self, enabled: bool, check_interval_minutes: u32) -> Result<Self> {
         watch_interval(check_interval_minutes)?;
-        self.automation
+        self.settings
             .insert("watchChanges".to_owned(), enabled.into());
-        self.automation.insert(
+        self.settings.insert(
             "watchCheckIntervalMin".to_owned(),
             check_interval_minutes.into(),
         );
@@ -789,20 +789,20 @@ impl LocalSyncJobPatch {
             "scheduleTimezone",
             "scheduleCalendar",
         ] {
-            self.automation.remove(key);
+            self.settings.remove(key);
         }
-        self.automation
+        self.settings
             .insert("scheduleMode".to_owned(), schedule.schedule_mode.into());
         if let Some(v) = schedule.schedule_interval_sec {
-            self.automation
+            self.settings
                 .insert("scheduleIntervalSec".to_owned(), v.into());
         }
         if let Some(v) = schedule.schedule_timezone {
-            self.automation
+            self.settings
                 .insert("scheduleTimezone".to_owned(), v.into());
         }
         if let Some(v) = schedule.schedule_calendar {
-            self.automation.insert(
+            self.settings.insert(
                 "scheduleCalendar".to_owned(),
                 serde_json::Value::Array(
                     v.into_iter()
@@ -813,6 +813,13 @@ impl LocalSyncJobPatch {
                 ),
             );
         }
+        self
+    }
+    /// Select native permission comparison/synchronization. For an established
+    /// two-way job this can invalidate its baseline; recovery remains explicit.
+    pub fn ignore_permissions(mut self, ignore: bool) -> Self {
+        self.settings
+            .insert("ignorePerms".to_owned(), ignore.into());
         self
     }
     /// Select an exact bounded label.
@@ -843,6 +850,14 @@ pub struct LocalSyncJobUpdate {
 pub struct LocalSyncJobRemoval {
     /// Exact identity observed absent; source/target data are not deletion targets.
     pub job_id: LocalSyncJobId,
+}
+/// A known marker-rebuild acknowledgement and separate native status readback.
+/// This is not proof of the remote filesystem effect or completed synchronization.
+pub struct LocalSyncMarkerRepair {
+    /// Exact job whose markers were requested for rebuilding.
+    pub job_id: LocalSyncJobId,
+    /// Actual subsequent native status, including any remaining error.
+    pub observed: LocalSyncStatus,
 }
 /// Native task acknowledgement. Observe the exact operation before inferring completion.
 #[derive(Deserialize)]
@@ -1102,6 +1117,7 @@ private_debug!(
     LocalSyncJobPatch,
     LocalSyncJobUpdate,
     LocalSyncJobRemoval,
+    LocalSyncMarkerRepair,
     LocalSyncOperation,
     LocalSyncStatus,
     LocalSyncProgress,

@@ -113,7 +113,7 @@ impl Client {
         if patch.label.is_none()
             && patch.group.is_none()
             && patch.enabled.is_none()
-            && patch.automation.is_empty()
+            && patch.settings.is_empty()
         {
             return Err(invalid("Local Sync update must select at least one field"));
         }
@@ -133,7 +133,7 @@ impl Client {
             job.enabled = enabled;
         }
         let mut body = value(&job)?;
-        for (key, val) in &patch.automation {
+        for (key, val) in &patch.settings {
             body[key] = val.clone();
         }
         let operation = "update Local Sync job";
@@ -168,7 +168,7 @@ impl Client {
                 .is_none_or(|v| v.as_str() == configuration.group.as_deref().unwrap_or_default())
             && patch.enabled.is_none_or(|v| v == configuration.enabled)
             && patch
-                .automation
+                .settings
                 .iter()
                 .all(|(k, v)| observed_value.get(k) == Some(v));
         Ok(LocalSyncJobUpdate {
@@ -369,6 +369,107 @@ impl Client {
             control,
             observed,
         })
+    }
+    /// Explicitly rebuild native endpoint markers for a reviewed job snapshot.
+    /// The entire fresh configuration must still match that snapshot and the
+    /// native operation must be quiescent. This deliberately repairs a safety
+    /// marker; verify endpoint ownership and mounts before calling. No endpoint
+    /// directory creation, host filesystem fallback, retry or run is performed
+    /// by the SDK. The acknowledgement/status are separate from filesystem proof.
+    pub async fn rebuild_local_sync_markers(
+        &self,
+        expected: &LocalSyncJob,
+    ) -> Result<crate::LocalSyncMarkerRepair> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        let current = self.local_sync_repair_snapshot(expected).await?;
+        let operation = "rebuild native Local Sync markers";
+        let ack: serde_json::Value = self
+            .local_sync_json(
+                operation,
+                reqwest::Method::POST,
+                &["jobs", current.job_id.as_str(), "markers", "rebuild"],
+                &[],
+                Some(&serde_json::json!({"confirmed":true,"job":current})),
+                true,
+            )
+            .await?;
+        if ack.as_object().is_none_or(|o| !o.is_empty()) {
+            return Err(unknown(
+                operation,
+                invalid(
+                    "native marker rebuild acknowledgement differs from the known empty object",
+                ),
+            ));
+        }
+        let observed = self
+            .local_sync_status(&expected.job_id)
+            .await
+            .map_err(|e| unknown(operation, e))?;
+        Ok(crate::LocalSyncMarkerRepair {
+            job_id: expected.job_id.clone(),
+            observed,
+        })
+    }
+    /// Explicitly discard an incompatible two-way baseline and return a native
+    /// recovery preview for the entire reviewed job snapshot. This can change
+    /// deletion/conflict interpretation. It is not backup restoration or file
+    /// execution; review the new preview and choose a separate explicit run.
+    /// Current settings must still match and work must be quiescent. No retries,
+    /// automatic run, controller baseline edits or filesystem fallback occur.
+    pub async fn recover_local_sync_baseline(
+        &self,
+        expected: &LocalSyncJob,
+    ) -> Result<LocalSyncPreview> {
+        if expected.mode != "bisync" {
+            return Err(invalid("native baseline recovery requires a two-way job"));
+        }
+        let _guard = self.connection.mutation_lock.lock().await;
+        let current = self.local_sync_repair_snapshot(expected).await?;
+        let operation = "recover native Local Sync baseline";
+        let preview: LocalSyncPreview = self
+            .local_sync_json(
+                operation,
+                reqwest::Method::POST,
+                &["jobs", current.job_id.as_str(), "baseline", "recover"],
+                &[],
+                Some(&serde_json::json!({"confirmed":true,"job":current})),
+                true,
+            )
+            .await?;
+        if preview.job_id != expected.job_id {
+            return Err(unknown(
+                operation,
+                invalid("native baseline recovery selects a different job"),
+            ));
+        }
+        let observed = self
+            .local_sync_preview(&expected.job_id)
+            .await
+            .map_err(|e| unknown(operation, e))?;
+        if observed.id != preview.id || observed.operation_id != preview.operation_id {
+            return Err(unknown(
+                operation,
+                invalid("native baseline recovery preview changed before readback"),
+            ));
+        }
+        Ok(observed)
+    }
+    async fn local_sync_repair_snapshot(&self, expected: &LocalSyncJob) -> Result<LocalSyncJob> {
+        let current = self.local_sync_job(&expected.job_id).await?;
+        if value(&current)? != value(expected)? {
+            return Err(invalid(
+                "native repair configuration changed since the reviewed snapshot",
+            ));
+        }
+        current.side_a.validate_target(self.folder_path_style()?)?;
+        current.side_b.validate_target(self.folder_path_style()?)?;
+        let status = self.local_sync_status(&expected.job_id).await?;
+        if !matches!(status.state.as_str(), "idle" | "error") {
+            return Err(invalid(
+                "native repair requires a known quiescent operation state",
+            ));
+        }
+        Ok(current)
     }
     /// Explicitly start analysis only. This acknowledges an operation; poll its
     /// exact identity and read the completed preview before choosing execution.
