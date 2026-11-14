@@ -26,6 +26,8 @@ mod folder_policy_contracts;
 mod gui_listener_contracts;
 #[path = "common/management_transport_contracts.rs"]
 mod management_transport_contracts;
+#[path = "common/native_helper_contracts.rs"]
+mod native_helper_contracts;
 #[path = "common/network_limits_contracts.rs"]
 mod network_limits_contracts;
 #[path = "common/system_actions_contracts.rs"]

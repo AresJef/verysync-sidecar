@@ -50,6 +50,7 @@
 #![doc = include_str!("../docs/public/management-transport.md")]
 #![doc = include_str!("../docs/public/gui-listener.md")]
 #![doc = include_str!("../docs/public/target-directories.md")]
+#![doc = include_str!("../docs/public/native-helpers.md")]
 
 mod auth;
 mod auxiliary;
@@ -103,7 +104,10 @@ mod transports;
 mod upgrades;
 
 pub use auth::{ApiKey, DeviceId};
-pub use auxiliary::{TargetDirectoryCreation, TargetDirectoryEntry, TargetDirectoryLocation};
+pub use auxiliary::{
+    NativeUsageReport, PendingNativeLink, TargetDirectoryCreation, TargetDirectoryEntry,
+    TargetDirectoryLocation, TargetIpLocation,
+};
 pub use capabilities::{
     library_capabilities, Capability, CapabilityReport, ImplementationStatus, InstanceConditions,
     InstanceObservation, LibraryCapability, TargetSnapshot, TargetValidation, VerificationStatus,

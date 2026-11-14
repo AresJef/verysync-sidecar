@@ -59,3 +59,71 @@ impl fmt::Debug for TargetDirectoryCreation {
             .finish_non_exhaustive()
     }
 }
+
+/// Target-side IP lookup data. Empty location text is valid for addresses such
+/// as loopback. Results are native data, not an independently verified location.
+#[derive(Clone)]
+pub struct TargetIpLocation {
+    /// Address echoed and checked against the explicitly requested IP.
+    pub ip: std::net::IpAddr,
+    /// Native `pro` field, potentially empty or localized.
+    pub province: String,
+    /// Native city text, potentially empty or localized.
+    pub city: String,
+    /// Native `addr` description, potentially empty or localized.
+    pub description: String,
+    /// Additional native fields, without interpretation.
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for TargetIpLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TargetIpLocation").finish_non_exhaustive()
+    }
+}
+
+/// A native usage-report snapshot collected on explicit request. Collection is
+/// separate from enabling or sending usage reports. All values are private.
+#[derive(Clone, Deserialize)]
+pub struct NativeUsageReport {
+    /// Native program version, including its prefix.
+    pub version: String,
+    /// Native OS/architecture description.
+    pub platform: String,
+    /// Native configured-device count, including the local device.
+    #[serde(rename = "numDevices")]
+    pub device_count: u64,
+    /// Native report identifier, when present; not the certificate device ID.
+    #[serde(rename = "uniqueID")]
+    pub unique_id: Option<String>,
+    /// Other native report fields and counters. No performance claim is inferred.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for NativeUsageReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeUsageReport").finish_non_exhaustive()
+    }
+}
+
+/// A native GUI-link snapshot. Retrieving it never opens or follows the link,
+/// registers a folder, or accepts a sharing key on the caller's behalf.
+#[derive(Clone)]
+pub struct PendingNativeLink {
+    pub(crate) link: Option<String>,
+    /// Other private native fields, preserved without interpretation.
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl PendingNativeLink {
+    /// Borrow the exact nonempty native text. It is untrusted and can include
+    /// sharing credentials. An empty native string is represented as `None`.
+    pub fn link(&self) -> Option<&str> {
+        self.link.as_deref()
+    }
+}
+impl fmt::Debug for PendingNativeLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PendingNativeLink")
+            .field("present", &self.link.is_some())
+            .finish_non_exhaustive()
+    }
+}

@@ -19,6 +19,7 @@ mod license_control;
 mod local_sync_control;
 mod maintenance_control;
 mod management_auth;
+mod native_helpers;
 mod network_control;
 mod official_account_control;
 mod recovery;
