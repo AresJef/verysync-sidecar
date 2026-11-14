@@ -3,6 +3,8 @@
 #[path = "common/engine_fixture.rs"]
 mod engine_fixture;
 
+#[path = "common/direct_restart_effects.rs"]
+mod direct_restart_effects;
 #[path = "common/response_proxy.rs"]
 mod response_proxy;
 
