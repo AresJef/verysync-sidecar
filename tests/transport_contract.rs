@@ -4217,3 +4217,63 @@ async fn local_sync_native_reset_and_missed_flags_remain_explicit_when_resuming(
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn local_sync_automation_put_reports_normalization_and_preserves_unselected_private_options(
+) -> TestResult {
+    use verysync_sidecar::{
+        LocalSyncCalendarRule, LocalSyncJobId, LocalSyncJobPatch, LocalSyncSchedule,
+    };
+    let id = LocalSyncJobId::parse("synthetic-job")?;
+    let original = serde_json::json!({"jobId":id.as_str(),"label":"unchanged","sideA":{"fsType":"basic","uri":"/source","transfers":2},"sideB":{"fsType":"sftp","uri":"sftp://private.invalid/root","transfers":4,"password":"retained secret"},"mode":"mirror_a_to_b","enabled":false,"syncOnStartup":false,"deleteExtraneous":false,"watchChanges":false,"watchCheckIntervalMin":10,"scheduleMode":"off","scheduleIntervalSec":0,"futureSetting":{"keep":7}});
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(original.clone()),
+        identity(),
+        Reply::json(original.clone()),
+        identity(),
+        Reply::json(original.clone()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let patch = LocalSyncJobPatch::default()
+        .watch_changes(true, 10)?
+        .schedule(LocalSyncSchedule::interval(60)?)
+        .schedule(LocalSyncSchedule::calendar(
+            vec![LocalSyncCalendarRule::new(
+                vec![1, 7],
+                vec!["12:34".to_owned()],
+            )?],
+            "UTC",
+        )?);
+    let result = client.update_local_sync_job(&id, &patch).await?;
+    assert!(!result.requested_fields_match);
+    assert_eq!(result.configuration.watch_changes, Some(false));
+    assert_eq!(result.configuration.schedule_mode.as_deref(), Some("off"));
+    assert_eq!(serde_json::to_value(result.configuration)?, original);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    let writes: Vec<_> = requests.iter().filter(|x| x.starts_with("PUT ")).collect();
+    assert_eq!(writes.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("missing body")?)?;
+    assert_eq!(body["watchChanges"], true);
+    assert_eq!(body["scheduleMode"], "calendar");
+    assert_eq!(body["scheduleTimezone"], "UTC");
+    assert_eq!(
+        body["scheduleCalendar"][0]["weekdays"],
+        serde_json::json!([1, 7])
+    );
+    assert_eq!(
+        body["scheduleCalendar"][0]["times"],
+        serde_json::json!(["12:34"])
+    );
+    assert_eq!(body["scheduleIntervalSec"], 0);
+    assert_eq!(body["futureSetting"], original["futureSetting"]);
+    assert_eq!(body["sideB"]["password"], "retained secret");
+    assert_eq!(body["enabled"], false);
+    Ok(())
+}

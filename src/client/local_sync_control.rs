@@ -66,8 +66,8 @@ impl Client {
         }
         Ok(job)
     }
-    /// Register both explicit endpoints without starting, scheduling or watching
-    /// a sync. Actual readback follows the acknowledgement. On any uncertain
+    /// Register both explicit endpoints. Automatic triggers default off; explicit
+    /// startup/watch/schedule choices can cause native writes. On any uncertain
     /// write, reconcile the job list; the SDK never retries creation.
     pub async fn create_local_sync_job(
         &self,
@@ -102,7 +102,7 @@ impl Client {
         }
         Ok(observed)
     }
-    /// Replace only selected label/group/enabled fields in a freshly read full
+    /// Replace selected labels, enablement or automatic triggers in a freshly read full
     /// native object, preserving endpoint credentials and unknown options. This
     /// is serialized for clones, but does not lock other management writers.
     pub async fn update_local_sync_job(
@@ -110,7 +110,11 @@ impl Client {
         id: &LocalSyncJobId,
         patch: &LocalSyncJobPatch,
     ) -> Result<LocalSyncJobUpdate> {
-        if patch.label.is_none() && patch.group.is_none() && patch.enabled.is_none() {
+        if patch.label.is_none()
+            && patch.group.is_none()
+            && patch.enabled.is_none()
+            && patch.automation.is_empty()
+        {
             return Err(invalid("Local Sync update must select at least one field"));
         }
         let _guard = self.connection.mutation_lock.lock().await;
@@ -128,6 +132,10 @@ impl Client {
         if let Some(enabled) = patch.enabled {
             job.enabled = enabled;
         }
+        let mut body = value(&job)?;
+        for (key, val) in &patch.automation {
+            body[key] = val.clone();
+        }
         let operation = "update Local Sync job";
         let acknowledged: LocalSyncJob = self
             .local_sync_json(
@@ -135,7 +143,7 @@ impl Client {
                 reqwest::Method::PUT,
                 &["jobs", id.as_str()],
                 &[],
-                Some(&value(&job)?),
+                Some(&body),
                 true,
             )
             .await?;
@@ -149,6 +157,7 @@ impl Client {
             .local_sync_job(id)
             .await
             .map_err(|e| unknown(operation, e))?;
+        let observed_value = value(&configuration).map_err(|e| unknown(operation, e))?;
         let requested_fields_match = patch
             .label
             .as_ref()
@@ -157,7 +166,11 @@ impl Client {
                 .group
                 .as_ref()
                 .is_none_or(|v| v.as_str() == configuration.group.as_deref().unwrap_or_default())
-            && patch.enabled.is_none_or(|v| v == configuration.enabled);
+            && patch.enabled.is_none_or(|v| v == configuration.enabled)
+            && patch
+                .automation
+                .iter()
+                .all(|(k, v)| observed_value.get(k) == Some(v));
         Ok(LocalSyncJobUpdate {
             configuration,
             requested_fields_match,
