@@ -3,10 +3,11 @@ use super::{mutation_error, Client};
 use crate::local_sync::{invalid, logical_subpath};
 use crate::{
     CreateLocalSyncJob, Error, LocalSyncAction, LocalSyncActionResult, LocalSyncConfiguration,
-    LocalSyncHealth, LocalSyncHistory, LocalSyncJob, LocalSyncJobId, LocalSyncJobPatch,
-    LocalSyncJobRemoval, LocalSyncJobUpdate, LocalSyncOperation, LocalSyncPreview,
-    LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId, LocalSyncStatus, ResponseDiagnostic, Result,
-    StorageDirectory, StorageEndpoint, StorageEntry, StorageProbe,
+    LocalSyncConflictResolution, LocalSyncHealth, LocalSyncHistory, LocalSyncJob, LocalSyncJobId,
+    LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate, LocalSyncOperation,
+    LocalSyncPreview, LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId, LocalSyncSelection,
+    LocalSyncSelectionSummary, LocalSyncStatus, ResponseDiagnostic, Result, StorageDirectory,
+    StorageEndpoint, StorageEntry, StorageProbe,
 };
 use serde::de::DeserializeOwned;
 
@@ -362,6 +363,100 @@ impl Client {
         id: &LocalSyncJobId,
         preview: &LocalSyncPreviewId,
     ) -> Result<LocalSyncRun> {
+        self.run_local_sync_preview(id, preview, &LocalSyncSelection::all())
+            .await
+    }
+    /// Read native totals for an explicit selection without running it. The body
+    /// is a selection object; predicted bytes are not transferred-data evidence.
+    pub async fn local_sync_selection_summary(
+        &self,
+        id: &LocalSyncJobId,
+        preview: &LocalSyncPreviewId,
+        selection: &LocalSyncSelection,
+    ) -> Result<LocalSyncSelectionSummary> {
+        let current = self.local_sync_preview(id).await?;
+        if &current.id != preview {
+            return Err(invalid(
+                "Local Sync preview changed before selection summary",
+            ));
+        }
+        selection.selected_count(current.count)?;
+        self.local_sync_json(
+            "read native Local Sync selection totals",
+            reqwest::Method::POST,
+            &[
+                "jobs",
+                id.as_str(),
+                "previews",
+                preview.as_str(),
+                "selection-summary",
+            ],
+            &[],
+            Some(&value(selection)?),
+            false,
+        )
+        .await
+    }
+    /// Resolve reviewed conflicts in one exact preview without executing them.
+    /// The native core returns its replacement preview; the SDK independently
+    /// reads that identity back. A selected missing side can plan deletions.
+    pub async fn resolve_local_sync_conflict(
+        &self,
+        id: &LocalSyncJobId,
+        preview: &LocalSyncPreviewId,
+        resolution: &LocalSyncConflictResolution,
+    ) -> Result<LocalSyncPreview> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        if &self.local_sync_preview(id).await?.id != preview {
+            return Err(invalid(
+                "Local Sync preview changed before conflict resolution",
+            ));
+        }
+        let operation = "resolve exact native Local Sync conflicts";
+        let ack: LocalSyncPreview = self
+            .local_sync_json(
+                operation,
+                reqwest::Method::POST,
+                &[
+                    "jobs",
+                    id.as_str(),
+                    "previews",
+                    preview.as_str(),
+                    "resolve-conflicts",
+                ],
+                &[],
+                Some(&value(resolution)?),
+                true,
+            )
+            .await?;
+        if &ack.job_id != id {
+            return Err(unknown(
+                operation,
+                invalid("native conflict resolution selects another job"),
+            ));
+        }
+        let observed = self
+            .local_sync_preview(id)
+            .await
+            .map_err(|e| unknown(operation, e))?;
+        if observed.id != ack.id {
+            return Err(unknown(
+                operation,
+                invalid("native resolved preview changed before readback"),
+            ));
+        }
+        Ok(observed)
+    }
+    /// Execute only the explicit ranges in one still-current preview. The SDK
+    /// rejects out-of-range/empty selections and scan issues before native POST;
+    /// expiry, native dependencies and races remain authoritative on the core.
+    /// No automatic action expansion, conflict resolution, retry or rollback.
+    pub async fn run_local_sync_preview(
+        &self,
+        id: &LocalSyncJobId,
+        preview: &LocalSyncPreviewId,
+        selection: &LocalSyncSelection,
+    ) -> Result<LocalSyncRun> {
         let _guard = self.connection.mutation_lock.lock().await;
         let current = self.local_sync_preview(id).await?;
         if &current.id != preview || current.scan_issue_count != 0 {
@@ -369,14 +464,19 @@ impl Client {
                 "Local Sync preview changed or has unresolved scan issues",
             ));
         }
-        let operation = "run all exact Local Sync preview actions";
+        if selection.selected_count(current.count)? == 0 {
+            return Err(invalid(
+                "Local Sync execution requires a nonempty exact selection",
+            ));
+        }
+        let operation = "run exact Local Sync preview selection";
         let run: LocalSyncRun = self
             .local_sync_json(
                 operation,
                 reqwest::Method::POST,
                 &["jobs", id.as_str(), "run"],
                 &[],
-                Some(&serde_json::json!({"previewId":preview,"selection":{"all":true}})),
+                Some(&serde_json::json!({"previewId":preview,"selection":selection})),
                 true,
             )
             .await?;

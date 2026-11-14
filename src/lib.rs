@@ -119,12 +119,14 @@ pub use invitations::{
     PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
 };
 pub use local_sync::{
-    CreateLocalSyncJob, LocalSyncAction, LocalSyncActionResult, LocalSyncConfiguration,
-    LocalSyncHealth, LocalSyncHistory, LocalSyncHistoryRecord, LocalSyncJob, LocalSyncJobId,
-    LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate, LocalSyncMode, LocalSyncOperation,
-    LocalSyncOperationId, LocalSyncPreview, LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId,
-    LocalSyncStatus, LocalSyncSummary, StorageDirectory, StorageEndpoint, StorageEntry,
-    StorageProbe, StorageProtocol,
+    CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncActionResult,
+    LocalSyncConfiguration, LocalSyncConflictPolicy, LocalSyncConflictResolution,
+    LocalSyncConflictSide, LocalSyncHealth, LocalSyncHistory, LocalSyncHistoryRecord, LocalSyncJob,
+    LocalSyncJobId, LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate, LocalSyncMode,
+    LocalSyncOperation, LocalSyncOperationId, LocalSyncPreview, LocalSyncPreviewId, LocalSyncRun,
+    LocalSyncRunId, LocalSyncSelection, LocalSyncSelectionSummary, LocalSyncStatus,
+    LocalSyncSummary, StorageDirectory, StorageEndpoint, StorageEntry, StorageProbe,
+    StorageProtocol,
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,

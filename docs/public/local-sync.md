@@ -90,8 +90,22 @@ preview. It refuses a changed preview ID or unresolved scan issues before POST.
 The target still decides expiry, active-operation and conflict conditions;
 preflights cannot lock external writers. Inspect the job's direction, deletion
 and permission settings and the preview's actual actions before requesting a
-run. This API currently exposes all-action execution; selected-action execution
-remains a separate pending capability.
+run. `run_local_sync_preview()` accepts an explicit `LocalSyncSelection` of inclusive
+native action-ID ranges. `including()` and `all_except()` accept at most 10000
+ascending, disjoint ranges; action zero is valid. Ranges are never silently
+sorted, merged, expanded or clipped. Fresh preview count/identity checks reject
+out-of-range or empty execution before native POST. Native dependency and expiry
+rules still apply. `local_sync_selection_summary()` reads exact predicted action
+counts and copy bytes without execution; predicted bytes are separate from
+actual run results. An empty include selection can be summarized as zero.
+
+Two-way jobs accept `LocalSyncConflictPolicy::{Newer, Larger, Manual}`. A manual
+conflict can be resolved with `resolve_local_sync_conflict()` and an explicit
+winning `LocalSyncConflictSide` at one path or subtree. The returned replacement
+preview is independently read back; resolving it does not execute its actions.
+Choosing a missing side can plan deletion. Review the replacement actions and
+explicitly execute that exact new preview. No old data backup or rollback is
+provided by the SDK.
 
 The initial `LocalSyncRun` is a receipt. Observe `local_sync_run()` and compare
 its exact run ID before interpreting finish time, counters and result pages.
@@ -127,8 +141,9 @@ returns a named-object absence error for a missing CREATE/OPEN name. Real
 credential validation, logout and filesystem effects remain in the peer; no
 native error is converted into success.
 
-Reverse mirror, bidirectional conflicts, selected execution, inflight controls,
-Local Sync events, watch/schedules, marker/baseline recovery and each of
+Selected/excluded actions, reverse mirror and two-way newer/larger/manual
+conflicts have separate local native cases. Their final same-source platform
+gates remain pending. Inflight controls, Local Sync events, watch/schedules, marker/baseline recovery and each of
 FTP/SFTP/SMB/WebDAV require separate native effects and verification. Their GUI
 presence, enum values, stored configuration or a basic endpoint success are not
 support claims. Licensed conditions, old architectures and final cross-network

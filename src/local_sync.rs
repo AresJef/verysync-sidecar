@@ -260,6 +260,188 @@ pub enum LocalSyncMode {
     #[serde(rename = "bisync")]
     Bidirectional,
 }
+/// Explicit native policy for simultaneous two-way changes.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalSyncConflictPolicy {
+    /// Select the native newer modification-time policy.
+    Newer,
+    /// Select the native larger-file policy.
+    Larger,
+    /// Preserve conflicts for separately explicit manual resolution.
+    Manual,
+}
+
+/// One inclusive native action-ID range; numeric action zero is valid.
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+pub struct LocalSyncActionRange([u64; 2]);
+impl LocalSyncActionRange {
+    /// Select a non-reversed range whose inclusive length fits a u64.
+    pub fn new(first: u64, last: u64) -> Result<Self> {
+        if last
+            .checked_sub(first)
+            .and_then(|n| n.checked_add(1))
+            .is_none()
+        {
+            return Err(invalid("Local Sync action range is reversed or overflows"));
+        }
+        Ok(Self([first, last]))
+    }
+    /// Select one exact action ID without expanding a range into a list.
+    pub fn single(id: u64) -> Self {
+        Self([id, id])
+    }
+    /// First inclusive action ID.
+    pub fn first(&self) -> u64 {
+        self.0[0]
+    }
+    /// Last inclusive action ID.
+    pub fn last(&self) -> u64 {
+        self.0[1]
+    }
+}
+
+/// Explicit bounded selection within one separately identified preview.
+/// Empty includes select none; executing an empty selection is refused.
+#[derive(Clone, Debug, Serialize)]
+pub struct LocalSyncSelection {
+    all: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    include: Vec<LocalSyncActionRange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    exclude: Vec<LocalSyncActionRange>,
+}
+impl LocalSyncSelection {
+    /// Select every action in the exact preview supplied to a client method.
+    pub fn all() -> Self {
+        Self {
+            all: true,
+            include: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
+    /// Include only explicit ascending, disjoint inclusive ranges (at most 10000).
+    /// No range is silently sorted, merged, expanded or clipped.
+    pub fn including(ranges: Vec<LocalSyncActionRange>) -> Result<Self> {
+        Self::ranges(false, ranges)
+    }
+    /// Select all actions except these ascending, disjoint inclusive ranges.
+    pub fn all_except(ranges: Vec<LocalSyncActionRange>) -> Result<Self> {
+        Self::ranges(true, ranges)
+    }
+    fn ranges(all: bool, ranges: Vec<LocalSyncActionRange>) -> Result<Self> {
+        if ranges.len() > 10000 || ranges.windows(2).any(|w| w[0].last() >= w[1].first()) {
+            return Err(invalid(
+                "Local Sync ranges must be bounded, ascending and disjoint",
+            ));
+        }
+        let (include, exclude) = if all {
+            (Vec::new(), ranges)
+        } else {
+            (ranges, Vec::new())
+        };
+        Ok(Self {
+            all,
+            include,
+            exclude,
+        })
+    }
+    pub(crate) fn selected_count(&self, count: u64) -> Result<u64> {
+        let ranges = if self.all {
+            &self.exclude
+        } else {
+            &self.include
+        };
+        let mut covered = 0u64;
+        for range in ranges {
+            if range.last() >= count {
+                return Err(invalid("Local Sync range is outside the exact preview"));
+            }
+            covered = covered
+                .checked_add(range.last() - range.first() + 1)
+                .ok_or_else(|| invalid("Local Sync selected count overflows"))?;
+        }
+        if self.all {
+            count
+                .checked_sub(covered)
+                .ok_or_else(|| invalid("Local Sync excluded count exceeds preview"))
+        } else {
+            Ok(covered)
+        }
+    }
+}
+
+/// Actual native action totals for an exact preview selection, without execution.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSyncSelectionSummary {
+    /// Actual selected previously resolved conflicts.
+    pub resolved_conflicts: u64,
+    /// Actual selected file permission operations.
+    pub permission_files: u64,
+    /// Actual selected file copies.
+    pub copy_files: u64,
+    /// Actual selected file deletions.
+    pub delete_files: u64,
+    /// Actual selected directory creations.
+    pub create_directories: u64,
+    /// Actual selected directory deletions.
+    pub delete_directories: u64,
+    /// Actual selected unresolved conflicts.
+    pub conflicts: u64,
+    /// Native predicted copy bytes, separate from completed transfer bytes.
+    pub copy_bytes: u64,
+    /// Additional private native totals.
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// Explicit winning side for a manual conflict. A missing winning object can
+/// produce a native deletion action; resolving a preview executes no action.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LocalSyncConflictSide {
+    /// Choose side A's actual current state, including an observed deletion.
+    A,
+    /// Choose side B's actual current state, including an observed deletion.
+    B,
+}
+/// One explicit native preview conflict resolution, with private target paths.
+#[derive(Clone, Serialize)]
+pub struct LocalSyncConflictResolution {
+    path: String,
+    recursive: bool,
+    side: LocalSyncConflictSide,
+}
+impl LocalSyncConflictResolution {
+    /// Resolve exactly one nonempty logical path in a reviewed preview.
+    pub fn at_path(path: impl Into<String>, side: LocalSyncConflictSide) -> Result<Self> {
+        let path = path.into();
+        logical_subpath(&path)?;
+        if path.is_empty() {
+            return Err(invalid(
+                "single conflict resolution requires a nonempty path",
+            ));
+        }
+        Ok(Self {
+            path,
+            recursive: false,
+            side,
+        })
+    }
+    /// Resolve one explicit subtree; an empty path deliberately selects the root.
+    pub fn subtree(path: impl Into<String>, side: LocalSyncConflictSide) -> Result<Self> {
+        let path = path.into();
+        logical_subpath(&path)?;
+        Ok(Self {
+            path,
+            recursive: true,
+            side,
+        })
+    }
+}
+
 /// Explicit job creation settings. No automatic startup, schedule or watch is
 /// enabled. Creating a registration does not preview or execute it.
 #[derive(Clone, Serialize)]
@@ -278,6 +460,8 @@ pub struct CreateLocalSyncJob {
     watch_changes: bool,
     schedule_mode: &'static str,
     parallel_file_ops: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conflict_policy: Option<LocalSyncConflictPolicy>,
 }
 impl CreateLocalSyncJob {
     /// Select both explicit endpoints and a native direction. Permission copying
@@ -318,7 +502,17 @@ impl CreateLocalSyncJob {
             watch_changes: false,
             schedule_mode: "off",
             parallel_file_ops: 1,
+            conflict_policy: None,
         })
+    }
+    /// Select the native simultaneous-change policy for a two-way job.
+    /// No conflict is resolved or file changed by constructing this option.
+    pub fn conflict_policy(mut self, policy: LocalSyncConflictPolicy) -> Result<Self> {
+        if !matches!(self.mode, LocalSyncMode::Bidirectional) {
+            return Err(invalid("conflict policy requires a two-way Local Sync job"));
+        }
+        self.conflict_policy = Some(policy);
+        Ok(self)
     }
     /// Set a bounded group name; an empty group selects no named group.
     pub fn group(mut self, group: impl Into<String>) -> Result<Self> {
@@ -639,6 +833,8 @@ private_debug!(
     LocalSyncHealth,
     LocalSyncJob,
     LocalSyncConfiguration,
+    LocalSyncSelectionSummary,
+    LocalSyncConflictResolution,
     LocalSyncJobPatch,
     LocalSyncJobUpdate,
     LocalSyncJobRemoval,
@@ -770,5 +966,40 @@ mod contract_tests {
             serde_json::json!({"path":"missing-size","directory":true,"modified":"native-time"})
         )
         .is_err());
+    }
+    #[test]
+    fn selection_ranges_keep_zero_and_refuse_overflow_overlap_and_outside_ids() {
+        assert!(LocalSyncActionRange::new(2, 1).is_err());
+        assert!(LocalSyncActionRange::new(0, u64::MAX).is_err());
+        assert!(LocalSyncSelection::including(vec![
+            LocalSyncActionRange::new(0, 2).unwrap(),
+            LocalSyncActionRange::single(2)
+        ])
+        .is_err());
+        assert!(LocalSyncSelection::including(vec![
+            LocalSyncActionRange::single(2),
+            LocalSyncActionRange::single(0)
+        ])
+        .is_err());
+        assert!(
+            LocalSyncSelection::including(vec![LocalSyncActionRange::single(0); 10001]).is_err()
+        );
+        let zero = LocalSyncSelection::including(vec![LocalSyncActionRange::single(0)]).unwrap();
+        assert_eq!(zero.selected_count(1).unwrap(), 1);
+        assert!(zero.selected_count(0).is_err());
+        let excluded =
+            LocalSyncSelection::all_except(vec![LocalSyncActionRange::single(0)]).unwrap();
+        assert_eq!(excluded.selected_count(1).unwrap(), 0);
+        assert_eq!(
+            LocalSyncSelection::including(Vec::new())
+                .unwrap()
+                .selected_count(10)
+                .unwrap(),
+            0
+        );
+        let wide =
+            LocalSyncSelection::including(vec![LocalSyncActionRange::new(0, 999999999).unwrap()])
+                .unwrap();
+        assert_eq!(wide.selected_count(1000000000).unwrap(), 1000000000);
     }
 }
