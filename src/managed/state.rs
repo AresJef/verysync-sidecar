@@ -3,6 +3,7 @@
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 
@@ -154,6 +155,34 @@ impl StateLease {
     pub(super) fn release_engine_lock_for_spawn(&mut self) {
         self.engine_lock.take();
     }
+
+    /// Confirm the exact owned state's upstream lock is available after native
+    /// containment exit, while retaining our separate library lease. This is a
+    /// bounded observation of resource release, never a startup/write retry.
+    pub(super) fn confirm_engine_released(&self, deadline: Instant) -> Result<()> {
+        loop {
+            let lock = match native::open_owned_lock(&self.path.join("verysync.lock")) {
+                Ok(lock) => lock,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(io_error("observe owned engine state release", error)),
+            };
+            match lock.try_lock_exclusive() {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == Some(33) => {}
+                Err(error) => return Err(io_error("observe owned engine lock release", error)),
+            }
+            drop(lock);
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::Timeout {
+                    operation: "confirm owned engine state release",
+                });
+            }
+            std::thread::sleep(remaining.min(Duration::from_millis(10)));
+        }
+    }
 }
 
 fn canonical(path: &Path) -> std::io::Result<PathBuf> {
@@ -170,6 +199,33 @@ fn canonical(path: &Path) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exit_state_confirmation_observes_real_lock_release_and_remains_bounded() -> Result<()> {
+        let base = tempfile::tempdir().map_err(|e| io_error("make release test root", e))?;
+        let path = base.path().join("state");
+        let lease = StateLease::acquire(&path)?;
+        lease.confirm_engine_released(Instant::now())?;
+        let held = native::create_private(&path.join("verysync.lock"))
+            .map_err(|e| io_error("create release test lock", e))?;
+        held.try_lock_exclusive()
+            .map_err(|e| io_error("hold release test lock", e))?;
+        assert!(matches!(
+            lease.confirm_engine_released(Instant::now() + Duration::from_millis(20)),
+            Err(Error::Timeout {
+                operation: "confirm owned engine state release"
+            })
+        ));
+        assert!(matches!(
+            StateLease::acquire(&path),
+            Err(Error::ManagedStateInUse {
+                lock: crate::ManagedStateLock::LibraryLease
+            })
+        ));
+        drop(held);
+        lease.confirm_engine_released(Instant::now() + Duration::from_secs(1))?;
+        Ok(())
+    }
 
     #[test]
     fn private_state_is_exclusive_and_reusable_without_changing_data() -> Result<()> {

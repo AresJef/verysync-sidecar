@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Confirm upstream owned-state lock release after process containment exit, within
+  the existing cleanup window. Report `ManagedExit.state_released` separately,
+  and require it for successful exit waits, offline backup and upgrade admission.
+  Preserve an interrupted FTP run's observed optional cancellation flag when
+  native peer failure can finish before a separate stop request arrives.
+
 - Preserve a complete Local Sync run's native execution error as private typed
   data alongside finish time, counts and cancellation. Continue rejecting API
   error envelopes, malformed records and wrong job identities. Distinguish

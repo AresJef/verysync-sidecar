@@ -81,7 +81,14 @@ Startup returns only after authenticated management readiness and comparison
 with the persisted device identity. Spawn, HTTP acknowledgement, configuration
 readback and process-tree exit are separate observations. `wait_for_exit()` sends
 no shutdown request; it waits for actual exit/empty native containment and release
-of the state lease. A timeout around that wait leaves the owner intact. Dropping
+of the state lease. `ManagedExit` reports `tree_stopped` and `state_released`
+separately. After containment exit, the owner observes the exact upstream state
+lock becoming available while still holding its separate library lease. Both
+conditions share the existing final five-second cleanup window; no second startup
+is attempted and no startup request is retried. If resource release cannot be
+confirmed, the exit wait reports cleanup failure. Lock availability is a point in
+time observation, not exclusion against unrelated launchers after lease release.
+A timeout around that wait leaves the owner intact. Dropping
 the owner requests exact cleanup; a cloned management Client does not keep it
 alive. Await an explicit exit observation when completion matters.
 

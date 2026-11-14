@@ -47,7 +47,10 @@ impl OwnedProcess {
     }
 
     pub(super) fn finish(&mut self) -> io::Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        self.finish_before(Instant::now() + Duration::from_secs(5))
+    }
+
+    pub(super) fn finish_before(&mut self, deadline: Instant) -> io::Result<()> {
         while !self.guard.tree_stopped()? {
             if Instant::now() >= deadline {
                 return Err(io::Error::new(
