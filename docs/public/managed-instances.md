@@ -339,3 +339,8 @@ inside its own temporary process, then frees its calibration console. Acceptance
 rejects an additional/unverified owned console or a newly visible console window,
 while preserving the raw association/member observations. It does not detach or
 hide the caller's existing console.
+
+`Error::ManagedStateInUse { lock }` distinguishes `ManagedStateLock::LibraryLease`
+from `ManagedStateLock::EngineLock`. These report which admission lock was busy,
+without exposing private paths or authorizing deletion, takeover or termination.
+The error does not imply that the native engine lock has a library owner.

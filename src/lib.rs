@@ -100,7 +100,7 @@ pub use devices::{
 };
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use engine_source::{EngineSource, LocalProgram, ProgramInfo};
-pub use error::{Error, ProcessDiagnostic, ResponseDiagnostic, Result};
+pub use error::{Error, ManagedStateLock, ProcessDiagnostic, ResponseDiagnostic, Result};
 pub use events::{
     EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventStreamItem,
     EventSubscription,
