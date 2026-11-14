@@ -17,6 +17,8 @@ const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAA
 mod device_options_contracts;
 #[path = "common/folder_options_contracts.rs"]
 mod folder_options_contracts;
+#[path = "common/folder_policy_contracts.rs"]
+mod folder_policy_contracts;
 
 #[path = "common/gui_listener_contracts.rs"]
 mod gui_listener_contracts;

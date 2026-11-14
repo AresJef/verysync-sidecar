@@ -28,7 +28,7 @@ impl Client {
         let url = self.connection.folder_url(folder)?;
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
-        self.folder(folder).await?;
+        patch.validate_existing(&self.folder(folder).await?)?;
         self.connection
             .request_bytes(
                 "update advanced folder configuration",

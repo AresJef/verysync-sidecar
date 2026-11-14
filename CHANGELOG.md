@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add native folder-type, block-order, copy-strategy and ordered attribute-filter
+  selectors, including per-registration overrides without editing shared defaults.
+  Support initial receive-encrypted registration and protect existing-type
+  transitions; keep configuration and platform/data-path effects separate.
+
 - Share additional typed device selections with existing create/update/default
   paths. Preserve absent introduction sources and private unknown values, retain
   exact field matching, and keep template inheritance separate from introduction,

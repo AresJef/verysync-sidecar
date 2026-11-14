@@ -106,9 +106,69 @@ does not acquire an entitlement or download files.
 
 The native case separately verifies selected values, new-folder inheritance,
 existing-folder isolation, partial edits, complete-snapshot template editing,
-normal restart persistence and retained synthetic bytes. OS-specific metadata,
-extended-attribute filters, marker names, block/copy strategies, sharing secrets
-and additional template/device controls retain separate capability gates.
+normal restart persistence and retained synthetic bytes. Actual platform metadata
+effects, marker names, sharing secrets and remaining template controls retain
+separate capability gates. The selectors below extend the typed policy surface.
+
+## Folder types, block/copy strategies and attribute filters
+
+`FolderAdvancedPatch` also selects `FolderType`, `BlockPullOrder`,
+`CopyRangeMethod` and an ordered `ExtendedAttributeFilter`. Reads preserve unknown
+selector strings; typed writes refuse them. Attribute patterns keep the target's
+native matching syntax, rather than being compiled as controller-side regular
+expressions. Rule order, permit flags, explicit size selectors and unknown native
+filter fields are retained. Patterns and unknown values are hidden from Debug.
+
+```no_run
+use verysync_sidecar::{
+    BlockPullOrder, Client, CopyRangeMethod, CreateFolderOptions,
+    ExtendedAttributeFilter, ExtendedAttributeRule, FolderAdvancedPatch,
+    FolderId, FolderType, TargetPath,
+};
+
+async fn register_with_explicit_initial_policy(
+    client: &Client,
+    id: FolderId,
+    path: TargetPath,
+) -> verysync_sidecar::Result<()> {
+    let attributes = ExtendedAttributeFilter::new(
+        vec![ExtendedAttributeRule::new("user.*", true)?,
+             ExtendedAttributeRule::new("*", false)?],
+        2048,
+        8192,
+    )?;
+    let initial = FolderAdvancedPatch::default()
+        .folder_type(FolderType::ReceiveEncrypted)
+        .block_pull_order(BlockPullOrder::InOrder)
+        .copy_range_method(CopyRangeMethod::All)
+        .extended_attribute_filter(attributes);
+    let actual = client.create_folder(
+        &CreateFolderOptions::new(id, path)
+            .paused(true)
+            .advanced_configuration(initial)?,
+    ).await?;
+    // Inspect actual.advanced_configuration(); registration is not data proof.
+    Ok(())
+}
+```
+
+Initial per-registration overrides merge into actual upstream defaults and use
+the existing single creation request. They never temporarily change the shared
+template. An acknowledged create with invalid selected readback is an unknown
+outcome, without replay. Template policy edits still affect future objects only.
+
+The selected baseline supports initial receive-encrypted registration but
+rejects changing an existing folder to or from that type. Scoped typed edits
+check the existing type and refuse such transitions before PATCH. The library
+does not recreate a folder or migrate data to bypass this restriction. Other
+native type selections and idempotent receive-encrypted edits remain explicit.
+
+Strategy selection does not prove a particular system call, copy-on-write
+behavior, block transfer order or supported target filesystem. Initial encrypted
+registration does not prove encrypted data transfer or sharing permission.
+Attribute-filter configuration does not prove metadata propagation. These effects
+retain independent platform/data-path acceptance gates. Marker names, versioning
+template locations, sharing secrets and other remaining defaults are separate.
 
 ## Complete configuration saves
 
