@@ -49,9 +49,9 @@ async fn full_configuration_save_preserves_sections_and_rejects_stale_snapshots(
         "remoteIgnoredDevices",
         "version",
     ] {
-        assert_eq!(
-            saved.configuration.native_document()[section],
-            before.native_document()[section]
+        assert!(
+            saved.configuration.native_document()[section] == before.native_document()[section],
+            "unrelated configuration section changed"
         );
     }
     assert_eq!(saved.configuration.folders()?[0].path.local_path(), None);
@@ -96,9 +96,9 @@ async fn full_configuration_save_preserves_sections_and_rejects_stale_snapshots(
     );
     assert_eq!(persisted.folder_defaults()?.rescan_interval_seconds, 317);
     for section in ["folders", "devices", "gui", "ldap", "relayServer"] {
-        assert_eq!(
-            persisted.native_document()[section],
-            before.native_document()[section]
+        assert!(
+            persisted.native_document()[section] == before.native_document()[section],
+            "persisted unrelated configuration section changed"
         );
     }
     assert!(
@@ -164,7 +164,10 @@ async fn defaults_are_inherited_only_by_new_objects_and_survive_normal_restart()
     assert_eq!(changed.configuration.label, "synthetic inherited label");
     assert_eq!(changed.configuration.rescan_interval_seconds, 313);
     for (key, value) in &original_folder.extra {
-        assert_eq!(changed.configuration.extra.get(key), Some(value));
+        assert!(
+            changed.configuration.extra.get(key) == Some(value),
+            "unrelated folder default changed"
+        );
     }
     let changed = core
         .client()
@@ -176,7 +179,10 @@ async fn defaults_are_inherited_only_by_new_objects_and_survive_normal_restart()
         )
         .await?;
     assert!(changed.requested_fields_match);
-    assert_eq!(changed.configuration.extra, original_device.extra);
+    assert!(
+        changed.configuration.extra == original_device.extra,
+        "unrelated device default changed"
+    );
     let folder = core
         .client()
         .create_folder(&CreateFolderOptions::new(

@@ -251,3 +251,8 @@ required-features = ["engine-tests"]
 name = "configuration_engine"
 path = "tests/configuration_engine.rs"
 required-features = ["engine-tests"]
+
+[[test]]
+name = "authentication_engine"
+path = "tests/authentication_engine.rs"
+required-features = ["engine-tests"]

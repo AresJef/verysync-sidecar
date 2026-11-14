@@ -211,6 +211,12 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target configuration_engine --evidence-dir "${{ runner.temp }}/vs-configuration-proxy"
+      - name: Verify credential rotation, old-key refusal and explicit owner reconnection
+        id: native_authentication_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
         id: native_managed_lifetime
         continue-on-error: true

@@ -91,6 +91,8 @@ pub enum Capability {
     FullConfiguration,
     /// Native configuration application flag, separate from persistence.
     ConfigurationApplication,
+    /// Explicit API-key rotation and read-only reauthentication of the same instance.
+    ManagementKeyRotation,
     /// Account, configuration and commercial authorization.
     AccountLicense,
     /// Storage protocol integrations.
@@ -299,6 +301,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::ManagementKeyRotation,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::FullConfiguration,
         implementation: ImplementationStatus::Typed,

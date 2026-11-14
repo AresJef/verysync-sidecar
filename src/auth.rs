@@ -14,6 +14,17 @@ use crate::{Error, Result};
 pub struct ApiKey(HeaderValue);
 
 impl ApiKey {
+    /// Explicitly generate 32 cryptographically random bytes as an ASCII key.
+    /// This performs no request or credential change and installs no provider.
+    pub fn generate() -> Result<Self> {
+        let mut bytes = [0u8; 32];
+        getrandom::fill(&mut bytes).map_err(|_| Error::InvalidCredential {
+            reason: "secure API key generation failed",
+        })?;
+        let value: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        Self::new(&value)
+    }
+
     /// Validate a nonempty ASCII key without control characters.
     ///
     /// Invalid values are not included in errors. The key is sent only as a
