@@ -136,7 +136,11 @@ fn missing_folder_preamble(bytes: &[u8]) -> Option<Vec<u8>> {
         .rsplit_once('\n')
         .map(|(prefix, line)| (&bytes[..prefix.len() + 1], line))
         .unwrap_or((&bytes[..0], text));
-    (line.trim() == "verysync: error: no such folder").then(|| prefix.to_vec())
+    matches!(
+        line.trim(),
+        "verysync: error: no such folder" | "verysync.exe: error: no such folder"
+    )
+    .then(|| prefix.to_vec())
 }
 impl ManagedInstance {
     /// Run one whitelisted database command against this confirmed stopped
@@ -303,6 +307,22 @@ mod tests {
             missing_folder_preamble(b"verysync: error: no such folder\nother failure\n").is_none()
         );
         assert!(missing_folder_preamble(b"verysync: error: permission denied\n").is_none());
+        assert_eq!(
+            missing_folder_preamble(
+                &[
+                    prefix.as_slice(),
+                    b"verysync.exe: error: no such folder\r\n"
+                ]
+                .concat()
+            )
+            .unwrap(),
+            prefix
+        );
+        assert!(missing_folder_preamble(b"unrelated.exe: error: no such folder\n").is_none());
+        assert!(
+            missing_folder_preamble(b"verysync.exe: error: no such folder\nother failure\n")
+                .is_none()
+        );
         assert!(missing_folder_preamble(
             &[table.as_slice(), b"verysync: error: no such folder\n"].concat()
         )

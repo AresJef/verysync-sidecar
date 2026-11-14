@@ -712,7 +712,9 @@ shutil.move(str(source),str(destination/'kept.bin'))
         serde_json::from_slice(&std::fs::read(external.join("invocation.json"))?)?;
     assert_eq!(called["file"], name);
     assert_eq!(
-        Path::new(called["folder"].as_str().ok_or("native folder arg")?),
+        std::fs::canonicalize(Path::new(
+            called["folder"].as_str().ok_or("native folder arg")?
+        ))?,
         std::fs::canonicalize(&receive)?
     );
     let reset_location = b

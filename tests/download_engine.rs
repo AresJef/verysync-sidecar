@@ -93,6 +93,17 @@ async fn official_fixed_archive_prepares_and_runs_the_exact_native_program(
         "public Rust program preparation evidence: {}",
         serde_json::json!({"fixed_official_runtime_download":true,"complete_archive_sha_verified":true,"exact_inner_sha_matches_independent_fixture":true,"only_regular_executable_materialized":true,"private_executable_permissions":true,"spaces_and_unicode_native_paths":true,"actual_baseline_program_started":true,"actual_management_authenticated":true,"actual_normal_tree_exit":true,"diagnostic_handle_released_before_stop_returns":true,"synthetic_sample_retained":true})
     );
-    std::fs::remove_dir_all(root)?;
+    std::fs::remove_dir_all(&root).inspect_err(|error| {
+        // A stopped tree and successful diagnostic rename remain separate from
+        // test-root deletion. Preserve a sharing failure without retry or waiver.
+        eprintln!(
+            "post-assertion download fixture cleanup: {}",
+            serde_json::json!({"native_error":error.raw_os_error(),
+                "program_remains":prepared.program().path().exists(),
+                "destination_remains":destination.exists(),"state_remains":state.exists(),
+                "capture_remains":state.join(".verysync-sidecar-core.log").exists(),
+                "state_entry_count":std::fs::read_dir(&state).ok().map(|entries|entries.count())})
+        );
+    })?;
     Ok(())
 }

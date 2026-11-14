@@ -157,7 +157,8 @@ private diagnostic. It is not interpreted as a row or silently discarded.
 Every row after the header must still match the schema; malformed, overflowing,
 duplicate-header and unknown-trailer responses remain unrecognized.
 Malformed successful tables return `UnrecognizedCounts`, never an invented empty
-index. Only the known exact exit-one diagnostic maps to `FolderNotIndexed`.
+index. Only the known exact exit-one diagnostic maps to `FolderNotIndexed`,
+including the fixed Windows executable's `verysync.exe` error prefix.
 Statistics and file metadata remain explicit native text; the SDK invents no
 units or undocumented metadata schema. Default `Debug` omits selectors and output.
 

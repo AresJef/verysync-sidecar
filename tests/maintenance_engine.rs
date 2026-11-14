@@ -264,7 +264,11 @@ fn assert_index_absent(oracle: &CountsOracle) -> TestResult {
             == ["DEVICE", "TYPE", "FLAGS", "DELETED", "COUNT", "SIZE"]));
     assert_eq!(
         std::str::from_utf8(&oracle.stderr)?.trim(),
-        "verysync: error: no such folder"
+        if cfg!(windows) {
+            "verysync.exe: error: no such folder"
+        } else {
+            "verysync: error: no such folder"
+        }
     );
     Ok(())
 }
@@ -276,7 +280,7 @@ fn cli_shape(bytes: &[u8]) -> serde_json::Value {
         serde_json::json!({"bytes":line.len(),"columns":columns.len(),
             "header":columns==["DEVICE","TYPE","FLAGS","DELETED","COUNT","SIZE"],
             "numeric_count_row":columns.len()==6 && columns[4].parse::<u64>().is_ok() && columns[5].parse::<u64>().is_ok(),
-            "known_missing_folder":line.trim()=="verysync: error: no such folder"})
+            "known_missing_folder":matches!(line.trim(),"verysync: error: no such folder"|"verysync.exe: error: no such folder")})
     }).collect::<Vec<_>>());
     serde_json::json!({"bytes":bytes.len(),"utf8":text.is_ok(),"sha256":format!("{:x}",Sha256::digest(bytes)),"line_shapes":lines})
 }
@@ -443,6 +447,59 @@ fn decode_profile(profile: &verysync_sidecar::CoreProfile) -> TestResult<Vec<u8>
     Ok(decoded)
 }
 
+// Inspect only the native top-level collection interval. See the official
+// https://github.com/google/pprof/blob/main/proto/profile.proto (fields 9/10).
+// This independent test decoder does not interpret or print private symbols.
+fn profile_interval_ns(mut bytes: &[u8]) -> TestResult<(u64, u64)> {
+    fn varint(bytes: &mut &[u8]) -> TestResult<u64> {
+        let mut value = 0u64;
+        for shift in (0..=63).step_by(7) {
+            let (&byte, rest) = bytes.split_first().ok_or("truncated profile varint")?;
+            *bytes = rest;
+            if shift == 63 && byte > 1 {
+                return Err("overflowing profile varint".into());
+            }
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Ok(value);
+            }
+        }
+        Err("unterminated profile varint".into())
+    }
+    let (mut start, mut duration) = (None, None);
+    while !bytes.is_empty() {
+        let key = varint(&mut bytes)?;
+        if key >> 3 == 0 {
+            return Err("zero profile field".into());
+        }
+        let size = match key & 7 {
+            0 => {
+                let value = varint(&mut bytes)?;
+                let slot = match key >> 3 {
+                    9 => Some(&mut start),
+                    10 => Some(&mut duration),
+                    _ => None,
+                };
+                if let Some(slot) = slot {
+                    if value == 0 || value > i64::MAX as u64 || slot.replace(value).is_some() {
+                        return Err("invalid or repeated profile interval".into());
+                    }
+                }
+                0
+            }
+            1 => 8,
+            2 => usize::try_from(varint(&mut bytes)?)?,
+            5 => 4,
+            _ => return Err("unsupported profile wire type".into()),
+        };
+        bytes = bytes.get(size..).ok_or("truncated profile field")?;
+    }
+    Ok((
+        start.ok_or("native profile start absent")?,
+        duration.ok_or("native profile duration absent")?,
+    ))
+}
+
 #[tokio::test]
 async fn public_profiles_metrics_and_clone_serialization_preserve_the_owned_core() -> TestResult {
     use verysync_sidecar::{CoreProfileRequest, RawMethod, RawRequest, RequestEffect};
@@ -478,11 +535,25 @@ async fn public_profiles_metrics_and_clone_serialization_preserve_the_owned_core
     let (one, two) = tokio::join!(a.collect_core_profile(cpu), b.collect_core_profile(cpu));
     let one = one?;
     let two = two?;
-    assert!(start.elapsed() >= Duration::from_secs(2));
     assert_eq!(one.request, cpu);
     assert_eq!(two.request, cpu);
     let cpu_decoded = decode_profile(&one)?;
-    decode_profile(&two)?;
+    let cpu_two_decoded = decode_profile(&two)?;
+    let first = profile_interval_ns(&cpu_decoded)?;
+    let second = profile_interval_ns(&cpu_two_decoded)?;
+    eprintln!(
+        "native CPU profile interval evidence: {}",
+        serde_json::json!({"first_duration_ns":first.1,"second_duration_ns":second.1,
+            "first_end_ns":first.0.checked_add(first.1),"second_start_ns":second.0,
+            "controller_elapsed_ns":start.elapsed().as_nanos()})
+    );
+    // Verify both complete requested one-second native intervals and actual
+    // non-overlap, rather than inferring serialization from a caller clock.
+    assert!(first.1 >= 1_000_000_000 && second.1 >= 1_000_000_000);
+    assert!(first
+        .0
+        .checked_add(first.1)
+        .is_some_and(|end| end <= second.0));
     assert!(format!("{heap:?} {one:?} {before:?}").len() < 512);
     assert_eq!(core.client().system_status().await?.device_id, identity);
     let gui = core
