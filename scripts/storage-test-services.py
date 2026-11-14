@@ -341,6 +341,17 @@ def smb(config, root):
         return commands, packets, status
 
     server.getServer().hookSmb2Command(smb2.SMB2_CREATE, create_with_named_missing_status)
+    def read_with_eof_error_body(conn_id, smb_server, request):
+        commands, packets, status = SMB2Commands.smb2Read(conn_id, smb_server, request)
+        # Impacket 0.13.1 returns a READ body (StructureSize 17) for EOF.
+        # MS-SMB2 2.2.2/3.3.4.4 requires the ERROR body (StructureSize 9):
+        # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d4da8b67-c180-47e3-ba7a-d24214ac4aaa
+        # Preserve the real STATUS_END_OF_FILE, never convert it to success.
+        if status == 0xC0000011:
+            return [smb2.SMB2Error()], None, status
+        return commands, packets, status
+
+    server.getServer().hookSmb2Command(smb2.SMB2_READ, read_with_eof_error_body)
     server.addShare("synthetic", str(root))
     server.addCredential(config["user"], 0, compute_lmhash(config["password"]),
                          compute_nthash(config["password"]))

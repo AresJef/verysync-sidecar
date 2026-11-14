@@ -1,6 +1,8 @@
 //! Actual native protocol traffic and data effects, with synthetic owned peers.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/storage_diagnostic.rs"]
+mod storage_diagnostic;
 #[path = "common/storage_service.rs"]
 mod storage_service;
 use managed_fixture::{options, TestResult};
@@ -9,60 +11,6 @@ use verysync_sidecar::{
     CreateLocalSyncJob, LocalSyncJobId, LocalSyncMode, LocalSyncRun, ManagedInstance,
     StorageEndpoint, StorageProtocol, TargetPath,
 };
-
-fn native_rejection(
-    error: &verysync_sidecar::Error,
-    endpoint: &StorageEndpoint,
-    root: &std::path::Path,
-) {
-    let mut cause = error;
-    while let verysync_sidecar::Error::MutationOutcomeUnknown { source, .. } = cause {
-        cause = source;
-    }
-    let response = match cause {
-        verysync_sidecar::Error::Api { response, .. }
-        | verysync_sidecar::Error::Http { response }
-        | verysync_sidecar::Error::InvalidResponse { response, .. } => response,
-        _ => {
-            eprintln!("synthetic protocol failure category: {cause:?}");
-            return;
-        }
-    };
-    let decoded: serde_json::Value =
-        serde_json::from_slice(response.body_bytes()).unwrap_or(serde_json::Value::Null);
-    if let Some(message) = decoded.get("error").and_then(serde_json::Value::as_str) {
-        let mut redacted = message.to_owned();
-        for key in ["user", "password"] {
-            if let Some(secret) = endpoint
-                .extra()
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .filter(|s| !s.is_empty())
-            {
-                redacted = redacted.replace(secret, "[SYNTHETIC_CREDENTIAL]");
-            }
-        }
-        let path = root.to_string_lossy();
-        redacted = redacted
-            .replace(path.as_ref(), "[SYNTHETIC_ROOT]")
-            .replace(&path.replace('\\', "/"), "[SYNTHETIC_ROOT]");
-        let bounded = redacted
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(512)
-            .collect::<String>();
-        eprintln!(
-            "synthetic native protocol rejection: status={} message={bounded}",
-            response.status()
-        );
-    } else {
-        eprintln!(
-            "synthetic native protocol rejection: status={} body_bytes={}",
-            response.status(),
-            response.body_bytes().len()
-        );
-    }
-}
 
 async fn execute(core: &ManagedInstance, id: &LocalSyncJobId) -> TestResult<LocalSyncRun> {
     let operation = core.client().start_local_sync_preview(id).await?;
@@ -172,7 +120,7 @@ async fn protocol_effects(protocol: StorageProtocol) -> TestResult {
         Ok(run) => run,
         Err(error) => {
             if let Some(native) = error.downcast_ref::<verysync_sidecar::Error>() {
-                native_rejection(native, &server.endpoint, &root);
+                storage_diagnostic::native_rejection(native, &server.endpoint, &root);
             }
             return Err(error);
         }
