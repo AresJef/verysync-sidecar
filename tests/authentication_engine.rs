@@ -8,6 +8,186 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn native_ldap_search_filter_requires_a_matching_directory_entry() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-ldap-search-")
+        .tempdir()?
+        .keep();
+    let mut peer = ldap_service::LdapService::start(&root)?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let login = GuiLoginOptions::new(core.client().endpoint().clone(), peer.credentials.clone())
+        .expected_device_id(identity.clone())
+        .request_timeout(Duration::from_secs(3))?;
+    assert!(
+        core.client()
+            .update_ldap_configuration(
+                &LdapPatch::default()
+                    .address(peer.address.clone())
+                    .bind_dn("uid=%s,dc=example,dc=test")
+                    .transport(LdapTransport::Plain)
+                    .insecure_skip_verify(false)
+                    .search_base_dn("dc=example,dc=test")
+                    .search_filter("(uid=%s)")
+            )
+            .await?
+            .requested_fields_match
+    );
+    core.set_gui_auth_mode(&GuiAuthMode::Ldap, Duration::from_secs(10))
+        .await?;
+    let session = GuiSession::login(login.clone()).await?;
+    assert_eq!(session.system_status().await?.device_id, identity);
+    assert!(session.logout().await?.session_rejected);
+    for patch in [
+        LdapPatch::default().search_filter("(uid=missing-entry)"),
+        LdapPatch::default()
+            .search_filter("(uid=%s)")
+            .search_base_dn("dc=missing,dc=test"),
+    ] {
+        core.set_gui_auth_mode(&GuiAuthMode::Static, Duration::from_secs(10))
+            .await?;
+        assert!(
+            core.client()
+                .update_ldap_configuration(&patch)
+                .await?
+                .requested_fields_match
+        );
+        core.set_gui_auth_mode(&GuiAuthMode::Ldap, Duration::from_secs(10))
+            .await?;
+        assert_login_denied(GuiSession::login(login.clone()).await);
+        assert_eq!(core.client().system_status().await?.device_id, identity);
+    }
+    let observations = peer.observations()?;
+    assert!(observations
+        .iter()
+        .any(|r| r["operation"] == "searchRequest" && r["entries"] == 1 && r["result_code"] == 0));
+    assert!(observations
+        .iter()
+        .any(|r| r["operation"] == "searchRequest"
+            && r["filter_matches"] == false
+            && r["entries"] == 0));
+    assert!(observations
+        .iter()
+        .any(|r| r["operation"] == "searchRequest"
+            && r["base_matches"] == false
+            && r["entries"] == 0));
+    peer.stop()?;
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    println!(
+        "native_ldap_search_effects=9 helper_platform={}",
+        peer.python_platform
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_ldap_tls_requires_explicit_self_signed_certificate_policy() -> TestResult {
+    ldap_encrypted_authentication("tls", LdapTransport::Tls).await
+}
+
+#[tokio::test]
+async fn native_ldap_starttls_upgrades_before_sending_bind_credentials() -> TestResult {
+    ldap_encrypted_authentication("starttls", LdapTransport::StartTls).await
+}
+
+fn assert_login_denied(result: Result<GuiSession>) {
+    assert!(
+        matches!(&result,Err(Error::AccessDenied{response}) if response.status()==403)
+            || matches!(&result, Err(Error::Authentication { status: 401 }))
+    );
+}
+
+async fn ldap_encrypted_authentication(
+    transport_name: &str,
+    transport: LdapTransport,
+) -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-ldap-encrypted-")
+        .tempdir()?
+        .keep();
+    let mut peer = ldap_service::LdapService::start_transport(&root, transport_name)?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let login = GuiLoginOptions::new(core.client().endpoint().clone(), peer.credentials.clone())
+        .expected_device_id(identity.clone())
+        .request_timeout(Duration::from_secs(3))?;
+    assert!(
+        core.client()
+            .update_ldap_configuration(
+                &LdapPatch::default()
+                    .address(peer.address.clone())
+                    .bind_dn("uid=%s,dc=example,dc=test")
+                    .transport(transport)
+                    .insecure_skip_verify(false)
+                    .search_base_dn("")
+                    .search_filter("")
+            )
+            .await?
+            .requested_fields_match
+    );
+    core.set_gui_auth_mode(&GuiAuthMode::Ldap, Duration::from_secs(10))
+        .await?;
+    assert_login_denied(GuiSession::login(login.clone()).await);
+    let strict = peer.observations()?;
+    assert!(strict
+        .iter()
+        .any(|r| r["operation"] == "tlsHandshakeRejected"));
+    assert!(!strict.iter().any(|r| r["operation"] == "bindRequest"));
+    core.set_gui_auth_mode(&GuiAuthMode::Static, Duration::from_secs(10))
+        .await?;
+    assert!(
+        core.client()
+            .update_ldap_configuration(&LdapPatch::default().insecure_skip_verify(true))
+            .await?
+            .requested_fields_match
+    );
+    core.set_gui_auth_mode(&GuiAuthMode::Ldap, Duration::from_secs(10))
+        .await?;
+    let session = GuiSession::login(login).await?;
+    assert_eq!(session.system_status().await?.device_id, identity);
+    assert_login_denied(
+        GuiSession::login(
+            GuiLoginOptions::new(
+                core.client().endpoint().clone(),
+                GuiCredentials::new("ldap-test-user", "deliberately-wrong-password")?,
+            )
+            .expected_device_id(identity.clone())
+            .request_timeout(Duration::from_secs(3))?,
+        )
+        .await,
+    );
+    let observed = peer.observations()?;
+    assert!(observed
+        .iter()
+        .any(|r| r["operation"] == "tlsHandshake" && r["encrypted"] == true));
+    assert!(observed.iter().any(|r| r["operation"] == "bindRequest"
+        && r["result_code"] == 0
+        && r["encrypted"] == true));
+    assert!(observed.iter().any(|r| r["operation"] == "bindRequest"
+        && r["result_code"] == 49
+        && r["encrypted"] == true));
+    assert!(!observed
+        .iter()
+        .any(|r| r["operation"] == "bindRequest" && r["encrypted"] == false));
+    if transport_name == "starttls" {
+        assert!(observed
+            .iter()
+            .any(|r| r["operation"] == "startTls" && r["result_code"] == 0));
+    }
+    assert!(session.logout().await?.session_rejected);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    peer.stop()?;
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    println!(
+        "native_ldap_encrypted_effects=12 transport={transport_name} helper_platform={}",
+        peer.python_platform
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_ldap_bind_and_authentication_failure_preserve_api_management() -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("vs-ldap-")

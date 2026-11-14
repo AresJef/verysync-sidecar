@@ -18,6 +18,9 @@ pub struct LdapService {
 }
 impl LdapService {
     pub fn start(root: &Path) -> TestResult<Self> {
+        Self::start_transport(root, "plain")
+    }
+    pub fn start_transport(root: &Path, transport: &str) -> TestResult<Self> {
         let python = std::env::var_os("VERYSYNC_STORAGE_TEST_PYTHON")
             .ok_or("explicit private LDAP test Python required")?;
         let mut random = [0; 24];
@@ -42,7 +45,7 @@ impl LdapService {
         let mut input = child.stdin.take().ok_or("LDAP peer input absent")?;
         serde_json::to_writer(
             &mut input,
-            &serde_json::json!({"root":root,"dn":"uid=ldap-test-user,dc=example,dc=test","password":service.password}),
+            &serde_json::json!({"root":root,"dn":"uid=ldap-test-user,dc=example,dc=test","password":service.password,"transport":transport}),
         )?;
         input.write_all(b"\n")?;
         drop(input);
@@ -72,7 +75,11 @@ impl LdapService {
             .as_u64()
             .filter(|p| *p > 0 && *p <= 65535 && *p != 18886)
             .ok_or("LDAP peer port invalid")?;
-        if ready["ready"] != true || ready["loopback_only"] != true || ready["protocol"] != "ldap" {
+        if ready["ready"] != true
+            || ready["loopback_only"] != true
+            || ready["protocol"] != "ldap"
+            || ready["transport"] != transport
+        {
             return Err("private LDAP readiness contract failed".into());
         }
         service.address = format!("127.0.0.1:{port}");
