@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Verify native reverse, two-way newer/larger/manual conflicts and selected-only
+  data effects independently for FTP, SFTP, SMB and WebDAV with owned protocol
+  peers. Keep per-protocol authentication, in-flight and recovery conditions
+  separate from directional acceptance.
+
 - Add explicit marker rebuilding and two-way baseline recovery against complete
   reviewed job snapshots. Refuse stale settings and active/unknown states, retain
   exact acknowledgements and preview identities, and never execute recovery

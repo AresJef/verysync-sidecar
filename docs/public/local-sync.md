@@ -282,3 +282,22 @@ core restart. Local success and the complete six-profile source gate are separat
 Missing baseline files alone do not necessarily produce a native failure; the
 comparison mismatch is the tested recovery trigger. Per-backend recovery and
 fault conditions remain independently required.
+
+## Per-protocol directional and selection evidence
+
+The dedicated advanced native cases separately exercise FTP, SFTP, SMB and
+WebDAV: actual remote-to-local mirror copying, two-way initial changes in both
+directions, simultaneous newer/larger/manual conflicts, manual replacement
+preview without immediate file changes, and a separately explicit selected-only
+run with native predicted counts/bytes. The unselected target file remains
+absent and its source bytes remain intact. Registration removal retains files.
+These effects remain separate from licensed scheduling, in-flight control,
+additional authentication/identity modes and per-backend fault recovery. Final
+six-profile source acceptance is still required.
+
+The Impacket 0.13.1 synthetic SMB peer also needs a correctly structured EOF
+error response for actual remote reads. Its stock READ handler returns a READ
+body with `STATUS_END_OF_FILE`; the test peer preserves that status and supplies
+an SMB2 ERROR body as required by [MS-SMB2 section 2.2.2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d4da8b67-c180-47e3-ba7a-d24214ac4aaa).
+This is a peer-fixture protocol correction, not an SDK read fallback, successful
+empty read or retry policy.

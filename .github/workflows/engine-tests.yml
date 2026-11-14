@@ -31,7 +31,10 @@ jobs:
   fixture:
     name: ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    # Complete native suites grew from baseline control to protocols/recovery.
+    # Two source1535 profiles reached the old 45-minute job capacity; individual
+    # native deadlines/workloads remain unchanged and failures still gate.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -166,6 +169,12 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target local_sync_protocol_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-protocols-proxy"
+      - name: Verify each protocol's reverse copies, three conflicts and selected data effects
+        id: native_local_sync_protocol_advanced_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_protocol_advanced_engine --evidence-dir "${{ runner.temp }}/vs-protocol-advanced-proxy"
       - name: Verify selected actions, reverse copies and actual native two-way conflicts
         id: native_local_sync_advanced_engine
         continue-on-error: true
