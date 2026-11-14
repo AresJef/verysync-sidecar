@@ -62,7 +62,7 @@ pub enum ManagedLifetime {
 /// The state must be new/empty or already marked as owned by this library. The
 /// library refuses an ordinary existing application state. Its exclusive state
 /// lease is separate from any engine lock. Addresses are explicit: a socket must
-/// be `gui.sock` directly inside the state, or HTTP must use a literal loopback
+/// be `gui.sock` directly inside the state, or HTTP(S) must use a literal loopback
 /// IP, a fixed port and no proxy prefix. No address discovery occurs.
 #[derive(Clone, Debug)]
 pub struct ManagedOptions {
@@ -74,6 +74,7 @@ pub struct ManagedOptions {
     pub(crate) lifetime: ManagedLifetime,
     pub(crate) version_policy: VersionPolicy,
     pub(crate) upgrade_checks: ManagedUpgradeChecks,
+    pub(crate) transport: crate::ManagementTransport,
 }
 
 impl ManagedOptions {
@@ -116,12 +117,18 @@ impl ManagedOptions {
                 Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
                 _ => false,
             };
-            if url.scheme() != "http"
+            #[cfg(not(feature = "tls"))]
+            if url.scheme() == "https" {
+                return Err(Error::UnsupportedTransport {
+                    transport: "managed HTTPS requires the tls feature",
+                });
+            }
+            if !matches!(url.scheme(), "http" | "https")
                 || !literal_loopback
                 || url.path() != "/"
                 || url.port().is_none()
             {
-                return Err(Error::InvalidConfiguration { reason: "managed HTTP requires a literal loopback IP, explicit nondefault port and no prefix" });
+                return Err(Error::InvalidConfiguration { reason: "managed HTTP(S) requires a literal loopback IP, explicit nondefault port and no prefix" });
             }
         }
         // The fixed program's configuration protocol uses UTF-8 strings. Native
@@ -139,6 +146,7 @@ impl ManagedOptions {
             lifetime: ManagedLifetime::CallerOwned,
             version_policy: VersionPolicy::ValidatedOnly,
             upgrade_checks: ManagedUpgradeChecks::Disabled,
+            transport: crate::ManagementTransport::default(),
         })
     }
 
@@ -183,6 +191,14 @@ impl ManagedOptions {
         Ok(self)
     }
 
+    /// Select per-connection management trust and an explicit proxy. This does
+    /// not install server certificates. Managed HTTPS requires matching native
+    /// certificate/key material and normal client trust/hostname validation.
+    pub fn management_transport(mut self, transport: crate::ManagementTransport) -> Self {
+        self.transport = transport;
+        self
+    }
+
     /// Explicitly select core persistence before startup (default CallerOwned).
     /// Helpers and cancelled/failed startup still request exact cleanup. An
     /// abrupt caller death after persistent core creation can leave that core
@@ -215,6 +231,7 @@ impl ManagedOptions {
                 })??;
         crate::Client::connect(
             crate::ConnectOptions::new(self.endpoint.clone(), key)
+                .transport(self.transport.clone())
                 .expected_device_id(identity)
                 .version_policy(self.version_policy)
                 .request_timeout(self.request_timeout)?,

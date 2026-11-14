@@ -585,7 +585,11 @@ pub(super) fn existing_connection(options: &ManagedOptions) -> Result<(ApiKey, D
     } else {
         address == management_address(options)?
     };
-    if !matches {
+    let selected_tls = options
+        .endpoint
+        .http_url()
+        .is_some_and(|u| u.scheme() == "https");
+    if !matches || root["4"]["5"].as_bool() != Some(selected_tls) {
         return Err(Error::InvalidConfiguration {
             reason: "selected endpoint does not match completed private state",
         });
@@ -598,9 +602,19 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
     let mut root = read_configuration(state)?;
     let key = persisted_key(&root)?;
     let address = management_address(options)?;
-    for (key, value) in [("1", true), ("5", false), ("7", false), ("10", false)] {
+    for (key, value) in [("1", true), ("7", false), ("10", false)] {
         set(field_mut(&mut root, "4")?, key, Value::Boolean(value))?;
     }
+    set(
+        field_mut(&mut root, "4")?,
+        "5",
+        Value::Boolean(
+            options
+                .endpoint
+                .http_url()
+                .is_some_and(|u| u.scheme() == "https"),
+        ),
+    )?;
     set(field_mut(&mut root, "4")?, "2", Value::from(address))?;
     set(field_mut(&mut root, "12")?, "0", Value::Boolean(false))?;
     if fresh {

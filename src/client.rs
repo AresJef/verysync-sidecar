@@ -105,13 +105,13 @@ pub struct InstanceInfo {
 /// settings, discovers another endpoint, or takes process ownership.
 #[derive(Clone, Debug)]
 pub struct ConnectOptions {
-    endpoint: ManagementEndpoint,
+    pub(crate) endpoint: ManagementEndpoint,
     api_key: ApiKey,
-    expected_device_id: Option<DeviceId>,
+    pub(crate) expected_device_id: Option<DeviceId>,
     version_policy: VersionPolicy,
     timeout: Duration,
     response_limit: usize,
-    transport: crate::ManagementTransport,
+    pub(crate) transport: crate::ManagementTransport,
 }
 
 impl ConnectOptions {
