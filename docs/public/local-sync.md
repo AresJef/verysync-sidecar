@@ -149,6 +149,41 @@ will persist. Observe the exact run, `cancelled` and actual destination effects.
 Native progress counters are optional observations and may include cancelled
 work; they are separate from durable destination-byte proof.
 
+A complete `LocalSyncRun` can have a nonempty `error` together with its actual
+finish time, failure counts and cancellation flag. This describes native
+execution, rather than an API-error envelope or successful work. The SDK retains
+that private text and still rejects malformed records, native API errors and
+mismatched job identities. Ordinary Debug omits the text.
+
+Run-result pages use native current-run storage. After another run replaces it,
+the old exact run ID can return HTTP 409. Read and retain needed results before
+starting the next run; the SDK does not synthesize historical results, substitute
+another run or retry a stale identity. A newly created job's configuration
+readback is also not a durable-storage acknowledgement; verify persisted state
+when interruption recovery depends on it.
+
+### Disconnected peers and explicit owned recovery
+
+A broken peer can leave native work running or `canceling` beyond a bounded
+observation. A stop acknowledgement does not prove I/O ended. Isolated SFTP and
+SMB runs remained in that state after a twenty-second stop observation. The
+internal wait's cause is not established. The SDK does not extend deadlines,
+retry work, roll back files or force an existing instance automatically.
+
+For a library-owned core, callers can separately choose `force_stop()`, await
+confirmed exact-tree exit, then explicitly restart retained state. This can
+interrupt writes; it is not normal shutdown or proof of the old run's completion.
+Reconcile actual partial files/status, explicitly update a changed endpoint,
+review a fresh preview, then choose a separate run. An ordinary Client does not
+acquire process ownership over an existing instance.
+
+Private recovery cases distinguish FTP's cancelled/failed run and saved action
+errors from deliberately chosen owned termination for the other protocols.
+Each still requires unchanged source/sentinel, retained partial files, a fresh
+preview without copying, separate execution and sixteen exact completed payloads.
+An interrupted old run is never relabelled successful. Local effects and the
+complete final-source platform gate remain separate.
+
 `local_sync_events(after, wait_seconds)` returns the native Local Sync event log,
 which uses `sequence`, `cursor`, `reset` and `missed`. These positions are distinct
 from P2P event IDs. Events identify a job and sequence, not an exact run or

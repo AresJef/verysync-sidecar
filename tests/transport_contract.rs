@@ -4520,3 +4520,53 @@ async fn local_sync_endpoint_replacement_keeps_other_secrets_and_known_cleared_i
     assert_eq!(body["ignoreLines"], serde_json::json!([]));
     Ok(())
 }
+
+#[tokio::test]
+async fn local_sync_complete_failed_run_is_data_while_error_envelopes_still_fail() -> TestResult {
+    use verysync_sidecar::LocalSyncJobId;
+    for shape in ["complete", "error-only", "malformed", "wrong-job"] {
+        let mut body = serde_json::json!({"id":"native-run","jobId":"job","started":"native-start","finished":"native-finish","count":4,"summary":{"completed":2,"failed":2,"skipped":0},"cancelled":true,"error":format!("synthetic write failed {KEY}")});
+        match shape {
+            "error-only" => body = serde_json::json!({"error":"synthetic unavailable"}),
+            "malformed" => {
+                body.as_object_mut().unwrap().remove("summary");
+            }
+            "wrong-job" => body["jobId"] = serde_json::json!("another-job"),
+            _ => (),
+        }
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(body),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let result = client.local_sync_run(&LocalSyncJobId::parse("job")?).await;
+        match shape {
+            "complete" => {
+                let run = result?;
+                assert_eq!(run.summary.failed, 2);
+                assert_eq!(run.cancelled, Some(true));
+                assert!(run
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains(KEY)));
+                assert!(!format!("{run:?}").contains(KEY));
+            }
+            "wrong-job" => assert!(matches!(result, Err(Error::InvalidConfiguration { .. }))),
+            _ => assert!(matches!(result, Err(Error::Api { .. }))),
+        }
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 4);
+        assert!(
+            requests
+                .last()
+                .unwrap()
+                .starts_with("GET /prefix/rest/localsync/jobs/job/run "),
+            "request line {:?}",
+            requests.last().unwrap().lines().next()
+        );
+    }
+    Ok(())
+}
