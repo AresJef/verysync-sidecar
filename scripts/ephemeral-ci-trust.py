@@ -2,6 +2,7 @@
 """Explicit, fingerprint-scoped CA trust for disposable GitHub-hosted test VMs."""
 import argparse
 import base64
+import ctypes
 import datetime
 import hashlib
 import json
@@ -69,16 +70,31 @@ if ($env:CI -ne 'true' -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRO
 $pem = [IO.File]::ReadAllText($env:VS_TEST_CA_CERTIFICATE)
 $der = [Convert]::FromBase64String(($pem -replace '-----BEGIN CERTIFICATE-----','' -replace '-----END CERTIFICATE-----','').Trim())
 $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList (,$der)
-$store = New-Object Security.Cryptography.X509Certificates.X509Store 'Root','CurrentUser'
+$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Disposable VM administrator required' }
+$stageLog = [IO.Path]::Combine([IO.Path]::GetDirectoryName($env:VS_TEST_CA_CERTIFICATE),'ephemeral-ca-windows-stages.jsonl')
+function Stage($name) { [IO.File]::AppendAllText($stageLog,('{"phase":"' + $name + '"}' + [Environment]::NewLine)) }
+# CurrentUser Root writes can prompt through CryptoAPI despite -NonInteractive.
+# Only this explicit disposable VM uses its administrative LocalMachine Root.
+$store = New-Object Security.Cryptography.X509Certificates.X509Store 'Root','LocalMachine'
+Stage 'before-store-open'
 $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+Stage 'after-store-open'
 try {
   $found = $store.Certificates.Find([Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,$cert.Thumbprint,$false)
   switch ($env:VS_TEST_CA_ACTION) {
     'probe' { if ($found.Count -gt 0) { exit 3 }; exit 0 }
-    'install' { if ($found.Count -ne 0) { throw 'Preexisting CA refused' }; $store.Add($cert) }
+    'install' {
+      if ($found.Count -ne 0) { throw 'Preexisting CA refused' }
+      Stage 'before-store-add'
+      $store.Add($cert)
+      Stage 'after-store-add'
+    }
     'remove' { foreach ($item in $found) {
       if ([Convert]::ToBase64String($item.RawData) -ne [Convert]::ToBase64String($der)) { throw 'CA identity mismatch' }
+      Stage 'before-store-remove'
       $store.Remove($item)
+      Stage 'after-store-remove'
     } }
     default { throw 'Explicit trust action required' }
   }
@@ -105,7 +121,7 @@ def run(arguments, path, extra=None):
 
 def record_command_result(arguments, path, code):
     operations = {"find-certificate", "add-trusted-cert", "remove-trusted-cert",
-                  "delete-certificate", "install", "rm", "update-ca-certificates"}
+                  "delete-certificate", "probe-admin-trust", "install", "rm", "update-ca-certificates"}
     operation = next((value for value in arguments if value in operations), "windows-root-store")
     with (path.parent / "ephemeral-ca-command-results.jsonl").open("a", encoding="utf-8") as output:
         output.write(json.dumps({"operation": operation, "exit": code}) + "\n")
@@ -121,6 +137,52 @@ def linux_path(identity):
     return Path("/usr/local/share/ca-certificates") / ("verysync-sidecar-ci-" + identity["sha256"] + ".crt")
 
 
+def macos_admin_trust_status(path):
+    """Read settings for this exact DER certificate; never mutate trust here.
+
+    Apple's SecTrustSettings.h specifies domainAdmin=1 and errSecItemNotFound
+    when this certificate has no settings. A successful empty array is PRESENT
+    trust, not absence. No enumeration or import of unrelated settings occurs.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+    der = x509.load_pem_x509_certificate(path.read_bytes()).public_bytes(Encoding.DER)
+    cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    security = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
+    pointer = ctypes.c_void_p
+    cf.CFDataCreate.argtypes = [pointer, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_long]
+    cf.CFDataCreate.restype = pointer
+    cf.CFRelease.argtypes = [pointer]
+    cf.CFRelease.restype = None
+    security.SecCertificateCreateWithData.argtypes = [pointer, pointer]
+    security.SecCertificateCreateWithData.restype = pointer
+    security.SecTrustSettingsCopyTrustSettings.argtypes = [pointer, ctypes.c_uint32,
+                                                        ctypes.POINTER(pointer)]
+    security.SecTrustSettingsCopyTrustSettings.restype = ctypes.c_int32
+    data = cf.CFDataCreate(None, (ctypes.c_ubyte * len(der)).from_buffer_copy(der), len(der))
+    if not data:
+        raise RuntimeError("native CA probe could not allocate certificate data")
+    certificate = None
+    settings = pointer()
+    try:
+        certificate = security.SecCertificateCreateWithData(None, data)
+        if not certificate:
+            raise RuntimeError("native CA probe rejected generated certificate")
+        return security.SecTrustSettingsCopyTrustSettings(certificate, 1, ctypes.byref(settings))
+    finally:
+        if settings.value:
+            cf.CFRelease(settings)
+        if certificate:
+            cf.CFRelease(certificate)
+        cf.CFRelease(data)
+
+
+def probe_macos_admin_trust(path):
+    # Keep even a stalled native read inside the same 25s subprocess boundary.
+    return run([sys.executable, str(Path(__file__).resolve()), "probe-admin-trust",
+                "--certificate", str(path), "--allow-ephemeral-runner-system-trust"], path)
+
+
 def ensure_absent(path, identity):
     if sys.platform == "win32":
         code = windows("probe", path)
@@ -131,6 +193,8 @@ def ensure_absent(path, identity):
                     "/Library/Keychains/System.keychain"], path)
         if code != 44:
             raise ValueError("preexisting or unobservable CA refused")
+        if probe_macos_admin_trust(path) != 0:
+            raise ValueError("preexisting or unobservable administrative CA trust refused")
     elif sys.platform == "linux":
         if linux_path(identity).exists():
             raise ValueError("preexisting test CA file refused")
@@ -146,9 +210,15 @@ def mutate(action, path, identity):
             commands = [["sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot",
                          "-k", "/Library/Keychains/System.keychain", str(path)]]
         else:
-            commands = [["sudo", "-n", "security", "remove-trusted-cert", "-d", str(path)],
-                        ["sudo", "-n", "security", "delete-certificate", "-Z", identity["sha1"],
-                         "/Library/Keychains/System.keychain"]]
+            # remove-trusted-cert hangs on hosted macOS images (runner-images
+            # #12116). Delete only our fingerprint, then independently require
+            # absence of its administrative trust settings. A stale setting is
+            # a real cleanup failure; never remove the lease or waive the gate.
+            code = run(["sudo", "-n", "security", "delete-certificate", "-Z", identity["sha256"],
+                        "/Library/Keychains/System.keychain"], path)
+            if code not in (0, 44) or probe_macos_admin_trust(path) != 0:
+                raise RuntimeError("exact macOS CA cleanup incomplete; private lease retained")
+            return
         codes = [run(command, path) for command in commands]
     elif sys.platform == "linux":
         destination = linux_path(identity)
@@ -167,12 +237,21 @@ def mutate(action, path, identity):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["install", "remove"])
+    parser.add_argument("action", choices=["install", "remove", "probe-admin-trust"])
     parser.add_argument("--certificate", required=True, type=Path)
     parser.add_argument("--allow-ephemeral-runner-system-trust", action="store_true")
     arguments = parser.parse_args(argv)
     path = require_scope(arguments.certificate, arguments.allow_ephemeral_runner_system_trust)
     identity = certificate_identity(path)
+    if arguments.action == "probe-admin-trust":
+        if sys.platform != "darwin":
+            raise ValueError("administrative trust probe requires macOS")
+        status = macos_admin_trust_status(path)
+        if status not in (0, -25300):
+            raise RuntimeError(f"administrative CA trust read failed with status {status}")
+        print(json.dumps({"ca_sha256": identity["sha256"],
+                          "admin_trust_present": status == 0}), flush=True)
+        return 3 if status == 0 else 0
     lease = path.parent / ".ephemeral-ci-ca-lease.json"
     if arguments.action == "install":
         ensure_absent(path, identity)
@@ -203,4 +282,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

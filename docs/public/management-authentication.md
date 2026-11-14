@@ -236,3 +236,15 @@ requires strict chain/hostname verification, encrypted correct-password acceptan
 wrong-password and wrong-hostname refusal, persisted policy and exact CA cleanup.
 Its same-source native results remain a separate acceptance gate; fixture-only
 certificate checks do not establish that the Rust/native authentication passed.
+On hosted macOS, cleanup deletes the unique generated certificate by SHA-256
+and independently reads administrative trust settings for that exact DER
+certificate through the native Security API. A remaining or unobservable trust
+record fails cleanup and keeps the private recovery lease. No authorization
+database policy or unrelated trust record is changed. The separate macOS LDAP
+diagnosis jobs shorten feedback for this platform-specific cleanup condition;
+the complete native matrix and its final gate are still required.
+Windows uses the explicitly selected disposable VM's administrative
+`LocalMachine\Root` store, with exact DER matching and fingerprint cleanup.
+Interactive current-user root-store prompts are not automated. This provisioning
+is confined to the runtime test helper; adding or compiling the crate changes
+no certificate store.

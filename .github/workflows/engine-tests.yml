@@ -365,6 +365,72 @@ jobs:
           NATIVE_MATRIX_PACKAGE: ${{ matrix.package }}
         run: python scripts/check-native-step-results.py
 
+  ldap-trust-diagnostic:
+    name: LDAP trust diagnosis only (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Verify trust scope and stale-setting failure contracts
+        run: python -m unittest discover -s scripts/tests -p test_ephemeral_ci_trust.py
+      - name: Select separate x64 peer interpreter on Windows ARM
+        if: matrix.package == 'windows-arm64-standard'
+        id: storage_tools_python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+          architecture: x64
+          update-environment: false
+      - name: Prepare explicit private protocol peers
+        env:
+          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
+        run: python scripts/prepare-storage-test-environment.py --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Install the native Rust toolchain
+        run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+      - name: Fetch fixed dependencies explicitly
+        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare the fixed isolated core explicitly
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Diagnose strict native LDAP and exact CA cleanup only; not full acceptance
+        timeout-minutes: 4
+        env:
+          VERYSYNC_TEST_EPHEMERAL_CA_TRUST: selected
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target ldap_trusted_ca_engine
+          --evidence-dir "${{ runner.temp }}/vs-ldap-trust-diagnostic-proxy"
+      - name: Verify exact owned-core cleanup
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+
   smb-diagnostic:
     name: SMB diagnosis only (${{ matrix.package }})
     runs-on: ${{ matrix.runner }}

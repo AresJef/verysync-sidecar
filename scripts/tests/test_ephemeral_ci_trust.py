@@ -1,5 +1,6 @@
 """The trust helper must reject local and unowned paths before native commands."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -13,6 +14,59 @@ SPEC.loader.exec_module(TRUST)
 
 
 class EphemeralTrustScopeTests(unittest.TestCase):
+    def test_macos_removal_uses_exact_sha256_and_requires_independent_trust_absence(self):
+        path = Path("/synthetic/vs-ldap-trusted-owned/synthetic-ldap-ca.pem")
+        identity = {"sha256": "a" * 64, "sha1": "b" * 40}
+        for deletion in [0, 44]:
+            with self.subTest(deletion=deletion), mock.patch.object(TRUST.sys, "platform", "darwin"):
+                with mock.patch.object(TRUST, "run", return_value=deletion) as run:
+                    with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=0) as probe:
+                        TRUST.mutate("remove", path, identity)
+                run.assert_called_once_with(["sudo", "-n", "security", "delete-certificate", "-Z",
+                                             "a" * 64, "/Library/Keychains/System.keychain"], path)
+                probe.assert_called_once_with(path)
+
+    def test_macos_stale_or_unobservable_admin_trust_is_a_cleanup_failure(self):
+        with mock.patch.object(TRUST.sys, "platform", "darwin"):
+            for status in [3, 1]:
+                with self.subTest(status=status), mock.patch.object(TRUST, "run", return_value=0):
+                    with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=status):
+                        with self.assertRaises(RuntimeError):
+                            TRUST.mutate("remove", Path("/synthetic"), {"sha256": "a" * 64})
+
+    def test_failed_cleanup_keeps_exact_owned_lease(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic-ldap-ca.pem"
+            path.write_text("synthetic")
+            identity = {"sha256": "a" * 64}
+            lease = path.parent / ".ephemeral-ci-ca-lease.json"
+            lease.write_text(json.dumps(identity))
+            with mock.patch.object(TRUST, "require_scope", return_value=path):
+                with mock.patch.object(TRUST, "certificate_identity", return_value=identity):
+                    with mock.patch.object(TRUST, "mutate", side_effect=RuntimeError("stale trust")):
+                        with self.assertRaises(RuntimeError):
+                            TRUST.main(["remove", "--certificate", str(path), "--allow-ephemeral-runner-system-trust"])
+            self.assertEqual(json.loads(lease.read_text()), identity)
+
+    def test_probe_never_calls_a_mutation_and_distinguishes_present_empty_settings(self):
+        for native, expected in [(0, 3), (-25300, 0)]:
+            with self.subTest(status=native), mock.patch.object(TRUST.sys, "platform", "darwin"):
+                with mock.patch.object(TRUST, "require_scope", return_value=Path("/synthetic")):
+                    with mock.patch.object(TRUST, "certificate_identity", return_value={"sha256": "a" * 64}):
+                        with mock.patch.object(TRUST, "macos_admin_trust_status", return_value=native):
+                            with mock.patch.object(TRUST, "mutate", side_effect=AssertionError("probe mutated trust")):
+                                self.assertEqual(TRUST.main(["probe-admin-trust", "--certificate", "/synthetic",
+                                                             "--allow-ephemeral-runner-system-trust"]), expected)
+
+    def test_unrecognized_native_trust_read_status_is_not_absence(self):
+        with mock.patch.object(TRUST.sys, "platform", "darwin"):
+            with mock.patch.object(TRUST, "require_scope", return_value=Path("/synthetic")):
+                with mock.patch.object(TRUST, "certificate_identity", return_value={"sha256": "a" * 64}):
+                    with mock.patch.object(TRUST, "macos_admin_trust_status", return_value=-1):
+                        with self.assertRaises(RuntimeError):
+                            TRUST.main(["probe-admin-trust", "--certificate", "/synthetic",
+                                        "--allow-ephemeral-runner-system-trust"])
+
     def test_unselected_local_or_self_hosted_execution_cannot_reach_native_commands(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

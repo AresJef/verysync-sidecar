@@ -51,10 +51,30 @@ impl TemporaryTrust {
                 .lines()
                 .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
                 .collect();
+            let mut stage_bytes = Vec::new();
+            let _ = std::fs::File::open(parent.join("ephemeral-ca-windows-stages.jsonl"))
+                .and_then(|file| file.take(8192).read_to_end(&mut stage_bytes));
+            let stages: Vec<_> = String::from_utf8_lossy(&stage_bytes)
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter_map(|value| value["phase"].as_str().map(str::to_owned))
+                .filter(|phase| {
+                    matches!(
+                        phase.as_str(),
+                        "before-store-open"
+                            | "after-store-open"
+                            | "before-store-add"
+                            | "after-store-add"
+                            | "before-store-remove"
+                            | "after-store-remove"
+                    )
+                })
+                .collect();
             eprintln!(
                 "ephemeral CA helper failure: {}",
                 serde_json::json!({
-                "action":action,"helper_code":output.status.code(),"native_commands":native})
+                "action":action,"helper_code":output.status.code(),"native_commands":native,
+                "windows_store_stages":stages})
             );
             return Err("ephemeral CA helper failed; inspect private test diagnostics".into());
         }
