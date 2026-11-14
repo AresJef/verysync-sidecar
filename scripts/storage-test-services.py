@@ -230,10 +230,83 @@ def sftp(config, root):
         threading.Thread(target=connection, args=(sock,), daemon=True).start()
 
 
+def windows_smb_open_sharing(root):
+    """Give only this fixture module's share files real Windows delete sharing.
+
+    Impacket renames a file while its request FileId still owns an open fd.
+    Windows CRT os.open does not grant FILE_SHARE_DELETE. A separate module-local
+    OS namespace keeps this correction out of Python's global os module and SDK.
+    No client error is converted into success and no native copy is emulated.
+    """
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+    import types
+    import impacket.smbserver as module
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                       ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes, close.restype = [wintypes.HANDLE], wintypes.BOOL
+    invalid = wintypes.HANDLE(-1).value
+    original = os.open
+
+    def share_open(path, flags, mode=0o777, *, dir_fd=None):
+        if dir_fd is not None or not Path(path).resolve().is_relative_to(root):
+            return original(path, flags, mode, dir_fd=dir_fd)
+        access = 0xC0000000 if flags & os.O_RDWR else 0x40000000 if flags & os.O_WRONLY else 0x80000000
+        if flags & os.O_CREAT:
+            disposition = 1 if flags & os.O_EXCL else 2 if flags & os.O_TRUNC else 4
+        else:
+            disposition = 5 if flags & os.O_TRUNC else 3
+        # MS CreateFileW: delete sharing permits later delete/rename requests.
+        # https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
+        attributes = 0x80
+        if flags & os.O_CREAT and not mode & 0o222:
+            attributes |= 1
+        handle = create(os.fspath(path), access, 1 | 2 | 4, None, disposition, attributes, None)
+        if handle is None or handle == invalid:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            fd = msvcrt.open_osfhandle(handle, (flags & os.O_APPEND) | os.O_NOINHERIT)
+        except BaseException:
+            close(handle)
+            raise
+        try:
+            msvcrt.setmode(fd, os.O_BINARY)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    # Verify actual fd read/write and rename-while-open before advertising ready.
+    first = root / ".fixture-sharing-check.tmp"
+    renamed = root / ".fixture-sharing-check.renamed"
+    fd = share_open(first, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+    try:
+        payload = b"\x00native\r\nsharing\xff"
+        assert os.write(fd, payload) == len(payload)
+        os.rename(first, renamed)
+        os.lseek(fd, 0, os.SEEK_SET)
+        assert os.read(fd, len(payload)) == payload
+    finally:
+        os.close(fd)
+        for owned in (first, renamed):
+            if owned.exists():
+                owned.unlink()
+    module.os = types.SimpleNamespace(**{**vars(os), "open": share_open})
+
+
 def smb(config, root):
     from impacket.smbserver import SimpleSMBServer, SMB2Commands
     from impacket import smb3structs as smb2
     from impacket.ntlm import compute_lmhash, compute_nthash
+    windows_smb_open_sharing(root)
     server = SimpleSMBServer(listenAddress="127.0.0.1", listenPort=0)
     server.setSMB2Support(True)
 
