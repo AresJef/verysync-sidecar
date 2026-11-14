@@ -1,6 +1,8 @@
 //! Actual indexed data, bounded pages and a native file-access failure.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/private_redial.rs"]
+mod private_redial;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 #[cfg(unix)]
@@ -973,10 +975,10 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     Ok(())
 }
 
-async fn incoming_bytes(
+async fn incoming_observation(
     client: &verysync_sidecar::Client,
     peer: &verysync_sidecar::DeviceId,
-) -> TestResult<u64> {
+) -> TestResult<(u64, Option<String>)> {
     let snapshot = client.connections().await?;
     let connection = snapshot
         .connections
@@ -998,9 +1000,10 @@ async fn incoming_bytes(
     {
         return Err("expected an actual connected private loopback TCP peer".into());
     }
-    connection
+    let bytes = connection
         .in_bytes_total
-        .ok_or_else(|| "incoming byte counter is absent".into())
+        .ok_or("incoming byte counter is absent")?;
+    Ok((bytes, connection.started_at.clone()))
 }
 async fn clear_bandwidth(a: &ManagedInstance, b: &ManagedInstance) -> TestResult {
     use verysync_sidecar::BandwidthPatch;
@@ -1058,9 +1061,13 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
         .keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    // Explicit private fixture preparation; native/SDK defaults and all
+    // payload, observation, rate and quality bounds remain unchanged.
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
-    let a_address = private_tcp(a.client()).await?;
+    let _a_address = private_tcp(a.client()).await?;
     let b_address = private_tcp(b.client()).await?;
     let keys = a.client().generate_share().await?;
     let rw = a.client().validate_share_key(&keys.read_write_key).await?;
@@ -1078,7 +1085,12 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
         .await?;
     for (client, folder, peer, address) in [
         (a.client(), &af.configuration.id, &b_id, b_address),
-        (b.client(), &bf.configuration.id, &a_id, a_address),
+        (
+            b.client(),
+            &bf.configuration.id,
+            &a_id,
+            "dynamic".to_owned(),
+        ),
     ] {
         client
             .create_device(
@@ -1157,6 +1169,20 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
                     .requested_fields_match
             ),
         }
+        assert_eq!(
+            a.client()
+                .network_configuration()
+                .await?
+                .reconnection_interval_seconds,
+            5
+        );
+        assert_eq!(
+            b.client()
+                .network_configuration()
+                .await?
+                .reconnection_interval_seconds,
+            5
+        );
         let name = format!("rate-{case}.bin");
         let mut state = 0x1234abcd9876u64 ^ (case + 1);
         let content: Vec<u8> = (0..2_097_152)
@@ -1202,12 +1228,19 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
         }
         needed_observation??;
         let outer_start = Instant::now();
-        let before = incoming_bytes(b.client(), &a_id).await?;
+        let (before, first_epoch) = incoming_observation(b.client(), &a_id).await?;
         let before_end = outer_start.elapsed();
         tokio::time::sleep(Duration::from_secs(3)).await;
         let after_start = outer_start.elapsed();
-        let after = incoming_bytes(b.client(), &a_id).await?;
+        let (after, second_epoch) = incoming_observation(b.client(), &a_id).await?;
         let outer_span = outer_start.elapsed();
+        eprintln!(
+            "bandwidth counter epoch diagnostic: {}",
+            json!({"case":case,"before":before,"after":after,"epoch_before":first_epoch,"epoch_after":second_epoch})
+        );
+        if first_epoch.is_some() && second_epoch.is_some() && first_epoch != second_epoch {
+            return Err("connection epoch changed during complete measurement".into());
+        }
         let delta = after
             .checked_sub(before)
             .ok_or("counter decreased during the complete measurement window")?;
@@ -1255,7 +1288,7 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
     let phase = std::env::var("VERYSYNC_BANDWIDTH_PHASE").unwrap_or_else(|_| "acceptance".into());
     println!(
         "public bandwidth functional trial: {}",
-        json!({"phase":phase,"protocol":"VS033-S4-functional-v2","complete_cases":samples,"scope":"absolute functional byte-cap observations; no throughput or speedup claim"})
+        json!({"phase":phase,"protocol":"VS033-S4-functional-v3","fixture_reconnection_interval_seconds":5,"dial_topology":"sender_only_receiver_dynamic","complete_cases":samples,"scope":"absolute functional byte-cap observations; no throughput or speedup claim"})
     );
     println!(
         "public bandwidth functional evidence: {}",
@@ -1273,9 +1306,13 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
     let root = tempfile::Builder::new().prefix("vsssel-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    // Explicit private fixture preparation; native/SDK defaults and all
+    // payload, observation, rate and quality bounds remain unchanged.
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
-    let a_address = private_tcp(a.client()).await?;
+    let _a_address = private_tcp(a.client()).await?;
     let b_address = private_tcp(b.client()).await?;
     let keys = a.client().generate_share().await?;
     let ak = a.client().validate_share_key(&keys.read_write_key).await?;
@@ -1308,7 +1345,12 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
     assert!(configured.requested_mode_match && configured.configuration.enabled);
     for (client, folder, peer, address) in [
         (a.client(), &af.configuration.id, &b_id, b_address),
-        (b.client(), &bf.configuration.id, &a_id, a_address),
+        (
+            b.client(),
+            &bf.configuration.id,
+            &a_id,
+            "dynamic".to_owned(),
+        ),
     ] {
         client
             .create_device(

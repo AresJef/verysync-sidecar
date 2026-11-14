@@ -353,3 +353,11 @@ The public synthetic native case verifies endpoint/direction changes, actual
 ignore and clear behavior, explicit deletion, old endpoint and source retention,
 and a subsequent reverse copy into a new endpoint. Full source/platform acceptance
 and protocol-specific remaining conditions are independent of this local case.
+
+SFTP `insecure_tls(false)` preserves the native option; it is not evidence that
+the target consults a particular trust store. An isolated v2.33.2 macOS ARM core
+accepted a probe despite a conflicting synthetic host key in its private-profile
+`known_hosts`. That attempted profile trust mechanism is unverified. The test
+failed before positive identity/copy acceptance, and no system or controller SSH
+configuration was changed. Do not infer verified host identity from a successful
+probe or this flag alone; the native trust mechanism still needs separate proof.
