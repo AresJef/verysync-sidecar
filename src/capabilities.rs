@@ -294,7 +294,11 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::LocalSync),
+    LibraryCapability {
+        capability: Capability::LocalSync,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::TransferScheduling,
         implementation: ImplementationStatus::Typed,
