@@ -643,6 +643,49 @@ pub struct LocalSyncOperation {
     #[serde(flatten)]
     pub extra: Extra,
 }
+/// An explicit control for the currently identified native job operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalSyncOperationControl {
+    /// Request a pause; read actual state and in-flight effects separately.
+    Pause,
+    /// Request resumption of the same identified operation.
+    Resume,
+    /// Request cancellation; this is not rollback or proof of immediate I/O stop.
+    Stop,
+}
+/// A known native control acknowledgement and a separately read status snapshot.
+#[derive(Debug)]
+pub struct LocalSyncControlReceipt {
+    /// Exact target registration.
+    pub job_id: LocalSyncJobId,
+    /// Operation checked before and after the command.
+    pub operation_id: LocalSyncOperationId,
+    /// Caller-selected control.
+    pub control: LocalSyncOperationControl,
+    /// Actual readback; acknowledgement alone does not promise a target state.
+    pub observed: LocalSyncStatus,
+}
+/// Actual native transfer counters. Reported bytes are not durable file proof.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSyncProgress {
+    /// Reported start time, when present.
+    pub started: Option<String>,
+    /// Reported planned bytes, when known.
+    pub planned_bytes: Option<u64>,
+    /// Reported planned action count, when known.
+    pub planned_actions: Option<u64>,
+    /// Reported finished actions; not inferred from missing values.
+    pub finished_actions: Option<u64>,
+    /// Reported finished files.
+    pub finished_files: Option<u64>,
+    /// Native transfer counter; it may include work that is later cancelled.
+    pub bytes_transferred: Option<u64>,
+    /// Current private path and future native progress values.
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
 /// A point-in-time native job state. Unknown state/progress fields remain intact.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -657,7 +700,13 @@ pub struct LocalSyncStatus {
     pub operation_id: Option<LocalSyncOperationId>,
     /// Native error text, private and not printed by Debug.
     pub last_error: Option<String>,
-    /// Native counts, watch state, progress and future metadata.
+    /// Actual native execution counters, when supplied.
+    pub summary: Option<LocalSyncSummary>,
+    /// Actual native progress without inferring transferred or durable bytes.
+    pub progress: Option<LocalSyncProgress>,
+    /// Whether the latest native run was cancelled, when reported.
+    pub last_run_cancelled: Option<bool>,
+    /// Native counts, watch state and future metadata.
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -726,6 +775,8 @@ pub struct LocalSyncRun {
     pub count: u64,
     /// Actual success/failure/skip counters.
     pub summary: LocalSyncSummary,
+    /// Whether this native run was cancelled, when explicitly reported.
+    pub cancelled: Option<bool>,
     /// Native error/stopped fields and future metadata.
     #[serde(flatten)]
     pub extra: Extra,
@@ -840,6 +891,7 @@ private_debug!(
     LocalSyncJobRemoval,
     LocalSyncOperation,
     LocalSyncStatus,
+    LocalSyncProgress,
     LocalSyncPreview,
     LocalSyncAction,
     LocalSyncRun,

@@ -4013,3 +4013,207 @@ async fn local_sync_selection_and_resolution_keep_native_shapes_and_exact_previe
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn local_sync_events_report_internal_sequence_holes_without_consuming_queue_tail(
+) -> TestResult {
+    use verysync_sidecar::{EventGapReason, LocalSyncEventOptions, LocalSyncEventStreamItem};
+    let status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-a"}));
+    let event = |sequence| serde_json::json!({"sequence":sequence,"jobId":"","type":"future_native_kind","time":"native-time","private":KEY});
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),status(),status(),status(),Reply::json(serde_json::json!({"events":[event(1),event(3)],"cursor":3,"reset":false,"missed":false})),status()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut stream =
+        client.subscribe_local_sync_events(LocalSyncEventOptions::default().wait_seconds(0)?)?;
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Event{event,..}))if event.sequence==1&&event.kind=="future_native_kind")
+    );
+    assert_eq!(stream.cursor().last_sequence, 1);
+    assert_eq!(stream.buffered_items(), 2);
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::MissingEvents&&g.previous.last_sequence==1&&g.resume_from.last_sequence==2)
+    );
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Event{event,..}))if event.sequence==3)
+    );
+    assert_eq!(stream.cursor().last_sequence, 3);
+    assert!(!format!("{stream:?}").contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.contains("/rest/localsync/events?"))
+            .count(),
+        1
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_event_schema_failure_reports_gap_then_terminal_error_without_retry(
+) -> TestResult {
+    use verysync_sidecar::{EventGapReason, LocalSyncEventOptions, LocalSyncEventStreamItem};
+    let status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-a"}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        status(),
+        status(),
+        status(),
+        Reply::json(serde_json::json!({"events":[],"cursor":0,"reset":false})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut stream = client.subscribe_local_sync_events(LocalSyncEventOptions::default())?;
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::BatchUnavailable)
+    );
+    assert!(matches!(
+        stream.next().await,
+        Some(Err(Error::InvalidResponse { .. }))
+    ));
+    assert!(stream.next().await.is_none());
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.contains("/rest/localsync/events?"))
+            .count(),
+        1
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_event_observation_change_discards_cross_generation_batch() -> TestResult {
+    use verysync_sidecar::{EventGapReason, LocalSyncEventOptions, LocalSyncEventStreamItem};
+    let status = |boot: &str| Reply::json(serde_json::json!({"myID":ID,"startTime":boot}));
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),status("boot-a"),status("boot-a"),status("boot-a"),Reply::json(serde_json::json!({"events":[{"sequence":1,"jobId":"","type":"run_finished","time":"native-time"}],"cursor":1,"reset":false,"missed":false})),status("boot-b")]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut stream = client.subscribe_local_sync_events(LocalSyncEventOptions::default())?;
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::ObservationChanged&&g.resume_from.last_sequence==0&&g.resume_from.engine_started_at.as_deref()==Some("boot-b"))
+    );
+    assert_eq!(stream.buffered_items(), 0);
+    assert_eq!(server.finish().await?.len(), 6);
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_control_wrong_operation_never_posts_and_unknown_ack_never_retries() -> TestResult
+{
+    use verysync_sidecar::{LocalSyncJobId, LocalSyncOperationControl, LocalSyncOperationId};
+    for wrong in [true, false] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            Reply::json(
+                serde_json::json!({"jobId":"job","state":"running","operationId":"current-operation"}),
+            ),
+        ];
+        if !wrong {
+            replies.extend([
+                identity(),
+                Reply::json(serde_json::json!({"unrecognized":KEY})),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let id = LocalSyncJobId::parse("job")?;
+        let operation = LocalSyncOperationId::parse(if wrong {
+            "stale-operation"
+        } else {
+            "current-operation"
+        })?;
+        let result = client
+            .control_local_sync_operation(&id, &operation, LocalSyncOperationControl::Stop)
+            .await;
+        if wrong {
+            assert!(matches!(result, Err(Error::InvalidConfiguration { .. })));
+        } else {
+            assert!(matches!(result, Err(Error::MutationOutcomeUnknown { .. })));
+        }
+        assert_eq!(
+            server
+                .finish()
+                .await?
+                .iter()
+                .filter(|r| r.starts_with("POST "))
+                .count(),
+            usize::from(!wrong)
+        );
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_events_excessive_or_nonmonotonic_batches_fail_without_truncation() -> TestResult
+{
+    use verysync_sidecar::{EventGapReason, LocalSyncEventOptions, LocalSyncEventStreamItem};
+    for sequences in [vec![1, 2], vec![2, 1], vec![0]] {
+        let status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-a"}));
+        let events=sequences.iter().map(|sequence|serde_json::json!({"sequence":sequence,"type":"native-kind","time":"native-time"})).collect::<Vec<_>>();
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            status(),
+            status(),
+            status(),
+            Reply::json(
+                serde_json::json!({"events":events,"cursor":2,"reset":false,"missed":false}),
+            ),
+            status(),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let mut stream =
+            client.subscribe_local_sync_events(LocalSyncEventOptions::default().max_events(1)?)?;
+        assert!(
+            matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::BatchUnavailable)
+        );
+        assert!(matches!(
+            stream.next().await,
+            Some(Err(Error::InvalidResponse { .. }))
+        ));
+        assert!(stream.next().await.is_none());
+        assert_eq!(stream.cursor().last_sequence, 0);
+        assert_eq!(server.finish().await?.len(), 6);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_native_reset_and_missed_flags_remain_explicit_when_resuming() -> TestResult {
+    use verysync_sidecar::{
+        EventGapReason, LocalSyncEventCursor, LocalSyncEventOptions, LocalSyncEventStreamItem,
+    };
+    for reset in [true, false] {
+        let sequence = if reset { 5 } else { 8 };
+        let last = if reset { 7 } else { 1 };
+        let status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-a"}));
+        let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),status(),status(),status(),Reply::json(serde_json::json!({"events":[{"sequence":sequence,"type":"native-kind","time":"native-time"}],"cursor":sequence,"reset":reset,"missed":!reset})),status()]).await?;
+        let client = Client::connect(server.options()?).await?;
+        let cursor = LocalSyncEventCursor {
+            device_id: client.instance().device_id.clone(),
+            engine_started_at: Some("boot-a".into()),
+            last_sequence: last,
+        };
+        let mut stream =
+            client.subscribe_local_sync_events(LocalSyncEventOptions::default().resume(cursor))?;
+        assert!(
+            matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::ResumedContinuityUnverified)
+        );
+        let expected = if reset {
+            EventGapReason::CursorReset
+        } else {
+            EventGapReason::MissingEvents
+        };
+        assert!(
+            matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==expected&&g.previous.last_sequence==last&&g.resume_from.last_sequence==sequence-1)
+        );
+        assert!(
+            matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Event{event,..}))if event.sequence==sequence)
+        );
+        assert_eq!(stream.cursor().last_sequence, sequence);
+        assert_eq!(server.finish().await?.len(), 6);
+    }
+    Ok(())
+}
