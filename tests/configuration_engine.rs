@@ -1,4 +1,6 @@
 //! Actual default inheritance, independent runtime state and persisted configuration.
+#[path = "common/folder_options_cases.rs"]
+mod folder_options_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/process_priority.rs"]
