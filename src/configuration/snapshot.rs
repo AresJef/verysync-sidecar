@@ -116,6 +116,7 @@ impl ConfigurationSnapshot {
     }
     /// Edit future-folder defaults without changing existing registrations.
     pub fn set_folder_defaults(&mut self, patch: &FolderDefaultsPatch) -> Result<()> {
+        patch.validate()?;
         self.merge(&["defaults", "folder"], patch)
     }
     /// Edit future-device defaults; unknown enum inputs are rejected.

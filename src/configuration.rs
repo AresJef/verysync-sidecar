@@ -27,6 +27,32 @@ pub struct FolderDefaults {
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
+impl FolderDefaults {
+    fn decode<T: serde::de::DeserializeOwned>(&self) -> crate::Result<T> {
+        let value = serde_json::to_value(self).map_err(|_| crate::Error::InvalidConfiguration {
+            reason: "folder template cannot be encoded",
+        })?;
+        serde_json::from_value(value).map_err(|_| crate::Error::InvalidConfiguration {
+            reason: "folder template does not match the selected native settings schema",
+        })
+    }
+    /// Actual complete scan selections in the template; no watcher or scan is started.
+    pub fn scan_configuration(&self) -> crate::Result<crate::FolderScanConfig> {
+        self.decode()
+    }
+    /// Actual pull-order selection for subsequent registrations.
+    pub fn scheduling_configuration(&self) -> crate::Result<crate::FolderSchedulingConfig> {
+        self.decode()
+    }
+    /// Actual advanced selections. Missing native fields remain absent.
+    pub fn advanced_configuration(&self) -> crate::Result<crate::FolderAdvancedConfig> {
+        self.decode()
+    }
+    /// Actual selective-mode selection; not proof of licensed selective transfers.
+    pub fn selective_configuration(&self) -> crate::Result<crate::FolderSelectiveConfig> {
+        self.decode()
+    }
+}
 impl fmt::Debug for FolderDefaults {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FolderDefaults")
@@ -45,10 +71,14 @@ pub struct FolderDefaultsPatch {
     label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     paused: Option<bool>,
-    #[serde(rename = "rescanIntervalS", skip_serializing_if = "Option::is_none")]
-    rescan_interval_seconds: Option<u32>,
-    #[serde(rename = "fsWatcherEnabled", skip_serializing_if = "Option::is_none")]
-    watcher_enabled: Option<bool>,
+    #[serde(flatten)]
+    scan: crate::FolderScanPatch,
+    #[serde(flatten)]
+    advanced: Option<crate::FolderAdvancedPatch>,
+    #[serde(rename = "order", skip_serializing_if = "Option::is_none")]
+    pull_order: Option<crate::FolderPullOrder>,
+    #[serde(rename = "selectiveEnabled", skip_serializing_if = "Option::is_none")]
+    selective_enabled: Option<bool>,
 }
 impl FolderDefaultsPatch {
     /// Change the label inherited by subsequent registrations.
@@ -63,13 +93,53 @@ impl FolderDefaultsPatch {
     }
     /// Set the periodic interval in seconds; zero disables periodic rescanning.
     pub fn rescan_interval_seconds(mut self, value: u32) -> Self {
-        self.rescan_interval_seconds = Some(value);
+        self.scan = self.scan.rescan_interval_seconds(value);
         self
     }
     /// Request filesystem watching for subsequent registrations.
     pub fn watcher_enabled(mut self, value: bool) -> Self {
-        self.watcher_enabled = Some(value);
+        self.scan = self.scan.watcher(value);
         self
+    }
+    /// Replace the selected scan fields using the same bounded scan input model
+    /// as registered folders. Existing unrelated template fields are retained.
+    pub fn scan_configuration(mut self, patch: crate::FolderScanPatch) -> crate::Result<Self> {
+        patch.validate()?;
+        self.scan = patch;
+        Ok(self)
+    }
+    /// Replace the selected advanced fields for subsequent registrations only.
+    pub fn advanced_configuration(
+        mut self,
+        patch: crate::FolderAdvancedPatch,
+    ) -> crate::Result<Self> {
+        patch.validate()?;
+        self.advanced = Some(patch);
+        Ok(self)
+    }
+    /// Select a known native file pull order for subsequent registrations.
+    pub fn pull_order(mut self, value: crate::FolderPullOrder) -> crate::Result<Self> {
+        if matches!(value, crate::FolderPullOrder::Unknown(_)) {
+            return Err(crate::Error::InvalidConfiguration {
+                reason: "unknown folder pull order cannot be submitted",
+            });
+        }
+        self.pull_order = Some(value);
+        Ok(self)
+    }
+    /// Select the future-folder selective-mode flag. Does not acquire a license.
+    pub fn selective_enabled(mut self, value: bool) -> Self {
+        self.selective_enabled = Some(value);
+        self
+    }
+    pub(crate) fn validate(&self) -> crate::Result<()> {
+        if !self.scan.is_empty() {
+            self.scan.validate()?;
+        }
+        if let Some(patch) = &self.advanced {
+            patch.validate()?;
+        }
+        Ok(())
     }
 }
 impl fmt::Debug for FolderDefaultsPatch {
@@ -77,8 +147,10 @@ impl fmt::Debug for FolderDefaultsPatch {
         f.debug_struct("FolderDefaultsPatch")
             .field("changes_label", &self.label.is_some())
             .field("paused", &self.paused)
-            .field("rescan_interval_seconds", &self.rescan_interval_seconds)
-            .field("watcher_enabled", &self.watcher_enabled)
+            .field("scan", &self.scan)
+            .field("advanced", &self.advanced)
+            .field("pull_order", &self.pull_order)
+            .field("selective_enabled", &self.selective_enabled)
             .finish()
     }
 }

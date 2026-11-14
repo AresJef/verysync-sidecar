@@ -88,14 +88,16 @@ impl FolderScanPatch {
         self.disable_initial = Some(value);
         self
     }
-    pub(crate) fn validate(&self) -> Result<()> {
-        if self.rescan.is_none()
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rescan.is_none()
             && self.watcher.is_none()
             && self.delay.is_none()
             && self.timeout.is_none()
             && self.progress.is_none()
             && self.disable_initial.is_none()
-        {
+    }
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.is_empty() {
             return Err(Error::InvalidConfiguration {
                 reason: "scan patch must contain at least one field",
             });

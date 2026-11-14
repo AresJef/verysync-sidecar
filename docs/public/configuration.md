@@ -46,6 +46,70 @@ The library does not roll back configuration or implicitly restart an instance.
 These methods do not change management credentials, start an official account
 session, or acquire a commercial entitlement.
 
+## Advanced folder selections and template inheritance
+
+`folder_advanced_configuration(&id)` and
+`update_folder_advanced_configuration(&id, &patch)` read and change explicit
+native folder selections. `FolderAdvancedPatch` covers permission handling,
+normalization, minimum free space, copier/hasher counts,
+retry timing, conflict retention, sparse files, parent ownership, modification
+time window, concurrent writes, fsync, case sensitivity, junction traversal,
+ownership and extended-attribute flags, block indexing, backup-only mode,
+marker-repair policy, puller selections, Live Photo selection and tags.
+
+The observed legacy `pullerMaxPendingKiB` field is read-only in the typed model.
+The selected baseline acknowledged nonzero scoped PATCH and complete PUT values
+but read them back as zero; an acknowledgment does not establish mutability.
+
+These are configuration controls. Their readback does not establish filesystem
+support, metadata replication, deletion handling, resource usage or throughput.
+Disabling fsync can reduce native durability. The SDK never silently enables it.
+Missing advanced fields remain `None`; unmodeled values remain available through
+the original `FolderConfig` or template, and ordinary Debug hides private values.
+
+```no_run
+use verysync_sidecar::{
+    Client, FolderAdvancedPatch, FolderDefaultsPatch, FolderId, FolderPullOrder,
+    FolderScanPatch,
+};
+
+async fn choose_future_and_existing_settings(
+    client: &Client,
+    existing: &FolderId,
+) -> verysync_sidecar::Result<()> {
+    let template = FolderDefaultsPatch::default()
+        .scan_configuration(FolderScanPatch::default()
+            .watcher(false)
+            .watcher_delay_seconds(0.5))?
+        .pull_order(FolderPullOrder::Alphabetic)?
+        .advanced_configuration(FolderAdvancedPatch::default()
+            .hashers(2)
+            .max_conflicts(10))?;
+    let future = client.update_folder_defaults(&template).await?;
+    let current = client.update_folder_advanced_configuration(
+        existing,
+        &FolderAdvancedPatch::default().hashers(1),
+    ).await?;
+    // Inspect both actual configurations and requested_fields_match values.
+    // Template edits affect new registrations; existing folders are independent.
+    Ok(())
+}
+```
+
+`FolderDefaults` provides typed `scan_configuration()`,
+`scheduling_configuration()`, `selective_configuration()` and
+`advanced_configuration()` views. Scan inputs use the registered-folder numeric
+validation, including finite watcher delays. Replacing the selected scan or
+advanced subpatch in a builder replaces that selected group; unselected native
+fields remain untouched. `selective_enabled()` selects only the native flag and
+does not acquire an entitlement or download files.
+
+The native case separately verifies selected values, new-folder inheritance,
+existing-folder isolation, partial edits, complete-snapshot template editing,
+normal restart persistence and retained synthetic bytes. OS-specific metadata,
+extended-attribute filters, marker names, block/copy strategies, sharing secrets
+and additional template/device controls retain separate capability gates.
+
 ## Complete configuration saves
 
 `configuration()` returns an identity-bound `ConfigurationSnapshot`, retaining
