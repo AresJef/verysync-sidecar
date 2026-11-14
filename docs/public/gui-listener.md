@@ -79,3 +79,11 @@ identity and synthetic bytes, and actual Unix socket permission changes. Full
 same-source native platform acceptance remains pending. HTTP acknowledgement,
 stored readback, successful TLS authentication and process-tree exit are separate
 observations throughout.
+
+Replacing a Unix socket can interrupt its own PATCH response. The native case
+retains a transport/timeout `MutationOutcomeUnknown` and then explicitly opens a
+read-only connection with the expected device identity. It requires the selected
+mode, the unchanged remaining GUI configuration and the actual filesystem mode
+before recording the observed effect. The original acknowledgement stays
+unknown. Separate controlled-response cases cover both applied and unchanged
+readbacks and require exactly one PATCH followed by GET requests.

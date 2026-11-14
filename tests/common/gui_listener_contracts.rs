@@ -10,6 +10,63 @@ fn identity() -> Reply {
     Reply::json(serde_json::json!({"myID":ID}))
 }
 #[tokio::test]
+async fn listener_timeout_keeps_unknown_and_explicit_readback_can_show_applied_or_unchanged(
+) -> TestResult {
+    use verysync_sidecar::{DeviceId, GuiListenerPatch, GuiSocketPermissions};
+    for applied in [false, true] {
+        let mut delayed = Reply::json(serde_json::json!({}));
+        delayed.delay = Duration::from_secs(3);
+        let mut observed = gui();
+        if applied {
+            observed["unixSocketPermissions"] = "0600".into();
+        }
+        let server = ScriptedServer::start(vec![
+            version(),
+            identity(),
+            identity(),
+            Reply::json(gui()),
+            delayed,
+            version(),
+            identity(),
+            identity(),
+            Reply::json(observed),
+        ])
+        .await?;
+        let client =
+            Client::connect(server.options()?.request_timeout(Duration::from_secs(2))?).await?;
+        let result = client
+            .update_gui_listener(
+                &GuiListenerPatch::default()
+                    .unix_socket_permissions(GuiSocketPermissions::Mode(0o600)),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(Error::MutationOutcomeUnknown { source, .. })
+            if matches!(*source, Error::Timeout { .. }))
+        );
+        let explicit =
+            Client::connect(server.options()?.expected_device_id(DeviceId::parse(ID)?)).await?;
+        let actual = explicit.gui_listener().await?;
+        assert_eq!(
+            actual.unix_socket_permissions == GuiSocketPermissions::Mode(0o600),
+            applied
+        );
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 9);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("PATCH "))
+                .count(),
+            1
+        );
+        assert!(requests[5..]
+            .iter()
+            .all(|request| request.starts_with("GET ")));
+    }
+    Ok(())
+}
+#[tokio::test]
 async fn listener_write_preserves_scope_and_acknowledgement_does_not_invent_reconnect() -> TestResult
 {
     use verysync_sidecar::{GuiListenAddress, GuiListenerPatch};
