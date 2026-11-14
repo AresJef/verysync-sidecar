@@ -46,6 +46,7 @@
 #![doc = include_str!("../docs/public/management-authentication.md")]
 #![doc = include_str!("../docs/public/official-accounts.md")]
 #![doc = include_str!("../docs/public/licenses.md")]
+#![doc = include_str!("../docs/public/remote-management.md")]
 
 mod auth;
 mod capabilities;
@@ -81,6 +82,7 @@ mod raw;
 mod recovery;
 mod relay;
 mod releases;
+mod remote_management;
 mod scans;
 mod scheduling;
 mod selective;
@@ -197,6 +199,7 @@ pub use releases::{
     official_programs, ArchiveFormat, BuildVariant, OfficialProgram, PinnedVersion, ProgramAbi,
     ProgramArchitecture, ProgramOs, ProgramTarget,
 };
+pub use remote_management::DeviceTunnelProbe;
 pub use scans::{FolderScanConfig, FolderScanPatch, FolderScanUpdate};
 pub use scheduling::{
     BandwidthPatch, BandwidthUpdate, FolderPullOrder, FolderSchedulingConfig,

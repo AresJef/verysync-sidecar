@@ -45,6 +45,18 @@ pub struct DeviceConfig {
     pub compression: DeviceCompression,
     /// Device-level pause setting, independent of folder or instance pauses.
     pub paused: bool,
+    /// Native permission for this peer to request remote management. This does
+    /// not establish a license, a usable tunnel or a successful GUI session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_tunnel: Option<bool>,
+    /// Native remote GUI port selection, if reported. This is target-side
+    /// configuration, not an address to discover or contact automatically.
+    #[serde(
+        rename = "remoteGUIPort",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub remote_gui_port: Option<u16>,
     /// Actual transport selectors, if reported. An empty list means engine policy,
     /// not proof that every transport is disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +101,16 @@ pub struct DeviceDefaults {
     pub compression: DeviceCompression,
     /// Default device-level pause.
     pub paused: bool,
+    /// Default native remote-management permission for newly registered peers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_tunnel: Option<bool>,
+    /// Default native remote GUI port selection, if reported.
+    #[serde(
+        rename = "remoteGUIPort",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub remote_gui_port: Option<u16>,
     /// Actual default selectors, if supplied. Empty follows the engine policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_transports: Option<Vec<DeviceTransport>>,
@@ -133,6 +155,10 @@ pub struct DevicePatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) paused: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) allow_tunnel: Option<bool>,
+    #[serde(rename = "remoteGUIPort", skip_serializing_if = "Option::is_none")]
+    pub(crate) remote_gui_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) allowed_transports: Option<Vec<DeviceTransport>>,
     #[serde(rename = "maxSendKbps", skip_serializing_if = "Option::is_none")]
     pub(crate) max_send_kib_per_second: Option<u32>,
@@ -140,6 +166,23 @@ pub struct DevicePatch {
     pub(crate) max_receive_kib_per_second: Option<u32>,
 }
 impl DevicePatch {
+    /// Explicitly grant or revoke this peer's native remote-management permission.
+    /// Granting it does not purchase, issue or validate a license.
+    pub fn allow_tunnel(mut self, value: bool) -> Self {
+        self.allow_tunnel = Some(value);
+        self
+    }
+    /// Select an explicit nonzero native remote GUI port. The library never
+    /// discovers a port or uses this field as a management connection address.
+    pub fn remote_gui_port(mut self, value: u16) -> Result<Self> {
+        if value == 0 {
+            return Err(Error::InvalidConfiguration {
+                reason: "remote GUI port must be nonzero",
+            });
+        }
+        self.remote_gui_port = Some(value);
+        Ok(self)
+    }
     /// Set the display name, including an explicitly empty name.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
@@ -193,6 +236,8 @@ impl DevicePatch {
             && self.addresses.is_none()
             && self.compression.is_none()
             && self.paused.is_none()
+            && self.allow_tunnel.is_none()
+            && self.remote_gui_port.is_none()
             && self.allowed_transports.is_none()
             && self.max_send_kib_per_second.is_none()
             && self.max_receive_kib_per_second.is_none()
@@ -237,6 +282,12 @@ impl DevicePatch {
                 .as_ref()
                 .is_none_or(|v| *v == value.compression)
             && self.paused.is_none_or(|v| v == value.paused)
+            && self
+                .allow_tunnel
+                .is_none_or(|v| value.allow_tunnel == Some(v))
+            && self
+                .remote_gui_port
+                .is_none_or(|v| value.remote_gui_port == Some(v))
             && self
                 .max_send_kib_per_second
                 .is_none_or(|v| value.max_send_kib_per_second == Some(v))

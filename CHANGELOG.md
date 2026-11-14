@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit per-peer native remote-management permission and port settings,
+  canonical tunnel probes with private negative results, and gateway connection
+  options that check the target identity and preserve explicit base paths. Keep
+  licensed sessions and cross-network effects pending independent acceptance.
+
 - Add identity-checked native license observations and explicit refresh/Pro-trial
   requests. Preserve collection shapes, private metadata and actual uncertainty;
   compare expiry only against a caller-selected Unix-second reference, without

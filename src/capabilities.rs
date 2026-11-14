@@ -115,6 +115,8 @@ pub enum Capability {
     LocalSync,
     /// Enterprise and official remote management.
     EnterpriseRemoteManagement,
+    /// Explicit native peer tunnel probes and target-identity gateway connections.
+    RemoteManagement,
     /// Other explicit system and resource operations.
     AuxiliaryControls,
 }
@@ -386,6 +388,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::EnterpriseRemoteManagement),
+    LibraryCapability {
+        capability: Capability::RemoteManagement,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::SelectiveBrowse,
         implementation: ImplementationStatus::Typed,

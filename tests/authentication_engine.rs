@@ -8,6 +8,159 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn native_tunnel_permissions_negative_probe_and_restart_preserve_owned_data() -> TestResult {
+    fn loopback(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::String(s) => s
+                .strip_prefix("tcp://")
+                .and_then(|v| v.parse::<std::net::SocketAddr>().ok())
+                .filter(|a| {
+                    a.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) && a.port() != 0
+                })
+                .map(|_| s.clone()),
+            serde_json::Value::Array(v) => v.iter().find_map(loopback),
+            serde_json::Value::Object(v) => v.values().find_map(loopback),
+            _ => None,
+        }
+    }
+    async fn address(c: &Client) -> TestResult<String> {
+        Ok(tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(a) = c
+                    .system_status()
+                    .await?
+                    .extra
+                    .get("connectionServiceStatus")
+                    .and_then(loopback)
+                {
+                    return Ok::<_, Error>(a);
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await??)
+    }
+    let root = tempfile::Builder::new()
+        .prefix("vs-tunnel-")
+        .tempdir()?
+        .keep();
+    let sentinel = root.join("sentinel.bin");
+    std::fs::write(&sentinel, b"remote configuration keeps caller bytes")?;
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let b_default = options(&root.join("b"))?;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let b_addr = listener.local_addr()?;
+    assert_ne!(b_addr.port(), 18886);
+    drop(listener);
+    let b_options = ManagedOptions::new(
+        b_default.program().clone(),
+        b_default.state_directory(),
+        ManagementEndpoint::http(&format!("http://{b_addr}/"))?,
+    )?
+    .startup_timeout(Duration::from_secs(25))?;
+    let mut b = ManagedInstance::start(b_options).await?;
+    let aid = a.client().instance().device_id.clone();
+    let bid = b.client().instance().device_id.clone();
+    let aa = address(a.client()).await?;
+    let ba = address(b.client()).await?;
+    let template = a
+        .client()
+        .update_device_defaults(
+            &DevicePatch::default()
+                .allow_tunnel(false)
+                .remote_gui_port(b_addr.port())?,
+        )
+        .await?;
+    assert!(template.requested_fields_match);
+    assert_eq!(template.configuration.allow_tunnel, Some(false));
+    assert_eq!(template.configuration.remote_gui_port, Some(b_addr.port()));
+    for (client, peer, addr) in [(a.client(), &bid, ba), (b.client(), &aid, aa)] {
+        let patch = DevicePatch::default().addresses(vec![addr]).paused(false);
+        let patch = if *peer == bid {
+            patch
+        } else {
+            patch.allow_tunnel(false).remote_gui_port(b_addr.port())?
+        };
+        assert!(
+            client
+                .create_device(&CreateDeviceOptions::new(peer.clone()).settings(patch))
+                .await?
+                .requested_fields_match
+        );
+    }
+    let defaults = a.client().device_defaults().await?;
+    let original = a.client().device(&bid).await?;
+    assert_eq!(original.allow_tunnel, Some(false));
+    assert_eq!(original.remote_gui_port, Some(b_addr.port()));
+    let denied = a.client().probe_device_tunnel(&bid).await?;
+    assert_eq!(denied.device_id(), &bid);
+    assert!(!denied.tunnel_available());
+    assert_eq!(denied.native_error(), Some("no authorization"));
+    for (client, peer) in [(a.client(), &bid), (b.client(), &aid)] {
+        assert!(
+            client
+                .update_device(peer, &DevicePatch::default().allow_tunnel(true))
+                .await?
+                .requested_fields_match
+        );
+    }
+    let changed = a.client().device(&bid).await?;
+    assert_eq!(changed.remote_gui_port, Some(b_addr.port()));
+    assert_eq!(changed.addresses, original.addresses);
+    assert_eq!(changed.compression, original.compression);
+    assert!(
+        changed.extra == original.extra,
+        "unrelated device settings changed"
+    );
+    let probe = a.client().probe_device_tunnel(&bid).await?;
+    assert_eq!(probe.device_id(), &bid);
+    if probe.tunnel_available() {
+        assert!(probe.native_error().is_none_or(str::is_empty));
+    } else {
+        assert!(probe.native_error().is_some_and(|v| !v.is_empty()));
+    }
+    println!(
+        "native granted tunnel_available={} licensed_session_not_attempted=true",
+        probe.tunnel_available()
+    );
+    assert!(a.client().license_status().await?.licenses().is_none());
+    assert!(
+        serde_json::to_value(a.client().device_defaults().await?)?
+            == serde_json::to_value(defaults)?,
+        "device defaults changed"
+    );
+    a.restart(Duration::from_secs(30)).await?;
+    let persisted = a.client().device(&bid).await?;
+    assert_eq!(persisted.allow_tunnel, Some(true));
+    assert_eq!(persisted.remote_gui_port, Some(b_addr.port()));
+    assert_eq!(a.client().system_status().await?.device_id, aid);
+    assert_eq!(b.client().system_status().await?.device_id, bid);
+    for (client, peer) in [(a.client(), &bid), (b.client(), &aid)] {
+        assert!(
+            client
+                .update_device(peer, &DevicePatch::default().allow_tunnel(false))
+                .await?
+                .requested_fields_match
+        );
+    }
+    let revoked = a.client().probe_device_tunnel(&bid).await?;
+    assert!(!revoked.tunnel_available());
+    assert_eq!(revoked.native_error(), Some("no authorization"));
+    assert_eq!(
+        std::fs::read(&sentinel)?,
+        b"remote configuration keeps caller bytes"
+    );
+    // Probe observations are not a paid native gateway session. Do not open a
+    // gateway with these unlicensed synthetic instances or infer entitlement.
+    for core in [&mut b, &mut a] {
+        let exit = core.shutdown(Duration::from_secs(30)).await?;
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    }
+    println!("native_remote_tunnel_effects=20 licensed_gateway_session_pending=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_empty_license_metadata_and_uncertain_fetch_preserve_the_owned_instance(
 ) -> TestResult {
     let root = tempfile::Builder::new()

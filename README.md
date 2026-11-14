@@ -1,5 +1,10 @@
 # verysync-sidecar
 
+The unreleased [remote-management API](docs/public/remote-management.md) keeps
+native permissions, explicit tunnel probes and target-identity gateway
+connections separate. Licensed native sessions and cross-network acceptance
+remain pending.
+
 The unreleased [license API](docs/public/licenses.md) preserves native license
 metadata and separates explicit refresh/trial acknowledgements from actual
 licensed effects. Authorized positive acceptance remains pending.
