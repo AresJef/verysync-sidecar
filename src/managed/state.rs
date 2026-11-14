@@ -9,9 +9,18 @@ use fs2::FileExt;
 use super::{io_error, native};
 use crate::{Error, Result};
 
-const MARKER: &str = ".verysync-sidecar-state";
-const LEASE: &str = ".verysync-sidecar-lease";
-const FORMAT: &[u8] = b"verysync-sidecar private state v1\n";
+pub(super) const MARKER: &str = ".verysync-sidecar-state";
+pub(super) const LEASE: &str = ".verysync-sidecar-lease";
+pub(super) const FORMAT: &[u8] = b"verysync-sidecar private state v1\n";
+pub(super) const RESTORE_INCOMPLETE: &str = ".verysync-sidecar-restore-incomplete";
+
+fn require_complete(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path.join(RESTORE_INCOMPLETE)) {
+        Ok(_) => Err(Error::UnmanagedState),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error("inspect state restore completion", error)),
+    }
+}
 
 /// Admit existing private state for reads only, without creating files or leases.
 pub(super) fn existing(path: &Path) -> Result<PathBuf> {
@@ -23,6 +32,7 @@ pub(super) fn existing(path: &Path) -> Result<PathBuf> {
     native::private_directory(path, &metadata)
         .map_err(|e| io_error("check existing state privacy", e))?;
     let path = canonical(path).map_err(|e| io_error("resolve existing private state", e))?;
+    require_complete(&path)?;
     let mut bytes = Vec::new();
     native::open_private(&path.join(MARKER), true)
         .map_err(|e| io_error("open existing state marker", e))?
@@ -65,6 +75,7 @@ impl StateLease {
             Err(error) => return Err(io_error("inspect state", error)),
         }
         let path = canonical(path).map_err(|e| io_error("resolve private state", e))?;
+        require_complete(&path)?;
         let file = native::open_private(&path.join(LEASE), false)
             .map_err(|e| io_error("open state lease", e))?;
         file.try_lock_exclusive().map_err(|error| {

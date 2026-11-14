@@ -236,3 +236,68 @@ fn path_rejects_unpaired_native_surrogates_without_replacement() {
     let path = TargetPath::local(std::path::PathBuf::from(native));
     assert!(matches!(path.to_protocol(), Err(Error::PathEncoding)));
 }
+
+#[test]
+fn resource_paths_use_explicit_target_syntax_without_native_or_url_traversal() {
+    use verysync_sidecar::{ResourcePath, ResourceVolumeId};
+    let id = ResourceVolumeId::parse("synthetic-volume").unwrap();
+    for value in ["../x", "x/../y", "x/./y", "/rooted", "x//y", "x/"] {
+        assert!(ResourcePath::relative(
+            id.clone(),
+            &TargetPath::remote(PathStyle::Unix, value).unwrap()
+        )
+        .is_err());
+    }
+    assert!(ResourcePath::relative(
+        id.clone(),
+        &TargetPath::remote(PathStyle::Unix, "literal\\file ?% 二").unwrap()
+    )
+    .is_ok());
+    assert!(ResourcePath::root(id.clone(), PathStyle::Unix)
+        .child("line\nbreak")
+        .is_ok());
+    assert!(ResourcePath::root(id.clone(), PathStyle::Unix)
+        .child("x\0y")
+        .is_err());
+    for name in [
+        "..",
+        "a/b",
+        "a\\b",
+        "C:",
+        "a:stream",
+        "nul",
+        "CON.txt",
+        "com1",
+        "LPT².txt",
+        "trail.",
+        "trail ",
+        "line\nbreak",
+    ] {
+        assert!(ResourcePath::root(id.clone(), PathStyle::Windows)
+            .child(name)
+            .is_err());
+    }
+    let remote = ResourcePath::relative(
+        id,
+        &TargetPath::remote(PathStyle::Windows, r"nested\二 空格 %.txt").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(remote.style(), PathStyle::Windows);
+    assert!(!format!("{remote:?}").contains("二 空格"));
+    for invalid in ["", ".", "..", "a/b", "a\\b", "synthetic\nvolume"] {
+        assert!(ResourceVolumeId::parse(invalid).is_err());
+    }
+}
+
+#[test]
+fn finite_resource_byte_ranges_preserve_offsets_and_refuse_overflow_or_reversal() {
+    use verysync_sidecar::ResourceByteRange;
+    for (first, last) in [(0, 0), (10, 19), (u64::MAX - 2, u64::MAX - 1)] {
+        let range = ResourceByteRange::new(first, last).unwrap();
+        assert_eq!(range.first(), first);
+        assert_eq!(range.last(), last);
+    }
+    for (first, last) in [(2, 1), (0, u64::MAX), (u64::MAX, u64::MAX)] {
+        assert!(ResourceByteRange::new(first, last).is_err());
+    }
+}

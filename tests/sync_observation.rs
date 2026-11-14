@@ -31,6 +31,10 @@ async fn indexed_files(
     Ok(())
 }
 
+#[path = "common/sync_diagnostics.rs"]
+mod sync_diagnostics;
+use sync_diagnostics::report as sync_stage_diagnostic;
+
 #[tokio::test]
 async fn actual_scan_scopes_schedule_and_watcher_preserve_files() -> TestResult {
     use verysync_sidecar::FolderScanPatch;
@@ -643,6 +647,14 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     })
     .await;
     if needed_observation.is_err() {
+        sync_stage_diagnostic(
+            "active-need-before-any-payload",
+            &[
+                (&a, &af.configuration.id, &b_id),
+                (&b, &bf.configuration.id, &a_id),
+            ],
+        )
+        .await;
         let status = b.client().folder_status(&bf.configuration.id).await?;
         let config = b.client().folder(&bf.configuration.id).await?;
         eprintln!(
@@ -865,7 +877,7 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     a.client().request_scan(&af.configuration.id).await?;
     b.client().resume_folder(folder).await?;
     let page = ListPage::new(1, 1000)?;
-    let need = tokio::time::timeout(Duration::from_secs(20), async {
+    let need_result = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let n = b.client().folder_need(folder, page).await?;
             if n.queued.len() >= 2 && n.queued.iter().any(|f| f.name == "zz priority %.bin") {
@@ -874,7 +886,21 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??;
+    .await;
+    if need_result.is_err() {
+        sync_stage_diagnostic(
+            "legacy-priority-queue-prepare",
+            &[(&a, &af.configuration.id, &b_id), (&b, folder, &a_id)],
+        )
+        .await;
+        if let Ok(observed) = b.client().folder_need(folder, page).await {
+            eprintln!(
+                "private priority queue preparation diagnostic: {}",
+                json!({"queued":observed.queued.len(),"progress":observed.progress.len(),"rest":observed.rest.len(),"target_queued":observed.queued.iter().any(|f|f.name=="zz priority %.bin"),"target_progress":observed.progress.iter().any(|f|f.name=="zz priority %.bin"),"target_rest":observed.rest.iter().any(|f|f.name=="zz priority %.bin")})
+            );
+        }
+    }
+    let need = need_result??;
     let target = "zz priority %.bin";
     assert!(need
         .queued
@@ -1067,7 +1093,7 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
         client.share_folder_with(folder, peer).await?;
         client.resume_folder(folder).await?;
     }
-    tokio::time::timeout(Duration::from_secs(20), async {
+    let connected_observation = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             if b.client()
                 .connections()
@@ -1081,7 +1107,18 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??;
+    .await;
+    if !matches!(&connected_observation, Ok(Ok(()))) {
+        sync_stage_diagnostic(
+            "bandwidth-initial-connection",
+            &[
+                (&a, &af.configuration.id, &b_id),
+                (&b, &bf.configuration.id, &a_id),
+            ],
+        )
+        .await;
+    }
+    connected_observation??;
     let mut samples = Vec::new();
     let mut original = Vec::new();
     let mut payload_hashes = BTreeSet::new();
@@ -1134,7 +1171,7 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
         assert!(payload_hashes.insert(digest.clone()));
         std::fs::write(source.join(&name), &content)?;
         a.client().request_scan(&af.configuration.id).await?;
-        tokio::time::timeout(Duration::from_secs(20), async {
+        let needed_observation = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 let need = b
                     .client()
@@ -1152,7 +1189,18 @@ async fn actual_global_and_device_bandwidth_caps_preserve_transferred_bytes() ->
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
-        .await??;
+        .await;
+        if !matches!(&needed_observation, Ok(Ok(()))) {
+            sync_stage_diagnostic(
+                &format!("bandwidth-case-{case}-need"),
+                &[
+                    (&a, &af.configuration.id, &b_id),
+                    (&b, &bf.configuration.id, &a_id),
+                ],
+            )
+            .await;
+        }
+        needed_observation??;
         let outer_start = Instant::now();
         let before = incoming_bytes(b.client(), &a_id).await?;
         let before_end = outer_start.elapsed();
@@ -1275,20 +1323,22 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
         client.resume_folder(folder).await?;
     }
     a.client().request_scan(&af.configuration.id).await?;
+    let mut last_remote = None;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if b.client()
-                .folder_status(&bf.configuration.id)
-                .await?
-                .global_files
-                == Some(3)
-            {
+            let status = b.client().folder_status(&bf.configuration.id).await?;
+            last_remote = Some((status.global_files, status.local_files, status.need_bytes));
+            if status.global_files == Some(3) {
                 break Ok::<_, Error>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??;
+    .await
+    .map_err(|_| {
+        eprintln!("selective preparation timed out: phase=remote-index counters={last_remote:?}");
+        "selective remote-index preparation exceeded its original 20-second bound"
+    })??;
     let folder = &bf.configuration.id;
     let root_options = SelectiveBrowseOptions::new(SelectiveScope::FolderRoot).levels(2);
     let tree = b.client().browse_selective(folder, &root_options).await?;
@@ -1417,16 +1467,24 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
             .await?
             .enabled
     );
+    let mut last_received = None;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let status = b.client().folder_status(folder).await?;
+            last_received = Some((status.global_files, status.local_files, status.need_bytes));
             if status.local_files == Some(3) && status.need_bytes == Some(0) {
                 break Ok::<_, Error>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??;
+    .await
+    .map_err(|_| {
+        eprintln!(
+            "selective preparation timed out: phase=normal-receive counters={last_received:?}"
+        );
+        "selective normal-receive effect exceeded its original 20-second bound"
+    })??;
     let nested = Path::new("nested").join("child.bin");
     for (name, bytes) in [
         (Path::new("first.bin"), b"first synthetic".as_slice()),
@@ -1553,16 +1611,16 @@ async fn actual_receiveonly_revert_and_marker_repair_restore_owned_data() -> Tes
     b.client().request_scan(&bf.configuration.id).await?;
     let change_observation = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            if b.client()
+            let observed = b
+                .client()
                 .local_changes(&bf.configuration.id, ListPage::new(1, 10)?)
-                .await?
-                .files
-                .iter()
-                .any(|f| f.name == "revert.bin")
+                .await?;
+            if observed.files.iter().any(|f| f.name == "revert.bin")
+                && !observed.files.iter().any(|f| f.name == "deleted.bin")
                 && std::fs::read(receiver.join("deleted.bin"))
                     .is_ok_and(|v| v == b"original deleted synthetic bytes")
             {
-                break Ok::<_, Error>(());
+                break Ok::<_, Error>(observed);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -1585,17 +1643,14 @@ async fn actual_receiveonly_revert_and_marker_repair_restore_owned_data() -> Tes
             })
         );
     }
-    change_observation??;
+    let observed_changes = change_observation??;
     // The fixed engine derives receive-only mode from the RO key and repairs
     // local deletion itself; establish that separately before explicit revert.
     assert_eq!(
         std::fs::read(receiver.join("deleted.bin"))?,
         b"original deleted synthetic bytes"
     );
-    assert!(!b
-        .client()
-        .local_changes(&bf.configuration.id, ListPage::new(1, 10)?)
-        .await?
+    assert!(!observed_changes
         .files
         .iter()
         .any(|f| f.name == "deleted.bin"));

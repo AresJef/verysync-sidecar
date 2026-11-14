@@ -64,10 +64,25 @@ pub enum Capability {
     LicensedSelectiveSelection,
     /// Explicit tracked-change reversion, authority override and marker repair.
     FolderRecovery,
-    /// Explicit fixed-program acquisition and upgrades.
+    /// Explicit program sources, optional acquisition/cache and upgrade calls.
     EngineDownloadUpgrade,
+    /// Explicit offline private-state snapshots and fresh-directory restoration.
+    StateBackupRestore,
     /// File management and history.
     FileHistory,
+    /// Native local file-manager mounts, bounded metadata and remote checksums.
+    ResourceBrowse,
+    /// Explicit bounded file streaming, ranges and native archives.
+    ResourceTransfer,
+    /// Explicit native directory/file changes, collisions and destructive removal.
+    ResourceMutation,
+    /// Explicit core logs, package levels, diagnostic locations, native profiles
+    /// and authenticated metrics. Destructive maintenance has separate gates.
+    CoreMaintenance,
+    /// Explicit synchronization-index reset requests and restart acknowledgements.
+    SynchronizationIndexReset,
+    /// Explicit stopped-owner native statistics, counts, file metadata and reset.
+    OfflineDatabaseMaintenance,
     /// Remaining advanced folder settings.
     AdvancedFolderSettings,
     /// Account, configuration and commercial authorization.
@@ -201,13 +216,56 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::EngineDownloadUpgrade),
+    LibraryCapability {
+        capability: Capability::EngineDownloadUpgrade,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::StateBackupRestore,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::NetworkControl,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::FileHistory),
+    LibraryCapability {
+        capability: Capability::ResourceTransfer,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::ResourceMutation,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::SynchronizationIndexReset,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::OfflineDatabaseMaintenance,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::CoreMaintenance,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::FileHistory,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::ResourceBrowse,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::TransportControl,
         implementation: ImplementationStatus::Typed,

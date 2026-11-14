@@ -53,7 +53,11 @@ the caller's environment is not changed. Windows retains its dedicated
 APPDATA/LOCALAPPDATA/USERPROFILE and temporary paths.
 
 The executable's actual SHA-256 is recorded, an optional expected checksum is
-checked before execution, and its actual CLI version must report exactly v2.33.2.
+checked before execution. The default version policy requires exactly v2.33.2;
+`ManagedOptions::version_policy(VersionPolicy::AllowUnverified)` explicitly permits
+other versions while retaining identity, schema and authentication checks.
+The authenticated management version must equal the actual CLI version. See
+[program upgrades](program-upgrades.md) for separate snapshot/transition gates.
 Keep a caller-provided executable stable while starting it: an external writer
 can replace its bytes after inspection. CLI credentials travel through private
 stdin/configuration, never command-line arguments or ordinary Debug output.

@@ -14,6 +14,1255 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn index_reset_requires_explicit_scope_and_exact_native_ack_without_readback() -> TestResult {
+    use verysync_sidecar::{FolderId, IndexResetScope};
+    for all in [false, true] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+        ];
+        let scope = if all {
+            IndexResetScope::AllFolders
+        } else {
+            IndexResetScope::Folder(FolderId::parse(KEY)?)
+        };
+        if !all {
+            replies.push(Reply::json(serde_json::json!({"folders":[{"id":KEY,"label":"","path":"/synthetic","paused":true}]})));
+        }
+        let message = if all {
+            "resetting database".to_owned()
+        } else {
+            format!("resetting folder {KEY}")
+        };
+        replies.push(Reply::json(serde_json::json!({"ok":message,"private":KEY})));
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let ack = client.request_index_reset(&scope).await?;
+        assert_eq!(ack.scope, scope);
+        assert!(ack.restart_expected);
+        assert_eq!(ack.native_message(), message);
+        assert_eq!(ack.extra["private"], KEY);
+        assert!(!format!("{ack:?}").contains(KEY));
+        let requests = server.finish().await?;
+        let posts = requests
+            .iter()
+            .filter(|r| r.starts_with("POST "))
+            .collect::<Vec<_>>();
+        assert_eq!(posts.len(), 1);
+        let target = if all {
+            "POST /prefix/rest/system/reset ".to_owned()
+        } else {
+            format!("POST /prefix/rest/system/reset?folder={KEY} ")
+        };
+        assert!(posts[0].starts_with(&target));
+        assert!(requests.last().is_some_and(|r| r.starts_with("POST ")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_reset_unknown_ack_is_unknown_once_and_missing_folder_never_resets_all() -> TestResult
+{
+    use verysync_sidecar::{FolderId, IndexResetScope};
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({"ok":"other native action","private":KEY}),
+    ] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            Reply::json(body),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .request_index_reset(&IndexResetScope::AllFolders)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        assert_eq!(
+            server
+                .finish()
+                .await?
+                .iter()
+                .filter(|r| r.starts_with("POST "))
+                .count(),
+            1
+        );
+    }
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"folders":[]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client
+            .request_index_reset(&IndexResetScope::Folder(FolderId::parse("absent")?))
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert!(!server
+        .finish()
+        .await?
+        .iter()
+        .any(|r| r.starts_with("POST ")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn archive_restore_refuses_same_future_missing_or_unknown_target_clock_without_post(
+) -> TestResult {
+    use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
+    for clock in [
+        Some("2026-11-14T08:00:00+08:00"),
+        Some("2026-11-13T23:59:59Z"),
+        None,
+        Some("unknown native clock"),
+    ] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let mut now = serde_json::json!({"myID":ID,"private":KEY});
+        if let Some(clock) = clock {
+            now["nowTime"] = clock.into();
+        }
+        let server=ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),
+            Reply::json(serde_json::json!({"folders":[{"id":"private-restore","label":"","path":"/synthetic","paused":false}]})),Reply::json(now),
+        ]).await?;
+        let client = Client::connect(server.options()?).await?;
+        let item = FileVersionRestore::new(
+            TargetPath::remote(PathStyle::Unix, "file.txt")?,
+            "2026-11-14T00:00:00Z",
+        )?;
+        let error = client
+            .restore_file_versions(&FolderId::parse("private-restore")?, &[item])
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::ArchiveRestorePrecondition { .. }));
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 5);
+        assert!(!requests.iter().any(|r| r.starts_with("POST ")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn directory_preflight_refuses_file_scope_and_oversized_inventory_without_post() -> TestResult
+{
+    use verysync_sidecar::{
+        DirectoryVersionOrder, FolderId, PathStyle, TargetPath, VersionedDirectory,
+    };
+    let id = FolderId::parse("bounded-native-restore")?;
+    let version = serde_json::json!({"versionTime":"2026-11-14T00:00:00Z","modTime":"2026-11-13T00:00:00Z","size":3});
+    let mut oversized = serde_json::Map::new();
+    for i in 0..513 {
+        oversized.insert(format!("f{i}.txt"), serde_json::json!([version.clone()]));
+    }
+    for (scope, listing) in [
+        (
+            VersionedDirectory::Path(TargetPath::remote(PathStyle::Unix, "file.txt")?),
+            serde_json::json!({"file.txt":[version]}),
+        ),
+        (
+            VersionedDirectory::FolderRoot,
+            serde_json::Value::Object(oversized),
+        ),
+    ] {
+        let identity =
+            || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));
+        let folder = || {
+            Reply::json(
+                serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"/synthetic","paused":false}]}),
+            )
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            folder(),
+            identity(),
+            folder(),
+            Reply::json(listing),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client
+                .restore_directory_versions(&id, &scope, DirectoryVersionOrder::Oldest)
+                .await,
+            Err(Error::ArchiveRestorePrecondition { .. })
+        ));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 7);
+        assert!(!requests.iter().any(|r| r.starts_with("POST ")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn profiles_validate_duration_preserve_native_bytes_and_metrics_base_path() -> TestResult {
+    use verysync_sidecar::CoreProfileRequest;
+    let gzip = vec![
+        31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 43, 174, 204, 43, 201, 72, 45, 201, 76, 214, 45, 41, 74,
+        204, 43, 46, 200, 47, 42, 209, 205, 78, 173, 4, 0, 65, 73, 34, 84, 23, 0, 0, 0,
+    ];
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let metrics = format!("# HELP synthetic private {KEY}\n# TYPE synthetic gauge\nsynthetic 1\n");
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply {
+            body: gzip.clone(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+        identity(),
+        Reply {
+            body: metrics.as_bytes().to_vec(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for duration_seconds in [0, 31, 255] {
+        assert!(matches!(
+            client
+                .collect_core_profile(CoreProfileRequest::Cpu { duration_seconds })
+                .await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let profile = client
+        .collect_core_profile(CoreProfileRequest::Cpu {
+            duration_seconds: 1,
+        })
+        .await?;
+    assert_eq!(profile.body_bytes(), gzip);
+    assert!(!format!("{profile:?}").contains(KEY));
+    assert_eq!(profile.into_body_bytes(), gzip);
+    let snapshot = client.core_metrics().await?;
+    assert_eq!(snapshot.native_text(), metrics);
+    assert!(!format!("{snapshot:?}").contains(KEY));
+    assert_eq!(snapshot.into_native_text(), metrics);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    assert!(requests[3].starts_with("GET /prefix/rest/debug/cpuprof?duration=1s "));
+    assert!(requests[5].starts_with("GET /prefix/metrics "));
+    assert!(requests[5]
+        .to_ascii_lowercase()
+        .contains("x-api-key: synthetic-transport-key"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_profile_success_is_unknown_once_and_metrics_html_is_not_a_snapshot() -> TestResult
+{
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply {
+            body: KEY.as_bytes().to_vec(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+        identity(),
+        Reply {
+            body: b"<html>not metrics</html>".to_vec(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .collect_core_profile(verysync_sidecar::CoreProfileRequest::Heap)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(matches!(
+        client.core_metrics().await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("GET /prefix/rest/debug/heapprof "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_profile_identity_prevents_native_profiling_request() -> TestResult {
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":"BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB"})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client
+            .collect_core_profile(verysync_sidecar::CoreProfileRequest::Heap)
+            .await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 3);
+    Ok(())
+}
+
+#[test]
+fn maintenance_schema_preserves_null_unknown_levels_and_redacts_private_data() -> TestResult {
+    use verysync_sidecar::{CoreErrorLog, CoreLogLevel, CoreLogLevels, CoreLogSnapshot};
+    let empty: CoreErrorLog =
+        serde_json::from_value(serde_json::json!({"errors":null,"private":KEY}))?;
+    assert!(empty.is_empty());
+    for value in [
+        serde_json::json!({}),
+        serde_json::json!({"errors":{}}),
+        serde_json::json!({"errors":[{"message":KEY}]}),
+    ] {
+        assert!(serde_json::from_value::<CoreErrorLog>(value).is_err());
+    }
+    assert!(serde_json::from_value::<CoreLogSnapshot>(serde_json::json!({})).is_err());
+    let log: CoreLogSnapshot = serde_json::from_value(
+        serde_json::json!({"messages":[{"when":KEY,"level":"UNMODELED","message":KEY,"unknown":KEY}],"private":KEY}),
+    )?;
+    let entry = &log.messages.as_ref().ok_or("entry absent")?[0];
+    assert_eq!(entry.level, "UNMODELED");
+    assert_eq!(entry.extra["unknown"], KEY);
+    let levels: CoreLogLevels = serde_json::from_value(
+        serde_json::json!({"levels":{"main":KEY},"packages":{"main":KEY},"private":KEY}),
+    )?;
+    assert_eq!(
+        levels.levels.get("main"),
+        Some(&CoreLogLevel::Other(KEY.to_owned()))
+    );
+    assert!(!format!(
+        "{empty:?} {log:?} {entry:?} {levels:?} {:?}",
+        levels.levels["main"]
+    )
+    .contains(KEY));
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_invalid_inputs_issue_no_requests() -> TestResult {
+    use verysync_sidecar::CoreLogLevel;
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for message in ["".to_owned(), "bad\0message".to_owned(), "x".repeat(8193)] {
+        assert!(matches!(
+            client.record_core_error(&message).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    for stamp in ["", "bad\nvalue"] {
+        assert!(matches!(
+            client.core_log(Some(stamp)).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    for levels in [
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::from([(
+            "main".to_owned(),
+            CoreLogLevel::Other("TRACE".to_owned()),
+        )]),
+    ] {
+        assert!(matches!(
+            client.set_core_log_levels(&levels).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_diagnostics_keep_remote_windows_paths_and_log_timestamp_query() -> TestResult {
+    let stamp = "2026-11-14T04:00:00.123+08:00";
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"databaseSize":12,"locations":{"confdir":"Q:\\private\\二 %"},"private":KEY})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"messages":null})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let diagnostic = client.core_diagnostics().await?;
+    let path = &diagnostic.locations["confdir"];
+    assert_eq!(path.style(), verysync_sidecar::PathStyle::Windows);
+    assert_eq!(path.to_protocol()?, "Q:\\private\\二 %");
+    assert!(path.local_path().is_none());
+    assert_eq!(diagnostic.extra["private"], KEY);
+    assert!(!format!("{diagnostic:?}").contains("Q:"));
+    assert!(client.core_log(Some(stamp)).await?.messages.is_none());
+    let requests = server.finish().await?;
+    let expected = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("since", stamp)
+        .finish();
+    assert!(requests
+        .last()
+        .ok_or("last request absent")?
+        .starts_with(&format!("GET /prefix/rest/system/log?{expected} ")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_nonempty_ack_or_failed_readback_is_unknown_without_retry() -> TestResult {
+    for invalid_ack in [true, false] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+        ];
+        if invalid_ack {
+            replies.push(Reply::json(serde_json::json!({"unexpected":KEY})));
+        } else {
+            replies.push(Reply {
+                body: Vec::new(),
+                ..Reply::json(serde_json::Value::Null)
+            });
+            replies.push(identity());
+            replies.push(Reply {
+                status: 500,
+                body: KEY.as_bytes().to_vec(),
+                ..Reply::json(serde_json::Value::Null)
+            });
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .record_core_error("explicit synthetic message")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        let requests = server.finish().await?;
+        let writes = requests
+            .iter()
+            .filter(|r| r.starts_with("POST "))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].starts_with("POST /prefix/rest/system/error "));
+        assert_eq!(
+            writes[0].split("\r\n\r\n").nth(1),
+            Some("explicit synthetic message")
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_invalid_diagnostics_are_not_successful_empty_metadata() -> TestResult {
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(), Reply::json(serde_json::json!({"locations":{},"private":KEY})),
+        identity(), Reply::json(serde_json::json!({"databaseSize":0,"locations":{"confdir":"/bad\0path"},"private":KEY})),
+        identity(), Reply::json(serde_json::json!({"databaseSize":-1,"locations":{},"private":KEY})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    for _ in 0..3 {
+        let error = client.core_diagnostics().await.unwrap_err();
+        assert!(matches!(error, Error::InvalidResponse { .. }));
+        assert!(!format!("{error:?} {error}").contains(KEY));
+    }
+    assert_eq!(server.finish().await?.len(), 8);
+    Ok(())
+}
+
+#[tokio::test]
+async fn maintenance_level_update_is_partial_and_returns_actual_ignored_readback() -> TestResult {
+    use verysync_sidecar::CoreLogLevel;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let levels = || {
+        Reply::json(
+            serde_json::json!({"levels":{"main":"INFO","other":"WARN"},"packages":{"main":"Main","other":KEY}}),
+        )
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        levels(),
+        Reply {
+            body: Vec::new(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+        identity(),
+        levels(),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let update = client
+        .set_core_log_levels(&std::collections::BTreeMap::from([(
+            "main".to_owned(),
+            CoreLogLevel::Debug,
+        )]))
+        .await?;
+    assert!(!update.requested_levels_match);
+    assert_eq!(
+        update.configuration.levels.get("main"),
+        Some(&CoreLogLevel::Info)
+    );
+    assert_eq!(
+        update.configuration.levels.get("other"),
+        Some(&CoreLogLevel::Warn)
+    );
+    assert!(!format!("{update:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with("POST /prefix/rest/system/loglevels "));
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("body absent")?)?;
+    assert_eq!(body, serde_json::json!({"main":"DEBUG"}));
+    Ok(())
+}
+
+#[tokio::test]
+async fn directory_version_restore_requires_explicit_root_and_native_items_body() -> TestResult {
+    use verysync_sidecar::{
+        DirectoryVersionOrder, FolderId, PathStyle, TargetPath, VersionedDirectory,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));
+    let id = FolderId::parse("directory versions")?;
+    let folder = || {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":id.as_str(),"path":"/synthetic","label":"","paused":false}]}),
+        )
+    };
+    let version = serde_json::json!({"versionTime":"2026-11-14T00:00:00Z","modTime":"2026-11-13T00:00:00Z","size":12});
+    let mut replies = vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+    ];
+    replies.extend([
+        identity(),
+        folder(),
+        identity(),
+        folder(),
+        Reply::json(serde_json::json!({"root.txt":[version.clone()]})),
+        identity(),
+        Reply::json(serde_json::json!({})),
+    ]);
+    replies.extend([identity(), folder()]);
+    for listing in [
+        serde_json::json!({"nested":[]}),
+        serde_json::json!({"nested/二 %":[]}),
+        serde_json::json!({"nested/二 %/file.txt":[version]}),
+    ] {
+        replies.extend([identity(), folder(), Reply::json(listing)]);
+    }
+    replies.extend([
+        identity(),
+        Reply::json(serde_json::json!({"native-path":KEY})),
+    ]);
+    let server = ScriptedServer::start(replies).await?;
+    let client = Client::connect(server.options()?).await?;
+    for path in [".", "..", "/absolute", "nested/../escape"] {
+        let scope = VersionedDirectory::Path(TargetPath::remote(PathStyle::Unix, path)?);
+        assert!(matches!(
+            client
+                .restore_directory_versions(&id, &scope, DirectoryVersionOrder::Oldest)
+                .await,
+            Err(Error::InvalidPath { .. })
+        ));
+    }
+    let root = client
+        .restore_directory_versions(
+            &id,
+            &VersionedDirectory::FolderRoot,
+            DirectoryVersionOrder::Oldest,
+        )
+        .await?;
+    assert_eq!(root.error_count(), 0);
+    let scope = VersionedDirectory::Path(TargetPath::remote(PathStyle::Unix, "nested/二 %")?);
+    assert!(!format!("{scope:?}").contains("nested"));
+    let result = client
+        .restore_directory_versions(&id, &scope, DirectoryVersionOrder::Newest)
+        .await?;
+    assert_eq!(result.error_count(), 1);
+    assert!(!format!("{result:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 2);
+    let mut bodies = Vec::new();
+    for request in &writes {
+        let text = request.split("\r\n\r\n").nth(1).ok_or("body")?;
+        bodies.push(serde_json::from_str::<serde_json::Value>(text)?);
+    }
+    assert!(writes
+        .iter()
+        .all(|r| r
+            .starts_with("POST /prefix/rest/folder/versions/restore?folder=directory+versions ")));
+    assert_eq!(
+        bodies[0],
+        serde_json::json!({"items":[{"path":".","action":"oldest"}]})
+    );
+    assert_eq!(
+        bodies[1],
+        serde_json::json!({"items":[{"path":"nested/二 %","action":"latest"}]})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn audit_settings_report_ignored_enable_and_preserve_null_pages() -> TestResult {
+    use verysync_sidecar::AuditHistorySettings;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),Reply::json(serde_json::json!({})),Reply::json(serde_json::json!({"folderHistoryEnabled":false,"folderHistoryMaxRecords":100000,"private":KEY})),identity(),Reply::json(serde_json::json!({"data":null,"error":null,"total":0}))]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let update = client
+        .set_audit_history_settings(AuditHistorySettings {
+            enabled: true,
+            maximum_records: 100000,
+        })
+        .await?;
+    assert!(!update.requested_fields_match && !update.configuration.enabled);
+    for (page, size) in [(0, 10), (1, 0), (1, 1001)] {
+        assert!(matches!(
+            client.audit_history(page, size).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let page = client.audit_history(2, 10).await?;
+    assert!(page.records.is_none() && page.error.is_none() && page.total == 0);
+    assert!(!format!("{page:?} {update:?}").contains(KEY));
+    let requests = server.finish().await?;
+    assert!(requests
+        .last()
+        .is_some_and(|r| r.starts_with("GET /prefix/rest/history/list?page=2&perpage=10 ")));
+    let patch = requests
+        .iter()
+        .find(|r| r.starts_with("PATCH "))
+        .ok_or("patch")?;
+    let body: serde_json::Value =
+        serde_json::from_str(patch.split("\r\n\r\n").nth(1).ok_or("body")?)?;
+    assert_eq!(
+        body,
+        serde_json::json!({"folderHistoryEnabled":true,"folderHistoryMaxRecords":100000})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn audit_reset_get_requires_identity_explicit_error_field_and_no_retry() -> TestResult {
+    for reply in [
+        serde_json::json!({"error":null}),
+        serde_json::json!({}),
+        serde_json::json!({"error":KEY}),
+    ] {
+        let valid = reply.get("error").is_some_and(serde_json::Value::is_null);
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(reply),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let result = client.reset_audit_history().await;
+        assert_eq!(result.is_ok(), valid);
+        if let Err(error) = result {
+            assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+            assert!(!format!("{error:?} {error}").contains(KEY));
+        }
+        assert_eq!(
+            server
+                .finish()
+                .await?
+                .iter()
+                .filter(|r| r.starts_with("GET /prefix/rest/history/reset "))
+                .count(),
+            1
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn version_policy_preserves_unknown_archive_settings_and_reports_stale_readback() -> TestResult
+{
+    use verysync_sidecar::{FolderId, FolderVersioningPolicy};
+    let id = FolderId::parse("version folder %")?;
+    let versioning = serde_json::json!({"type":"simple","params":{"keep":"9","cleanoutDays":"7","vendor":KEY},"cleanupIntervalS":3600,"fsPath":KEY,"fsType":"basic","vendorSecret":KEY});
+    let folder = |v: serde_json::Value| {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":id.as_str(),"path":"/synthetic","label":"","paused":false,"versioning":v}]}),
+        )
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        folder(versioning.clone()),
+        Reply::json(serde_json::json!({})),
+        folder(versioning),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let result = client
+        .set_folder_versioning(
+            &id,
+            FolderVersioningPolicy::Trashcan {
+                cleanout_days: 0,
+                cleanup_interval_seconds: 7200,
+            },
+        )
+        .await?;
+    assert!(!result.requested_fields_match);
+    assert_eq!(result.configuration.filesystem_path, KEY);
+    assert!(!format!("{result:?}").contains(KEY));
+    assert!(matches!(
+        client
+            .set_folder_versioning(
+                &id,
+                FolderVersioningPolicy::Simple {
+                    keep: 0,
+                    cleanout_days: 0,
+                    cleanup_interval_seconds: 3600
+                }
+            )
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    let requests = server.finish().await?;
+    let patches = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(patches.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_str(patches[0].split("\r\n\r\n").nth(1).ok_or("body")?)?;
+    assert_eq!(body["versioning"]["type"], "trashcan");
+    assert_eq!(body["versioning"]["params"]["keep"], "9");
+    assert_eq!(body["versioning"]["params"]["cleanoutDays"], "0");
+    assert_eq!(body["versioning"]["params"]["vendor"], KEY);
+    assert_eq!(body["versioning"]["fsPath"], KEY);
+    assert_eq!(body["versioning"]["vendorSecret"], KEY);
+    assert_eq!(body["versioning"]["cleanupIntervalS"], 7200);
+    Ok(())
+}
+
+#[tokio::test]
+async fn extended_versioners_and_remote_archive_location_keep_unknowns_and_unknown_outcomes(
+) -> TestResult {
+    use verysync_sidecar::{
+        ExternalVersioningCommand, FolderId, FolderVersioningPolicy, PathStyle, TargetPath,
+        VersionArchiveLocation,
+    };
+    let id = FolderId::parse("archive-policy")?;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let folder = |versioning| {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"C:\\data","paused":false,"versioning":versioning}]}),
+        )
+    };
+    let before = serde_json::json!({"type":"simple","params":{"keep":"9","native":KEY},"cleanupIntervalS":3600,"fsPath":"C:\\old","fsType":"basic","nativeSecret":KEY});
+    let mut staggered = before.clone();
+    staggered["type"] = "staggered".into();
+    staggered["params"]["maxAge"] = "0".into();
+    staggered["cleanupIntervalS"] = 7.into();
+    let command = format!("\"target-program\" \"%FOLDER_PATH%\" \"%FILE_PATH%\" {KEY}");
+    let mut external = staggered.clone();
+    external["type"] = "external".into();
+    external["params"]["command"] = command.clone().into();
+    let archive = "\\\\owned-host\\share\\档案 %.bak";
+    let mut located = external.clone();
+    located["fsPath"] = archive.into();
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+        identity(),
+        identity(),
+        folder(before),
+        Reply::json(serde_json::json!({})),
+        folder(staggered.clone()),
+        identity(),
+        folder(staggered),
+        Reply::json(serde_json::json!({})),
+        folder(external.clone()),
+        identity(),
+        folder(external),
+        Reply::json(serde_json::json!({})),
+        folder(located.clone()),
+        identity(),
+        folder(located),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"folders":[]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let update = client
+        .set_folder_versioning(
+            &id,
+            FolderVersioningPolicy::Staggered {
+                max_age_seconds: 0,
+                cleanup_interval_seconds: 7,
+            },
+        )
+        .await?;
+    assert!(update.requested_fields_match);
+    let native = ExternalVersioningCommand::new(command.clone())?;
+    assert_eq!(native.native_command(), command);
+    assert!(!format!("{native:?}").contains(KEY));
+    let update = client
+        .set_folder_versioning(&id, FolderVersioningPolicy::External { command: native })
+        .await?;
+    assert!(update.requested_fields_match);
+    let location =
+        VersionArchiveLocation::BasicDirectory(TargetPath::remote(PathStyle::Windows, archive)?);
+    let update = client.set_version_archive_location(&id, &location).await?;
+    assert!(update.requested_fields_match);
+    assert!(!format!("{update:?} {location:?}").contains(KEY));
+    assert!(matches!(
+        client
+            .set_version_archive_location(&id, &VersionArchiveLocation::FolderDefault)
+            .await,
+        Err(Error::MutationOutcomeUnknown { .. })
+    ));
+    assert!(matches!(
+        client
+            .set_version_archive_location(
+                &id,
+                &VersionArchiveLocation::BasicDirectory(TargetPath::remote(
+                    PathStyle::Unix,
+                    "/wrong-style"
+                )?)
+            )
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    for text in [
+        "".to_owned(),
+        "   ".to_owned(),
+        "bad\ncommand".to_owned(),
+        "x".repeat(8193),
+    ] {
+        assert!(ExternalVersioningCommand::new(text).is_err());
+    }
+    assert!(client
+        .set_folder_versioning(
+            &id,
+            FolderVersioningPolicy::Staggered {
+                max_age_seconds: 0,
+                cleanup_interval_seconds: 0
+            }
+        )
+        .await
+        .is_err());
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 4);
+    for (index, request) in writes.iter().enumerate() {
+        let body: serde_json::Value =
+            serde_json::from_str(request.split("\r\n\r\n").nth(1).ok_or("body")?)?;
+        assert_eq!(body["versioning"]["params"]["keep"], "9");
+        assert_eq!(body["versioning"]["params"]["native"], KEY);
+        assert_eq!(body["versioning"]["nativeSecret"], KEY);
+        match index {
+            0 => {
+                assert_eq!(body["versioning"]["params"]["maxAge"], "0");
+                assert_eq!(body["versioning"]["cleanupIntervalS"], 7);
+            }
+            1 => assert_eq!(body["versioning"]["params"]["command"], command),
+            2 => assert_eq!(body["versioning"]["fsPath"], archive),
+            3 => assert_eq!(body["versioning"]["fsPath"], ""),
+            _ => unreachable!(),
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn exact_version_restore_encodes_native_map_and_retains_partial_errors() -> TestResult {
+    use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
+    let identity = || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));
+    let id = FolderId::parse("versions 中文")?;
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),
+        Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"/synthetic","paused":false}]})),
+        identity(),
+        Reply::json(serde_json::json!({"nested/a 二 %.txt":null,"other.txt":KEY})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let timestamp = "2026-11-14T02:20:15+08:00";
+    let item = FileVersionRestore::new(
+        TargetPath::remote(PathStyle::Unix, "nested/a 二 %.txt")?,
+        timestamp,
+    )?;
+    assert!(!format!("{item:?}").contains("nested"));
+    for items in [vec![], vec![item.clone(), item.clone()]] {
+        assert!(matches!(
+            client.restore_file_versions(&id, &items).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let bad =
+        FileVersionRestore::new(TargetPath::remote(PathStyle::Unix, "../escape")?, timestamp)?;
+    assert!(matches!(
+        client.restore_file_versions(&id, &[bad]).await,
+        Err(Error::InvalidPath { .. })
+    ));
+    let result = client.restore_file_versions(&id, &[item]).await?;
+    assert_eq!(result.error_count(), 1);
+    assert_eq!(result.0["other.txt"].as_deref(), Some(KEY));
+    assert!(!format!("{result:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let posts = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0]
+        .starts_with("POST /prefix/rest/folder/versions?folder=versions+%E4%B8%AD%E6%96%87 "));
+    let body: serde_json::Value =
+        serde_json::from_str(posts[0].split("\r\n\r\n").nth(1).ok_or("body")?)?;
+    assert_eq!(body, serde_json::json!({"nested/a 二 %.txt":timestamp}));
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_version_restore_ack_is_unknown_and_is_never_retried() -> TestResult {
+    use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
+    let identity = || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));
+    let id = FolderId::parse("versioned")?;
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),
+        Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),"label":"","path":"/synthetic","paused":false}]})),
+        identity(),
+        Reply::json(serde_json::json!([KEY])),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let item = FileVersionRestore::new(
+        TargetPath::remote(PathStyle::Unix, "version.txt")?,
+        "2026-11-14T00:00:00Z",
+    )?;
+    let error = client
+        .restore_file_versions(&id, &[item])
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("POST "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn version_prefix_null_is_empty_while_malformed_shapes_and_timestamps_are_rejected(
+) -> TestResult {
+    use verysync_sidecar::{
+        ArchivedFileVersion, FileVersionRestore, FolderId, FolderVersionHistory, PathStyle,
+        TargetPath,
+    };
+    assert!(
+        serde_json::from_value::<FolderVersionHistory>(serde_json::Value::Null)?
+            .0
+            .is_empty()
+    );
+    assert!(serde_json::from_value::<FolderVersionHistory>(serde_json::json!([KEY])).is_err());
+    assert!(serde_json::from_value::<ArchivedFileVersion>(
+        serde_json::json!({"versionTime":"t","modTime":"m","size":-1})
+    )
+    .is_err());
+    assert!(
+        FileVersionRestore::new(TargetPath::remote(PathStyle::Unix, "file")?, "bad\nvalue")
+            .is_err()
+    );
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let id = FolderId::parse("versioned")?;
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),"path":"/synthetic","label":"","paused":false}]})),Reply::json(serde_json::Value::Null)]).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(client
+        .folder_versions(&id, Some(&TargetPath::remote(PathStyle::Unix, "a 二%")?))
+        .await?
+        .0
+        .is_empty());
+    let requests = server.finish().await?;
+    assert!(requests.last().is_some_and(|r| r.starts_with(
+        "GET /prefix/rest/folder/versions/browse?folder=versioned&prefix=a+%E4%BA%8C%25 "
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_preview_preserves_binary_media_and_rejects_empty_or_non_image_success() -> TestResult
+{
+    use verysync_sidecar::{PathStyle, ResourcePath, ResourceVolumeId};
+    let reply = |body: Vec<u8>, headers: String| Reply {
+        status: 200,
+        body,
+        headers,
+        delay: Duration::ZERO,
+    };
+    let image = b"\x89PNG\r\n\x1a\nsynthetic-contract-bytes".to_vec();
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        reply(
+            image.clone(),
+            format!("Content-Type: image/png; private={KEY}\r\n"),
+        ),
+        Reply::json(serde_json::json!({"myID":ID})),
+        reply(Vec::new(), "Content-Type: image/png\r\n".into()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        reply(
+            KEY.as_bytes().to_vec(),
+            "Content-Type: text/plain\r\n".into(),
+        ),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("image-volume")?, PathStyle::Unix)
+        .child("preview %.png")?;
+    let result = client.resource_thumbnail(&path).await?;
+    assert_eq!(result.body_bytes(), image);
+    assert!(result.media_type().contains(KEY));
+    assert!(!format!("{result:?}").contains(KEY));
+    assert!(matches!(
+        client.resource_thumbnail(&path).await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    let error = client.resource_thumbnail(&path).await.unwrap_err();
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(matches!(error, Error::InvalidResponse { .. }));
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with(
+                "GET /prefix/rest/f/api/preview/thumb/image-volume/preview%20%25.png?inline=true "
+            ))
+            .count(),
+        3
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unix_newline_resource_name_is_percent_encoded_without_normalization() -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourcePath, ResourceVolumeId};
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"path":"line\nbreak.txt","name":"line\nbreak.txt","size":4,"mode":420,"modified":"opaque","isDir":false}))]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("mount")?, PathStyle::Unix)
+        .child("line\nbreak.txt")?;
+    client.resource_info(&path).await?;
+    assert!(server
+        .finish()
+        .await?
+        .last()
+        .unwrap()
+        .starts_with("GET /prefix/rest/f/api/resources/mount/line%0Abreak.txt "));
+    Ok(())
+}
+
+#[tokio::test]
+async fn known_provider_release_absence_is_typed_without_retry_or_erasing_other_failures(
+) -> TestResult {
+    let missing = b"couldn't find a release to download\n".to_vec();
+    let http = |body: Vec<u8>| Reply {
+        status: 500,
+        body,
+        headers: String::new(),
+        delay: Duration::ZERO,
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"arm64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        http(missing.clone()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        http(missing.clone()),
+        Reply::json(serde_json::json!({"myID":ID})),
+        http(format!("couldn't find a release to download but unknown: {KEY}").into_bytes()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(
+        matches!(client.check_kernel_upgrade().await,Err(Error::UpgradeReleaseUnavailable{response})if response.body_bytes()==missing)
+    );
+    assert!(
+        matches!(client.request_server_selected_upgrade().await,Err(Error::UpgradeReleaseUnavailable{response})if response.status()==500)
+    );
+    let error = client.request_server_selected_upgrade().await.unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("POST "))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_paths_are_encoded_once_and_missing_checksums_keep_private_diagnostics(
+) -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourceChecksum, ResourcePath, ResourceVolumeId};
+    let node = serde_json::json!({"path":"nested/二 ?%2e%2e.txt","name":"二 ?%2e%2e.txt","size":4,"mode":420,"modified":"unparsed-private-time","isDir":false,"checksums":{"sha256":"bad"},"private":KEY});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(node),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("mount ?%")?, PathStyle::Unix)
+        .child("nested")?
+        .child("二 ?%2e%2e.txt")?;
+    let error = client
+        .resource_checksum(&path, ResourceChecksum::Sha256)
+        .await
+        .unwrap_err();
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(
+        matches!(error,Error::InvalidResponse{response,..}if response.body_bytes().windows(KEY.len()).any(|s|s==KEY.as_bytes()))
+    );
+    let requests = server.finish().await?;
+    assert!(requests.last().unwrap().starts_with("GET /prefix/rest/f/api/resources/mount%20%3F%25/nested/%E4%BA%8C%20%3F%252e%252e.txt?checksum=sha256 "));
+    Ok(())
+}
+
+#[tokio::test]
+async fn upgrade_metadata_requires_flags_and_redacts_unknown_values() -> TestResult {
+    let mut replies = vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ];
+    for response in [
+        serde_json::json!({"running":"v2.33.2","latest":"v2.33.2","newer":false}),
+        serde_json::json!({"running":"","latest":"v2.33.2","newer":false,"majorNewer":false}),
+        serde_json::json!({"running":"v2.33.2","latest":"v2.33.2","newer":false,"majorNewer":false,"private":KEY}),
+    ] {
+        replies.push(Reply::json(serde_json::json!({"myID":ID})));
+        replies.push(Reply::json(response));
+    }
+    let server = ScriptedServer::start(replies).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.check_kernel_upgrade().await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    assert!(matches!(
+        client.check_kernel_upgrade().await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    let result = client.check_kernel_upgrade().await?;
+    assert_eq!(result.extra["private"], KEY);
+    assert!(!result.newer && !result.major_newer && !format!("{result:?}").contains(KEY));
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("GET /prefix/rest/system/upgrade "))
+            .count(),
+        3
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn kernel_upgrade_unknown_ack_is_not_retried_and_fixed_ack_is_recognized() -> TestResult {
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"ok":KEY})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"ok":"restarting"})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client.request_server_selected_upgrade().await.unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    client.request_server_selected_upgrade().await?;
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("POST /prefix/rest/system/upgrade "))
+            .count(),
+        2
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn invalid_fixed_archive_is_rejected_before_any_modifying_or_identity_request() -> TestResult
+{
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let asset = verysync_sidecar::official_programs()?
+        .into_iter()
+        .next()
+        .ok_or("fixed asset missing")?;
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("bad-archive");
+    let file = std::fs::File::create(&path)?;
+    file.set_len(asset.archive_bytes())?;
+    drop(file);
+    assert!(matches!(
+        client.upload_kernel_upgrade(&path, &asset).await,
+        Err(Error::ProgramRejected { .. })
+    ));
+    assert!(matches!(
+        client
+            .upload_kernel_upgrade("relative-archive", &asset)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn recovery_nonempty_ack_is_unknown_without_retry_and_pause_is_not_resumed() -> TestResult {
     use verysync_sidecar::FolderId;
     let folder = serde_json::json!({"id":"recovery","label":"synthetic","path":"/synthetic","paused":false,"type":"sendonly"});
@@ -1991,6 +3240,501 @@ async fn capabilities_report_is_a_snapshot_without_optional_feature_probes() -> 
         server.finish().await?.len(),
         2,
         "report must not add management or license probes"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_download_rejects_wrong_ranges_and_preserves_partial_and_error_semantics(
+) -> TestResult {
+    use verysync_sidecar::{
+        PathStyle, ResourceByteRange, ResourcePath, ResourceTransferOptions, ResourceVolumeId,
+    };
+    let body = |status, bytes: &[u8], headers: &str| Reply {
+        status,
+        body: bytes.to_vec(),
+        headers: headers.into(),
+        delay: Duration::ZERO,
+    };
+    let pairs = vec![
+        body(200, b"abc", ""),
+        body(206, b"bc", "Content-Range: bytes 0-1/3\r\n"),
+        body(206, b"b", "Content-Range: bytes 1-2/3\r\n"),
+        body(
+            200,
+            b"{\"error\":\"literal file bytes\"}",
+            "Content-Type: application/json\r\n",
+        ),
+        body(401, KEY.as_bytes(), ""),
+        body(403, KEY.as_bytes(), ""),
+        body(404, KEY.as_bytes(), ""),
+        body(206, b"abc", "Content-Range: bytes 0-2/3\r\n"),
+        body(200, b"abcd", ""),
+    ];
+    let mut replies = vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ];
+    for reply in pairs {
+        replies.push(Reply::json(serde_json::json!({"myID":ID})));
+        replies.push(reply);
+    }
+    let server = ScriptedServer::start(replies).await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("private-volume")?, PathStyle::Unix)
+        .child("literal %.bin")?;
+    let root = tempfile::tempdir()?;
+    let options = ResourceTransferOptions {
+        max_bytes: 1024,
+        deadline: Duration::from_secs(2),
+    };
+    for case in 0..9 {
+        let output = root.path().join(format!("result-{case}.bin"));
+        let range = if case < 3 {
+            Some(ResourceByteRange::new(1, 2)?)
+        } else {
+            None
+        };
+        let opts = if case == 8 {
+            ResourceTransferOptions {
+                max_bytes: 2,
+                ..options.clone()
+            }
+        } else {
+            options.clone()
+        };
+        let result = client.download_resource(&path, &output, range, &opts).await;
+        if case == 3 {
+            assert_eq!(
+                std::fs::read(&output)?,
+                b"{\"error\":\"literal file bytes\"}"
+            );
+            assert_eq!(result?.bytes, 30);
+        } else {
+            let error = result.unwrap_err();
+            assert!(!format!("{error:?} {error}").contains(KEY));
+            match case {
+                0 | 1 | 2 | 7 | 8 => {
+                    assert!(matches!(error, Error::ResourceTransferRejected { .. }))
+                }
+                4 => assert!(matches!(error, Error::Authentication { status: 401 })),
+                5 => assert!(
+                    matches!(error,Error::AccessDenied{response} if response.status()==403 && response.body_bytes()==KEY.as_bytes())
+                ),
+                6 => assert!(
+                    matches!(error,Error::Http{response} if response.status()==404 && response.body_bytes()==KEY.as_bytes())
+                ),
+                _ => unreachable!(),
+            }
+            // A contradictory Content-Length is rejected before local creation.
+            assert!(!output.exists());
+        }
+    }
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(
+                |r| r.starts_with("GET /prefix/rest/f/api/raw/private-volume/literal%20%25.bin ")
+            )
+            .count(),
+        9
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.to_ascii_lowercase().contains("range: bytes=1-2\r\n"))
+            .count(),
+        3
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_upload_keeps_unknown_ack_or_digest_outcomes_and_preflight_timeout_separate(
+) -> TestResult {
+    use verysync_sidecar::{
+        PathStyle, ResourcePath, ResourceTransferOptions, ResourceUploadConflict, ResourceVolumeId,
+    };
+    let ack = |bytes: &[u8]| Reply {
+        status: 200,
+        body: bytes.to_vec(),
+        headers: String::new(),
+        delay: Duration::ZERO,
+    };
+    let mut slow = Reply::json(serde_json::json!({"myID":ID}));
+    slow.delay = Duration::from_millis(100);
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),ack(b"200 OK\n"),Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"path":"/private/target","name":"target","size":5,"mode":420,"modified":"native-value","isDir":false,"checksums":{"sha256":"00".repeat(32)}})),
+        Reply::json(serde_json::json!({"myID":ID})),ack(KEY.as_bytes()),slow,
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let path = ResourcePath::root(ResourceVolumeId::parse("private-volume")?, PathStyle::Unix)
+        .child("target")?;
+    let root = tempfile::tempdir()?;
+    let input = root.path().join("source.bin");
+    std::fs::write(&input, b"hello")?;
+    let options = ResourceTransferOptions {
+        max_bytes: 5,
+        deadline: Duration::from_secs(2),
+    };
+    assert!(
+        matches!(client.upload_resource(&path,&input,ResourceUploadConflict::RejectExisting,&options).await,
+        Err(Error::MutationOutcomeUnknown{source,..}) if matches!(*source,Error::ResourceTransferRejected{..}))
+    );
+    let error = client
+        .upload_resource(&path, &input, ResourceUploadConflict::Replace, &options)
+        .await
+        .unwrap_err();
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert!(
+        matches!(error,Error::MutationOutcomeUnknown{source,..} if matches!(source.as_ref(),Error::InvalidResponse{response,..} if response.body_bytes()==KEY.as_bytes()))
+    );
+    assert!(matches!(
+        client
+            .upload_resource(
+                &path,
+                &input,
+                ResourceUploadConflict::Replace,
+                &ResourceTransferOptions {
+                    deadline: Duration::from_millis(20),
+                    ..options
+                }
+            )
+            .await,
+        Err(Error::Timeout { .. })
+    ));
+    assert_eq!(std::fs::read(&input)?, b"hello");
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 2);
+    assert!(writes[0]
+        .starts_with("POST /prefix/rest/f/api/resources/private-volume/target?override=false "));
+    assert!(writes[1]
+        .starts_with("POST /prefix/rest/f/api/resources/private-volume/target?override=true "));
+    for request in writes {
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("content-length: 5\r\n"));
+        assert!(request.ends_with("hello"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn streamed_download_retains_real_partial_files_after_chunk_limit_and_transport_failure(
+) -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourcePath, ResourceTransferOptions, ResourceVolumeId};
+    for chunked in [false, true] {
+        let root = tempfile::tempdir()?;
+        let output = root.path().join("partial.bin");
+        let observed = output.clone();
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let endpoint = ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?;
+        let server = tokio::spawn(async move {
+            for stage in 0..4 {
+                let (mut stream, _) =
+                    tokio::time::timeout(Duration::from_secs(3), listener.accept()).await??;
+                let mut request = Vec::new();
+                while !request.windows(4).any(|v| v == b"\r\n\r\n") {
+                    let mut block = [0; 1024];
+                    let n = stream.read(&mut block).await?;
+                    if n == 0 || request.len() + n > 16384 {
+                        return Err("invalid stream fixture request".into());
+                    }
+                    request.extend_from_slice(&block[..n]);
+                }
+                if stage < 3 {
+                    let body = if stage == 0 {
+                        serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})
+                    } else {
+                        serde_json::json!({"myID":ID})
+                    };
+                    let bytes = serde_json::to_vec(&body)?;
+                    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",bytes.len()).as_bytes()).await?;
+                    stream.write_all(&bytes).await?;
+                } else if chunked {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n").await?;
+                    tokio::time::timeout(Duration::from_secs(2), async {
+                        loop {
+                            if tokio::fs::metadata(&observed)
+                                .await
+                                .is_ok_and(|m| m.len() == 3)
+                            {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                    })
+                    .await?;
+                    let _ = stream.write_all(b"3\r\ndef\r\n0\r\n\r\n").await;
+                } else {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nabc").await?;
+                }
+            }
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        });
+        let client = Client::connect(ConnectOptions::new(endpoint, ApiKey::new(KEY)?)).await?;
+        let path = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix)
+            .child("file")?;
+        let error = client
+            .download_resource(
+                &path,
+                &output,
+                None,
+                &ResourceTransferOptions {
+                    max_bytes: if chunked { 4 } else { 1024 },
+                    deadline: Duration::from_secs(3),
+                },
+            )
+            .await
+            .unwrap_err();
+        if chunked {
+            assert!(matches!(error, Error::ResourceTransferRejected { .. }));
+        } else {
+            assert!(matches!(error, Error::Transport { .. }));
+        }
+        assert_eq!(tokio::fs::read(&output).await?, b"abc");
+        server.await??;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_selection_uses_root_route_and_nested_escaped_volume_relative_uris() -> TestResult
+{
+    use verysync_sidecar::{
+        PathStyle, ResourceArchiveFormat, ResourcePath, ResourceTransferOptions, ResourceVolumeId,
+        TargetPath,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let archive = b"PK synthetic opaque archive payload";
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),
+        identity(),Reply::json(serde_json::json!({"path":"/base","name":"base","size":0,"mode":493,"modified":"native-value","isDir":true,"items":[]})),
+        identity(),Reply{status:200,body:archive.to_vec(),headers:"Content-Type: application/zip\r\n".into(),delay:Duration::ZERO},
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let base = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix)
+        .child("base 二 %,dir")?;
+    let output = tempfile::tempdir()?.keep().join("selection.zip");
+    let result = client
+        .download_selected_resources(
+            &base,
+            &[
+                TargetPath::remote(PathStyle::Unix, "reports/二%,x.txt")?,
+                TargetPath::remote(PathStyle::Unix, "line\nbreak.txt")?,
+            ],
+            ResourceArchiveFormat::Zip,
+            &output,
+            &ResourceTransferOptions::default(),
+        )
+        .await?;
+    assert_eq!(std::fs::read(&output)?, archive);
+    assert_eq!(result.bytes, archive.len() as u64);
+    std::fs::remove_dir_all(output.parent().ok_or("output parent absent")?)?;
+    let requests = server.finish().await?;
+    let target = requests
+        .last()
+        .ok_or("missing selection request")?
+        .split_whitespace()
+        .nth(1)
+        .ok_or("missing target")?;
+    let uri = url::Url::parse(&format!("http://synthetic.invalid{target}"))?;
+    assert_eq!(uri.path(), "/prefix/rest/f/api/raw/volume/");
+    let query = uri
+        .query_pairs()
+        .into_owned()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(query.get("files").map(String::as_str),Some("base%20%E4%BA%8C%20%25%2Cdir/reports/%E4%BA%8C%25%2Cx.txt,base%20%E4%BA%8C%20%25%2Cdir/line%0Abreak.txt"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_mutation_roots_and_cross_volume_ids_are_rejected_before_requests() -> TestResult {
+    use verysync_sidecar::{
+        PathStyle, ResourceConflictPolicy, ResourceDeleteScope, ResourcePath, ResourceVolumeId,
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let root = ResourcePath::root(ResourceVolumeId::parse("source-volume")?, PathStyle::Unix);
+    let child = root.clone().child("file")?;
+    let other = ResourcePath::root(ResourceVolumeId::parse("other-volume")?, PathStyle::Unix)
+        .child("file")?;
+    assert!(matches!(
+        client.create_resource_directory(&root).await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client
+            .delete_resource(&root, ResourceDeleteScope::RecursiveDirectory)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client.write_resource_text(&root, "refused").await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client
+            .copy_resource(&root, &child, ResourceConflictPolicy::RejectExisting)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client
+            .move_resource(&child, &root, ResourceConflictPolicy::RejectExisting)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert!(matches!(
+        client
+            .copy_resource(&child, &other, ResourceConflictPolicy::RejectExisting)
+            .await,
+        Err(Error::ResourceMutationRejected { .. })
+    ));
+    assert!(matches!(
+        client
+            .move_resource(&child, &other, ResourceConflictPolicy::OverwriteAndMerge)
+            .await,
+        Err(Error::ResourceMutationRejected { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_copy_encodes_native_destination_uri_inside_query_and_reads_both_resources(
+) -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourceConflictPolicy, ResourcePath, ResourceVolumeId};
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let metadata = |name: &str| {
+        Reply::json(
+            serde_json::json!({"path":"/private/metadata","name":name,"size":5,"mode":420,"modified":"native-value","isDir":false}),
+        )
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        identity(),
+        metadata("from %.bin"),
+        identity(),
+        Reply {
+            status: 404,
+            body: b"not found".to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        Reply {
+            status: 200,
+            body: b"200 OK\n".to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        identity(),
+        metadata("to 二 %.bin"),
+        identity(),
+        metadata("from %.bin"),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let root = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix);
+    let result = client
+        .copy_resource(
+            &root.clone().child("from %.bin")?,
+            &root.child("to 二 %.bin")?,
+            ResourceConflictPolicy::RejectExisting,
+        )
+        .await?;
+    assert_eq!(result.metadata.name, "to 二 %.bin");
+    assert!(!result.generated_name);
+    assert!(!format!("{result:?}").contains("from %"));
+    assert!(!format!("{result:?}").contains("to 二"));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    let request = writes[0].lines().next().ok_or("missing request line")?;
+    let target = request.split_whitespace().nth(1).ok_or("missing target")?;
+    let uri = url::Url::parse(&format!("http://synthetic.invalid{target}"))?;
+    assert_eq!(
+        uri.path(),
+        "/prefix/rest/f/api/resources/volume/from%20%25.bin"
+    );
+    let query = uri
+        .query_pairs()
+        .into_owned()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        query.get("destination").map(String::as_str),
+        Some("/volume/to%20%E4%BA%8C%20%25.bin")
+    );
+    assert_eq!(query.get("action").map(String::as_str), Some("copy"));
+    assert_eq!(query.get("override").map(String::as_str), Some("false"));
+    assert_eq!(query.get("rename").map(String::as_str), Some("false"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_keep_both_ambiguous_parent_changes_are_unknown_without_retries() -> TestResult {
+    use verysync_sidecar::{PathStyle, ResourceConflictPolicy, ResourcePath, ResourceVolumeId};
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let file = |name: &str| serde_json::json!({"path":"/private/metadata","name":name,"size":5,"mode":420,"modified":"native-value","isDir":false});
+    let parent = |new: bool| {
+        let mut items = vec![file("source.bin"), file("target.bin")];
+        if new {
+            items.push(file("target(1).bin"));
+            items.push(file("concurrent.bin"));
+        }
+        Reply::json(
+            serde_json::json!({"path":"/","name":"root","size":0,"mode":493,"modified":"native-value","isDir":true,"items":items}),
+        )
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        identity(),
+        Reply::json(file("source.bin")),
+        identity(),
+        Reply::json(file("target.bin")),
+        identity(),
+        parent(false),
+        Reply {
+            status: 200,
+            body: b"200 OK\n".to_vec(),
+            headers: String::new(),
+            delay: Duration::ZERO,
+        },
+        identity(),
+        parent(true),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let root = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix);
+    assert!(
+        matches!(client.copy_resource(&root.clone().child("source.bin")?,&root.child("target.bin")?,ResourceConflictPolicy::KeepBoth).await,Err(Error::MutationOutcomeUnknown{source,..})if matches!(source.as_ref(),Error::ResourceMutationRejected{..}))
+    );
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .count(),
+        1
     );
     Ok(())
 }

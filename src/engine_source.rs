@@ -27,7 +27,7 @@ impl From<LocalProgram> for EngineSource {
 /// An explicit absolute path to a caller-provided official program.
 ///
 /// This value neither downloads nor runs a program. Managed startup verifies its
-/// actual SHA-256 and fixed version before configuring the private instance.
+/// actual SHA-256 and explicit version policy before configuring private state.
 #[derive(Clone, Debug)]
 pub struct LocalProgram {
     pub(crate) path: PathBuf,
@@ -66,6 +66,6 @@ impl LocalProgram {
 pub struct ProgramInfo {
     /// The actual SHA-256 of the selected executable.
     pub sha256: [u8; 32],
-    /// The checked fixed baseline version.
+    /// The actual checked CLI version, also matched to managed readiness.
     pub version: String,
 }

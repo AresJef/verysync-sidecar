@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "version": "v2.33.1",
+  "purpose": "Explicit older fixture for genuine different-version upgrade tests; not the default acceptance baseline.",
+  "source_directory": "https://dl-cn.verysync.com/releases/v2.33.1/",
+  "checksum_source_sha256": "acfc1023bb99d59d3604709d8c9ba8c49d66665c6ff22a4d2bec47729017b683",
+  "packages": [
+    {
+      "id": "linux-amd64-standard",
+      "os": "linux",
+      "upstream_arch": "amd64",
+      "archive_format": "tar.gz",
+      "executable_name": "verysync",
+      "alpha_target": true,
+      "filename": "verysync-linux-amd64-v2.33.1.tar.gz",
+      "url": "https://dl-cn.verysync.com/releases/v2.33.1/verysync-linux-amd64-v2.33.1.tar.gz",
+      "bytes": 22881841,
+      "sha256": "05cc41fbc28066a83e2ee092e6c27593ddf03ea92bc131a97dae5766b9d91a80"
+    },
+    {
+      "id": "linux-arm64-standard",
+      "os": "linux",
+      "upstream_arch": "arm64",
+      "archive_format": "tar.gz",
+      "executable_name": "verysync",
+      "alpha_target": true,
+      "filename": "verysync-linux-arm64-v2.33.1.tar.gz",
+      "url": "https://dl-cn.verysync.com/releases/v2.33.1/verysync-linux-arm64-v2.33.1.tar.gz",
+      "bytes": 21733149,
+      "sha256": "8308a1fd712b8b8537ab42ac5293042226fc1c46c742b0ed70011aa51b2dced1"
+    },
+    {
+      "id": "macos-amd64-standard",
+      "os": "macos",
+      "upstream_arch": "amd64",
+      "archive_format": "zip",
+      "executable_name": "verysync",
+      "alpha_target": true,
+      "filename": "verysync-macos-amd64-v2.33.1.zip",
+      "url": "https://dl-cn.verysync.com/releases/v2.33.1/verysync-macos-amd64-v2.33.1.zip",
+      "bytes": 20754003,
+      "sha256": "9a5f52c9d50576f1f96e882fac701b9ffe50a976dc6aee49eb4dcd462308ad00"
+    },
+    {
+      "id": "macos-arm64-standard",
+      "os": "macos",
+      "upstream_arch": "arm64",
+      "archive_format": "zip",
+      "executable_name": "verysync",
+      "alpha_target": true,
+      "filename": "verysync-macos-arm64-v2.33.1.zip",
+      "url": "https://dl-cn.verysync.com/releases/v2.33.1/verysync-macos-arm64-v2.33.1.zip",
+      "bytes": 19517507,
+      "sha256": "e269c1b89154dbb6a844e4414ef03078ee2c61a90c5b97dec85afa78c0646722"
+    },
+    {
+      "id": "windows-amd64-standard",
+      "os": "windows",
+      "upstream_arch": "amd64",
+      "archive_format": "zip",
+      "executable_name": "verysync.exe",
+      "alpha_target": true,
+      "filename": "verysync-windows-amd64-v2.33.1.zip",
+      "url": "https://dl-cn.verysync.com/releases/v2.33.1/verysync-windows-amd64-v2.33.1.zip",
+      "bytes": 17270536,
+      "sha256": "0f1b920aa2d2ad0e7c05e1707714b1045c6e4839c74253f9a48d4d6d5f980429"
+    },
+    {
+      "id": "windows-arm64-standard",
+      "os": "windows",
+      "upstream_arch": "arm64",
+      "archive_format": "zip",
+      "executable_name": "verysync.exe",
+      "alpha_target": true,
+      "filename": "verysync-windows-arm64-v2.33.1.zip",
+      "url": "https://dl-cn.verysync.com/releases/v2.33.1/verysync-windows-arm64-v2.33.1.zip",
+      "bytes": 20157904,
+      "sha256": "0b40812635029f96bfe9d7ffa5737e7e7d8079c1246912c3dac337bef35d7723"
+    }
+  ]
+}

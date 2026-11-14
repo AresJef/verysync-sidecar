@@ -117,6 +117,12 @@ pub enum Error {
         /// A description excluding paths, arguments and captured program output.
         reason: &'static str,
     },
+    /// The fixed kernel's provider has no matching downloadable release for
+    /// this target. This is a known refusal, separate from SDK artifact listing.
+    UpgradeReleaseUnavailable {
+        /// Actual bounded provider refusal; private bytes require explicit inspection.
+        response: ResponseDiagnostic,
+    },
     /// An owned program exited before the required managed operation completed.
     ManagedProcessExited {
         /// The credential-free stage that could not complete.
@@ -129,6 +135,11 @@ pub enum Error {
     /// A managed-state or lifecycle invariant could not be established.
     ManagedFailure {
         /// A description excluding credentials and captured output.
+        reason: &'static str,
+    },
+    /// An offline snapshot, its limits or restoration input is not admissible.
+    StateBackupRejected {
+        /// A description without private paths, credentials or manifest data.
         reason: &'static str,
     },
     /// The dedicated state already has an exclusive library owner.
@@ -248,6 +259,20 @@ pub enum Error {
         /// A description that excludes the supplied identifier.
         reason: &'static str,
     },
+    /// A file transfer input or response violates its explicit safety contract.
+    ResourceTransferRejected {
+        /// A description excluding file paths, URLs and upstream response bytes.
+        reason: &'static str,
+    },
+    /// An explicit resource mutation fails a path, kind or observation contract.
+    ResourceMutationRejected {
+        /// A description excluding native paths and upstream private data.
+        reason: &'static str,
+    },
+    /// The requested resource is absent during a mutation preflight.
+    ResourceNotFound,
+    /// A non-overwriting mutation found an existing destination before writing.
+    ResourceAlreadyExists,
     /// The exact peer identity is absent from current configuration.
     DeviceNotFound {
         /// Explicit requested identity, omitted from ordinary formatting.
@@ -280,6 +305,12 @@ pub enum Error {
     FolderPaused {
         /// Exact requested folder, omitted from ordinary formatting.
         id: FolderId,
+    },
+    /// Native restore timestamp safety could not be established. No restoring
+    /// POST was sent. Inspect target state before making another explicit call.
+    ArchiveRestorePrecondition {
+        /// Static reason, without private paths or native timestamp values.
+        reason: &'static str,
     },
     /// A response identified a different folder from the requested one.
     FolderIdentityMismatch {
@@ -334,6 +365,10 @@ impl fmt::Debug for Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ResourceTransferRejected { reason } => write!(formatter, "file transfer rejected: {reason}"),
+            Self::ResourceMutationRejected { reason } => write!(formatter, "resource mutation rejected: {reason}"),
+            Self::ResourceNotFound => formatter.write_str("resource was not found"),
+            Self::ResourceAlreadyExists => formatter.write_str("resource already exists; mutation did not start"),
             Self::CacheMiss => formatter.write_str("no complete program is available in the offline cache"),
             Self::CacheCorrupt { reason } => write!(formatter, "program cache is corrupt: {reason}"),
             Self::CacheRejected { reason } => write!(formatter, "program cache rejected: {reason}"),
@@ -350,8 +385,10 @@ impl fmt::Display for Error {
             Self::ShareAlreadyConfigured { .. } => formatter.write_str("sharing group is already configured locally"),
             Self::ScanObservationLost => formatter.write_str("scan observation lost continuity; query state explicitly"),
             Self::ProgramRejected { reason } => write!(formatter, "selected program rejected: {reason}"),
+            Self::UpgradeReleaseUnavailable { .. } => formatter.write_str("kernel upgrade provider has no matching release archive"),
             Self::ManagedProcessExited { operation, code, .. } => write!(formatter, "owned program exited while attempting to {operation} (code {code:?})"),
             Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),
+            Self::StateBackupRejected { reason } => write!(formatter, "private state copy rejected: {reason}"),
             Self::ManagedStateInUse => formatter.write_str("managed state already has an exclusive owner"),
             Self::UnmanagedState => formatter.write_str("state is not an admissible private library-owned directory"),
             Self::LocalIo { operation, .. } => write!(formatter, "native operation failed while attempting to {operation}"),
@@ -404,6 +441,7 @@ impl fmt::Display for Error {
             }
             Self::FolderNotFound {..}=>formatter.write_str("folder is not configured"),
             Self::FolderPaused {..}=>formatter.write_str("operation requires an unpaused folder"),
+            Self::ArchiveRestorePrecondition {reason}=>write!(formatter,"archive restore precondition failed: {reason}"),
             Self::FolderIdentityMismatch {..}=>formatter.write_str("response folder identity did not match the requested folder"),
             Self::DeviceNotFound {..}=>formatter.write_str("device is not configured"),
             Self::DeviceAlreadyExists {..}=>formatter.write_str("device ID is already configured; creation did not start"),

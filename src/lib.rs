@@ -38,6 +38,10 @@
 #![doc = include_str!("../docs/public/program-sources.md")]
 #![doc = include_str!("../docs/public/program-preparation.md")]
 #![doc = include_str!("../docs/public/program-cache.md")]
+#![doc = include_str!("../docs/public/program-upgrades.md")]
+#![doc = include_str!("../docs/public/file-resources.md")]
+#![doc = include_str!("../docs/public/file-transfers.md")]
+#![doc = include_str!("../docs/public/file-history.md")]
 
 mod auth;
 mod capabilities;
@@ -47,9 +51,14 @@ mod endpoint;
 mod engine_source;
 mod error;
 mod events;
+mod file_history;
+mod file_mutations;
+mod file_transfers;
+mod files;
 mod folders;
 mod ignores;
 mod invitations;
+mod maintenance;
 mod managed;
 mod network;
 mod operations;
@@ -65,6 +74,7 @@ mod sharing;
 mod status;
 mod sync_observation;
 mod transports;
+mod upgrades;
 
 pub use auth::{ApiKey, DeviceId};
 pub use capabilities::{
@@ -85,17 +95,43 @@ pub use events::{
     EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventStreamItem,
     EventSubscription,
 };
+pub use file_history::{
+    ArchivedFileVersion, AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate,
+    DirectoryVersionOrder, ExternalVersioningCommand, FileVersionRestore, FileVersionRestoreReport,
+    FolderVersionHistory, FolderVersioningConfiguration, FolderVersioningPolicy,
+    FolderVersioningUpdate, VersionArchiveLocation, VersionedDirectory,
+};
+pub use file_mutations::{
+    ResourceConflictPolicy, ResourceDeleteScope, ResourceMutation, ResourceRemoval,
+};
+pub use file_transfers::{
+    ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,
+    ResourceUpload, ResourceUploadConflict,
+};
+pub use files::{
+    ResourceChecksum, ResourceInfo, ResourcePath, ResourcePreview, ResourceVolume, ResourceVolumeId,
+};
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
 pub use ignores::{IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
 pub use invitations::{
     DeviceIgnoreUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
     PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
 };
+pub use maintenance::{
+    CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
+    CoreLogSnapshot, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest,
+    IndexResetAcknowledgement, IndexResetScope,
+};
 #[cfg(feature = "download")]
 pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
+pub use managed::{
+    DatabaseCommand, DatabaseCommandExit, DatabaseCommandOutcome, DatabaseCountRow,
+    KernelUpgradeCommand, KernelUpgradeExit, ManagedExit, ManagedInstance, ManagedLifetime,
+    ManagedOptions, ManagedUpgradeChecks, ProgramTransition, StateBackup, StateBackupInfo,
+    StateBackupOptions,
+};
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
-pub use managed::{ManagedExit, ManagedInstance, ManagedLifetime, ManagedOptions};
 pub use network::{
     ConnectionSnapshot, ConnectionTotals, DeviceTransport, DiscoveryRecord, ListenerStatus,
     NetworkConfig, NetworkPatch, NetworkUpdate, PeerConnection, PeerConnectionType,
@@ -134,6 +170,7 @@ pub use sync_observation::{
 pub use transports::{
     TrackerStatus, TransportConfig, TransportPatch, TransportStatus, TransportUpdate,
 };
+pub use upgrades::KernelUpgradeCheck;
 
 /// The fixed upstream version selected for initial compatibility acceptance.
 ///

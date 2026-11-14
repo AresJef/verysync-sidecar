@@ -2,8 +2,13 @@
 
 mod device_control;
 mod device_ignore;
+mod file_control;
+mod file_mutation;
+mod file_transfer;
+mod history_control;
 mod ignore_control;
 mod invitation_control;
+mod maintenance_control;
 mod network_control;
 mod recovery;
 mod relay_control;
@@ -12,6 +17,7 @@ mod scheduling;
 mod selective;
 mod sync_observation;
 mod transport_control;
+mod upgrade_control;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -926,10 +932,31 @@ impl Connection {
         if let Some(body) = body {
             request = request.json(body);
         }
+        self.request_prepared(operation, request, mutation).await
+    }
+
+    async fn request_prepared(
+        &self,
+        operation: &'static str,
+        request: reqwest::RequestBuilder,
+        mutation: bool,
+    ) -> Result<(u16, Vec<u8>)> {
+        let response = self
+            .request_prepared_response(operation, request, mutation)
+            .await?;
+        Ok((response.status, response.body))
+    }
+
+    async fn request_prepared_response(
+        &self,
+        operation: &'static str,
+        request: reqwest::RequestBuilder,
+        mutation: bool,
+    ) -> Result<RawResponse> {
         let RawResponse {
             status,
             body: bytes,
-            ..
+            headers,
         } = self.receive_response(operation, request, mutation).await?;
         if status == 401 {
             return Err(Error::Authentication { status });
@@ -966,7 +993,11 @@ impl Connection {
                 }));
             }
         }
-        Ok((status, bytes))
+        Ok(RawResponse {
+            status,
+            headers,
+            body: bytes,
+        })
     }
 
     async fn receive_response(

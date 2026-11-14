@@ -2,6 +2,55 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit resource directory creation, same-volume copy/move, existing-file
+  UTF-8 replacement and scoped deletion with collision/merge policies. Keep
+  observed Windows directory partial failures and required positive acceptance
+  separate; cancellation does not imply native rollback or copy termination.
+
+- Add native staggered/external versioners and explicit basic/default archive
+  locations, preserving earlier archive data when selecting a location. Observe
+  actual external callbacks and native failure effects separately from config.
+  `FolderVersioningPolicy` is now `Clone` rather than `Copy` because an external
+  policy owns its command text; alpha interfaces remain unstable.
+
+- Add explicit folder/global index-reset acknowledgements and stopped-owner
+  statistics, counts, file metadata and database reset commands. Keep actual
+  exit, index effects, data retention and restarted readiness distinct.
+
+- Refuse unverified/same-second archive restores before native POST using the
+  target's clock and a bounded directory preflight; preserve selected archives
+  and current data in the observed v2.33.2 timestamp-collision case.
+
+- Add explicit bounded native heap/CPU profiles and authenticated Prometheus
+  snapshots, preserving private payloads, collection effects and uncertainty.
+
+- Add explicit native error registration/clearing, bounded log snapshots,
+  partial package-level changes and target-syntax diagnostic locations,
+  with private Debug output and uncertain-write handling.
+
+- Add explicit directory oldest/newest version restoration, including an
+  explicit native dot-root selection, with observed nested-file effects.
+
+- Add explicit file versioning policies, native archive listings and exact file
+  restoration, with bounded selection and per-path errors. Preserve unknown
+  archive settings and expose conditional audit-log settings/pages/reset.
+
+- Add bounded streamed file uploads/downloads, exact finite byte ranges and all
+  seven native archive formats, with caller-selected new output paths, verified
+  post-upload digests and explicit cancellation/unknown-mutation semantics.
+
+- Add explicit file-manager mount/path values, bounded directory/text metadata
+  and native checksums plus bounded native image previews, with target-system
+  path guards, exact encoded control filenames and private diagnostics.
+
+- Add explicit version-policy-aware program transitions, kernel check/trigger,
+  fixed-archive streaming upload and contained stopped-owner CLI upgrades.
+  Preserve unknown mutation outcomes and require explicit executable reselection.
+
+- Add bounded private-state snapshots with pinned manifests and file hashes,
+  fresh-directory restoration, cooperative cancellation and incomplete-state
+  admission protection. Keep external synchronized files outside state rollback.
+
 - Add a native three-node read-only handoff scenario with the source stopped,
   an explicit wrong-endpoint failure, complete hashes and peer byte counters.
 

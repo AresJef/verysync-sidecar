@@ -442,17 +442,33 @@ async fn actual_private_udp_only_peers_and_disabled_tracker_nat_observations() -
     Ok(())
 }
 
-async fn relay_ready(client: &Client) -> TestResult<verysync_sidecar::RelayServerStatus> {
-    Ok(tokio::time::timeout(Duration::from_secs(10), async {
+async fn relay_ready(
+    client: &Client,
+    expected: std::net::SocketAddr,
+) -> TestResult<verysync_sidecar::RelayServerStatus> {
+    let mut last = None;
+    let result=tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let status = client.relay_server_status().await?;
-            if status.enabled && status.relay_url.is_some() {
+            let parsed=status.relay_url.as_deref().and_then(|value|url::Url::parse(value).ok());
+            let selected=parsed.as_ref().is_some_and(|url|url.scheme()=="relay"
+                &&url.host_str().and_then(|host|host.parse::<std::net::IpAddr>().ok())==Some(expected.ip())
+                &&url.port()==Some(expected.port())&&url.username().is_empty()&&url.password().is_none()&&url.fragment().is_none());
+            last=Some(json!({"enabled":status.enabled,"url_present":status.relay_url.is_some(),"url_parses":parsed.is_some(),"selected_owned_listener":selected}));
+            if status.enabled && selected {
                 return Ok::<_, Error>(status);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??)
+    .await;
+    if result.is_err() {
+        eprintln!(
+            "private relay preparation diagnostic: {}",
+            json!({"last":last})
+        );
+    }
+    Ok(result??)
 }
 #[tokio::test]
 async fn actual_owned_private_relay_session_with_tcp_and_udp_disabled() -> TestResult {
@@ -494,7 +510,7 @@ async fn actual_owned_private_relay_session_with_tcp_and_udp_disabled() -> TestR
         )
         .await?;
     assert!(enabled.requested_fields_match);
-    let runtime = relay_ready(relay.client()).await?;
+    let runtime = relay_ready(relay.client(), listen).await?;
     let effective = runtime
         .options
         .as_ref()

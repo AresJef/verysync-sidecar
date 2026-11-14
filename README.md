@@ -1,6 +1,19 @@
 # verysync-sidecar
 
+Unreleased [file transfers](docs/public/file-transfers.md) stream explicit local
+inputs/outputs with finite bounds, inclusive ranges, all seven native archive
+formats and post-upload digest verification. Complete native acceptance is pending.
+
 A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
+
+The unreleased [program upgrade and state snapshot API](docs/public/program-upgrades.md)
+separates explicit executable selection, kernel upgrade requests and offline
+state restoration. A restored old snapshot is distinct from opening a migrated
+database with an older executable.
+
+The unreleased [file-manager read API](docs/public/file-resources.md) separates
+opaque mounted-volume IDs from sync-folder IDs, preserves target path syntax,
+and exposes bounded resource metadata and actual file checksums.
 
 The unreleased optional [`download` feature](docs/public/program-preparation.md)
 adds explicit fixed-version transfer, full archive SHA-256 verification and
@@ -312,3 +325,10 @@ Compatibility commitments begin with the first formal release. Compatible update
 ## Licensing
 
 Project-owned code is licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. The official VerySync program and third-party dependencies remain subject to their own terms. The controller's license does not grant redistribution rights for the official program. No official executable is included in this repository or crate.
+
+
+Unreleased [file versioning](docs/public/file-history.md) adds explicit simple/trashcan/staggered policies, caller-selected native external versioners, archive locations, bounded archive browsing and guarded file/directory restoration. Global audit recording remains subject to Pro entitlement and separate positive acceptance.
+
+Unreleased [core maintenance](docs/public/core-maintenance.md) exposes native error logs, bounded log snapshots, explicit package-level changes, target-syntax diagnostic locations, native profiles and authenticated metrics. Explicit index resets and stopped-owner database commands have separate operation choices and return native outcomes; callers coordinate backups, peers and restarts. These APIs do not configure the controller application's logging.
+
+Unreleased [resource mutations](docs/public/file-mutations.md) provide explicit native directory creation, file copy/move, text replacement and scoped deletion. Copy/move are confined to one logical volume; native directory failures on Windows retain separate pending positive acceptance and explicit partial-data diagnostics.

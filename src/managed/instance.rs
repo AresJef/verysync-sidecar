@@ -51,6 +51,7 @@ pub struct ManagedInstance {
     pid: u32,
     _owner: Sender<()>,
     exit: watch::Receiver<Option<ManagedExit>>,
+    pub(super) state_ready_for_backup: bool,
 }
 
 struct ReadyContext {
@@ -72,7 +73,8 @@ impl ManagedInstance {
         })
     }
 
-    /// Start the selected official fixed-baseline program using private state.
+    /// Start the selected program using private state and explicit version policy.
+    /// The default accepts only the fixed validated baseline.
     ///
     /// Requires a caller-owned Tokio runtime with I/O and timers. Preparation,
     /// filesystem operations and blocking process reaping run on one private
@@ -126,6 +128,7 @@ impl ManagedInstance {
                 }
                 let connection = ConnectOptions::new(options.endpoint.clone(), context.key.clone())
                     .expected_device_id(context.identity.clone())
+                    .version_policy(options.version_policy)
                     .request_timeout(options.request_timeout)?;
                 match Client::connect(connection).await {
                     Ok(client) => break client,
@@ -142,6 +145,11 @@ impl ManagedInstance {
                     diagnostic: Some(report.diagnostic),
                 });
             }
+            if client.instance().version.version != context.info.version {
+                return Err(Error::ProgramRejected {
+                    reason: "management version differs from the selected program's CLI version",
+                });
+            }
             committed.store(true, Ordering::Release);
             Ok(Self {
                 options,
@@ -151,6 +159,7 @@ impl ManagedInstance {
                 pid: context.pid,
                 _owner: owner,
                 exit,
+                state_ready_for_backup: true,
             })
         };
         tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), startup)
@@ -168,6 +177,12 @@ impl ManagedInstance {
     /// Inspect the executable identity checked at startup.
     pub fn program_info(&self) -> &ProgramInfo {
         &self.info
+    }
+
+    /// The program selected for the next startup. After a failed program switch
+    /// this can differ from `program_info`, which describes the last ready core.
+    pub fn selected_program(&self) -> &crate::LocalProgram {
+        &self.options.program
     }
 
     /// Borrow the canonical native private state directory.
@@ -235,6 +250,7 @@ fn owner_thread(
         &state,
         &mut prepared.lease,
         options.lifetime,
+        options.upgrade_checks,
     );
     let (mut process, mut capture) = match spawned {
         Ok(pair) => pair,
@@ -320,6 +336,7 @@ fn spawn_core(
     state: &Path,
     lease: &mut super::state::StateLease,
     lifetime: super::ManagedLifetime,
+    upgrade_checks: super::ManagedUpgradeChecks,
 ) -> Result<(OwnedProcess, File)> {
     let mut capture = super::native::open_private(&state.join(".verysync-sidecar-core.log"), false)
         .map_err(|e| io_error("open private core diagnostics", e))?;
@@ -330,11 +347,16 @@ fn spawn_core(
         .seek(SeekFrom::Start(0))
         .map_err(|e| io_error("position private core diagnostics", e))?;
     let mut command = bootstrap::command(binary, state);
-    command.arg("serve").arg("--home").arg(state).args([
-        "--no-browser",
-        "--no-restart",
-        "--no-upgrade",
-    ]);
+    command
+        .arg("serve")
+        .arg("--home")
+        .arg(state)
+        .args(["--no-browser", "--no-restart"]);
+    if upgrade_checks == super::ManagedUpgradeChecks::Disabled {
+        command.arg("--no-upgrade");
+    } else {
+        command.env_remove("STNOUPGRADE");
+    }
     lease.release_engine_lock_for_spawn();
     let retained = lifetime == super::ManagedLifetime::CallerOwned;
     let io = super::process::ProcessIo {
