@@ -66,3 +66,56 @@ contracts exercise initial unknown acknowledgment, transient read-only refusal,
 caller-selected unverified-version policy, wrong identity, invalid inputs and
 cancellation after an observed write. Synthetic evidence does not substitute
 for native platform acceptance or GUI/password/LDAP/account-session evidence.
+
+## Native GUI password sessions
+
+`set_local_gui_credentials()` selects the native static GUI authentication mode
+and PATCHes only the username and password. The API key is retained. Its receipt
+reports actual username readback and password presence; a separate GUI login
+verifies the supplied password. The owned-instance method adopts the API-key
+connection authenticated after GUI reload, without restarting the core.
+
+`GuiSession::login()` sends no API key. It reads the native CSRF cookie, submits
+one local/LDAP login, then checks version and full identity with the resulting
+session cookie. An expected identity also checks the seven-character CSRF suffix
+before password submission. Forum-account login is not selected. Cookies remain
+in memory and the returned session does not retain the supplied password.
+
+```no_run
+use verysync_sidecar::{GuiCredentials, GuiLoginOptions, GuiSession, ManagedInstance};
+use std::time::Duration;
+
+async fn use_gui_session(core: &mut ManagedInstance) -> verysync_sidecar::Result<()> {
+    let credentials = GuiCredentials::new("explicit-gui-user", "caller-supplied-password")?;
+    core.set_local_gui_credentials(&credentials, Duration::from_secs(10)).await?;
+    let session = GuiSession::login(
+        GuiLoginOptions::new(core.client().endpoint().clone(), credentials)
+            .expected_device_id(core.client().instance().device_id.clone()),
+    ).await?;
+    let status = session.system_status().await?;
+    let logout = session.logout().await?;
+    // Inspect logout.session_rejected: the same old cookie was probed afterward.
+    Ok(())
+}
+```
+
+Each of the four login responses has the selected request deadline and body
+limit. Login and logout writes are never retried. Cookie headers are bounded,
+marked sensitive, omitted by Debug, and restricted to the selected endpoint;
+unexpected device suffixes, domain/path scopes and insecure transport for a
+Secure cookie are rejected. The native baseline's observed HTTP/Unix-socket
+session cookie omitted HttpOnly, Secure and SameSite attributes. The SDK keeps
+that credential outside a browser cookie store and preserves explicit endpoint
+and TLS choices. It does not change the official server's cookie policy.
+
+`system_status()`, `version()` and `gui_authentication()` perform typed session
+reads. Reading the GUI configuration explicitly makes its API key available as
+a redacted value; callers can separately choose an API-key `Client`. GUI sessions
+and API-key connections remain independent authentication contexts.
+
+`logout()` posts once, then tests the exact preceding cookie for native 401/403
+refusal. Clones of the logged-out session retain that revoked cookie. Native
+tests check that another independently logged-in session and the API-key client
+remain usable. Password hashing and session invalidation are performed by the
+official program. LDAP-mode correctness and official account login require
+their own actual authentication evidence.

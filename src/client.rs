@@ -184,6 +184,10 @@ pub struct Client {
 }
 
 impl Client {
+    /// Borrow the exact selected management endpoint; this performs no discovery.
+    pub fn endpoint(&self) -> &ManagementEndpoint {
+        &self.connection.endpoint
+    }
     /// Explicitly ask this engine to generate a fresh read/write and read-only pair.
     /// Generation registers no folder; these credentials are not management keys.
     pub async fn generate_share(&self) -> Result<crate::GeneratedShare> {
@@ -433,49 +437,7 @@ impl Client {
         tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
             reason: "a Tokio runtime with I/O and timers enabled is required",
         })?;
-        let builder = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(options.timeout.min(Duration::from_secs(5)))
-            .timeout(options.timeout)
-            .user_agent(concat!("verysync-sidecar/", env!("CARGO_PKG_VERSION")));
-        let (builder, base) = if let Some(socket) = options.endpoint.socket_path() {
-            #[cfg(unix)]
-            {
-                (
-                    builder.unix_socket(socket),
-                    Url::parse("http://localhost/").map_err(|_| Error::InvalidEndpoint {
-                        reason: "internal socket base URL",
-                    })?,
-                )
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = socket;
-                return Err(Error::UnsupportedTransport {
-                    transport: "Unix-domain sockets on this platform",
-                });
-            }
-        } else {
-            let url = options
-                .endpoint
-                .http_url()
-                .ok_or(Error::InvalidEndpoint {
-                    reason: "missing HTTP base URL",
-                })?
-                .clone();
-            #[cfg(not(feature = "tls"))]
-            if url.scheme() == "https" {
-                return Err(Error::UnsupportedTransport {
-                    transport: "HTTPS requires the tls feature",
-                });
-            }
-            (builder, url)
-        };
-        let http = builder
-            .build()
-            .map_err(|e| transport_error("build management client", e))?;
+        let (http, base) = management_http(&options.endpoint, options.timeout)?;
         let connection = Connection {
             http,
             base,
@@ -860,6 +822,55 @@ impl fmt::Debug for Client {
     }
 }
 
+pub(crate) fn management_http(
+    endpoint: &ManagementEndpoint,
+    timeout: Duration,
+) -> Result<(reqwest::Client, Url)> {
+    let builder = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(timeout.min(Duration::from_secs(5)))
+        .timeout(timeout)
+        .user_agent(concat!("verysync-sidecar/", env!("CARGO_PKG_VERSION")));
+    let (builder, base) = if let Some(socket) = endpoint.socket_path() {
+        #[cfg(unix)]
+        {
+            (
+                builder.unix_socket(socket),
+                Url::parse("http://localhost/").map_err(|_| Error::InvalidEndpoint {
+                    reason: "internal socket base URL",
+                })?,
+            )
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = socket;
+            return Err(Error::UnsupportedTransport {
+                transport: "Unix-domain sockets on this platform",
+            });
+        }
+    } else {
+        let url = endpoint
+            .http_url()
+            .ok_or(Error::InvalidEndpoint {
+                reason: "missing HTTP base URL",
+            })?
+            .clone();
+        #[cfg(not(feature = "tls"))]
+        if url.scheme() == "https" {
+            return Err(Error::UnsupportedTransport {
+                transport: "HTTPS requires the tls feature",
+            });
+        }
+        (builder, url)
+    };
+    let http = builder
+        .build()
+        .map_err(|e| transport_error("build management client", e))?;
+    Ok((http, base))
+}
+
 impl Connection {
     async fn get_json<T: DeserializeOwned>(
         &self,
@@ -962,51 +973,7 @@ impl Connection {
         request: reqwest::RequestBuilder,
         mutation: bool,
     ) -> Result<RawResponse> {
-        let RawResponse {
-            status,
-            body: bytes,
-            headers,
-        } = self.receive_response(operation, request, mutation).await?;
-        if status == 401 {
-            return Err(Error::Authentication { status });
-        }
-        let uncertain = |source| mutation_error(operation, mutation, source);
-        if status == 403 {
-            return Err(Error::AccessDenied {
-                response: ResponseDiagnostic::new(status, bytes),
-            });
-        }
-        if !(200..300).contains(&status) {
-            return Err(uncertain(Error::Http {
-                response: ResponseDiagnostic::new(status, bytes),
-            }));
-        }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ErrorEnvelope {
-            error: String,
-            #[serde(default)]
-            code: Option<i64>,
-        }
-        if let Ok(envelope) = serde_json::from_slice::<ErrorEnvelope>(&bytes) {
-            if !envelope.error.is_empty() {
-                if envelope.code == Some(3000) {
-                    return Err(Error::LicenseRequired {
-                        code: 3000,
-                        response: ResponseDiagnostic::new(status, bytes),
-                    });
-                }
-                return Err(uncertain(Error::Api {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                }));
-            }
-        }
-        Ok(RawResponse {
-            status,
-            headers,
-            body: bytes,
-        })
+        send_checked(operation, request, mutation, self.response_limit).await
     }
 
     async fn receive_response(
@@ -1015,36 +982,98 @@ impl Connection {
         request: reqwest::RequestBuilder,
         mutation: bool,
     ) -> Result<RawResponse> {
-        let uncertain = |source| mutation_error(operation, mutation, source);
-        let mut response = request
-            .send()
-            .await
-            .map_err(|e| uncertain(transport_error(operation, e)))?;
-        let status = response.status().as_u16();
-        let headers = response
-            .headers()
-            .iter()
-            .map(|(name, value)| (name.as_str().to_owned(), value.as_bytes().to_vec()))
-            .collect();
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| uncertain(transport_error(operation, e)))?
-        {
-            if chunk.len() > self.response_limit.saturating_sub(body.len()) {
-                return Err(uncertain(Error::ResponseTooLarge {
-                    limit: self.response_limit,
-                }));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        Ok(RawResponse {
-            status,
-            headers,
-            body,
-        })
+        send_bounded(operation, request, mutation, self.response_limit).await
     }
+}
+
+pub(crate) async fn send_bounded(
+    operation: &'static str,
+    request: reqwest::RequestBuilder,
+    mutation: bool,
+    response_limit: usize,
+) -> Result<RawResponse> {
+    let uncertain = |source| mutation_error(operation, mutation, source);
+    let mut response = request
+        .send()
+        .await
+        .map_err(|e| uncertain(transport_error(operation, e)))?;
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.as_str().to_owned(), value.as_bytes().to_vec()))
+        .collect();
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| uncertain(transport_error(operation, e)))?
+    {
+        if chunk.len() > response_limit.saturating_sub(body.len()) {
+            return Err(uncertain(Error::ResponseTooLarge {
+                limit: response_limit,
+            }));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(RawResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+pub(crate) async fn send_checked(
+    operation: &'static str,
+    request: reqwest::RequestBuilder,
+    mutation: bool,
+    response_limit: usize,
+) -> Result<RawResponse> {
+    let RawResponse {
+        status,
+        body: bytes,
+        headers,
+    } = send_bounded(operation, request, mutation, response_limit).await?;
+    if status == 401 {
+        return Err(Error::Authentication { status });
+    }
+    let uncertain = |source| mutation_error(operation, mutation, source);
+    if status == 403 {
+        return Err(Error::AccessDenied {
+            response: ResponseDiagnostic::new(status, bytes),
+        });
+    }
+    if !(200..300).contains(&status) {
+        return Err(uncertain(Error::Http {
+            response: ResponseDiagnostic::new(status, bytes),
+        }));
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ErrorEnvelope {
+        error: String,
+        #[serde(default)]
+        code: Option<i64>,
+    }
+    if let Ok(envelope) = serde_json::from_slice::<ErrorEnvelope>(&bytes) {
+        if !envelope.error.is_empty() {
+            if envelope.code == Some(3000) {
+                return Err(Error::LicenseRequired {
+                    code: 3000,
+                    response: ResponseDiagnostic::new(status, bytes),
+                });
+            }
+            return Err(uncertain(Error::Api {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes),
+            }));
+        }
+    }
+    Ok(RawResponse {
+        status,
+        headers,
+        body: bytes,
+    })
 }
 
 fn mutation_error(operation: &'static str, mutation: bool, source: Error) -> Error {

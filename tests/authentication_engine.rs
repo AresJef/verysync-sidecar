@@ -6,6 +6,72 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn gui_password_sessions_logout_and_api_key_management_are_independent() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-gui-auth-")
+        .tempdir()?
+        .keep();
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let endpoint = core.client().endpoint().clone();
+    let identity = core.client().instance().device_id.clone();
+    let mut entropy = [0u8; 24];
+    getrandom::fill(&mut entropy)?;
+    let password: String = entropy.iter().map(|b| format!("{b:02x}")).collect();
+    let credentials = GuiCredentials::new("synthetic-gui-user", password.clone())?;
+    let changed = core
+        .set_local_gui_credentials(&credentials, Duration::from_secs(10))
+        .await?;
+    assert!(changed.username_matches && changed.configuration.password_is_set());
+    assert!(matches!(changed.configuration.mode, GuiAuthMode::Static));
+    let configured = core.client().configuration().await?;
+    assert!(configured.native_document()["gui"]["password"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("$2") && s != password));
+    let login =
+        GuiLoginOptions::new(endpoint.clone(), credentials).expected_device_id(identity.clone());
+    let session = GuiSession::login(login.clone()).await?;
+    let second = GuiSession::login(login).await?;
+    assert_eq!(session.system_status().await?.device_id, identity);
+    assert_eq!(session.version().await?.version, "v2.33.2");
+    let obtained = session.gui_authentication().await?.api_key()?;
+    assert_eq!(
+        Client::connect(
+            ConnectOptions::new(endpoint.clone(), obtained).expected_device_id(identity.clone())
+        )
+        .await?
+        .instance()
+        .device_id,
+        identity
+    );
+    let wrong = GuiSession::login(
+        GuiLoginOptions::new(
+            endpoint,
+            GuiCredentials::new("synthetic-gui-user", "wrong-private-test-password")?,
+        )
+        .expected_device_id(identity.clone()),
+    )
+    .await;
+    assert!(
+        matches!(&wrong,Err(Error::AccessDenied{response}) if response.status()==403)
+            || matches!(&wrong, Err(Error::Authentication { status: 401 }))
+    );
+    let stale = session.clone();
+    assert!(session.logout().await?.session_rejected);
+    let denied = stale.system_status().await;
+    assert!(
+        matches!(&denied,Err(Error::AccessDenied{response}) if response.status()==403)
+            || matches!(&denied, Err(Error::Authentication { status: 401 }))
+    );
+    assert_eq!(second.system_status().await?.device_id, identity);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    assert!(second.logout().await?.session_rejected);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    println!("native_gui_authentication_effects=14");
+    Ok(())
+}
+
+#[tokio::test]
 async fn key_rotation_reauthenticates_owner_retains_files_and_rejects_old_key() -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("vs-auth-")

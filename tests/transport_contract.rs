@@ -14,6 +14,158 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn gui_session_uses_scoped_csrf_cookies_without_api_keys_and_verifies_logout() -> TestResult {
+    use verysync_sidecar::{GuiCredentials, GuiLoginOptions, GuiSession};
+    let csrf = "synthetic-private-csrf";
+    let cookie = "synthetic-private-session";
+    let root = Reply {
+        headers: format!("Set-Cookie: CSRF-Token-AAAAAAA={csrf}; Path=/prefix/\r\n"),
+        ..Reply::json(serde_json::json!({}))
+    };
+    let login = Reply {
+        status: 204,
+        body: vec![],
+        headers: format!("Set-Cookie: sessionid-AAAAAAA={cookie}; Path=/prefix/\r\n"),
+        delay: Duration::ZERO,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let denied = || Reply {
+        status: 403,
+        ..Reply::json(serde_json::json!({}))
+    };
+    let server = ScriptedServer::start(vec![
+        root,
+        login,
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        identity(),
+        Reply {
+            status: 204,
+            body: vec![],
+            ..Reply::json(serde_json::json!({}))
+        },
+        denied(),
+        denied(),
+    ])
+    .await?;
+    let options = GuiLoginOptions::new(
+        ManagementEndpoint::http(&server.base)?,
+        GuiCredentials::new("hidden-gui-user", "hidden-gui-password")?,
+    )
+    .expected_device_id(verysync_sidecar::DeviceId::parse(ID)?)
+    .stay_logged_in(true);
+    let session = GuiSession::login(options).await?;
+    assert_eq!(session.system_status().await?.device_id.as_str(), ID);
+    let debug = format!("{session:?}");
+    for value in [csrf, cookie, "hidden-gui-user", "hidden-gui-password"] {
+        assert!(!debug.contains(value));
+    }
+    let stale = session.clone();
+    let logout = session.logout().await?;
+    assert!(logout.write_acknowledged && logout.session_rejected);
+    assert!(matches!(
+        stale.system_status().await,
+        Err(Error::AccessDenied { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 9);
+    assert!(requests[0].starts_with("GET /prefix/ "));
+    assert!(requests[1].starts_with("POST /prefix/rest/noauth/auth/password "));
+    let body: serde_json::Value = serde_json::from_str(
+        requests[1]
+            .split_once("\r\n\r\n")
+            .ok_or("missing GUI credentials")?
+            .1,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"username":"hidden-gui-user","password":"hidden-gui-password","stayLoggedIn":true,"forumUser":false})
+    );
+    assert!(requests
+        .iter()
+        .all(|r| !r.to_ascii_lowercase().contains("x-api-key:")));
+    assert!(requests[1]
+        .to_ascii_lowercase()
+        .contains(&format!("x-csrf-token-aaaaaaa: {csrf}")));
+    assert!(!requests[1].contains(cookie));
+    assert!(requests[2].contains(cookie));
+    assert!(requests[8].contains(cookie));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("POST /prefix/rest/noauth/auth/password "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("POST /prefix/rest/noauth/auth/logout "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_session_rejects_wrong_cookie_scope_before_password_submission() -> TestResult {
+    use verysync_sidecar::{DeviceId, GuiCredentials, GuiLoginOptions, GuiSession};
+    for header in [
+        "CSRF-Token-BBBBBBB=private; Path=/prefix/",
+        "CSRF-Token-AAAAAAA=private; Domain=other.invalid",
+        "CSRF-Token-AAAAAAA=private; Path=/different/",
+        "CSRF-Token-AAAAAAA=private; Secure",
+        "CSRF-Token-AAAAAAA=; Path=/prefix/",
+    ] {
+        let server = ScriptedServer::start(vec![Reply {
+            headers: format!("Set-Cookie: {header}\r\n"),
+            ..Reply::json(serde_json::json!({}))
+        }])
+        .await?;
+        let options = GuiLoginOptions::new(
+            ManagementEndpoint::http(&server.base)?,
+            GuiCredentials::new("hidden-gui-user", "hidden-gui-password")?,
+        )
+        .expected_device_id(DeviceId::parse(ID)?);
+        assert!(matches!(
+            GuiSession::login(options).await,
+            Err(Error::InvalidResponse { .. })
+        ));
+        assert_eq!(server.finish().await?.len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_session_redacts_cookie_and_password_echoes_from_version_errors() -> TestResult {
+    use verysync_sidecar::{DeviceId, GuiCredentials, GuiLoginOptions, GuiSession};
+    let server=ScriptedServer::start(vec![
+        Reply {headers:"Set-Cookie: CSRF-Token-AAAAAAA=private-csrf-token; Path=/prefix/\r\n".to_owned(),..Reply::json(serde_json::json!({}))},
+        Reply {status:204,body:vec![],headers:"Set-Cookie: sessionid-AAAAAAA=private-session-token; Path=/prefix/\r\n".to_owned(),delay:Duration::ZERO},
+        Reply::json(serde_json::json!({"version":"v-private-csrf-token-private-session-token-hidden-gui-user-hidden-gui-password","os":"linux","arch":"amd64"})),
+    ]).await?;
+    let options = GuiLoginOptions::new(
+        ManagementEndpoint::http(&server.base)?,
+        GuiCredentials::new("hidden-gui-user", "hidden-gui-password")?,
+    )
+    .expected_device_id(DeviceId::parse(ID)?);
+    let error = GuiSession::login(options).await.unwrap_err();
+    assert!(matches!(error, Error::IncompatibleVersion { .. }));
+    let debug = format!("{error:?} {error}");
+    for value in [
+        "private-csrf-token",
+        "private-session-token",
+        "hidden-gui-user",
+        "hidden-gui-password",
+    ] {
+        assert!(!debug.contains(value));
+    }
+    assert_eq!(server.finish().await?.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
 async fn key_rotation_cancel_after_write_releases_lock_and_allows_explicit_recovery() -> TestResult
 {
     use verysync_sidecar::FolderDefaultsPatch;

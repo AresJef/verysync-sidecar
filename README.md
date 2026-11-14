@@ -56,6 +56,9 @@ snapshot before writing; independent writers still need coordination.
 The unreleased [management credential API](docs/public/management-authentication.md)
 rotates an explicit API key once, verifies readback and old-key refusal, and
 provides fresh identity-checked connections for normal operation and recovery.
+Explicit local GUI credential changes and in-memory GUI sessions additionally
+verify native password login, CSRF handling and server-side logout independently
+of API-key management.
 
 The unreleased [invitation and folder-peer APIs](docs/public/invitations.md)
 distinguish remote offers, persistent ignores, local key registration and explicit
