@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Share additional typed device selections with existing create/update/default
+  paths. Preserve absent introduction sources and private unknown values, retain
+  exact field matching, and keep template inheritance separate from introduction,
+  auto-acceptance and encrypted-transfer effects.
+
 - Add scoped typed advanced-folder selections and share validated scan, pull-order,
   selective and advanced inputs with creation templates. Preserve native absence,
   unknown/private fields, actual readback differences and existing-object settings;
