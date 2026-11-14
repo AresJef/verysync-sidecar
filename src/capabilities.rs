@@ -93,6 +93,8 @@ pub enum Capability {
     ConfigurationApplication,
     /// Explicit API-key rotation and read-only reauthentication of the same instance.
     ManagementKeyRotation,
+    /// Local GUI credential configuration and explicit native cookie sessions.
+    GuiAuthentication,
     /// Account, configuration and commercial authorization.
     AccountLicense,
     /// Storage protocol integrations.
@@ -301,6 +303,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::GuiAuthentication,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::ManagementKeyRotation,
         implementation: ImplementationStatus::Typed,

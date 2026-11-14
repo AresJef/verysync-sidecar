@@ -174,6 +174,22 @@ impl ManagedInstance {
         &self.client
     }
 
+    /// Set local GUI credentials once and adopt the authenticated API-key
+    /// connection after native GUI reload. No core restart or force is used.
+    /// A separate GUI login verifies the supplied password.
+    pub async fn set_local_gui_credentials(
+        &mut self,
+        credentials: &crate::GuiCredentials,
+        timeout: Duration,
+    ) -> Result<crate::GuiCredentialUpdate> {
+        let update = self
+            .client
+            .set_local_gui_credentials(credentials, timeout)
+            .await?;
+        self.client = update.client.clone();
+        Ok(update)
+    }
+
     /// Rotate the management key once and adopt the freshly authenticated
     /// connection for subsequent owned lifecycle operations. The root process
     /// is not restarted. Old borrowed clients retain their previous credential.

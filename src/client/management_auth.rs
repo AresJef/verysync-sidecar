@@ -4,6 +4,90 @@ use crate::{ApiKey, ApiKeyRotation, ConnectOptions, Error, GuiAuthenticationConf
 use std::time::Duration;
 
 impl Client {
+    /// Select local GUI authentication with one explicit username/password PATCH,
+    /// then read configuration through the unchanged API key after GUI reload.
+    /// Password presence is separate from actual password/login verification.
+    /// Cancellation or an unknown outcome never retries or rolls back the write.
+    pub async fn set_local_gui_credentials(
+        &self,
+        credentials: &crate::GuiCredentials,
+        timeout: Duration,
+    ) -> Result<crate::GuiCredentialUpdate> {
+        if timeout.is_zero() || std::time::Instant::now().checked_add(timeout).is_none() {
+            return Err(Error::InvalidConfiguration {
+                reason: "GUI credential update requires a nonzero representable deadline",
+            });
+        }
+        tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
+            reason: "GUI credential update requires a Tokio runtime with I/O and timers",
+        })?;
+        let body = serde_json::json!({"user":credentials.username,"password":credentials.password,"authMode":"static"});
+        let mut write_started = false;
+        let operation = async {
+            let _guard = self.connection.mutation_lock.lock().await;
+            self.system_status().await?;
+            let url = self.connection.management_url("rest/config/gui", &[])?;
+            write_started = true;
+            let write_acknowledged = match self
+                .connection
+                .request_bytes(
+                    "set local GUI credentials",
+                    reqwest::Method::PATCH,
+                    url,
+                    Some(&body),
+                    true,
+                )
+                .await
+            {
+                Ok(_) => true,
+                Err(Error::MutationOutcomeUnknown { .. }) => false,
+                Err(error) => return Err(error),
+            };
+            loop {
+                let client = match self
+                    .reconnect_with_api_key(self.connection.key.clone())
+                    .await
+                {
+                    Ok(client) => client,
+                    Err(error) if retry_read(&error) => {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                    Err(Error::IncompatibleVersion { actual }) => {
+                        return Err(gui_credential_unknown(Error::IncompatibleVersion {
+                            actual: actual
+                                .replace(&credentials.password, "[REDACTED]")
+                                .replace(&credentials.username, "[REDACTED]"),
+                        }))
+                    }
+                    Err(error) => return Err(gui_credential_unknown(error)),
+                };
+                let configuration = client
+                    .gui_authentication()
+                    .await
+                    .map_err(gui_credential_unknown)?;
+                return Ok(crate::GuiCredentialUpdate {
+                    username_matches: configuration.username == credentials.username,
+                    configuration,
+                    client,
+                    write_acknowledged,
+                });
+            }
+        };
+        tokio::time::timeout(timeout, operation)
+            .await
+            .unwrap_or_else(|_| {
+                let error = Error::Timeout {
+                    operation: "set local GUI credentials",
+                };
+                Err(if write_started {
+                    gui_credential_unknown(error)
+                } else {
+                    error
+                })
+            })
+    }
+
     /// Read management GUI authentication settings, independently of a GUI login
     /// session or official VerySync account. Debug omits private values.
     pub async fn gui_authentication(&self) -> Result<GuiAuthenticationConfig> {
@@ -141,6 +225,13 @@ fn retry_read(error: &Error) -> bool {
 fn rotation_unknown(source: Error) -> Error {
     Error::MutationOutcomeUnknown {
         operation: "reconcile management API key rotation",
+        source: Box::new(source),
+    }
+}
+
+fn gui_credential_unknown(source: Error) -> Error {
+    Error::MutationOutcomeUnknown {
+        operation: "reconcile local GUI credential update",
         source: Box::new(source),
     }
 }
