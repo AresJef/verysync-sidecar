@@ -1,4 +1,4 @@
-//! Actual connection count under a typed maximum, separate from receipts.
+//! Actual incoming maxima and outgoing thresholds, separate from receipts.
 use super::*;
 use verysync_sidecar::DeviceAdvancedPatch;
 
@@ -10,8 +10,26 @@ async fn connected_count(client: &Client, peers: &[&DeviceId]) -> TestResult<usi
         .count())
 }
 
-#[tokio::test]
-async fn actual_maximum_connection_cap_and_explicit_zero_restoration() -> TestResult {
+async fn exercise_connection_limit(outgoing: bool) -> TestResult {
+    let key = if outgoing {
+        "connectionLimitEnough"
+    } else {
+        "connectionLimitMax"
+    };
+    let patch = |value| {
+        if outgoing {
+            NetworkPatch::default().connection_limit_enough(value)
+        } else {
+            NetworkPatch::default().connection_limit_max(value)
+        }
+    };
+    let selected = |config: &verysync_sidecar::NetworkConfig| {
+        if outgoing {
+            config.connection_limit_enough
+        } else {
+            config.connection_limit_max
+        }
+    };
     let root = tempfile::Builder::new().prefix("vsmax-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
@@ -21,32 +39,43 @@ async fn actual_maximum_connection_cap_and_explicit_zero_restoration() -> TestRe
     let cid = c.client().instance().device_id.clone();
     let original = b.client().network_configuration().await?;
     assert_eq!(original.connection_limit_enough, Some(0));
+    assert_eq!(original.connection_limit_max, Some(0));
+    let original_limit = selected(&original).ok_or("original connection limit absent")?;
     let mut unrelated_before =
         b.client().configuration().await?.native_document()["options"].clone();
     unrelated_before
         .as_object_mut()
         .ok_or("options missing")?
-        .remove("connectionLimitMax");
-    let update = b
-        .client()
-        .update_network_configuration(&NetworkPatch::default().connection_limit_max(1))
-        .await?;
+        .remove(key);
+    let update = b.client().update_network_configuration(&patch(1)).await?;
     assert!(update.requested_fields_match);
-    assert_eq!(update.configuration.connection_limit_max, Some(1));
+    assert_eq!(selected(&update.configuration), Some(1));
     let mut unrelated_after =
         b.client().configuration().await?.native_document()["options"].clone();
     unrelated_after
         .as_object_mut()
         .ok_or("options missing")?
-        .remove("connectionLimitMax");
+        .remove(key);
     assert_eq!(unrelated_before, unrelated_after);
     let target = listener(b.client(), None).await?;
-    for (client, id, addresses) in [
-        (b.client(), aid.clone(), vec!["dynamic".into()]),
-        (b.client(), cid.clone(), vec!["dynamic".into()]),
-        (a.client(), bid.clone(), vec![target.clone()]),
-        (c.client(), bid.clone(), vec![target]),
-    ] {
+    let topology = if outgoing {
+        let a_target = listener(a.client(), None).await?;
+        let c_target = listener(c.client(), None).await?;
+        [
+            (a.client(), bid.clone(), vec!["dynamic".into()]),
+            (c.client(), bid.clone(), vec!["dynamic".into()]),
+            (b.client(), aid.clone(), vec![a_target]),
+            (b.client(), cid.clone(), vec![c_target]),
+        ]
+    } else {
+        [
+            (b.client(), aid.clone(), vec!["dynamic".into()]),
+            (b.client(), cid.clone(), vec!["dynamic".into()]),
+            (a.client(), bid.clone(), vec![target.clone()]),
+            (c.client(), bid.clone(), vec![target]),
+        ]
+    };
+    for (client, id, addresses) in topology {
         client
             .update_network_configuration(&NetworkPatch::default().reconnection_interval_seconds(5))
             .await?;
@@ -70,6 +99,9 @@ async fn actual_maximum_connection_cap_and_explicit_zero_restoration() -> TestRe
                 .num_connections,
             Some(1)
         );
+        if outgoing && client.instance().device_id == bid && device.configuration.device_id == aid {
+            connection(b.client(), &aid, true).await?;
+        }
     }
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
@@ -89,7 +121,7 @@ async fn actual_maximum_connection_cap_and_explicit_zero_restoration() -> TestRe
     }
     assert!(
         b.client()
-            .update_network_configuration(&NetworkPatch::default().connection_limit_max(0))
+            .update_network_configuration(&patch(0))
             .await?
             .requested_fields_match
     );
@@ -98,7 +130,7 @@ async fn actual_maximum_connection_cap_and_explicit_zero_restoration() -> TestRe
     assert_eq!(connected_count(b.client(), &[&aid, &cid]).await?, 2);
     assert!(
         b.client()
-            .update_network_configuration(&NetworkPatch::default().connection_limit_max(2))
+            .update_network_configuration(&patch(2))
             .await?
             .requested_fields_match
     );
@@ -125,21 +157,13 @@ async fn actual_maximum_connection_cap_and_explicit_zero_restoration() -> TestRe
     b.restart(Duration::from_secs(30)).await?;
     assert_eq!(b.client().instance().device_id, bid);
     assert_eq!(
-        b.client()
-            .network_configuration()
-            .await?
-            .connection_limit_max,
+        selected(&b.client().network_configuration().await?),
         Some(2)
     );
     assert!(
         b.client()
             .update_network_configuration(
-                &NetworkPatch::default()
-                    .connection_limit_max(
-                        original
-                            .connection_limit_max
-                            .ok_or("original maximum absent")?
-                    )
+                &patch(original_limit)
                     .reconnection_interval_seconds(original.reconnection_interval_seconds)
             )
             .await?
@@ -151,15 +175,24 @@ async fn actual_maximum_connection_cap_and_explicit_zero_restoration() -> TestRe
     }
     std::fs::remove_dir_all(root)?;
     println!(
-        "public maximum connection limit evidence: {}",
+        "public connection limit effect evidence: {}",
         json!({
-            "typed_max_one_receipt":true,"other_options_unchanged":true,
+            "selector":key,"typed_one_receipt":true,"other_options_unchanged":true,
             "single_connection_per_device_pair_selected":true,"twelve_seconds_maximum_one_peer":true,
-            "observed_samples":samples,"typed_zero_allows_both_real_incoming_peers":true,
-            "typed_max_two_persists_same_identity_restart":true,"original_settings_restored":true,
+            "observed_samples":samples,"typed_zero_allows_both_real_peers":true,
+            "typed_two_persists_same_identity_restart":true,"original_settings_restored":true,
             "explicit_pause_actual_disconnection_before_cleanup":true,"all_three_normal_tree_exits":true,
-            "outgoing_enough_threshold_acceptance":false
+            "outgoing_threshold_effect":outgoing,"incoming_maximum_effect":!outgoing
         })
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn actual_maximum_connection_cap_and_explicit_zero_restoration() -> TestResult {
+    exercise_connection_limit(false).await
+}
+#[tokio::test]
+async fn actual_outgoing_connection_threshold_and_explicit_zero_restoration() -> TestResult {
+    exercise_connection_limit(true).await
 }

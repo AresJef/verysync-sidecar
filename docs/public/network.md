@@ -17,6 +17,7 @@ let update = client.update_network_configuration(
         .global_discovery(false)
         .local_discovery(false)
         .connection_limit_max(8)
+        .connection_limit_enough(0)
         .reconnection_interval_seconds(5)
 ).await?;
 assert!(update.requested_fields_match);
@@ -55,13 +56,23 @@ options remain unchanged by the maximum-only PATCH, and original settings are
 restored before normal tree cleanup. This is a functional connection-count
 observation, with separate final platform acceptance.
 
-`NetworkConfig::connection_limit_enough` retains the engine's stored outgoing
-threshold as an optional observation. Its complete runtime contract remains
-pending: bounded private trials could save a change from one to two while a
-second outgoing peer still failed to connect within twenty seconds, including
-a trial selecting one connection per device pair. There is no typed setter for
-that threshold yet. The raw request entry point remains available for explicit
-version-specific investigation; a saved value is not a verified dialing effect.
+`NetworkPatch::connection_limit_enough` selects the engine's outgoing
+connection threshold. Zero disables that threshold; the separately selected
+maximum still applies. It uses the same portable integer bound and exact
+selected-field receipt as the maximum. The library does not impose a relation
+between the two independent settings. Optional readbacks retain absence as
+`None` rather than inventing a zero.
+
+The outgoing native test uses a sole dialer and selects one connection per
+device pair. With threshold one it establishes the first peer, adds the second,
+and observes exactly one connected peer for twelve seconds. Explicit threshold
+zero then permits both actual outgoing peers to connect. A stored threshold
+two survives a normal same-identity restart. This threshold is not a promise
+that a chosen number of peers will connect: separate bounded private trials
+saved a change from one to two while the second outgoing peer still failed to
+connect within twenty seconds, including a single-connection-per-pair trial.
+Those failures remain recorded. Further hot-change and dialing-scheduler
+semantics are unverified; use actual connection snapshots for runtime state.
 
 `discovery_cache` reads records with candidate `addresses` and retained unknown
 metadata. It does not start a query, enable discovery or establish connectivity.
