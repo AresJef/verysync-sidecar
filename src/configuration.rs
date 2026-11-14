@@ -1,5 +1,7 @@
 //! Configuration templates and native application state.
+mod disk_space;
 mod snapshot;
+pub use disk_space::{DiskFreeRequirement, DiskSpaceUnit};
 use serde::{Deserialize, Serialize};
 pub use snapshot::{ConfigurationSnapshot, ConfigurationUpdate};
 use std::{collections::BTreeMap, fmt};
@@ -98,7 +100,7 @@ pub struct GeneralOptions {
     pub keep_temporaries_hours: u32,
     /// Configured progress reporting interval, in seconds.
     #[serde(rename = "progressUpdateIntervalS")]
-    pub progress_update_interval_seconds: u32,
+    pub progress_update_interval_seconds: i64,
     /// Native folder-concurrency setting, including the engine's zero policy.
     #[serde(rename = "maxFolderConcurrency")]
     pub max_folder_concurrency: u32,
@@ -114,6 +116,27 @@ pub struct GeneralOptions {
     /// Whether the engine requests sleep prevention during synchronization.
     #[serde(rename = "disableSystemSleepOnSync")]
     pub disable_system_sleep_on_sync: bool,
+    /// Native minimum free space for configuration/index storage, when reported.
+    #[serde(rename = "minHomeDiskFree", skip_serializing_if = "Option::is_none")]
+    pub min_home_disk_free: Option<DiskFreeRequirement>,
+    /// Minimum temporary-file block count for index publication, when reported.
+    #[serde(rename = "tempIndexMinBlocks", skip_serializing_if = "Option::is_none")]
+    pub temp_index_min_blocks: Option<u32>,
+    /// Native global preference for adopting announced remote names.
+    #[serde(
+        rename = "overwriteRemoteDeviceNamesOnConnect",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub overwrite_remote_device_names_on_connect: Option<bool>,
+    /// Configured full-index resend on a native program upgrade.
+    #[serde(
+        rename = "sendFullIndexOnUpgrade",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub send_full_index_on_upgrade: Option<bool>,
+    /// Configured IP traffic-class byte; not proof of OS or router handling.
+    #[serde(rename = "trafficClass", skip_serializing_if = "Option::is_none")]
+    pub traffic_class: Option<u8>,
     /// Remaining upstream options; values may be private and are omitted by Debug.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -141,7 +164,7 @@ pub struct GeneralOptionsPatch {
         rename = "progressUpdateIntervalS",
         skip_serializing_if = "Option::is_none"
     )]
-    progress_update_interval_seconds: Option<u32>,
+    progress_update_interval_seconds: Option<i64>,
     #[serde(
         rename = "maxFolderConcurrency",
         skip_serializing_if = "Option::is_none"
@@ -161,6 +184,22 @@ pub struct GeneralOptionsPatch {
         skip_serializing_if = "Option::is_none"
     )]
     disable_system_sleep_on_sync: Option<bool>,
+    #[serde(rename = "minHomeDiskFree", skip_serializing_if = "Option::is_none")]
+    min_home_disk_free: Option<DiskFreeRequirement>,
+    #[serde(rename = "tempIndexMinBlocks", skip_serializing_if = "Option::is_none")]
+    temp_index_min_blocks: Option<u32>,
+    #[serde(
+        rename = "overwriteRemoteDeviceNamesOnConnect",
+        skip_serializing_if = "Option::is_none"
+    )]
+    overwrite_remote_device_names_on_connect: Option<bool>,
+    #[serde(
+        rename = "sendFullIndexOnUpgrade",
+        skip_serializing_if = "Option::is_none"
+    )]
+    send_full_index_on_upgrade: Option<bool>,
+    #[serde(rename = "trafficClass", skip_serializing_if = "Option::is_none")]
+    traffic_class: Option<u8>,
 }
 impl GeneralOptionsPatch {
     /// Set the engine's temporary-file retention interval in hours.
@@ -168,8 +207,8 @@ impl GeneralOptionsPatch {
         self.keep_temporaries_hours = Some(value);
         self
     }
-    /// Set the configured progress update interval in seconds.
-    pub fn progress_update_interval_seconds(mut self, value: u32) -> Self {
+    /// Set whole seconds, or explicitly select -1 to disable progress reporting.
+    pub fn progress_update_interval_seconds(mut self, value: i64) -> Self {
         self.progress_update_interval_seconds = Some(value);
         self
     }
@@ -197,6 +236,45 @@ impl GeneralOptionsPatch {
     pub fn disable_system_sleep_on_sync(mut self, value: bool) -> Self {
         self.disable_system_sleep_on_sync = Some(value);
         self
+    }
+    /// Select the target configuration/index volume's native free-space threshold.
+    pub fn min_home_disk_free(mut self, value: DiskFreeRequirement) -> Self {
+        self.min_home_disk_free = Some(value);
+        self
+    }
+    /// Set the native temporary-file index block threshold.
+    pub fn temp_index_min_blocks(mut self, value: u32) -> Self {
+        self.temp_index_min_blocks = Some(value);
+        self
+    }
+    /// Select the global native remote-name adoption preference.
+    pub fn overwrite_remote_device_names_on_connect(mut self, value: bool) -> Self {
+        self.overwrite_remote_device_names_on_connect = Some(value);
+        self
+    }
+    /// Select full-index resend after a separately chosen native upgrade.
+    pub fn send_full_index_on_upgrade(mut self, value: bool) -> Self {
+        self.send_full_index_on_upgrade = Some(value);
+        self
+    }
+    /// Set the native IP traffic-class byte; downstream handling remains separate.
+    pub fn traffic_class(mut self, value: u8) -> Self {
+        self.traffic_class = Some(value);
+        self
+    }
+    pub(crate) fn validate(&self) -> crate::Result<()> {
+        if self
+            .progress_update_interval_seconds
+            .is_some_and(|s| s < -1)
+        {
+            return Err(crate::Error::InvalidConfiguration {
+                reason: "progress reporting interval must be -1 or nonnegative seconds",
+            });
+        }
+        if let Some(requirement) = &self.min_home_disk_free {
+            requirement.validate()?;
+        }
+        Ok(())
     }
 }
 

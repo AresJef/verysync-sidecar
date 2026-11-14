@@ -1,9 +1,123 @@
 //! Actual default inheritance, independent runtime state and persisted configuration.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/process_priority.rs"]
+mod process_priority;
 use managed_fixture::{options, TestResult};
 use std::time::Duration;
 use verysync_sidecar::*;
+
+#[tokio::test]
+async fn native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart(
+) -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-general-options-")
+        .tempdir()?
+        .keep();
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let before = core.client().configuration().await?;
+    let priority_before = process_priority::observe(core.process_id()).await?;
+    for unit in [
+        DiskSpaceUnit::Percent,
+        DiskSpaceUnit::Kilobytes,
+        DiskSpaceUnit::Megabytes,
+        DiskSpaceUnit::Gigabytes,
+        DiskSpaceUnit::Terabytes,
+    ] {
+        let threshold = DiskFreeRequirement::new(0.0, unit)?;
+        let update = core
+            .client()
+            .update_general_options(
+                &GeneralOptionsPatch::default().min_home_disk_free(threshold.clone()),
+            )
+            .await?;
+        assert!(update.requested_fields_match);
+        assert_eq!(
+            update.configuration.min_home_disk_free.as_ref(),
+            Some(&threshold)
+        );
+    }
+    let threshold = DiskFreeRequirement::new(0.25, DiskSpaceUnit::Megabytes)?;
+    let update = core
+        .client()
+        .update_general_options(
+            &GeneralOptionsPatch::default()
+                .min_home_disk_free(threshold.clone())
+                .progress_update_interval_seconds(-1)
+                .temp_index_min_blocks(7)
+                .overwrite_remote_device_names_on_connect(false)
+                .send_full_index_on_upgrade(true)
+                .traffic_class(16)
+                .set_low_priority(false)
+                .max_folder_concurrency(2)
+                .max_dial_concurrent(3)
+                .max_concurrent_incoming_request_kib(4096)
+                .disable_system_sleep_on_sync(false),
+        )
+        .await?;
+    assert!(update.requested_fields_match);
+    assert_eq!(update.configuration.progress_update_interval_seconds, -1);
+    assert_eq!(update.configuration.traffic_class, Some(16));
+    assert_eq!(
+        update.configuration.min_home_disk_free.as_ref(),
+        Some(&threshold)
+    );
+    let changed = core.client().configuration().await?;
+    for section in [
+        "folders",
+        "devices",
+        "gui",
+        "ldap",
+        "relayServer",
+        "defaults",
+    ] {
+        assert!(
+            before.native_document()[section] == changed.native_document()[section],
+            "unrelated native section changed"
+        );
+    }
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let persisted = core.client().general_options().await?;
+    assert_eq!(persisted.progress_update_interval_seconds, -1);
+    assert!(!persisted.set_low_priority);
+    assert_eq!(persisted.temp_index_min_blocks, Some(7));
+    assert_eq!(
+        persisted.overwrite_remote_device_names_on_connect,
+        Some(false)
+    );
+    assert_eq!(persisted.send_full_index_on_upgrade, Some(true));
+    assert_eq!(persisted.min_home_disk_free.as_ref(), Some(&threshold));
+    assert_eq!(
+        (
+            persisted.max_folder_concurrency,
+            persisted.max_dial_concurrent,
+            persisted.max_concurrent_incoming_request_kib
+        ),
+        (2, 3, 4096)
+    );
+    let priority_after = process_priority::observe(core.process_id()).await?;
+    println!("native owned priorities: before={priority_before:?} after={priority_after:?}");
+    #[cfg(unix)]
+    {
+        assert!(priority_before
+            .iter()
+            .any(|p| p.parse::<i32>().is_ok_and(|v| v > 0)));
+        assert!(priority_after.iter().all(|p| p == "0"));
+    }
+    #[cfg(windows)]
+    {
+        assert!(priority_before
+            .iter()
+            .any(|p| p == "BelowNormal" || p == "Idle"));
+        assert!(priority_after.iter().all(|p| p == "Normal"));
+    }
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    println!("native_general_preferences_effects=18");
+    Ok(())
+}
 
 #[tokio::test]
 async fn full_configuration_save_preserves_sections_and_rejects_stale_snapshots() -> TestResult {

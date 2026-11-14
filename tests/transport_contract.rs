@@ -14,6 +14,100 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn general_options_preserve_native_integral_and_fractional_disk_values_and_disabled_progress(
+) -> TestResult {
+    use verysync_sidecar::{DiskFreeRequirement, DiskSpaceUnit, GeneralOptionsPatch};
+    for value in [1.0, 0.25] {
+        let expected = DiskFreeRequirement::new(value, DiskSpaceUnit::Megabytes)?;
+        let mut options = complete_configuration_fixture()["options"].clone();
+        options["minHomeDiskFree"] = if value == 1.0 {
+            serde_json::json!({"value":1,"unit":"MB"})
+        } else {
+            serde_json::json!({"value":0.25,"unit":"MB"})
+        };
+        options["progressUpdateIntervalS"] = (-1).into();
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({})),
+            Reply::json(options),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let updated = client
+            .update_general_options(
+                &GeneralOptionsPatch::default()
+                    .min_home_disk_free(expected.clone())
+                    .progress_update_interval_seconds(-1),
+            )
+            .await?;
+        assert!(updated.requested_fields_match);
+        assert_eq!(updated.configuration.min_home_disk_free, Some(expected));
+        assert_eq!(updated.configuration.progress_update_interval_seconds, -1);
+        assert_eq!(updated.configuration.extra["futureSecret"], KEY);
+        let serialized = serde_json::to_value(&updated.configuration)?;
+        assert!(serialized.get("trafficClass").is_none());
+        assert_eq!(serialized["futureSecret"], KEY);
+        assert!(!format!("{updated:?}").contains(KEY));
+        let requests = server.finish().await?;
+        let writes: Vec<_> = requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .collect();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].starts_with("PATCH /prefix/rest/config/options "));
+        let body: serde_json::Value = serde_json::from_str(
+            writes[0]
+                .split_once("\r\n\r\n")
+                .ok_or("general patch absent")?
+                .1,
+        )?;
+        assert_eq!(body.as_object().ok_or("general patch not object")?.len(), 2);
+        assert_eq!(body["progressUpdateIntervalS"], -1);
+        assert_eq!(body["minHomeDiskFree"]["value"].is_u64(), value == 1.0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_general_options_are_refused_for_partial_and_full_snapshot_edits_before_write(
+) -> TestResult {
+    use verysync_sidecar::{DiskFreeRequirement, DiskSpaceUnit, GeneralOptionsPatch};
+    for value in [f64::NAN, f64::INFINITY, -1.0, 101.0] {
+        assert!(DiskFreeRequirement::new(value, DiskSpaceUnit::Percent).is_err());
+    }
+    let unknown: DiskFreeRequirement =
+        serde_json::from_value(serde_json::json!({"value":1,"unit":KEY}))?;
+    assert!(matches!(unknown.unit(), DiskSpaceUnit::Unknown(_)));
+    assert!(!format!("{unknown:?}").contains(KEY));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(complete_configuration_fixture()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut snapshot = client.configuration().await?;
+    for patch in [
+        GeneralOptionsPatch::default().progress_update_interval_seconds(-2),
+        GeneralOptionsPatch::default().min_home_disk_free(unknown),
+    ] {
+        assert!(matches!(
+            snapshot.set_general_options(&patch),
+            Err(Error::InvalidConfiguration { .. })
+        ));
+        assert!(matches!(
+            client.update_general_options(&patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 4);
+    Ok(())
+}
+
+#[tokio::test]
 async fn ldap_patch_preserves_other_settings_and_never_selects_gui_mode() -> TestResult {
     use verysync_sidecar::LdapPatch;
     let identity = || Reply::json(serde_json::json!({"myID":ID}));

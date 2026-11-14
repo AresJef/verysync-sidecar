@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Preserve signed progress-report intervals, including the native disabled value
+  `-1`. Add typed minimum configuration-volume free space and scoped temporary
+  index, remote-name, full-index resend and IP traffic-class preferences. Separate
+  persisted selections and observed owned-process priority from other policies.
+
 - Confirm upstream owned-state lock release after process containment exit, within
   the existing cleanup window. Report `ManagedExit.state_released` separately,
   and require it for successful exit waits, offline backup and upgrade admission.
