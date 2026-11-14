@@ -101,6 +101,8 @@ pub enum Capability {
     GuiAuthentication,
     /// Native GUI preferences and same-endpoint reload reconciliation.
     GuiPreferences,
+    /// Explicit native GUI listener/TLS and Unix socket permission controls.
+    GuiListener,
     /// Native directory configuration and GUI LDAP-mode selection.
     LdapAuthentication,
     /// Account, configuration and commercial authorization.
@@ -386,6 +388,11 @@ static CATALOG: &[LibraryCapability] = &[
     },
     LibraryCapability {
         capability: Capability::TransferScheduling,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::GuiListener,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },

@@ -48,6 +48,7 @@
 #![doc = include_str!("../docs/public/licenses.md")]
 #![doc = include_str!("../docs/public/remote-management.md")]
 #![doc = include_str!("../docs/public/management-transport.md")]
+#![doc = include_str!("../docs/public/gui-listener.md")]
 
 mod auth;
 mod capabilities;
@@ -64,6 +65,7 @@ mod file_mutations;
 mod file_transfers;
 mod files;
 mod folders;
+mod gui_listener;
 mod gui_preferences;
 mod gui_session;
 mod ignores;
@@ -137,6 +139,9 @@ pub use files::{
     ResourceChecksum, ResourceInfo, ResourcePath, ResourcePreview, ResourceVolume, ResourceVolumeId,
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
+pub use gui_listener::{
+    GuiListenAddress, GuiListenerConfig, GuiListenerPatch, GuiListenerUpdate, GuiSocketPermissions,
+};
 pub use gui_preferences::{GuiPreferences, GuiPreferencesPatch, GuiPreferencesUpdate};
 pub use gui_session::{
     GuiCredentialUpdate, GuiCredentials, GuiLoginOptions, GuiLogoutReceipt, GuiSession,

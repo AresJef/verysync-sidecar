@@ -1,5 +1,9 @@
 # verysync-sidecar
 
+Unreleased [native GUI listener controls](docs/public/gui-listener.md) separate
+explicit address/TLS/server-enable/socket-mode writes from caller reconnection,
+certificate trust and process ownership. Full platform acceptance is pending.
+
 Unreleased [management transport policy](docs/public/management-transport.md)
 accepts per-connection trusted certificates and explicit authenticated HTTP(S)
 proxies. Certificate/hostname verification and reconnect policy remain explicit;
