@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add per-connection PEM/DER trust roots and explicit authenticated HTTP(S)
+  management proxies for API-key and GUI-session connections. Retain policy
+  through credential reconnects, verify hostnames normally, and omit reflected
+  proxy credentials from ordinary version diagnostics. No global trust changes.
+
 - Add explicit per-peer native remote-management permission and port settings,
   canonical tunnel probes with private negative results, and gateway connection
   options that check the target identity and preserve explicit base paths. Keep

@@ -110,6 +110,7 @@ pub struct ConnectOptions {
     version_policy: VersionPolicy,
     timeout: Duration,
     response_limit: usize,
+    transport: crate::ManagementTransport,
 }
 
 impl ConnectOptions {
@@ -123,6 +124,7 @@ impl ConnectOptions {
             version_policy: VersionPolicy::default(),
             timeout: Duration::from_secs(10),
             response_limit: 1024 * 1024,
+            transport: crate::ManagementTransport::default(),
         }
     }
 
@@ -132,6 +134,14 @@ impl ConnectOptions {
     /// caller to inspect, but it has not been compared to an out-of-band ID.
     pub fn expected_device_id(mut self, identity: DeviceId) -> Self {
         self.expected_device_id = Some(identity);
+        self
+    }
+
+    /// Select per-connection trust and an explicit HTTP(S) proxy. Default policy
+    /// uses normal TLS verification and no ambient proxy. Credential reconnection
+    /// and GUI reload reconciliation retain the selection.
+    pub fn transport(mut self, transport: crate::ManagementTransport) -> Self {
+        self.transport = transport;
         self
     }
 
@@ -175,6 +185,7 @@ struct Connection {
     endpoint: ManagementEndpoint,
     timeout: Duration,
     version_policy: VersionPolicy,
+    transport: crate::ManagementTransport,
 }
 
 /// An authenticated connection that does not own the engine process.
@@ -442,7 +453,7 @@ impl Client {
         tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
             reason: "a Tokio runtime with I/O and timers enabled is required",
         })?;
-        let (http, base) = management_http(&options.endpoint, options.timeout)?;
+        let (http, base) = management_http(&options.endpoint, options.timeout, &options.transport)?;
         let connection = Connection {
             http,
             base,
@@ -453,6 +464,7 @@ impl Client {
             endpoint: options.endpoint,
             timeout: options.timeout,
             version_policy: options.version_policy,
+            transport: options.transport,
         };
         let version: EngineVersion = connection
             .get_json("read version", "rest/system/version")
@@ -463,7 +475,9 @@ impl Client {
             VersionCompatibility::Unverified
         } else {
             return Err(Error::IncompatibleVersion {
-                actual: connection.key.redact(&version.version),
+                actual: connection
+                    .transport
+                    .version_diagnostic(&connection.key.redact(&version.version)),
             });
         };
         #[derive(Deserialize)]
@@ -821,7 +835,9 @@ impl fmt::Debug for Client {
             )
             .field(
                 "version",
-                &self.connection.key.redact(&self.instance.version.version),
+                &self.connection.transport.version_diagnostic(
+                    &self.connection.key.redact(&self.instance.version.version),
+                ),
             )
             .finish_non_exhaustive()
     }
@@ -830,6 +846,7 @@ impl fmt::Debug for Client {
 pub(crate) fn management_http(
     endpoint: &ManagementEndpoint,
     timeout: Duration,
+    transport: &crate::ManagementTransport,
 ) -> Result<(reqwest::Client, Url)> {
     let builder = reqwest::Client::builder()
         .no_proxy()
@@ -838,6 +855,7 @@ pub(crate) fn management_http(
         .connect_timeout(timeout.min(Duration::from_secs(5)))
         .timeout(timeout)
         .user_agent(concat!("verysync-sidecar/", env!("CARGO_PKG_VERSION")));
+    let builder = transport.apply(builder, endpoint)?;
     let (builder, base) = if let Some(socket) = endpoint.socket_path() {
         #[cfg(unix)]
         {

@@ -48,6 +48,7 @@ pub struct GuiLoginOptions {
     timeout: Duration,
     limit: usize,
     stay_logged_in: bool,
+    transport: crate::ManagementTransport,
 }
 impl GuiLoginOptions {
     /// Use the validated baseline, ten seconds per complete response and a
@@ -61,12 +62,19 @@ impl GuiLoginOptions {
             timeout: Duration::from_secs(10),
             limit: 1024 * 1024,
             stay_logged_in: false,
+            transport: crate::ManagementTransport::default(),
         }
     }
     /// Explicitly request the native persistent-login cookie policy. The SDK
     /// still keeps cookies only in memory and does not install a cookie store.
     pub fn stay_logged_in(mut self, value: bool) -> Self {
         self.stay_logged_in = value;
+        self
+    }
+    /// Select per-session TLS trust and an explicit proxy. The default does not
+    /// read ambient proxy settings; this does not change the system trust store.
+    pub fn transport(mut self, value: crate::ManagementTransport) -> Self {
+        self.transport = value;
         self
     }
     /// Require the authenticated full device identity; the CSRF suffix is also
@@ -178,7 +186,8 @@ impl GuiSession {
         tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
             reason: "GUI login requires a Tokio runtime with I/O and timers",
         })?;
-        let (http, base) = crate::client::management_http(&options.endpoint, options.timeout)?;
+        let (http, base) =
+            crate::client::management_http(&options.endpoint, options.timeout, &options.transport)?;
         let root = crate::client::send_checked(
             "read GUI CSRF cookie",
             http.get(base.clone()),
@@ -236,10 +245,12 @@ impl GuiSession {
             crate::VersionCompatibility::Unverified
         } else {
             return Err(Error::IncompatibleVersion {
-                actual: wire
-                    .redact(&version.version)
-                    .replace(&options.credentials.password, "[REDACTED]")
-                    .replace(&options.credentials.username, "[REDACTED]"),
+                actual: options.transport.version_diagnostic(
+                    &wire
+                        .redact(&version.version)
+                        .replace(&options.credentials.password, "[REDACTED]")
+                        .replace(&options.credentials.username, "[REDACTED]"),
+                ),
             });
         };
         let status: crate::SystemStatus = parse(
