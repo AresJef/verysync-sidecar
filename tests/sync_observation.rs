@@ -1552,6 +1552,35 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
     }
     a.client().pause_device(&b_id).await?;
     b.client().pause_device(&a_id).await?;
+    // A pause acknowledgement does not mean its asynchronous connection-close
+    // callbacks have completed. Observe the requested disconnection before
+    // ending this fixture. The fixed engine was observed waiting for a close
+    // callback's database write while its model shutdown waited for that callback.
+    let drain_began = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let sender = a.client().connections().await?;
+            let receiver = b.client().connections().await?;
+            if !sender
+                .connections
+                .get(&b_id)
+                .is_some_and(|peer| peer.connected)
+                && !receiver
+                    .connections
+                    .get(&a_id)
+                    .is_some_and(|peer| peer.connected)
+            {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| "explicit selective-fixture pause did not disconnect within twenty seconds")??;
+    eprintln!(
+        "selective actual paused-peer disconnection observed: elapsed_millis={}",
+        drain_began.elapsed().as_millis()
+    );
     // End this fixture's sole active dialer first. Each owned core retains
     // its original ten-second normal-exit requirement; no force fallback.
     for (name, core) in [("sender", &mut a), ("receiver", &mut b)] {
