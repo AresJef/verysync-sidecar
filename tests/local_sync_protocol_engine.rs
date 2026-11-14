@@ -87,6 +87,7 @@ async fn protocol_effects(protocol: StorageProtocol) -> TestResult {
         ),
         "incorrect credentials did not produce an actual native rejection: {cause:?}"
     );
+    let authentication_refusal_elapsed_ms = authentication_started.elapsed().as_millis();
     let probe = core
         .client()
         .probe_storage_endpoint(&server.endpoint)
