@@ -185,7 +185,7 @@ Selected/excluded actions, reverse mirror and two-way newer/larger/manual
 conflicts have separate local native cases. Their final same-source platform
 gates remain pending. In-flight controls and Local Sync events have separate local native data,
 cancellation, reset and actual restart observations; final platform acceptance
-remains pending. Watch/schedules, marker/baseline recovery and each of
+remains pending. Licensed watch/schedule execution, marker/baseline recovery and each of
 FTP/SFTP/SMB/WebDAV require separate native effects and verification. Their GUI
 presence, enum values, stored configuration or a basic endpoint success are not
 support claims. Licensed conditions, old architectures and final cross-network
@@ -205,3 +205,36 @@ peer interpreter platform separately. On Windows ARM64 only the protocol peer
 uses a dedicated x64 Python because a fixed cryptographic dependency has no
 ARM64 wheel. The Rust executable and VerySync core retain their separate native
 ARM64 requirements. An emulated peer is never reported as native SDK execution.
+
+## Native automatic triggers
+
+Automatic startup, watching, and schedules default off. Explicitly enabling them
+can cause unattended file changes, including immediately when a job is enabled.
+`CreateLocalSyncJob::enabled(false)` allows registration before execution is enabled.
+`sync_on_startup(true)` requests a full native analysis and synchronization when
+an enabled job starts or resumes at core startup. The SDK installs no timer,
+watcher, service, or background executor.
+
+`watch_changes(true, check_minutes)` selects native local change watching and
+periodic full checks. The bounded minute interval is 0 through 525600; zero
+disables only periodic checks. `LocalSyncSchedule::interval(seconds)` requires a
+positive interval. `LocalSyncSchedule::calendar(rules, timezone)` takes 1 through
+64 rules. `LocalSyncCalendarRule::new` requires nonempty unique ISO weekday
+numbers (Monday 1 through Sunday 7) and unique canonical `HH:MM` times. An empty
+timezone selects the target's local timezone; named timezone validation happens
+on the core. No controller timezone conversion is performed. Turning a schedule
+off does not also turn off watching/startup or cancel existing work.
+
+These options are also available through `LocalSyncJobPatch`. A scoped update
+retains endpoint credentials and unselected native settings and reports
+`requested_fields_match` against the independent readback. Native normalization
+can make that flag false. If creation normalizes a requested option, creation
+returns `MutationOutcomeUnknown`; reconcile the actual job list before taking
+further action. The registration may exist, and automatic retries can duplicate it.
+
+On fresh unlicensed v2.33.2 instances, watch, interval and calendar requests are
+normalized to false/off. That observation does not establish licensed automatic
+execution. Licensed positive watch/schedule acceptance remains pending. Native
+startup synchronization has separately copied real synthetic data on enablement
+and after a core restart through the public Rust API. Optional observed schedule
+fields retain missing values as unknown; unknown native modes are preserved.

@@ -442,8 +442,119 @@ impl LocalSyncConflictResolution {
     }
 }
 
-/// Explicit job creation settings. No automatic startup, schedule or watch is
-/// enabled. Creating a registration does not preview or execute it.
+/// One target-side calendar rule. Weekdays use ISO numbers, Monday=1 through
+/// Sunday=7. Times are exact 24-hour `HH:MM` values, interpreted by the core.
+#[derive(Clone, Serialize)]
+pub struct LocalSyncCalendarRule {
+    weekdays: Vec<u8>,
+    times: Vec<String>,
+}
+impl LocalSyncCalendarRule {
+    /// Select nonempty, unique weekdays and times without sorting, merging or
+    /// interpreting them in the controller timezone.
+    pub fn new(weekdays: Vec<u8>, times: Vec<String>) -> Result<Self> {
+        let unique_days: std::collections::BTreeSet<_> = weekdays.iter().collect();
+        let unique_times: std::collections::BTreeSet<_> = times.iter().collect();
+        if weekdays.is_empty()
+            || weekdays.len() > 7
+            || unique_days.len() != weekdays.len()
+            || weekdays.iter().any(|d| !(1..=7).contains(d))
+            || times.is_empty()
+            || times.len() > 1440
+            || unique_times.len() != times.len()
+            || times.iter().any(|t| !calendar_time(t))
+        {
+            return Err(invalid(
+                "calendar rules require unique ISO weekdays and canonical HH:MM times",
+            ));
+        }
+        Ok(Self { weekdays, times })
+    }
+}
+fn calendar_time(time: &str) -> bool {
+    let b = time.as_bytes();
+    b.len() == 5
+        && b[2] == b':'
+        && [b[0], b[1], b[3], b[4]].iter().all(u8::is_ascii_digit)
+        && (b[0] - b'0') * 10 + (b[1] - b'0') < 24
+        && (b[3] - b'0') * 10 + (b[4] - b'0') < 60
+}
+/// Explicit native automatic schedule. Setting it may enable unattended writes;
+/// the core's actual entitlement and normalization still apply.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSyncSchedule {
+    schedule_mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedule_interval_sec: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedule_timezone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedule_calendar: Option<Vec<LocalSyncCalendarRule>>,
+}
+impl LocalSyncSchedule {
+    /// Disable the separate native schedule. This does not disable watch or
+    /// startup synchronization and does not cancel an operation already running.
+    pub fn off() -> Self {
+        Self {
+            schedule_mode: "off",
+            schedule_interval_sec: None,
+            schedule_timezone: None,
+            schedule_calendar: None,
+        }
+    }
+    /// Request a positive interval in seconds. Successful configuration readback
+    /// is separate from a licensed, actually observed automatic execution.
+    pub fn interval(seconds: u32) -> Result<Self> {
+        if seconds == 0 {
+            return Err(invalid("native schedule interval must be positive"));
+        }
+        Ok(Self {
+            schedule_mode: "interval",
+            schedule_interval_sec: Some(seconds),
+            schedule_timezone: None,
+            schedule_calendar: None,
+        })
+    }
+    /// Request 1..=64 native rules. Empty timezone explicitly selects the target's
+    /// local timezone; a bounded named timezone is validated by the target.
+    /// The SDK performs no controller timezone lookup or conversion.
+    pub fn calendar(
+        rules: Vec<LocalSyncCalendarRule>,
+        timezone: impl Into<String>,
+    ) -> Result<Self> {
+        let timezone = timezone.into();
+        if rules.is_empty()
+            || rules.len() > 64
+            || timezone.len() > 128
+            || !timezone.is_ascii()
+            || timezone.chars().any(char::is_control)
+        {
+            return Err(invalid(
+                "native calendar rules or timezone exceed their bounds",
+            ));
+        }
+        Ok(Self {
+            schedule_mode: "calendar",
+            schedule_interval_sec: None,
+            schedule_timezone: Some(timezone),
+            schedule_calendar: Some(rules),
+        })
+    }
+}
+/// An observed native rule, retaining future weekday/time values and options.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LocalSyncCalendarRuleInfo {
+    /// Exact native weekday numbers; future values are not normalized away.
+    pub weekdays: Vec<u8>,
+    /// Exact target-side native times.
+    pub times: Vec<String>,
+    /// Additional private native settings.
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+/// Explicit job creation settings. Automatic startup, schedule and watch are
+/// disabled by default. Explicitly enabling them can start native file changes.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateLocalSyncJob {
@@ -458,7 +569,10 @@ pub struct CreateLocalSyncJob {
     delete_extraneous: bool,
     ignore_perms: bool,
     watch_changes: bool,
-    schedule_mode: &'static str,
+    #[serde(flatten)]
+    schedule: LocalSyncSchedule,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    watch_check_interval_min: Option<u32>,
     parallel_file_ops: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     conflict_policy: Option<LocalSyncConflictPolicy>,
@@ -500,10 +614,37 @@ impl CreateLocalSyncJob {
             delete_extraneous: false,
             ignore_perms: false,
             watch_changes: false,
-            schedule_mode: "off",
+            schedule: LocalSyncSchedule::off(),
+            watch_check_interval_min: None,
             parallel_file_ops: 1,
             conflict_policy: None,
         })
+    }
+    /// Select native execution enablement. Enabling an automatic job can start
+    /// file changes immediately, independently of an explicit preview/run call.
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+    /// Request a full native synchronization when enabled or at core startup.
+    /// This is an explicit unattended-write choice, not a read-only setting.
+    pub fn sync_on_startup(mut self, enabled: bool) -> Self {
+        self.sync_on_startup = enabled;
+        self
+    }
+    /// Request native local change watching and its periodic full-check interval
+    /// in minutes (0..=525600); zero disables only those full checks. Licensed
+    /// positive behavior must be verified separately from free normalization.
+    pub fn watch_changes(mut self, enabled: bool, check_interval_minutes: u32) -> Result<Self> {
+        watch_interval(check_interval_minutes)?;
+        self.watch_changes = enabled;
+        self.watch_check_interval_min = Some(check_interval_minutes);
+        Ok(self)
+    }
+    /// Explicitly request a native automatic schedule. No SDK timer is created.
+    pub fn schedule(mut self, schedule: LocalSyncSchedule) -> Self {
+        self.schedule = schedule;
+        self
     }
     /// Select the native simultaneous-change policy for a two-way job.
     /// No conflict is resolved or file changed by constructing this option.
@@ -578,6 +719,24 @@ pub struct LocalSyncJob {
     pub enabled: bool,
     /// Whether target startup can trigger execution.
     pub sync_on_startup: bool,
+    /// Observed local-change watching; missing remains unknown rather than false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_changes: Option<bool>,
+    /// Observed native periodic full-check interval in minutes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_check_interval_min: Option<u32>,
+    /// Observed native mode, retaining unknown future values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_mode: Option<String>,
+    /// Observed interval seconds, including a native disabled zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_interval_sec: Option<u64>,
+    /// Observed timezone; missing and explicit target-local empty are distinct.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_timezone: Option<String>,
+    /// Observed native calendar rules, if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_calendar: Option<Vec<LocalSyncCalendarRuleInfo>>,
     /// Native mirror deletion choice, separate from registration deletion.
     pub delete_extraneous: bool,
     /// Unknown settings, native timestamps and protocol-specific data.
@@ -601,8 +760,61 @@ pub struct LocalSyncJobPatch {
     pub(crate) label: Option<String>,
     pub(crate) group: Option<String>,
     pub(crate) enabled: Option<bool>,
+    pub(crate) automation: Extra,
 }
 impl LocalSyncJobPatch {
+    /// Explicitly request startup synchronization. Enabling it can cause writes
+    /// immediately or at a future core start; inspect actual readback separately.
+    pub fn sync_on_startup(mut self, enabled: bool) -> Self {
+        self.automation
+            .insert("syncOnStartup".to_owned(), enabled.into());
+        self
+    }
+    /// Request native watching and full-check minutes. No SDK watcher is started.
+    pub fn watch_changes(mut self, enabled: bool, check_interval_minutes: u32) -> Result<Self> {
+        watch_interval(check_interval_minutes)?;
+        self.automation
+            .insert("watchChanges".to_owned(), enabled.into());
+        self.automation.insert(
+            "watchCheckIntervalMin".to_owned(),
+            check_interval_minutes.into(),
+        );
+        Ok(self)
+    }
+    /// Request a native schedule, preserving unrelated job fields.
+    pub fn schedule(mut self, schedule: LocalSyncSchedule) -> Self {
+        for key in [
+            "scheduleMode",
+            "scheduleIntervalSec",
+            "scheduleTimezone",
+            "scheduleCalendar",
+        ] {
+            self.automation.remove(key);
+        }
+        self.automation
+            .insert("scheduleMode".to_owned(), schedule.schedule_mode.into());
+        if let Some(v) = schedule.schedule_interval_sec {
+            self.automation
+                .insert("scheduleIntervalSec".to_owned(), v.into());
+        }
+        if let Some(v) = schedule.schedule_timezone {
+            self.automation
+                .insert("scheduleTimezone".to_owned(), v.into());
+        }
+        if let Some(v) = schedule.schedule_calendar {
+            self.automation.insert(
+                "scheduleCalendar".to_owned(),
+                serde_json::Value::Array(
+                    v.into_iter()
+                        .map(
+                            |rule| serde_json::json!({"weekdays":rule.weekdays,"times":rule.times}),
+                        )
+                        .collect(),
+                ),
+            );
+        }
+        self
+    }
     /// Select an exact bounded label.
     pub fn label(mut self, value: impl Into<String>) -> Result<Self> {
         self.label = Some(job_label(value.into())?);
@@ -613,7 +825,8 @@ impl LocalSyncJobPatch {
         self.group = Some(bounded_text(value.into())?);
         Ok(self)
     }
-    /// Select whether native execution is enabled, without starting a run.
+    /// Select native execution enablement. An automatic job can start writes
+    /// when enabled; this does not cancel work already running.
     pub fn enabled(mut self, value: bool) -> Self {
         self.enabled = Some(value);
         self
@@ -951,6 +1164,14 @@ pub(crate) fn logical_subpath(value: &str) -> Result<()> {
     Ok(())
 }
 
+fn watch_interval(minutes: u32) -> Result<()> {
+    if minutes > 525600 {
+        Err(invalid("native watch full-check minutes exceed 525600"))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod contract_tests {
     use super::*;
@@ -1018,6 +1239,29 @@ mod contract_tests {
             serde_json::json!({"path":"missing-size","directory":true,"modified":"native-time"})
         )
         .is_err());
+    }
+    #[test]
+    fn native_calendar_guards_reject_ambiguous_or_unbounded_automatic_triggers() {
+        for days in [vec![], vec![0], vec![8], vec![1, 1]] {
+            assert!(LocalSyncCalendarRule::new(days, vec!["12:00".to_owned()]).is_err());
+        }
+        for time in ["24:00", "12:60", "1:00", "12:0", "１２:00", "12:00\n"] {
+            assert!(LocalSyncCalendarRule::new(vec![1], vec![time.to_owned()]).is_err());
+        }
+        assert!(LocalSyncCalendarRule::new(vec![7], vec![]).is_err());
+        assert!(LocalSyncCalendarRule::new(vec![7], vec!["00:00".to_owned(); 2]).is_err());
+        assert!(LocalSyncSchedule::interval(0).is_err());
+        assert!(LocalSyncSchedule::calendar(Vec::new(), "UTC").is_err());
+        let rule =
+            LocalSyncCalendarRule::new(vec![1, 7], vec!["00:00".to_owned(), "23:59".to_owned()])
+                .unwrap();
+        assert!(LocalSyncSchedule::calendar(vec![rule.clone(); 65], "UTC").is_err());
+        assert!(LocalSyncSchedule::calendar(vec![rule.clone()], "UTC\n").is_err());
+        assert!(LocalSyncSchedule::calendar(vec![rule], "").is_ok());
+        assert!(LocalSyncJobPatch::default()
+            .watch_changes(true, 525601)
+            .is_err());
+        assert!(LocalSyncJobPatch::default().watch_changes(true, 0).is_ok());
     }
     #[test]
     fn selection_ranges_keep_zero_and_refuse_overflow_overlap_and_outside_ids() {

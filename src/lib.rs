@@ -121,12 +121,13 @@ pub use invitations::{
 };
 pub use local_sync::{
     CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncActionResult,
-    LocalSyncConfiguration, LocalSyncConflictPolicy, LocalSyncConflictResolution,
-    LocalSyncConflictSide, LocalSyncControlReceipt, LocalSyncHealth, LocalSyncHistory,
-    LocalSyncHistoryRecord, LocalSyncJob, LocalSyncJobId, LocalSyncJobPatch, LocalSyncJobRemoval,
-    LocalSyncJobUpdate, LocalSyncMode, LocalSyncOperation, LocalSyncOperationControl,
-    LocalSyncOperationId, LocalSyncPreview, LocalSyncPreviewId, LocalSyncProgress, LocalSyncRun,
-    LocalSyncRunId, LocalSyncSelection, LocalSyncSelectionSummary, LocalSyncStatus,
+    LocalSyncCalendarRule, LocalSyncCalendarRuleInfo, LocalSyncConfiguration,
+    LocalSyncConflictPolicy, LocalSyncConflictResolution, LocalSyncConflictSide,
+    LocalSyncControlReceipt, LocalSyncHealth, LocalSyncHistory, LocalSyncHistoryRecord,
+    LocalSyncJob, LocalSyncJobId, LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate,
+    LocalSyncMode, LocalSyncOperation, LocalSyncOperationControl, LocalSyncOperationId,
+    LocalSyncPreview, LocalSyncPreviewId, LocalSyncProgress, LocalSyncRun, LocalSyncRunId,
+    LocalSyncSchedule, LocalSyncSelection, LocalSyncSelectionSummary, LocalSyncStatus,
     LocalSyncSummary, StorageDirectory, StorageEndpoint, StorageEntry, StorageProbe,
     StorageProtocol,
 };

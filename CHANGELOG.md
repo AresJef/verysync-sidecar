@@ -2,6 +2,13 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit native startup, watch and interval/calendar schedule settings.
+  Automatic triggers default off; selecting them can start unattended native
+  writes. Scoped updates preserve other settings and report actual normalization.
+  Free watch/schedule requests are reconciled without mutation retries; licensed
+  positive execution remains pending. Startup copied real files on enablement
+  and after restart through the public API.
+
 - Add operation-identity-checked Local Sync pause/resume/stop receipts and native
   progress/cancellation observations. Add separate pull-driven Local Sync events
   with bounded batches, consumed cursors, explicit gaps and cancellation, without
@@ -24,7 +31,7 @@
 - Add native Local Sync basic endpoints and typed job, preview, execution,
   result/history and scoped registration controls. Keep acknowledgements, actual
   completion and per-protocol acceptance separate; no controller copy engine or
-  automatic schedules, retries or rollback are introduced.
+  SDK scheduling timers, retries or rollback are introduced.
 
 - Add explicit resource directory creation, same-volume copy/move, existing-file
   UTF-8 replacement and scoped deletion with collision/merge policies. Keep

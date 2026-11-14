@@ -52,18 +52,8 @@ async fn public_local_sync_preview_execution_and_registration_changes_preserve_a
     assert!(job.group.is_none());
     assert_eq!(core.client().local_sync_jobs().await?.len(), 1);
     assert!(!job.delete_extraneous && !job.sync_on_startup);
-    assert_eq!(
-        job.extra
-            .get("scheduleMode")
-            .and_then(serde_json::Value::as_str),
-        Some("off")
-    );
-    assert_eq!(
-        job.extra
-            .get("watchChanges")
-            .and_then(serde_json::Value::as_bool),
-        Some(false)
-    );
+    assert_eq!(job.schedule_mode.as_deref(), Some("off"));
+    assert_eq!(job.watch_changes, Some(false));
     assert!(!target.join("nested").exists());
     let initial = core.client().local_sync_status(&job.job_id).await?;
     assert_eq!(initial.state, "idle");
