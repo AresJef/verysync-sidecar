@@ -3929,3 +3929,87 @@ async fn local_sync_http_success_error_envelope_is_unknown_once_and_changed_iden
     assert_eq!(server.finish().await?.len(), 3);
     Ok(())
 }
+
+#[tokio::test]
+async fn local_sync_selection_and_resolution_keep_native_shapes_and_exact_preview_identities(
+) -> TestResult {
+    use verysync_sidecar::{
+        LocalSyncActionRange, LocalSyncConflictResolution, LocalSyncConflictSide, LocalSyncJobId,
+        LocalSyncPreviewId, LocalSyncSelection,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let id = LocalSyncJobId::parse("job /%")?;
+    let preview = LocalSyncPreviewId::parse("preview /%")?;
+    let snapshot = |name: &str| serde_json::json!({"id":name,"jobId":id,"operationId":"operation","count":3,"expiresAt":"native-time","scanIssueCount":0});
+    let old = snapshot(preview.as_str());
+    let resolved = snapshot("replacement-preview");
+    let totals = serde_json::json!({"resolvedConflicts":0,"permissionFiles":0,"copyFiles":1,"deleteFiles":0,"createDirectories":0,"deleteDirectories":0,"conflicts":0,"copyBytes":5});
+    let receipt = serde_json::json!({"id":"run-identity","jobId":id,"started":"native-time","finished":"0001-01-01T00:00:00Z","count":1,"summary":{"completed":0,"failed":0,"skipped":0}});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(old.clone()),
+        identity(),
+        Reply::json(totals),
+        identity(),
+        Reply::json(old.clone()),
+        identity(),
+        Reply::json(receipt),
+        identity(),
+        Reply::json(old),
+        identity(),
+        Reply::json(resolved.clone()),
+        identity(),
+        Reply::json(resolved),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let selection = LocalSyncSelection::including(vec![LocalSyncActionRange::single(0)])?;
+    assert_eq!(
+        client
+            .local_sync_selection_summary(&id, &preview, &selection)
+            .await?
+            .copy_bytes,
+        5
+    );
+    assert_eq!(
+        client
+            .run_local_sync_preview(&id, &preview, &selection)
+            .await?
+            .count,
+        1
+    );
+    let resolution =
+        LocalSyncConflictResolution::at_path("private/中文 %.txt", LocalSyncConflictSide::B)?;
+    assert!(!format!("{resolution:?}").contains("private"));
+    let replaced = client
+        .resolve_local_sync_conflict(&id, &preview, &resolution)
+        .await?;
+    assert_eq!(replaced.id.as_str(), "replacement-preview");
+    let requests = server.finish().await?;
+    let posts = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(posts.len(), 3);
+    assert!(posts[0].starts_with("POST /prefix/rest/localsync/jobs/job%20%2F%25/previews/preview%20%2F%25/selection-summary "));
+    let body = |request: &String| -> TestResult<serde_json::Value> {
+        Ok(serde_json::from_str(
+            request.split_once("\r\n\r\n").ok_or("missing body")?.1,
+        )?)
+    };
+    assert_eq!(
+        body(posts[0])?,
+        serde_json::json!({"all":false,"include":[[0,0]]})
+    );
+    assert_eq!(
+        body(posts[1])?,
+        serde_json::json!({"previewId":preview,"selection":{"all":false,"include":[[0,0]]}})
+    );
+    assert_eq!(
+        body(posts[2])?,
+        serde_json::json!({"path":"private/中文 %.txt","recursive":false,"side":"b"})
+    );
+    Ok(())
+}

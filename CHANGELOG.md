@@ -2,6 +2,13 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit bounded Local Sync action selection and native selection totals,
+  reverse mirror effects and two-way newer/larger/manual conflict controls.
+  Manual resolution returns a readback-verified replacement preview without
+  executing it; predicted copy bytes remain distinct from completed transfers.
+  Empty/outside selections are refused before execution, with no automatic range
+  expansion, conflict resolution, retry or rollback.
+
 - Add explicit native remote endpoint selection and separate credentials, target
   connection limits, SFTP key paths and SMB/WebDAV identity settings. Protocol
   and platform effects remain independently verified, with private test peers.
