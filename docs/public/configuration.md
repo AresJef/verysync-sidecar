@@ -126,7 +126,9 @@ disk nor reserves space. The native configuration/index volume is the target.
 The controlled case checks all five unit selectors, fractional values, partial
 field preservation, disabled progress selection and normal restart persistence.
 It independently observes the owned process/group's OS priority before and after
-an explicit low-priority policy change and restart. This does not certify actual
+an explicit low-priority policy change and restart, relative to the controller's
+inherited native priority. It does not change caller process priority or assume
+that a CI runner starts at Unix nice 0 or Windows Normal. This does not certify actual
 temporary expiry, concurrency limits, disk-pressure handling, sleep prevention,
 remote-name replacement, packet QoS or a performance improvement. Network,
 bandwidth, upgrade and audit settings retain their separate typed APIs and

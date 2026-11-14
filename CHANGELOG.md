@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Validate native priority relative to caller inheritance and verify cloned
+  profiling request order through complete HTTP response bodies. Keep native
+  profile timestamps as diagnostics and preserve bounded, redacted protocol
+  start-failure details instead of inferring sequence from mixed clocks.
+
 - Add explicit event-audit, thumbnail and native proxy preferences with target
   paths/default selectors and preserved unrelated options. Separate actual event
   log data from licensed folder history, cache artifacts and proxy connections.

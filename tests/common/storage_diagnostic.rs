@@ -46,10 +46,36 @@ pub fn native_rejection(
             response.status()
         );
     } else {
+        // Shape only: preserve enough evidence to distinguish a malformed run
+        // receipt from a JSON/API envelope without printing paths, credentials,
+        // native error details or unknown metadata values in public CI logs.
+        let shape = |value: Option<&serde_json::Value>| match value {
+            None => "absent",
+            Some(serde_json::Value::Null) => "null",
+            Some(serde_json::Value::Bool(_)) => "bool",
+            Some(serde_json::Value::Number(_)) => "number",
+            Some(serde_json::Value::String(_)) => "string",
+            Some(serde_json::Value::Array(_)) => "array",
+            Some(serde_json::Value::Object(_)) => "object",
+        };
+        let fields: std::collections::BTreeMap<_, _> = [
+            "id",
+            "jobId",
+            "started",
+            "finished",
+            "count",
+            "summary",
+            "cancelled",
+            "error",
+        ]
+        .map(|key| (key, shape(decoded.get(key))))
+        .into_iter()
+        .collect();
         eprintln!(
-            "synthetic native protocol rejection: status={} body_bytes={}",
+            "synthetic native protocol rejection: status={} body_bytes={} run_field_shapes={}",
             response.status(),
-            response.body_bytes().len()
+            response.body_bytes().len(),
+            serde_json::json!(fields)
         );
     }
 }

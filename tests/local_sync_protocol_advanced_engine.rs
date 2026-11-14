@@ -43,11 +43,16 @@ async fn run(
     selection: &LocalSyncSelection,
     peer: &storage_service::Service,
     root: &Path,
+    phase: &str,
 ) -> TestResult {
-    let r = core
-        .client()
-        .run_local_sync_preview(id, p, selection)
-        .await?;
+    let r = match core.client().run_local_sync_preview(id, p, selection).await {
+        Ok(run) => run,
+        Err(error) => {
+            eprintln!("synthetic protocol start failure phase: {phase}");
+            storage_diagnostic::native_rejection(&error, &peer.endpoint, root);
+            return Err(error.into());
+        }
+    };
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let observed = match core.client().local_sync_run(id).await {
@@ -141,6 +146,7 @@ async fn effects(protocol: StorageProtocol) -> TestResult {
         &LocalSyncSelection::all(),
         &peer,
         &root,
+        "reverse-copy",
     )
     .await?;
     assert_eq!(
@@ -186,6 +192,7 @@ async fn effects(protocol: StorageProtocol) -> TestResult {
             &LocalSyncSelection::all(),
             &peer,
             &root,
+            &format!("{name}-initial-two-way"),
         )
         .await?;
         for side in [&a, &b] {
@@ -237,6 +244,7 @@ async fn effects(protocol: StorageProtocol) -> TestResult {
             &LocalSyncSelection::all(),
             &peer,
             &root,
+            &format!("{name}-resolved-conflict"),
         )
         .await?;
         let expected: &[u8] = if name == "newer" {
@@ -270,7 +278,16 @@ async fn effects(protocol: StorageProtocol) -> TestResult {
                 .await?;
             assert_eq!(summary.copy_files, 1);
             assert_eq!(summary.copy_bytes, b"explicit selected".len() as u64);
-            run(&core, &job.job_id, &p.id, &selection, &peer, &root).await?;
+            run(
+                &core,
+                &job.job_id,
+                &p.id,
+                &selection,
+                &peer,
+                &root,
+                "manual-selected-only",
+            )
+            .await?;
             assert_eq!(std::fs::read(b.join("selected.txt"))?, b"explicit selected");
             assert!(!b.join("unselected.txt").exists());
             assert_eq!(

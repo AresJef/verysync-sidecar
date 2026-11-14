@@ -1228,6 +1228,54 @@ async fn directory_preflight_refuses_file_scope_and_oversized_inventory_without_
 }
 
 #[tokio::test]
+async fn cloned_profile_calls_wait_until_the_entire_previous_response_body_is_read() -> TestResult {
+    use verysync_sidecar::CoreProfileRequest;
+    let gzip = vec![
+        31, 139, 8, 0, 0, 0, 0, 0, 0, 255, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let profile = || Reply {
+        body: gzip.clone(),
+        ..Reply::json(serde_json::Value::Null)
+    };
+    let (body_started, body_ready) = tokio::sync::oneshot::channel();
+    let (competitor_started, competitor_ready) = tokio::sync::oneshot::channel();
+    let server = ScriptedServer::with_controls(
+        vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            profile(),
+            identity(),
+            profile(),
+        ],
+        None,
+        Some((4, body_started, competitor_ready)),
+    )
+    .await?;
+    let first_client = Client::connect(server.options()?).await?;
+    let second_client = first_client.clone();
+    let cpu = CoreProfileRequest::Cpu {
+        duration_seconds: 1,
+    };
+    let first = tokio::spawn(async move { first_client.collect_core_profile(cpu).await });
+    tokio::time::timeout(Duration::from_secs(5), body_ready).await??;
+    let second = tokio::spawn(async move {
+        let _ = competitor_started.send(());
+        second_client.collect_core_profile(cpu).await
+    });
+    let (one, two) = tokio::try_join!(first, second)?;
+    assert_eq!(one?.body_bytes(), gzip);
+    assert_eq!(two?.body_bytes(), gzip);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    assert!(requests[3].starts_with("GET /prefix/rest/debug/cpuprof?duration=1s "));
+    assert!(requests[4].starts_with("GET /prefix/rest/system/status "));
+    assert!(requests[5].starts_with("GET /prefix/rest/debug/cpuprof?duration=1s "));
+    Ok(())
+}
+
+#[tokio::test]
 async fn profiles_validate_duration_preserve_native_bytes_and_metrics_base_path() -> TestResult {
     use verysync_sidecar::CoreProfileRequest;
     let gzip = vec![
@@ -3196,13 +3244,25 @@ struct ScriptedServer {
     base: String,
     task: Option<JoinHandle<TestResult<Vec<String>>>>,
 }
+type ResponseBodyGate = (
+    usize,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
 impl ScriptedServer {
     async fn start(replies: Vec<Reply>) -> TestResult<Self> {
         Self::with_signal(replies, None).await
     }
     async fn with_signal(
         replies: Vec<Reply>,
+        signal: Option<(usize, tokio::sync::oneshot::Sender<()>)>,
+    ) -> TestResult<Self> {
+        Self::with_controls(replies, signal, None).await
+    }
+    async fn with_controls(
+        replies: Vec<Reply>,
         mut signal: Option<(usize, tokio::sync::oneshot::Sender<()>)>,
+        mut body_gate: Option<ResponseBodyGate>,
     ) -> TestResult<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let base = format!("http://{}/prefix", listener.local_addr()?);
@@ -3266,7 +3326,31 @@ impl ScriptedServer {
                 );
                 // A deliberate timeout may close the client before this write.
                 let _ = stream.write_all(head.as_bytes()).await;
-                let _ = stream.write_all(&reply.body).await;
+                if body_gate
+                    .as_ref()
+                    .is_some_and(|(index, _, _)| *index == requests.len())
+                {
+                    let (_, ready, competitor) = body_gate.take().ok_or("body gate absent")?;
+                    let split = reply.body.len() / 2;
+                    stream.write_all(&reply.body[..split]).await?;
+                    let _ = ready.send(());
+                    tokio::time::timeout(Duration::from_secs(5), competitor).await??;
+                    // This is a bounded transport ordering assertion, not a
+                    // profiler timing/performance threshold. The first body is
+                    // deliberately incomplete while a clone is polled.
+                    if tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                        .await
+                        .is_ok()
+                    {
+                        return Err(
+                            "clone sent another request before the prior profile body completed"
+                                .into(),
+                        );
+                    }
+                    stream.write_all(&reply.body[split..]).await?;
+                } else {
+                    let _ = stream.write_all(&reply.body).await;
+                }
             }
             Ok(requests)
         });
