@@ -156,6 +156,7 @@ impl Client {
         &self,
         patch: &FolderDefaultsPatch,
     ) -> Result<ConfigurationSectionUpdate<FolderDefaults>> {
+        patch.validate()?;
         self.patch_configuration_section("rest/config/defaults/folder", patch)
             .await
     }

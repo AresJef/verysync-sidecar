@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add scoped typed advanced-folder selections and share validated scan, pull-order,
+  selective and advanced inputs with creation templates. Preserve native absence,
+  unknown/private fields, actual readback differences and existing-object settings;
+  keep configuration distinct from platform metadata and transfer effects.
+
 - Select native managed HTTPS with explicit per-instance transport policy and
   same-identity owner connection adoption. Retain trust/endpoints across normal
   startup, stop, restart and existing-state connection without transferring

@@ -73,6 +73,9 @@ readback remains separate from connection and file-transfer evidence.
 The unreleased [creation-default and application-state APIs](docs/public/configuration.md)
 change explicit fields inherited by future folders and devices, retain other
 template values, and separately expose the engine's configuration application flag.
+They share typed scan, file-order, selective and advanced selections with existing
+folders. Template inheritance, field matching and actual platform/data effects
+are separate observations.
 Identity-bound complete saves retain native sections and reject a known stale
 snapshot before writing; independent writers still need coordination.
 

@@ -304,7 +304,11 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::AdvancedFolderSettings),
+    LibraryCapability {
+        capability: Capability::AdvancedFolderSettings,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::SyncObservation,
         implementation: ImplementationStatus::Typed,

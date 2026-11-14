@@ -138,6 +138,21 @@ impl fmt::Debug for FolderConfig {
     }
 }
 
+impl FolderConfig {
+    /// Decode actual advanced selections, retaining absence and hiding private
+    /// upstream fields from Debug. This does not perform another request.
+    pub fn advanced_configuration(&self) -> Result<crate::FolderAdvancedConfig> {
+        serde_json::from_value(serde_json::to_value(&self.extra).map_err(|_| {
+            crate::Error::InvalidConfiguration {
+                reason: "advanced folder configuration cannot be encoded",
+            }
+        })?)
+        .map_err(|_| crate::Error::InvalidConfiguration {
+            reason: "advanced folder configuration does not match its native schema",
+        })
+    }
+}
+
 #[derive(Deserialize)]
 pub(crate) struct WireFolderIndex {
     pub(crate) folders: Vec<WireFolder>,
