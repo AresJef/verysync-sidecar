@@ -65,3 +65,10 @@ No native positive-selection or deletion support is claimed from the refusal
 tests. Current native evidence covers real tree/search/cursor data, all five
 typed licence refusals, unchanged selection/data after refusal, and explicit
 restoration of free ordinary synchronization with exact bytes and normal exits.
+
+The macOS native fixture records bounded process identities before normal
+shutdown and checks their birth times when diagnosing a timeout. It reports
+root/worker state separately from log exit markers. The observer sends no
+signals, retries no shutdown request and leaves the original ten-second failure
+intact. A missing or changed identity remains an observation gap, rather than
+proof that the owned tree exited.

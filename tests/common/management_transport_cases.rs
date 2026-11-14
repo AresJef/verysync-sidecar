@@ -243,6 +243,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
                 .use_tls(true),
         )
         .await?;
+    println!("native_gui_listener_stage=tls_reconnect");
     assert_eq!(
         update.previous_configuration.address.tcp_authority(),
         Some(initial.to_string().as_str())
@@ -259,6 +260,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
     .await?;
     assert!(update.requested_fields_match(&tls.gui_listener().await?));
     assert_eq!(tls.system_status().await?.device_id, id);
+    println!("native_gui_listener_stage=http_restore");
     let initial_guard = std::net::TcpListener::bind(initial)?;
     drop(initial_guard);
     let restore = tls
@@ -274,6 +276,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
             .request_timeout(Duration::from_secs(2))?,
     )
     .await?;
+    println!("native_gui_listener_stage=disable_management");
     assert!(restore.requested_fields_match(&http.gui_listener().await?));
     assert!(
         http.configuration().await?.native_document()["gui"] == before,
@@ -283,6 +286,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
         .update_gui_listener(&GuiListenerPatch::default().enabled(false))
         .await?;
     assert!(disabled.previous_configuration.enabled);
+    println!("native_gui_listener_stage=wait_released_address");
     // Passively bind the exact released owned address; do not probe any endpoint
     // that might have been reused by another process after the listener closes.
     let guard = tokio::time::timeout(Duration::from_secs(8), async {
@@ -297,6 +301,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
         }
     })
     .await??;
+    println!("native_gui_listener_stage=explicit_force_cleanup");
     // Disabling management is not process exit. Explicit forced cleanup is a
     // separate caller choice for this synthetic fixture, never a library fallback.
     let forced = core.force_stop(Duration::from_secs(10)).await?;
@@ -331,6 +336,7 @@ async fn native_gui_socket_modes_are_observed_on_the_actual_owned_socket() -> Te
     let id = core.client().instance().device_id.clone();
     let key = core.client().gui_authentication().await?.api_key()?;
     let before = core.client().gui_listener().await?;
+    let original_gui = core.client().configuration().await?.native_document()["gui"].clone();
     let path = core.state_directory().join("gui.sock");
     // Both names are known local paths in this owned fixture. Keep the native
     // configuration spelling intact; compare filesystem identity via Path APIs.
@@ -351,10 +357,36 @@ async fn native_gui_socket_modes_are_observed_on_the_actual_owned_socket() -> Te
         GuiSocketPermissions::Mode(0o660),
         before.unix_socket_permissions,
     ] {
-        let update = core
+        let mut expected_gui = original_gui.clone();
+        expected_gui["unixSocketPermissions"] = match &permissions {
+            GuiSocketPermissions::Mode(value) => format!("{value:04o}").into(),
+            GuiSocketPermissions::NativeDefault => "".into(),
+            _ => return Err("unexpected requested native socket mode".into()),
+        };
+        let result = core
             .client()
-            .update_gui_listener(&GuiListenerPatch::default().unix_socket_permissions(permissions))
-            .await?;
+            .update_gui_listener(
+                &GuiListenerPatch::default().unix_socket_permissions(permissions.clone()),
+            )
+            .await;
+        let update = match result {
+            Ok(update) => Some(update),
+            Err(Error::MutationOutcomeUnknown { source, .. })
+                if matches!(*source, Error::Transport { .. } | Error::Timeout { .. }) =>
+            {
+                // Replacing this very socket can close the PATCH response. Keep
+                // that outcome unknown; only explicit read-only reconciliation
+                // below can establish the requested configuration and file mode.
+                let cause = if matches!(*source, Error::Timeout { .. }) {
+                    "timeout"
+                } else {
+                    "transport"
+                };
+                println!("native_gui_socket_write_ack=unknown cause={cause} write_retried=false");
+                None
+            }
+            Err(error) => return Err(error.into()),
+        };
         let client = connect_listener(
             ConnectOptions::new(core.client().endpoint().clone(), key.clone())
                 .expected_device_id(id.clone())
@@ -362,7 +394,14 @@ async fn native_gui_socket_modes_are_observed_on_the_actual_owned_socket() -> Te
         )
         .await?;
         let actual = client.gui_listener().await?;
-        assert!(update.requested_fields_match(&actual));
+        assert_eq!(actual.unix_socket_permissions, permissions);
+        if let Some(update) = update {
+            assert!(update.requested_fields_match(&actual));
+        }
+        assert!(
+            client.configuration().await?.native_document()["gui"] == expected_gui,
+            "socket mode write changed unrelated GUI configuration"
+        );
         let expected = match actual.unix_socket_permissions {
             GuiSocketPermissions::Mode(v) => u32::from(v),
             GuiSocketPermissions::NativeDefault => mode,
@@ -378,6 +417,7 @@ async fn native_gui_socket_modes_are_observed_on_the_actual_owned_socket() -> Te
         })
         .await??;
     }
+    assert_eq!(core.client().system_status().await?.device_id, id);
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     println!("native_gui_socket_mode_effects=8");

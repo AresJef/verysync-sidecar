@@ -31,10 +31,10 @@ jobs:
   fixture:
     name: ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
-    # Complete native suites grew from baseline control to protocols/recovery.
-    # Two source1535 profiles reached the old 45-minute job capacity; individual
-    # native deadlines/workloads remain unchanged and failures still gate.
-    timeout-minutes: 55
+    # Source abe7 Windows AMD64 reached 55 minutes in the final mechanism probes
+    # after product suites completed. Allow the complete required bundle and its
+    # cleanup to finish; individual native deadlines and all outcome gates stay.
+    timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
@@ -124,6 +124,28 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_instance --test-filter restart_preserves_identity_folders_settings_and_samples
           --evidence-dir "${{ runner.temp }}/vs-managed-ui-proxy"
+      - name: Verify management, account, license and remote-tunnel boundaries
+        id: native_authentication_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
+      - name: Verify actual sync, selective browse, recovery and bounded transfers
+        id: native_sync_observation
+        continue-on-error: true
+        env:
+          VERYSYNC_BANDWIDTH_PHASE: acceptance
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target sync_observation
+          --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
+      - name: Verify fixed-version upgrades, state restoration and cancellation
+        id: native_upgrade_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
       - name: Verify mounted resource metadata, checksums and native previews
         id: native_files_engine
         continue-on-error: true
@@ -211,12 +233,6 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target configuration_engine --evidence-dir "${{ runner.temp }}/vs-configuration-proxy"
-      - name: Verify management, account, license and remote-tunnel boundaries
-        id: native_authentication_engine
-        continue-on-error: true
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
         id: native_managed_lifetime
         continue-on-error: true
@@ -254,15 +270,6 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target network --allow-private-discovery
           --evidence-dir "${{ runner.temp }}/vs-network-proxy"
-      - name: Verify actual sync, selective browse, recovery and bounded transfers
-        id: native_sync_observation
-        continue-on-error: true
-        env:
-          VERYSYNC_BANDWIDTH_PHASE: acceptance
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target sync_observation
-          --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
       - name: Verify read-only handoff to a fresh third node with the source stopped
         id: native_p2p_three_nodes
         continue-on-error: true
@@ -270,13 +277,6 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target p2p_three_nodes
           --evidence-dir "${{ runner.temp }}/vs-three-node-proxy"
-      - name: Verify fixed-version upgrades, state restoration and cancellation
-        id: native_upgrade_engine
-        continue-on-error: true
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
-          --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
       - name: Run independent-engine fixture contracts
         id: native_engine_control
         continue-on-error: true

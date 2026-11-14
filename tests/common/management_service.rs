@@ -67,6 +67,7 @@ impl ManagementService {
         let line = match receiver.recv_timeout(Duration::from_secs(12)) {
             Ok(result) => result?,
             Err(_) => {
+                eprintln!("{}", service.startup_diagnostic());
                 service.stop()?;
                 let _ = reader.join();
                 return Err("management peer readiness timed out".into());
@@ -96,6 +97,46 @@ impl ManagementService {
         service.proxy_port = port("proxy_port")?;
         service.tls_proxy_port = port("tls_proxy_port")?;
         Ok(service)
+    }
+    fn startup_diagnostic(&mut self) -> serde_json::Value {
+        let mut bytes = Vec::new();
+        let state = std::fs::File::open(self.root.join("management-startup.json"))
+            .ok()
+            .and_then(|file| file.take(1025).read_to_end(&mut bytes).ok())
+            .filter(|_| bytes.len() <= 1024)
+            .and_then(|_| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        let phase = state
+            .as_ref()
+            .and_then(|value| value["phase"].as_str())
+            .filter(|phase| {
+                matches!(
+                    *phase,
+                    "loading_crypto"
+                        | "creating_certificates"
+                        | "certificates_ready"
+                        | "binding_origin"
+                        | "binding_http_proxy"
+                        | "binding_https_proxy"
+                        | "ready"
+                )
+            })
+            .unwrap_or("unavailable");
+        let elapsed_millis = state
+            .as_ref()
+            .and_then(|value| value["elapsed_millis"].as_u64());
+        let child_exited = self
+            .child
+            .as_mut()
+            .and_then(|child| child.try_wait().ok())
+            .map(|status| status.is_some());
+        let private_stderr_bytes = std::fs::metadata(self.root.join("private-management-peer.log"))
+            .ok()
+            .map(|metadata| metadata.len());
+        serde_json::json!({"management_peer_startup_failure": {
+            "phase": phase, "phase_elapsed_millis": elapsed_millis,
+            "child_exited": child_exited, "private_stderr_bytes": private_stderr_bytes,
+            "readiness_timeout_seconds": 12
+        }})
     }
     pub fn endpoint(&self, correct_hostname: bool) -> TestResult<ManagementEndpoint> {
         let host = if correct_hostname {
