@@ -231,6 +231,31 @@ observes its retained process tree and lease release; `force_stop` is an explici
 owned termination action. A borrowed Client cannot safely force a PID it does
 not own. Saved identity/configuration and local samples remain after shutdown.
 
+`Client::request_restart` is the distinct native `POST /rest/system/restart`
+action. It checks identity, sends one request and validates the fixed engine's
+`ok: restarting` acknowledgement. It does not wait, retry, launch a replacement
+program or certify another management generation. A missing/malformed or
+unrecognized success body is `MutationOutcomeUnknown`; reconcile explicitly.
+
+An external native monitor may relaunch its program. The library deliberately
+runs its owned inner program with monitoring owned by the caller's Rust handle;
+the native restart request makes that inner program exit normally with code 3.
+Observe that exact tree/lease exit, then explicitly use `ManagedInstance::restart`
+when a new owned generation is wanted. For ordinary owned restarts, use that
+method directly. The native test separately verifies the request receipt,
+unforced exit code 3, subsequent explicit relaunch with the same device ID and a
+changed start time, retained folder settings/data, and final normal zero-code exit.
+A borrowed client cannot observe OS-tree exit by itself. For an externally
+monitored instance, compare authenticated identity/start-time observations
+separately; successful command acknowledgement alone is insufficient.
+
+```no_run
+# async fn request(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+client.request_restart().await?;
+// Observe the caller's external monitor or owned lifecycle explicitly.
+# Ok(()) }
+```
+
 The compiled `manage_owned` example accepts:
 
 ```text

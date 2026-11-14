@@ -445,6 +445,46 @@ impl Client {
             .map(|_| ())
     }
 
+    /// Request the native restart action once after checking the current identity.
+    ///
+    /// Success acknowledges the command, without waiting for another program
+    /// generation. A monitor may relaunch an externally managed program. The
+    /// library's owned inner program instead exits with the native restart code;
+    /// use [`crate::ManagedInstance::restart`] for explicit owned stop/start.
+    /// An uncertain write or invalid acknowledgement is never retried. Observe
+    /// a fresh identity and changed start time separately when reconciling it.
+    pub async fn request_restart(&self) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Acknowledgement {
+            ok: String,
+        }
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                "request native restart",
+                reqwest::Method::POST,
+                self.connection.management_url("rest/system/restart", &[])?,
+                None,
+                true,
+            )
+            .await?;
+        let uncertain = || Error::MutationOutcomeUnknown {
+            operation: "validate native restart acknowledgement",
+            source: Box::new(Error::InvalidResponse {
+                operation: "request native restart",
+                response: ResponseDiagnostic::new(status, bytes.clone()),
+            }),
+        };
+        let acknowledgement: Acknowledgement =
+            serde_json::from_slice(&bytes).map_err(|_| uncertain())?;
+        if acknowledgement.ok != "restarting" {
+            return Err(uncertain());
+        }
+        Ok(())
+    }
+
     /// Authenticate, apply the version policy, and read/optionally compare ID.
     ///
     /// Success means these management reads succeeded. It does not mean peers
