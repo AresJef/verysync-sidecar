@@ -4,6 +4,15 @@ use std::fmt;
 
 use crate::{DeviceId, FolderId};
 
+/// The independent state-admission lock that refused an owned operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManagedStateLock {
+    /// Another operation holds the sidecar's private state lease.
+    LibraryLease,
+    /// The native `verysync.lock` is held independently of the sidecar lease.
+    EngineLock,
+}
+
 /// Bounded private program output, available only through explicit inspection.
 ///
 /// Upstream output may contain sensitive state. Ordinary Debug/Display never
@@ -142,8 +151,12 @@ pub enum Error {
         /// A description without private paths, credentials or manifest data.
         reason: &'static str,
     },
-    /// The dedicated state already has an exclusive library owner.
-    ManagedStateInUse,
+    /// A dedicated-state admission lock is busy. This does not authorize killing
+    /// its owner or deleting the lock file; inspect the specific lock scope.
+    ManagedStateInUse {
+        /// Which independently checked lock refused admission.
+        lock: ManagedStateLock,
+    },
     /// The supplied directory is not an admissible library-owned state.
     UnmanagedState,
     /// A native filesystem or process operation failed without echoing arguments.
@@ -393,7 +406,10 @@ impl fmt::Display for Error {
             Self::ManagedProcessExited { operation, code, .. } => write!(formatter, "owned program exited while attempting to {operation} (code {code:?})"),
             Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),
             Self::StateBackupRejected { reason } => write!(formatter, "private state copy rejected: {reason}"),
-            Self::ManagedStateInUse => formatter.write_str("managed state already has an exclusive owner"),
+            Self::ManagedStateInUse { lock } => formatter.write_str(match lock {
+                ManagedStateLock::LibraryLease => "managed state library lease is busy",
+                ManagedStateLock::EngineLock => "managed state upstream engine lock is busy",
+            }),
             Self::UnmanagedState => formatter.write_str("state is not an admissible private library-owned directory"),
             Self::LocalIo { operation, .. } => write!(formatter, "native operation failed while attempting to {operation}"),
             Self::InvalidConfiguration { reason } => {

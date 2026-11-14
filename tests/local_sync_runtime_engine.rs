@@ -503,6 +503,57 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
         .await?;
     assert_ne!(next.id, receipt.id);
     let complete = finished_run(&core, &job.job_id, &next.id).await?;
+    if complete.summary.failed != 0 {
+        let results = core
+            .client()
+            .local_sync_run_results(&job.job_id, &next.id, 0, 100)
+            .await?;
+        let mut private = vec![root.to_string_lossy().into_owned()];
+        fn collect(value: &serde_json::Value, out: &mut Vec<String>) {
+            match value {
+                serde_json::Value::String(text) if text.len() >= 8 => out.push(text.clone()),
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        collect(value, out);
+                    }
+                }
+                serde_json::Value::Object(values) => {
+                    for value in values.values() {
+                        collect(value, out);
+                    }
+                }
+                _ => (),
+            }
+        }
+        for endpoint in [&peer.endpoint, &recovered_peer.endpoint] {
+            collect(&serde_json::to_value(endpoint)?, &mut private);
+        }
+        private.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        let redact = |text: &str| {
+            let mut text = text.to_owned();
+            for value in &private {
+                text = text.replace(value, "[PRIVATE_TEST_VALUE]");
+            }
+            text.chars()
+                .filter(|c| !c.is_control())
+                .take(512)
+                .collect::<String>()
+        };
+        let errors = results
+            .iter()
+            .filter_map(|r| {
+                r.extra
+                    .get("error")
+                    .filter(|v| v.as_str().is_none_or(|s| !s.is_empty()))
+            })
+            .take(32)
+            .map(|v| redact(&v.to_string()))
+            .collect::<Vec<_>>();
+        eprintln!(
+            "native disconnect recovery diagnostics: {}",
+            serde_json::json!({"failed_actions":complete.summary.failed,"completed_actions":complete.summary.completed,"results":results.len(),"run_error":complete.error.as_deref().map(redact),"action_errors":errors,"complete_payload_files":completed(&recovered_peer.share)?,"destination_files":snapshot(&recovered_peer.share)?.len()})
+        );
+    }
     assert_eq!(complete.summary.failed, 0);
     assert_eq!(completed(&recovered_peer.share)?, 16);
     assert_eq!(snapshot(&source)?, original);

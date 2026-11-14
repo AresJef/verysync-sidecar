@@ -422,6 +422,13 @@ their separate gates; configuration flags are not certificate verification proof
 
 ## SMB domain and guest boundary
 
+The independent Impacket 0.13.1 test peer coordinates directory enumeration with
+CREATE, SET_INFO and CLOSE metadata requests. Its stock enumeration can otherwise
+stat a temporary filename after another request removes it, raise an unhandled
+`FileNotFoundError` and close the connection. Payload READ/WRITE handlers retain
+their actual concurrency and test-only delays. Native data hashes, zero failed
+actions, operation identities and process-exit requirements are checked in full.
+
 The dedicated native cases observe the selected domain in the actual NTLM
 exchange at a private standalone peer. A different domain is rejected; a wrong
 password with the correct domain is also rejected by the peer's real NTLMv2

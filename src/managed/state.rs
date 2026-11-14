@@ -80,7 +80,9 @@ impl StateLease {
             .map_err(|e| io_error("open state lease", e))?;
         file.try_lock_exclusive().map_err(|error| {
             if error.kind() == io::ErrorKind::WouldBlock || error.raw_os_error() == Some(33) {
-                Error::ManagedStateInUse
+                Error::ManagedStateInUse {
+                    lock: crate::ManagedStateLock::LibraryLease,
+                }
             } else {
                 io_error("lock private state", error)
             }
@@ -127,7 +129,9 @@ impl StateLease {
                 .map_err(|e| io_error("open upstream state lock", e))?;
             lock.try_lock_exclusive().map_err(|error| {
                 if error.kind() == io::ErrorKind::WouldBlock || error.raw_os_error() == Some(33) {
-                    Error::ManagedStateInUse
+                    Error::ManagedStateInUse {
+                        lock: crate::ManagedStateLock::EngineLock,
+                    }
                 } else {
                     io_error("check upstream state lock", error)
                 }
@@ -179,7 +183,9 @@ mod tests {
         fs::write(path.join("synthetic"), b"retained").map_err(|e| io_error("write sample", e))?;
         assert!(matches!(
             StateLease::acquire(&path),
-            Err(Error::ManagedStateInUse)
+            Err(Error::ManagedStateInUse {
+                lock: crate::ManagedStateLock::LibraryLease
+            })
         ));
         drop(lease);
         let _second = StateLease::acquire(&path)?;
@@ -209,6 +215,26 @@ mod tests {
             b"unrelated private application data"
         );
         assert!(!path.join(LEASE).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn upstream_lock_contention_is_distinct_from_the_library_lease() -> Result<()> {
+        let base = tempfile::tempdir().map_err(|e| io_error("make lock test root", e))?;
+        let path = base.path().join("state");
+        drop(StateLease::acquire(&path)?);
+        let held = native::create_private(&path.join("verysync.lock"))
+            .map_err(|e| io_error("create test engine lock", e))?;
+        held.try_lock_exclusive()
+            .map_err(|e| io_error("hold test engine lock", e))?;
+        assert!(matches!(
+            StateLease::acquire(&path),
+            Err(Error::ManagedStateInUse {
+                lock: crate::ManagedStateLock::EngineLock
+            })
+        ));
+        drop(held);
+        let _lease = StateLease::acquire(&path)?;
         Ok(())
     }
 

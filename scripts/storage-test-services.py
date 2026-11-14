@@ -458,6 +458,22 @@ def smb(config, root):
         return commands, packets, status
 
     server.getServer().hookSmb2Command(smb2.SMB2_READ, read_with_eof_error_body)
+    # Impacket's findFirst2 enumerates names and then stats each path without
+    # tolerating a name removed by another request in that interval. Native
+    # temporary-file finalization can otherwise raise FileNotFoundError and
+    # close a valid QUERY_DIRECTORY connection. Coordinate only metadata RPCs;
+    # payload READ/WRITE handlers keep their actual concurrency and delays.
+    metadata_lock = threading.RLock()
+    metadata_handlers = {}
+    for command in (smb2.SMB2_QUERY_DIRECTORY, smb2.SMB2_CREATE,
+                    smb2.SMB2_SET_INFO, smb2.SMB2_CLOSE):
+        def coordinated_metadata(conn_id, smb_server, request, command=command):
+            with metadata_lock:
+                return metadata_handlers[command](conn_id, smb_server, request)
+
+        metadata_handlers[command] = server.getServer().hookSmb2Command(
+            command, coordinated_metadata)
+
     if config.get("write_delay_ms", 0):
         def delayed_write(conn_id, smb_server, request):
             time.sleep(config["write_delay_ms"] / 1000)
