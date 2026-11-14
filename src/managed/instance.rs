@@ -176,6 +176,16 @@ impl ManagedInstance {
     pub fn client(&self) -> &Client {
         &self.client
     }
+    /// Update GUI preferences once and adopt the same-key connection after reload.
+    pub async fn update_gui_preferences(
+        &mut self,
+        patch: &crate::GuiPreferencesPatch,
+        timeout: Duration,
+    ) -> Result<crate::GuiPreferencesUpdate> {
+        let update = self.client.update_gui_preferences(patch, timeout).await?;
+        self.client = update.client.clone();
+        Ok(update)
+    }
 
     /// Select a native GUI authentication mode once and adopt the API-key
     /// connection after GUI reload. Actual LDAP login is verified separately.

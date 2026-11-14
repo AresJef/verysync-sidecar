@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add typed native GUI preferences with one bounded write/reload reconciliation,
+  actual field matching and owned connection adoption. Retain credentials and
+  listener selection, and redact submitted preference text in version errors.
+
 - Read native diagnostic preferences and explicitly update crash-report settings.
   Preserve private destinations/identifiers without ordinary Debug disclosure.
   Keep normalized legacy usage fields read-only rather than promising consent,

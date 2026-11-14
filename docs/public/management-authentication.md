@@ -1,5 +1,44 @@
 # Management credentials and explicit recovery
 
+## Native GUI preferences
+
+`gui_preferences()` reads stored theme, metrics authorization, debugging, native
+administrative/host-check policy, frame loading, Basic prompts and cookie
+duration/path. Known credentials are excluded from this DTO; Debug omits private
+text and remaining values. The HTTP cookie path is distinct from a filesystem path.
+
+`update_gui_preferences()` submits only selected fields, then reconciles a fresh
+same-key, same-endpoint connection after native GUI reload. The caller-selected
+total deadline covers clone-lock acquisition, identity, the single PATCH and all
+read-only reconnects. The receipt separately reports acknowledgment and actual
+field matches. It does not replay or roll back writes, migrate the listener or
+change credentials/authentication mode. The owned-instance method adopts the
+returned connection for later lifecycle operations. Other GUI sessions can be
+affected by a native handler reload; inspect them separately.
+
+```no_run
+use verysync_sidecar::{GuiPreferencesPatch, ManagedInstance};
+use std::time::Duration;
+
+async fn protect_metrics(core: &mut ManagedInstance) -> verysync_sidecar::Result<()> {
+    let update = core.update_gui_preferences(
+        &GuiPreferencesPatch::default().metrics_without_auth(false),
+        Duration::from_secs(10),
+    ).await?;
+    // Inspect requested_fields_match before interpreting the native policy.
+    Ok(())
+}
+```
+
+These settings can alter access control and browser-facing policy. Selecting an
+insecure native preference is explicit, and changing a stored theme does not
+prove a rendered appearance. Cookie selection is separate from observed session
+expiration and cookie-path compatibility. The controlled case observes actual
+unauthenticated metrics refusal/acceptance/refusal and frame-header changes,
+retained credentials/identity/root process, unrelated configuration preservation,
+and normal restart persistence. Full same-source platform acceptance and the
+remaining individual policy/session conditions stay separate.
+
 `gui_authentication()` reads the management GUI authentication mode, username and
 password-presence flag. Its API key is available through an explicit `api_key()`
 call as a redacted `ApiKey`. Additional settings remain available for explicit

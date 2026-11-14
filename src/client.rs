@@ -6,6 +6,7 @@ mod device_ignore;
 mod file_control;
 mod file_mutation;
 mod file_transfer;
+mod gui_preferences;
 mod history_control;
 mod ignore_control;
 mod invitation_control;
