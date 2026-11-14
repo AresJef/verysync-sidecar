@@ -18,10 +18,10 @@ import threading
 import time
 
 
-def ready(protocol, port):
+def ready(protocol, port, tls=False):
     if not 0 < port <= 65535 or port == 18886:
         raise ValueError("invalid owned test endpoint")
-    print(json.dumps({"ready": True, "protocol": protocol, "port": port,
+    print(json.dumps({"ready": True, "protocol": protocol, "port": port, "tls": tls,
                       "loopback_only": True,
                       "python_platform": sysconfig.get_platform()}), flush=True)
 
@@ -94,8 +94,35 @@ def webdav(config, root):
         "dir_browser": {"enable": False},
     })
     server = Server(("127.0.0.1", 0), app, numthreads=8)
+    if config.get("tls", False):
+        from datetime import datetime, timedelta, timezone
+        import ipaddress
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
+        from cheroot.ssl.builtin import BuiltinSSLAdapter
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "synthetic loopback peer")])
+        now = datetime.now(timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(minutes=1))
+                .not_valid_after(now + timedelta(days=1))
+                .add_extension(x509.SubjectAlternativeName([
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+                .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+                .sign(key, hashes.SHA256()))
+        cert_path = root.parent / "synthetic-webdav-cert.pem"
+        key_path = root.parent / "synthetic-webdav-key.pem"
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                             serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        os.chmod(key_path, 0o600)
+        server.ssl_adapter = BuiltinSSLAdapter(str(cert_path), str(key_path), None)
     server.prepare()
-    ready("webdav", server.socket.getsockname()[1])
+    ready("webdav", server.socket.getsockname()[1], config.get("tls", False))
     server.serve()
 
 
