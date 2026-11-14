@@ -85,6 +85,12 @@ pub enum Capability {
     OfflineDatabaseMaintenance,
     /// Remaining advanced folder settings.
     AdvancedFolderSettings,
+    /// Creation templates for future folders and devices.
+    CreationDefaults,
+    /// Identity-bound complete saves and scoped general option changes.
+    FullConfiguration,
+    /// Native configuration application flag, separate from persistence.
+    ConfigurationApplication,
     /// Account, configuration and commercial authorization.
     AccountLicense,
     /// Storage protocol integrations.
@@ -282,7 +288,22 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
+    LibraryCapability {
+        capability: Capability::CreationDefaults,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::ConfigurationApplication,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::FullConfiguration,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::ScanControl,
         implementation: ImplementationStatus::Typed,

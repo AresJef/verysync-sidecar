@@ -47,6 +47,12 @@ defaults, guards creation and partial updates, controls a remote device's pause
 layer, and observes removal and remaining folder associations. Configuration
 readback remains separate from connection and file-transfer evidence.
 
+The unreleased [creation-default and application-state APIs](docs/public/configuration.md)
+change explicit fields inherited by future folders and devices, retain other
+template values, and separately expose the engine's configuration application flag.
+Identity-bound complete saves retain native sections and reject a known stale
+snapshot before writing; independent writers still need coordination.
+
 The unreleased [invitation and folder-peer APIs](docs/public/invitations.md)
 distinguish remote offers, persistent ignores, local key registration and explicit
 peer association. Nonempty pending-device records remain separately unverified.

@@ -1,5 +1,6 @@
 //! Authenticated management connections, separate from process ownership.
 
+mod configuration_control;
 mod device_control;
 mod device_ignore;
 mod file_control;

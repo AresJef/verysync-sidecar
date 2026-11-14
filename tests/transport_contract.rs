@@ -13,6 +13,205 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
+fn complete_configuration_fixture() -> serde_json::Value {
+    serde_json::json!({
+        "version":37,
+        "options":{"keepTemporariesH":24,"progressUpdateIntervalS":5,
+            "maxFolderConcurrency":0,"maxDialConcurrent":0,"maxConcurrentIncomingRequestKiB":0,
+            "setLowPriority":true,"disableSystemSleepOnSync":false,"futureSecret":KEY},
+        "defaults":{
+            "folder":{"label":"","paused":false,"rescanIntervalS":3600,"fsWatcherEnabled":true,"secretKey":KEY},
+            "device":{"name":"","addresses":["dynamic"],"compression":"metadata","paused":false,"futureSecret":KEY}
+        },
+        "folders":[{"id":"synthetic","label":KEY,"path":"C:\\Synthetic Data","paused":true}],
+        "devices":[{"deviceID":ID,"name":"","addresses":["dynamic"],"compression":"metadata","paused":false}],
+        "gui":{"apiKey":KEY},"ldap":{"address":KEY},"relayServer":{"private":KEY},
+        "remoteIgnoredDevices":[],"futureRoot":{"private":KEY}
+    })
+}
+
+#[tokio::test]
+async fn full_save_preserves_native_values_and_rejects_stale_or_unknown_outcomes() -> TestResult {
+    use verysync_sidecar::GeneralOptionsPatch;
+    for case in ["matching", "stale", "invalid-readback"] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let original = complete_configuration_fixture();
+        let mut observed = original.clone();
+        observed["options"]["keepTemporariesH"] = 25.into();
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+            identity(),
+            identity(),
+            Reply::json(original.clone()),
+            identity(),
+            Reply::json(if case == "stale" {
+                observed.clone()
+            } else {
+                original.clone()
+            }),
+        ];
+        if case != "stale" {
+            replies.extend([
+                Reply::json(serde_json::json!({})),
+                identity(),
+                Reply::json(if case == "matching" {
+                    observed.clone()
+                } else {
+                    serde_json::json!({"private":KEY})
+                }),
+            ]);
+            if case == "matching" {
+                replies.push(Reply::json(serde_json::json!({"configInSync":false})));
+            }
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let mut snapshot = client.configuration().await?;
+        assert_eq!(snapshot.version(), 37);
+        assert_eq!(snapshot.native_document(), &original);
+        assert_eq!(
+            snapshot.folders()?[0].path.style(),
+            verysync_sidecar::PathStyle::Windows
+        );
+        assert_eq!(
+            snapshot.folders()?[0].path.to_protocol()?,
+            r"C:\Synthetic Data"
+        );
+        assert!(!format!("{snapshot:?}").contains(KEY));
+        snapshot.set_general_options(&GeneralOptionsPatch::default().keep_temporaries_hours(25))?;
+        let result = client.replace_configuration(&snapshot).await;
+        match case {
+            "matching" => {
+                let update = result?;
+                assert!(update.requested_fields_match);
+                assert!(!update.application_state.config_in_sync);
+                assert_eq!(update.configuration.native_document(), &observed);
+                assert!(!format!("{update:?}").contains(KEY));
+            }
+            "stale" => assert!(matches!(result, Err(Error::ConfigurationChanged))),
+            _ => assert!(matches!(result, Err(Error::MutationOutcomeUnknown { .. }))),
+        }
+        let requests = server.finish().await?;
+        let writes = requests
+            .iter()
+            .filter(|r| r.starts_with("PUT "))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), usize::from(case != "stale"));
+        if let Some(write) = writes.first() {
+            assert!(write.starts_with("PUT /prefix/rest/config "));
+            let body: serde_json::Value = serde_json::from_str(
+                write
+                    .split_once("\r\n\r\n")
+                    .ok_or("missing full configuration")?
+                    .1,
+            )?;
+            assert_eq!(body, observed);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_configuration_cannot_be_saved_to_another_identity() -> TestResult {
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let first = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(complete_configuration_fixture()),
+    ])
+    .await?;
+    let client = Client::connect(first.options()?).await?;
+    let snapshot = client.configuration().await?;
+    assert_eq!(first.finish().await?.len(), 4);
+    let other_id = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let other = ScriptedServer::start(vec![
+        version(),
+        Reply::json(serde_json::json!({"myID":other_id})),
+    ])
+    .await?;
+    let other_client = Client::connect(other.options()?).await?;
+    assert!(matches!(
+        other_client.replace_configuration(&snapshot).await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert_eq!(other.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_patch_readback_and_native_application_are_independent() -> TestResult {
+    use verysync_sidecar::FolderDefaultsPatch;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(), identity(), Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"label":"another writer","paused":false,"rescanIntervalS":0,"fsWatcherEnabled":true,"secretKey":KEY})),
+        Reply::json(serde_json::json!({"configInSync":false,"private":KEY})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let update = client
+        .update_folder_defaults(&FolderDefaultsPatch::default().label("requested"))
+        .await?;
+    assert!(!update.requested_fields_match);
+    assert_eq!(update.configuration.extra["secretKey"], KEY);
+    assert!(!format!("{update:?}").contains(KEY));
+    let state = client.configuration_sync_state().await?;
+    assert!(!state.config_in_sync);
+    assert!(!format!("{state:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with("PATCH /prefix/rest/config/defaults/folder "));
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split("\r\n\r\n")
+            .nth(1)
+            .ok_or("missing request body")?,
+    )?;
+    assert_eq!(body, serde_json::json!({"label":"requested"}));
+    assert!(requests
+        .last()
+        .is_some_and(|r| r.starts_with("GET /prefix/rest/system/config/insync ")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepted_default_patch_with_invalid_readback_is_unknown_without_retry() -> TestResult {
+    use verysync_sidecar::FolderDefaultsPatch;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"private":KEY})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .update_folder_defaults(&FolderDefaultsPatch::default().paused(true))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn index_reset_requires_explicit_scope_and_exact_native_ack_without_readback() -> TestResult {
     use verysync_sidecar::{FolderId, IndexResetScope};

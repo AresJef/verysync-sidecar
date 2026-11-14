@@ -158,6 +158,10 @@ pub enum Error {
         /// A credential-free description of the setting.
         reason: &'static str,
     },
+    /// A full-save preflight observed a change since the snapshot was read.
+    /// No PUT was sent. Independent writers must still coordinate: this check
+    /// is not an atomic server-side compare-and-swap.
+    ConfigurationChanged,
     /// An explicitly owned event task failed while being joined.
     EventSubscriptionFailure,
     /// The engine's reported generation changed across an event snapshot read.
@@ -395,6 +399,7 @@ impl fmt::Display for Error {
             Self::InvalidConfiguration { reason } => {
                 write!(formatter, "invalid configuration: {reason}")
             }
+            Self::ConfigurationChanged => formatter.write_str("configuration changed since the reviewed snapshot; no replacement was sent"),
             Self::InvalidCredential { reason } => {
                 write!(formatter, "invalid management credential: {reason}")
             }

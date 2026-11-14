@@ -42,10 +42,12 @@
 #![doc = include_str!("../docs/public/file-resources.md")]
 #![doc = include_str!("../docs/public/file-transfers.md")]
 #![doc = include_str!("../docs/public/file-history.md")]
+#![doc = include_str!("../docs/public/configuration.md")]
 
 mod auth;
 mod capabilities;
 mod client;
+mod configuration;
 mod devices;
 mod endpoint;
 mod engine_source;
@@ -85,6 +87,10 @@ pub use capabilities::{
 };
 pub use client::{
     Client, ConnectOptions, EngineVersion, InstanceInfo, VersionCompatibility, VersionPolicy,
+};
+pub use configuration::{
+    ConfigurationSectionUpdate, ConfigurationSnapshot, ConfigurationSyncState, ConfigurationUpdate,
+    FolderDefaults, FolderDefaultsPatch, GeneralOptions, GeneralOptionsPatch,
 };
 pub use devices::{
     CreateDeviceOptions, DeviceCompression, DeviceConfig, DeviceDefaults, DevicePatch,
