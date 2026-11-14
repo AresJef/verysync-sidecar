@@ -4409,3 +4409,114 @@ async fn local_sync_baseline_wrong_ack_job_or_changed_preview_is_unknown_without
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn local_sync_complete_patch_refuses_incompatible_fresh_settings_and_target_syntax(
+) -> TestResult {
+    use verysync_sidecar::{
+        LocalSyncConflictPolicy, LocalSyncJobId, LocalSyncJobPatch, LocalSyncMode, PathStyle,
+        StorageEndpoint, TargetPath,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let id = LocalSyncJobId::parse("synthetic-job")?;
+    for case in 0..4 {
+        let mut original = local_sync_repair_job_fixture();
+        let patch = match case {
+            0 => LocalSyncJobPatch::default().delete_extraneous(true),
+            1 => {
+                original["mode"] = "mirror_a_to_b".into();
+                LocalSyncJobPatch::default().conflict_policy(LocalSyncConflictPolicy::Manual)
+            }
+            2 => {
+                original["mode"] = "mirror_a_to_b".into();
+                original["deleteExtraneous"] = true.into();
+                LocalSyncJobPatch::default().mode(LocalSyncMode::Bidirectional)
+            }
+            _ => {
+                original["mode"] = "unknown-future".into();
+                LocalSyncJobPatch::default().delete_extraneous(true)
+            }
+        };
+        let server = ScriptedServer::start(vec![
+            version(),
+            identity(),
+            identity(),
+            Reply::json(original),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.update_local_sync_job(&id, &patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 4);
+        assert!(!requests.iter().any(|r| r.starts_with("PUT ")));
+    }
+    let server = ScriptedServer::start(vec![version(), identity()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let windows =
+        StorageEndpoint::local(TargetPath::remote(PathStyle::Windows, r"C:\synthetic\new")?)?;
+    assert!(matches!(
+        client
+            .update_local_sync_job(&id, &LocalSyncJobPatch::default().side_a(windows))
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_endpoint_replacement_keeps_other_secrets_and_known_cleared_ignore_null(
+) -> TestResult {
+    use verysync_sidecar::{
+        LocalSyncJobId, LocalSyncJobPatch, PathStyle, StorageEndpoint, TargetPath,
+    };
+    let original = local_sync_repair_job_fixture();
+    let mut updated = original.clone();
+    updated["sideA"] = serde_json::json!({"fsType":"basic","uri":"/new/synthetic","transfers":3,"nativeDefault":7});
+    updated["ignoreLines"] = serde_json::Value::Null;
+    updated["parallelFileOps"] = 2.into();
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(original.clone()),
+        identity(),
+        Reply::json(updated.clone()),
+        identity(),
+        Reply::json(updated.clone()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let endpoint = StorageEndpoint::local(TargetPath::remote(PathStyle::Unix, "/new/synthetic")?)?
+        .parallel_transfers(3)?;
+    let result = client
+        .update_local_sync_job(
+            &LocalSyncJobId::parse("synthetic-job")?,
+            &LocalSyncJobPatch::default()
+                .side_a(endpoint)
+                .ignore_lines(Vec::new())?
+                .parallel_file_operations(2)?,
+        )
+        .await?;
+    assert!(result.requested_fields_match);
+    assert_eq!(serde_json::to_value(result.configuration)?, updated);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    let writes: Vec<_> = requests.iter().filter(|r| r.starts_with("PUT ")).collect();
+    assert_eq!(writes.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("missing body")?)?;
+    assert_eq!(
+        body["sideA"],
+        serde_json::json!({"fsType":"basic","uri":"/new/synthetic","transfers":3})
+    );
+    assert_eq!(body["sideB"], original["sideB"]);
+    assert_eq!(body["futureSetting"], original["futureSetting"]);
+    assert_eq!(body["ignoreLines"], serde_json::json!([]));
+    Ok(())
+}

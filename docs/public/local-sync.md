@@ -283,6 +283,19 @@ Missing baseline files alone do not necessarily produce a native failure; the
 comparison mismatch is the tested recovery trigger. Per-backend recovery and
 fault conditions remain independently required.
 
+## SFTP key validation boundary
+
+`private_key_file(TargetPath)` requests the bundled GUI's native `privateKey`
+path field. It opens no controller key file. This selection is not evidence of
+successful native key authentication. The fixed v2.33.2 macOS ARM core rejected
+an existing, synthetically generated unencrypted RSA PEM path with a key-parser
+error before authentication. Literal and escaped inline PEM research also failed;
+an escaped-key registration was not accepted. Those attempts are failed protocol
+research, not successful key refusal, transfer or host-identity acceptance.
+Password data effects remain separate. Positive key and verified host identity
+conditions remain pending, with no implicit agent/password fallback or key-file
+upload added by the SDK.
+
 ## Per-protocol directional and selection evidence
 
 The dedicated advanced native cases separately exercise FTP, SFTP, SMB and
@@ -301,3 +314,42 @@ body with `STATUS_END_OF_FILE`; the test peer preserves that status and supplies
 an SMB2 ERROR body as required by [MS-SMB2 section 2.2.2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d4da8b67-c180-47e3-ba7a-d24214ac4aaa).
 This is a peer-fixture protocol correction, not an SDK read fallback, successful
 empty read or retry policy.
+
+## Complete scoped configuration
+
+Endpoint `parallel_transfers` accepts 1 through 32. SFTP `sftp_channels` accepts
+1 through 256; `sftp_compression` requests the native compression preference.
+These settings are distinct from observed concurrency or negotiated wire
+compression. On the fixed macOS ARM baseline, enabling compression was saved but
+native analysis returned an unsupported-operation error before file effects.
+The test explicitly observes that refusal, then selects compression off before
+separately verifying data effects. It does not report compression as supported.
+
+Creation and `LocalSyncJobPatch` expose bounded native `ignore_lines` and
+`parallel_file_operations` (1 through 32). Rules are preserved as supplied, with
+at most 1024 lines, 4096 UTF-8 bytes per line and 64 KiB total including separators.
+Embedded NUL/newlines and include-file directives are refused; the SDK opens no
+ignore file. Empty rules explicitly clear the list. The native readback represents
+that known empty list as JSON null, which is preserved in the returned job;
+`requested_fields_match` recognizes this verified clear operation. It does not
+treat an unknown missing list as empty.
+
+`side_a` and `side_b` replace only the selected endpoint. Their path syntax is
+checked against the core before a modifying request; credentials/options of an
+unselected endpoint remain intact. Native extra defaults do not make an otherwise
+matching selected endpoint fail readback. Disabled SFTP compression is natively
+omitted; only that verified false default is treated as equivalent, without
+normalizing unknown missing credentials or other response fields.
+
+A patch can select `mode`, `delete_extraneous` and `conflict_policy`. The client
+checks the combined fresh configuration before PUT: mirror deletion is refused
+for two-way/unknown modes, and selected conflict preferences require two-way mode.
+Changing endpoints or comparison rules can require separately explicit marker or
+baseline recovery. No file migration, metadata repair, retry, backup or rollback
+happens implicitly. Explicit mirror deletion can remove destination-only files;
+review both endpoint ownership and the native preview before execution.
+
+The public synthetic native case verifies endpoint/direction changes, actual
+ignore and clear behavior, explicit deletion, old endpoint and source retention,
+and a subsequent reverse copy into a new endpoint. Full source/platform acceptance
+and protocol-specific remaining conditions are independent of this local case.
