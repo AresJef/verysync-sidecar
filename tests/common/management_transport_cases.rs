@@ -243,6 +243,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
                 .use_tls(true),
         )
         .await?;
+    println!("native_gui_listener_stage=tls_reconnect");
     assert_eq!(
         update.previous_configuration.address.tcp_authority(),
         Some(initial.to_string().as_str())
@@ -259,6 +260,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
     .await?;
     assert!(update.requested_fields_match(&tls.gui_listener().await?));
     assert_eq!(tls.system_status().await?.device_id, id);
+    println!("native_gui_listener_stage=http_restore");
     let initial_guard = std::net::TcpListener::bind(initial)?;
     drop(initial_guard);
     let restore = tls
@@ -274,6 +276,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
             .request_timeout(Duration::from_secs(2))?,
     )
     .await?;
+    println!("native_gui_listener_stage=disable_management");
     assert!(restore.requested_fields_match(&http.gui_listener().await?));
     assert!(
         http.configuration().await?.native_document()["gui"] == before,
@@ -283,6 +286,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
         .update_gui_listener(&GuiListenerPatch::default().enabled(false))
         .await?;
     assert!(disabled.previous_configuration.enabled);
+    println!("native_gui_listener_stage=wait_released_address");
     // Passively bind the exact released owned address; do not probe any endpoint
     // that might have been reused by another process after the listener closes.
     let guard = tokio::time::timeout(Duration::from_secs(8), async {
@@ -297,6 +301,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
         }
     })
     .await??;
+    println!("native_gui_listener_stage=explicit_force_cleanup");
     // Disabling management is not process exit. Explicit forced cleanup is a
     // separate caller choice for this synthetic fixture, never a library fallback.
     let forced = core.force_stop(Duration::from_secs(10)).await?;
