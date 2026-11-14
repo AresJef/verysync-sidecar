@@ -345,6 +345,10 @@ pub(in crate::managed) fn open_private(path: &Path, read_only: bool) -> io::Resu
         options.write(true).create(true);
     }
     let file = options.open(path)?;
+    validate_control_file(path, file)
+}
+
+fn validate_control_file(path: &Path, file: File) -> io::Result<File> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(io::Error::other(
@@ -364,7 +368,10 @@ pub(in crate::managed) fn protect_generated(path: &Path) -> io::Result<()> {
 }
 
 pub(in crate::managed) fn open_owned_lock(path: &Path) -> io::Result<File> {
-    open_private(path, false)
+    // This is an observation of an existing upstream resource, not admission
+    // that may create the library's own private control files.
+    let file = options().read(true).write(true).open(path)?;
+    validate_control_file(path, file)
 }
 
 pub(in crate::managed) fn open_snapshot_input(path: &Path) -> io::Result<File> {

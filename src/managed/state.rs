@@ -206,6 +206,10 @@ mod tests {
         let path = base.path().join("state");
         let lease = StateLease::acquire(&path)?;
         lease.confirm_engine_released(Instant::now())?;
+        assert!(
+            !path.join("verysync.lock").exists(),
+            "release observation created an upstream lock"
+        );
         let held = native::create_private(&path.join("verysync.lock"))
             .map_err(|e| io_error("create release test lock", e))?;
         held.try_lock_exclusive()

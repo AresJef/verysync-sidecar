@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Observe Windows upstream state locks without creating absent files. Keep the
+  same regular-file, reparse-point and private-ACL checks on existing handles.
+
 - Preserve signed progress-report intervals, including the native disabled value
   `-1`. Add typed minimum configuration-volume free space and scoped temporary
   index, remote-name, full-index resend and IP traffic-class preferences. Separate
