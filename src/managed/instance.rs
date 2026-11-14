@@ -174,6 +174,30 @@ impl ManagedInstance {
         &self.client
     }
 
+    /// Rotate the management key once and adopt the freshly authenticated
+    /// connection for subsequent owned lifecycle operations. The root process
+    /// is not restarted. Old borrowed clients retain their previous credential.
+    /// Check the returned readback/refusal flags. After cancellation or unknown
+    /// outcome, explicitly reconnect with the retained proposed key.
+    pub async fn rotate_api_key(
+        &mut self,
+        key: ApiKey,
+        timeout: Duration,
+    ) -> Result<crate::ApiKeyRotation> {
+        let rotation = self.client.rotate_api_key(key, timeout).await?;
+        self.client = rotation.client.clone();
+        Ok(rotation)
+    }
+
+    /// Read-only credential recovery for this same owned identity. A failed
+    /// authentication leaves the owner and its original connection intact.
+    /// Performs no key change, restart or process termination.
+    pub async fn reconnect_with_api_key(&mut self, key: ApiKey) -> Result<()> {
+        let client = self.client.reconnect_with_api_key(key).await?;
+        self.client = client;
+        Ok(())
+    }
+
     /// Inspect the executable identity checked at startup.
     pub fn program_info(&self) -> &ProgramInfo {
         &self.info

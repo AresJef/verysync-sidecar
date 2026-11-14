@@ -43,6 +43,7 @@
 #![doc = include_str!("../docs/public/file-transfers.md")]
 #![doc = include_str!("../docs/public/file-history.md")]
 #![doc = include_str!("../docs/public/configuration.md")]
+#![doc = include_str!("../docs/public/management-authentication.md")]
 
 mod auth;
 mod capabilities;
@@ -64,6 +65,7 @@ mod local_sync;
 mod local_sync_events;
 mod maintenance;
 mod managed;
+mod management_auth;
 mod network;
 mod operations;
 mod path;
@@ -156,6 +158,7 @@ pub use managed::{
 };
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
+pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
 pub use network::{
     ConnectionSnapshot, ConnectionTotals, DeviceTransport, DiscoveryRecord, ListenerStatus,
     NetworkConfig, NetworkPatch, NetworkUpdate, PeerConnection, PeerConnectionType,

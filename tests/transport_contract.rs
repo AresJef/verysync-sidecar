@@ -13,6 +13,212 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
+#[tokio::test]
+async fn key_rotation_cancel_after_write_releases_lock_and_allows_explicit_recovery() -> TestResult
+{
+    use verysync_sidecar::FolderDefaultsPatch;
+    const NEXT: &str = "synthetic-next-management-key";
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let server=ScriptedServer::with_signal(vec![
+        version(),identity(),identity(),Reply::json(serde_json::json!({})),
+        Reply {delay:Duration::from_millis(250),..version()},
+        version(),identity(),identity(),Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"label":"","paused":true,"rescanIntervalS":0,"fsWatcherEnabled":false})),
+    ],Some((5,sent))).await?;
+    let client = Client::connect(server.options()?).await?;
+    {
+        let operation = client.rotate_api_key(ApiKey::new(NEXT)?, Duration::from_secs(5));
+        tokio::pin!(operation);
+        tokio::select! {
+            event=received => event?,
+            _=&mut operation => return Err("credential operation finished before controlled pending read".into()),
+        }
+        let blocked = client
+            .rotate_api_key(
+                ApiKey::new("synthetic-other-management-key")?,
+                Duration::from_millis(50),
+            )
+            .await;
+        assert!(matches!(blocked, Err(Error::Timeout { .. })));
+        // Drop the operation after the server observed PATCH and the subsequent
+        // pending read. No timeout estimate decides whether the write happened.
+    }
+    let recovered = client.reconnect_with_api_key(ApiKey::new(NEXT)?).await?;
+    let update = tokio::time::timeout(
+        Duration::from_secs(2),
+        recovered.update_folder_defaults(&FolderDefaultsPatch::default().paused(true)),
+    )
+    .await??;
+    assert!(update.requested_fields_match);
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH /prefix/rest/config/gui "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH /prefix/rest/config/defaults/folder "))
+            .count(),
+        1
+    );
+    assert!(requests[5]
+        .to_ascii_lowercase()
+        .contains(&format!("x-api-key: {NEXT}")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn key_rotation_new_identity_mismatch_is_unknown_and_never_retried() -> TestResult {
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let other = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({})),
+        version(),
+        Reply::json(serde_json::json!({"myID":other})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .rotate_api_key(
+            ApiKey::new("synthetic-next-management-key")?,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::MutationOutcomeUnknown { source, .. } if matches!(*source, Error::IdentityMismatch { .. }))
+    );
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    assert_eq!(
+        requests.iter().filter(|r| r.starts_with("PATCH ")).count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn key_rotation_writes_once_reconciles_unknown_ack_and_preserves_version_policy() -> TestResult
+{
+    const NEXT: &str = "synthetic-next-management-key";
+    for (unverified, acknowledged, old_accepted, first_denied) in [
+        (false, true, false, false),
+        (true, false, false, true),
+        (false, true, true, false),
+    ] {
+        let version = || {
+            Reply::json(
+                serde_json::json!({"version":if unverified {"v99.0.0"} else {"v2.33.2"},"os":"linux","arch":"amd64"}),
+            )
+        };
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let denied = || Reply {
+            status: 403,
+            ..Reply::json(serde_json::json!({"private":KEY}))
+        };
+        let mut replies = vec![
+            version(),
+            identity(),
+            identity(),
+            Reply {
+                status: if acknowledged { 200 } else { 500 },
+                ..Reply::json(serde_json::json!({"private":NEXT}))
+            },
+        ];
+        if first_denied {
+            replies.push(denied());
+        }
+        replies.extend([version(),identity(),Reply::json(serde_json::json!({"enabled":true,"authMode":"static","user":"private-synthetic-user","password":KEY,"apiKey":NEXT,"futureSecret":KEY}))]);
+        if old_accepted {
+            replies.extend([version(), identity()]);
+        } else {
+            replies.push(denied());
+        }
+        replies.push(identity());
+        let server = ScriptedServer::start(replies).await?;
+        let options = server.options()?.version_policy(if unverified {
+            VersionPolicy::AllowUnverified
+        } else {
+            VersionPolicy::ValidatedOnly
+        });
+        let client = Client::connect(options).await?;
+        let rotation = client
+            .rotate_api_key(ApiKey::new(NEXT)?, Duration::from_secs(2))
+            .await?;
+        assert_eq!(rotation.write_acknowledged, acknowledged);
+        assert!(rotation.requested_key_matches);
+        assert_eq!(rotation.previous_key_rejected, !old_accepted);
+        assert_eq!(
+            rotation.client.system_status().await?.device_id.as_str(),
+            ID
+        );
+        let debug = format!("{rotation:?}");
+        assert!(
+            !debug.contains(KEY)
+                && !debug.contains(NEXT)
+                && !debug.contains("private-synthetic-user")
+        );
+        let requests = server.finish().await?;
+        let writes = requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].starts_with("PATCH /prefix/rest/config/gui "));
+        let body: serde_json::Value = serde_json::from_str(
+            writes[0]
+                .split_once("\r\n\r\n")
+                .ok_or("missing key patch")?
+                .1,
+        )?;
+        assert_eq!(body, serde_json::json!({"apiKey":NEXT}));
+        assert!(writes[0]
+            .to_ascii_lowercase()
+            .contains(&format!("x-api-key: {KEY}")));
+        assert!(requests
+            .last()
+            .ok_or("missing authenticated read")?
+            .to_ascii_lowercase()
+            .contains(&format!("x-api-key: {NEXT}")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_key_rotation_inputs_send_no_request() -> TestResult {
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for (key, timeout) in [
+        (KEY, Duration::from_secs(1)),
+        ("short", Duration::from_secs(1)),
+        ("synthetic-next-management-key", Duration::ZERO),
+    ] {
+        let result = client.rotate_api_key(ApiKey::new(key)?, timeout).await;
+        assert!(matches!(
+            result,
+            Err(Error::InvalidCredential { .. }) | Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
 fn complete_configuration_fixture() -> serde_json::Value {
     serde_json::json!({
         "version":37,
@@ -2378,6 +2584,12 @@ struct ScriptedServer {
 }
 impl ScriptedServer {
     async fn start(replies: Vec<Reply>) -> TestResult<Self> {
+        Self::with_signal(replies, None).await
+    }
+    async fn with_signal(
+        replies: Vec<Reply>,
+        mut signal: Option<(usize, tokio::sync::oneshot::Sender<()>)>,
+    ) -> TestResult<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let base = format!("http://{}/prefix", listener.local_addr()?);
         let task = tokio::spawn(async move {
@@ -2423,6 +2635,14 @@ impl ScriptedServer {
                     bytes.extend_from_slice(&buffer[..count]);
                 }
                 requests.push(String::from_utf8(bytes)?);
+                if signal
+                    .as_ref()
+                    .is_some_and(|(index, _)| *index == requests.len())
+                {
+                    if let Some((_, sender)) = signal.take() {
+                        let _ = sender.send(());
+                    }
+                }
                 tokio::time::sleep(reply.delay).await;
                 let head = format!(
                     "HTTP/1.1 {} Test\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",

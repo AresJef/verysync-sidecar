@@ -53,6 +53,10 @@ template values, and separately expose the engine's configuration application fl
 Identity-bound complete saves retain native sections and reject a known stale
 snapshot before writing; independent writers still need coordination.
 
+The unreleased [management credential API](docs/public/management-authentication.md)
+rotates an explicit API key once, verifies readback and old-key refusal, and
+provides fresh identity-checked connections for normal operation and recovery.
+
 The unreleased [invitation and folder-peer APIs](docs/public/invitations.md)
 distinguish remote offers, persistent ignores, local key registration and explicit
 peer association. Nonempty pending-device records remain separately unverified.

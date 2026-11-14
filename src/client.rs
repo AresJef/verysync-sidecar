@@ -11,6 +11,7 @@ mod ignore_control;
 mod invitation_control;
 mod local_sync_control;
 mod maintenance_control;
+mod management_auth;
 mod network_control;
 mod recovery;
 mod relay_control;
@@ -166,6 +167,9 @@ struct Connection {
     response_limit: usize,
     mutation_lock: Arc<tokio::sync::Mutex<()>>,
     endpoint_kind: crate::EndpointKind,
+    endpoint: ManagementEndpoint,
+    timeout: Duration,
+    version_policy: VersionPolicy,
 }
 
 /// An authenticated connection that does not own the engine process.
@@ -479,6 +483,9 @@ impl Client {
             response_limit: options.response_limit,
             mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             endpoint_kind,
+            endpoint: options.endpoint,
+            timeout: options.timeout,
+            version_policy: options.version_policy,
         };
         let version: EngineVersion = connection
             .get_json("read version", "rest/system/version")
