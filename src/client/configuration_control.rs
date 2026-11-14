@@ -131,7 +131,7 @@ impl Client {
             .await
     }
 
-    async fn patch_configuration_section<T: DeserializeOwned>(
+    pub(super) async fn patch_configuration_section<T: DeserializeOwned>(
         &self,
         route: &'static str,
         patch: &impl Serialize,

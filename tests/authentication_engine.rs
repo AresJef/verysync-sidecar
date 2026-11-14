@@ -1,9 +1,87 @@
 //! Actual management credential changes and explicit owned-client recovery.
+#[path = "common/ldap_service.rs"]
+mod ldap_service;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 use managed_fixture::{options, TestResult};
 use std::time::Duration;
 use verysync_sidecar::*;
+
+#[tokio::test]
+async fn native_ldap_bind_and_authentication_failure_preserve_api_management() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-ldap-")
+        .tempdir()?
+        .keep();
+    let mut peer = ldap_service::LdapService::start(&root)?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let endpoint = core.client().endpoint().clone();
+    let configured = core
+        .client()
+        .update_ldap_configuration(
+            &LdapPatch::default()
+                .address(peer.address.clone())
+                .bind_dn("uid=%s,dc=example,dc=test")
+                .transport(LdapTransport::Plain)
+                .insecure_skip_verify(false)
+                .search_base_dn("")
+                .search_filter(""),
+        )
+        .await?;
+    assert!(configured.requested_fields_match);
+    assert_eq!(configured.configuration.transport, LdapTransport::Plain);
+    assert!(!configured.configuration.insecure_skip_verify);
+    let mode = core
+        .set_gui_auth_mode(&GuiAuthMode::Ldap, Duration::from_secs(10))
+        .await?;
+    assert!(mode.requested_mode_matches);
+    let login = GuiLoginOptions::new(endpoint.clone(), peer.credentials.clone())
+        .expected_device_id(identity.clone())
+        .request_timeout(Duration::from_secs(3))?;
+    let session = GuiSession::login(login).await?;
+    assert_eq!(session.system_status().await?.device_id, identity);
+    for credentials in [
+        GuiCredentials::new("ldap-test-user", "deliberately-wrong-password")?,
+        peer.unknown_user()?,
+    ] {
+        let denied = GuiSession::login(
+            GuiLoginOptions::new(endpoint.clone(), credentials)
+                .expected_device_id(identity.clone())
+                .request_timeout(Duration::from_secs(3))?,
+        )
+        .await;
+        assert!(
+            matches!(&denied,Err(Error::AccessDenied{response}) if response.status()==403)
+                || matches!(&denied, Err(Error::Authentication { status: 401 }))
+        );
+    }
+    let observations = peer.observations()?;
+    assert!(observations.iter().any(|r| r["dn_matches"] == true
+        && r["password_matches"] == true
+        && r["result_code"] == 0));
+    assert!(observations.iter().any(|r| r["dn_matches"] == true
+        && r["password_matches"] == false
+        && r["result_code"] == 49));
+    assert!(observations
+        .iter()
+        .any(|r| r["dn_matches"] == false && r["result_code"] == 49));
+    peer.stop()?;
+    assert_eq!(session.system_status().await?.device_id, identity);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    assert!(session.logout().await?.session_rejected);
+    let mode = core
+        .set_gui_auth_mode(&GuiAuthMode::Static, Duration::from_secs(10))
+        .await?;
+    assert!(mode.requested_mode_matches);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    println!(
+        "native_ldap_effects=12 helper_platform={}",
+        peer.python_platform
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn gui_password_sessions_logout_and_api_key_management_are_independent() -> TestResult {

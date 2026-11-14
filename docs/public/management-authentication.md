@@ -119,3 +119,47 @@ tests check that another independently logged-in session and the API-key client
 remain usable. Password hashing and session invalidation are performed by the
 official program. LDAP-mode correctness and official account login require
 their own actual authentication evidence.
+
+## LDAP configuration and GUI mode
+
+`ldap_configuration()` reads the actual native address, bind template, transport,
+verification flag and optional search fields. `update_ldap_configuration()` PATCHes
+only explicit `LdapPatch` fields and returns actual readback while retaining other
+settings. This operation performs no directory bind and leaves GUI mode unchanged.
+`set_gui_auth_mode()` separately selects static or LDAP authentication, reconciling
+the API-key connection across native GUI reload. These writes are independent;
+callers coordinate other writers and inspect both readbacks before logging in.
+
+```no_run
+use verysync_sidecar::{GuiAuthMode, LdapPatch, LdapTransport, ManagedInstance};
+use std::time::Duration;
+
+async fn configure_private_ldap(core: &mut ManagedInstance) -> verysync_sidecar::Result<()> {
+    let update = core.client().update_ldap_configuration(
+        &LdapPatch::default()
+            .address("127.0.0.1:389")
+            .bind_dn("uid=%s,dc=example,dc=test")
+            .transport(LdapTransport::Plain)
+            .insecure_skip_verify(false)
+            .search_base_dn("")
+            .search_filter(""),
+    ).await?;
+    if update.requested_fields_match {
+        core.set_gui_auth_mode(&GuiAuthMode::Ldap, Duration::from_secs(10)).await?;
+    }
+    Ok(())
+}
+```
+
+The native plain direct-bind case has observed real LDAPv3 result 0 for correct
+credentials, result 49 for incorrect passwords and unknown users, and matching GUI
+login acceptance/refusal. An existing GUI session and API-key management remain
+usable after the private directory stops. The test peer is an explicitly started
+loopback-only process with synthetic credentials and exact child cleanup; the SDK
+does not depend on it or start a directory service.
+
+Native TLS/StartTLS selectors and search fields retain separate effect and trust
+conditions. Configuration readback does not establish a TLS handshake, trusted
+directory identity or search-filter membership. No trust store is modified and no
+certificate bypass is enabled implicitly. Full same-source platform evidence and
+the remaining directory conditions are required before broad support claims.
