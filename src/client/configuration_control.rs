@@ -168,8 +168,13 @@ impl Client {
         patch: &DevicePatch,
     ) -> Result<ConfigurationSectionUpdate<DeviceDefaults>> {
         patch.validate(true)?;
-        self.patch_configuration_section("rest/config/defaults/device", patch)
-            .await
+        let update: ConfigurationSectionUpdate<DeviceDefaults> = self
+            .patch_configuration_section("rest/config/defaults/device", patch)
+            .await?;
+        patch
+            .validate_advanced_readback(&update.configuration.extra)
+            .map_err(section_unknown)?;
+        Ok(update)
     }
 
     /// Read the native application flag. This does not save, restart or prove

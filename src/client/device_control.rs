@@ -84,6 +84,10 @@ impl Client {
             .device(&options.id)
             .await
             .map_err(|source| uncertain("read back created device", source))?;
+        options
+            .patch
+            .validate_advanced_readback(&configuration.extra)
+            .map_err(|source| uncertain("read back created device", source))?;
         Ok(DeviceUpdate {
             requested_fields_match: options.patch.matches(&configuration),
             configuration,
@@ -115,6 +119,9 @@ impl Client {
         let configuration = self
             .device(id)
             .await
+            .map_err(|source| uncertain("read back updated device", source))?;
+        patch
+            .validate_advanced_readback(&configuration.extra)
             .map_err(|source| uncertain("read back updated device", source))?;
         Ok(DeviceUpdate {
             requested_fields_match: patch.matches(&configuration),

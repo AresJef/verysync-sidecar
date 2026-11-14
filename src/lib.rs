@@ -54,6 +54,7 @@ mod auth;
 mod capabilities;
 mod client;
 mod configuration;
+mod device_options;
 mod devices;
 mod diagnostics_preferences;
 mod endpoint;
@@ -111,6 +112,7 @@ pub use configuration::{
     DiskFreeRequirement, DiskSpaceUnit, FolderDefaults, FolderDefaultsPatch, GeneralOptions,
     GeneralOptionsPatch,
 };
+pub use device_options::{DeviceAdvancedConfig, DeviceAdvancedPatch, IntroductionSource};
 pub use devices::{
     CreateDeviceOptions, DeviceCompression, DeviceConfig, DeviceDefaults, DevicePatch,
     DeviceRemoval, DeviceUpdate,

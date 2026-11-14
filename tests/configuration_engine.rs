@@ -1,4 +1,6 @@
 //! Actual default inheritance, independent runtime state and persisted configuration.
+#[path = "common/device_options_cases.rs"]
+mod device_options_cases;
 #[path = "common/folder_options_cases.rs"]
 mod folder_options_cases;
 #[path = "common/managed_fixture.rs"]

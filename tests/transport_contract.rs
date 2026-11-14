@@ -13,6 +13,8 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
+#[path = "common/device_options_contracts.rs"]
+mod device_options_contracts;
 #[path = "common/folder_options_contracts.rs"]
 mod folder_options_contracts;
 
