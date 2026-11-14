@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add typed native GUI listener selections and single explicit listener changes.
+  Keep acknowledgement, caller reconnection, actual TLS/bind/socket-mode effects
+  and process ownership separate; retain private unknown selectors on reads.
+
 - Add per-connection PEM/DER trust roots and explicit authenticated HTTP(S)
   management proxies for API-key and GUI-session connections. Retain policy
   through credential reconnects, verify hostnames normally, and omit reflected
