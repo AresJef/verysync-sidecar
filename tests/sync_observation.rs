@@ -1554,8 +1554,55 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
     // its original ten-second normal-exit requirement; no force fallback.
     for (name, core) in [("sender", &mut a), ("receiver", &mut b)] {
         eprintln!("selective owned normal shutdown: core={name} begin");
-        let exit = core.shutdown(Duration::from_secs(10)).await?;
-        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+        let began = std::time::Instant::now();
+        let exit = match core.shutdown(Duration::from_secs(10)).await {
+            Ok(exit) => exit,
+            Err(error) => {
+                // One immediate observation after the original failure. This
+                // does not extend the normal-exit window or turn failure into
+                // success, retry shutdown, signal a PID or inspect other cores.
+                use std::{future::Future, task::Poll};
+                let observed = {
+                    let mut wait = Box::pin(core.wait_for_exit());
+                    std::future::poll_fn(|context| match wait.as_mut().poll(context) {
+                        Poll::Ready(report) => Poll::Ready(Some(report)),
+                        Poll::Pending => Poll::Ready(None),
+                    })
+                    .await
+                };
+                let owner = match observed {
+                    Some(Ok(report)) => {
+                        json!({"report_ready":true,"code":report.code,"signal":report.signal,"forced":report.forced,"tree_stopped":report.tree_stopped,"state_released":report.state_released})
+                    }
+                    Some(Err(_)) => json!({"report_ready":true,"report_validation_failed":true}),
+                    None => json!({"report_ready":false}),
+                };
+                use std::io::Read;
+                let capture =
+                    std::fs::File::open(core.state_directory().join(".verysync-sidecar-core.log"))
+                        .and_then(|file| {
+                            let mut bytes = Vec::new();
+                            file.take(65536).read_to_end(&mut bytes)?;
+                            Ok(bytes)
+                        });
+                let diagnostic = match capture {
+                    Ok(bytes) => {
+                        use sha2::{Digest, Sha256};
+                        let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
+                        json!({"read":true,"bounded_bytes":bytes.len(),"sha256":format!("{:x}",Sha256::digest(&bytes)),"has_panic_marker":text.contains("panic:"),"has_shutdown_marker":text.contains("shutting down")||text.contains("shutdown"),"has_exit_marker":text.contains("exiting")||text.contains("exit for")})
+                    }
+                    Err(error) => {
+                        json!({"read":false,"error_kind":format!("{:?}",error.kind()),"native_code":error.raw_os_error()})
+                    }
+                };
+                eprintln!(
+                    "selective failed normal shutdown evidence: {}",
+                    json!({"core":name,"elapsed_millis":began.elapsed().as_millis(),"owner":owner,"private_capture":diagnostic,"original_failure_retained":true,"extra_exit_wait_millis":0})
+                );
+                return Err(error.into());
+            }
+        };
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
         eprintln!("selective owned normal shutdown: core={name} complete");
     }
     std::fs::remove_dir_all(root)?;
