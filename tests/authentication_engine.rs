@@ -8,6 +8,88 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn official_account_empty_logout_and_upstream_failure_preserve_gui_and_identity() -> TestResult
+{
+    let root = tempfile::Builder::new()
+        .prefix("vs-official-account-")
+        .tempdir()?
+        .keep();
+    let sentinel = root.join("sentinel.bin");
+    std::fs::write(&sentinel, b"official account calls retain caller data")?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let pid = core.process_id();
+    let before = core.client().configuration().await?;
+    let state = core.client().official_account_status().await?;
+    assert_eq!(state.state(), OfficialAccountState::LoggedOut);
+    assert_eq!(state.user_id(), None);
+    assert!(state.extra().is_empty());
+    let logout = core.client().logout_official_account().await?;
+    assert!(logout.expected_state_matches);
+    assert_eq!(logout.status.state(), OfficialAccountState::LoggedOut);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(logout.acknowledgement.body_bytes())?,
+        serde_json::json!({})
+    );
+    // The isolation wrapper refuses external forwarding. This establishes a
+    // native upstream service failure, not rejection of an incorrect password
+    // by the real account service and not a successful authenticated session.
+    let credentials = OfficialAccountCredentials::new(
+        "synthetic-account@example.invalid",
+        "synthetic-never-real-password",
+    )?;
+    let error = core
+        .client()
+        .login_official_account(&credentials)
+        .await
+        .err()
+        .ok_or("native upstream rejection expected")?;
+    assert!(!format!("{error:?} {credentials:?}").contains("synthetic-never-real-password"));
+    let Error::OfficialAccountRejected { code, response } = error else {
+        return Err("native official account rejection category differs".into());
+    };
+    assert_eq!(code, 5000);
+    assert_eq!(response.status(), 200);
+    let envelope: serde_json::Value = serde_json::from_slice(response.body_bytes())?;
+    assert_eq!(envelope["error"]["code"], 5000);
+    assert!(envelope["error"]["message"].is_string());
+    assert_eq!(
+        core.client().official_account_status().await?.state(),
+        OfficialAccountState::LoggedOut
+    );
+    assert_eq!(core.process_id(), pid);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let after = core.client().configuration().await?;
+    for section in [
+        "gui",
+        "ldap",
+        "folders",
+        "devices",
+        "defaults",
+        "options",
+        "relayServer",
+    ] {
+        assert!(
+            before.native_document()[section] == after.native_document()[section],
+            "official account call changed unrelated configuration"
+        );
+    }
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(
+        core.client().official_account_status().await?.state(),
+        OfficialAccountState::LoggedOut
+    );
+    assert_eq!(
+        std::fs::read(&sentinel)?,
+        b"official account calls retain caller data"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    println!("native_official_account_effects=12 successful_cloud_login_and_authenticated_logout_pending=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn gui_preferences_reload_preserve_credentials_and_control_actual_metrics_and_frame_headers(
 ) -> TestResult {
     let root = tempfile::Builder::new()
