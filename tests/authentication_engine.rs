@@ -3,6 +3,9 @@
 mod ldap_service;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[cfg(feature = "tls")]
+#[path = "common/management_transport_cases.rs"]
+mod management_transport_cases;
 use managed_fixture::{options, TestResult};
 use std::time::Duration;
 use verysync_sidecar::*;
