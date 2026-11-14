@@ -183,15 +183,21 @@ def probe_macos_admin_trust(path):
                 "--certificate", str(path), "--allow-ephemeral-runner-system-trust"], path)
 
 
+def macos_certificate_absent(path, identity):
+    code = run(["security", "find-certificate", "-c", identity["common_name"], "-Z",
+                "/Library/Keychains/System.keychain"], path)
+    if code not in (0, 44):
+        raise ValueError("generated macOS CA keychain state is unobservable")
+    return code == 44
+
+
 def ensure_absent(path, identity):
     if sys.platform == "win32":
         code = windows("probe", path)
         if code != 0:
             raise ValueError("preexisting or unobservable CA refused")
     elif sys.platform == "darwin":
-        code = run(["security", "find-certificate", "-c", identity["common_name"], "-Z",
-                    "/Library/Keychains/System.keychain"], path)
-        if code != 44:
+        if not macos_certificate_absent(path, identity):
             raise ValueError("preexisting or unobservable CA refused")
         if probe_macos_admin_trust(path) != 0:
             raise ValueError("preexisting or unobservable administrative CA trust refused")
@@ -210,13 +216,23 @@ def mutate(action, path, identity):
             commands = [["sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot",
                          "-k", "/Library/Keychains/System.keychain", str(path)]]
         else:
-            # remove-trusted-cert hangs on hosted macOS images (runner-images
-            # #12116). Delete only our fingerprint, then independently require
-            # absence of its administrative trust settings. A stale setting is
-            # a real cleanup failure; never remove the lease or waive the gate.
-            code = run(["sudo", "-n", "security", "delete-certificate", "-Z", identity["sha256"],
-                        "/Library/Keychains/System.keychain"], path)
-            if code not in (0, 44) or probe_macos_admin_trust(path) != 0:
+            # Removing trust before the keychain certificate hangs on hosted
+            # macOS. The native diagnostic proves deletion alone leaves trust.
+            # Reverse the order, then explicitly remove that exact remaining
+            # record and verify both independent postconditions. Never import
+            # a replacement trust store or change authorization policies.
+            if not macos_certificate_absent(path, identity):
+                code = run(["sudo", "-n", "security", "delete-certificate", "-Z", identity["sha256"],
+                            "/Library/Keychains/System.keychain"], path)
+                if code != 0:
+                    raise RuntimeError("exact generated CA deletion failed; private lease retained")
+            trust = probe_macos_admin_trust(path)
+            if trust == 3:
+                if run(["sudo", "-n", "security", "remove-trusted-cert", "-d", str(path)], path) != 0:
+                    raise RuntimeError("exact administrative CA trust removal failed; private lease retained")
+            elif trust != 0:
+                raise RuntimeError("exact administrative CA trust is unobservable; private lease retained")
+            if probe_macos_admin_trust(path) != 0:
                 raise RuntimeError("exact macOS CA cleanup incomplete; private lease retained")
             return
         codes = [run(command, path) for command in commands]

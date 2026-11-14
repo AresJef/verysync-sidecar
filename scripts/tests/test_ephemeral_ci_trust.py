@@ -16,23 +16,34 @@ SPEC.loader.exec_module(TRUST)
 class EphemeralTrustScopeTests(unittest.TestCase):
     def test_macos_removal_uses_exact_sha256_and_requires_independent_trust_absence(self):
         path = Path("/synthetic/vs-ldap-trusted-owned/synthetic-ldap-ca.pem")
-        identity = {"sha256": "a" * 64, "sha1": "b" * 40}
-        for deletion in [0, 44]:
-            with self.subTest(deletion=deletion), mock.patch.object(TRUST.sys, "platform", "darwin"):
-                with mock.patch.object(TRUST, "run", return_value=deletion) as run:
-                    with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=0) as probe:
+        identity = {"sha256": "a" * 64, "sha1": "b" * 40, "common_name": "synthetic"}
+        with mock.patch.object(TRUST.sys, "platform", "darwin"):
+            with mock.patch.object(TRUST, "macos_certificate_absent", return_value=False):
+                with mock.patch.object(TRUST, "run", return_value=0) as run:
+                    with mock.patch.object(TRUST, "probe_macos_admin_trust", side_effect=[3, 0]) as probe:
                         TRUST.mutate("remove", path, identity)
-                run.assert_called_once_with(["sudo", "-n", "security", "delete-certificate", "-Z",
-                                             "a" * 64, "/Library/Keychains/System.keychain"], path)
-                probe.assert_called_once_with(path)
+            self.assertEqual(run.call_args_list, [
+                mock.call(["sudo", "-n", "security", "delete-certificate", "-Z", "a" * 64,
+                           "/Library/Keychains/System.keychain"], path),
+                mock.call(["sudo", "-n", "security", "remove-trusted-cert", "-d", str(path)], path),
+            ])
+            self.assertEqual(probe.call_count, 2)
+
+    def test_macos_already_absent_keychain_and_trust_need_no_mutating_command(self):
+        with mock.patch.object(TRUST.sys, "platform", "darwin"):
+            with mock.patch.object(TRUST, "macos_certificate_absent", return_value=True):
+                with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=0):
+                    with mock.patch.object(TRUST, "run", side_effect=AssertionError("already absent state modified")):
+                        TRUST.mutate("remove", Path("/synthetic"), {"sha256": "a" * 64})
 
     def test_macos_stale_or_unobservable_admin_trust_is_a_cleanup_failure(self):
         with mock.patch.object(TRUST.sys, "platform", "darwin"):
             for status in [3, 1]:
                 with self.subTest(status=status), mock.patch.object(TRUST, "run", return_value=0):
-                    with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=status):
-                        with self.assertRaises(RuntimeError):
-                            TRUST.mutate("remove", Path("/synthetic"), {"sha256": "a" * 64})
+                    with mock.patch.object(TRUST, "macos_certificate_absent", return_value=True):
+                        with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=status):
+                            with self.assertRaises(RuntimeError):
+                                TRUST.mutate("remove", Path("/synthetic"), {"sha256": "a" * 64})
 
     def test_failed_cleanup_keeps_exact_owned_lease(self):
         with tempfile.TemporaryDirectory() as directory:

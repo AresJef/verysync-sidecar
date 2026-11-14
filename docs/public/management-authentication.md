@@ -237,8 +237,9 @@ wrong-password and wrong-hostname refusal, persisted policy and exact CA cleanup
 Its same-source native results remain a separate acceptance gate; fixture-only
 certificate checks do not establish that the Rust/native authentication passed.
 On hosted macOS, cleanup deletes the unique generated certificate by SHA-256
-and independently reads administrative trust settings for that exact DER
-certificate through the native Security API. A remaining or unobservable trust
+before explicitly removing its remaining administrative trust record, and
+independently reads settings for that exact DER certificate through the native
+Security API. A remaining or unobservable trust
 record fails cleanup and keeps the private recovery lease. No authorization
 database policy or unrelated trust record is changed. The separate macOS LDAP
 diagnosis jobs shorten feedback for this platform-specific cleanup condition;
