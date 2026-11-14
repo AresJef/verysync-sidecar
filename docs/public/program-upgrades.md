@@ -146,6 +146,13 @@ snapshot, and verify/select new executable bytes before restarting an upgrade.
 exit 1 containing the fixed kernel's known missing-release diagnostic; other
 failures stay unclassified. `FromUrl` errors do not set this flag.
 
+A failed metadata fetch can produce `no version to select` with exit 1 while
+`release_unavailable` remains false. An empty selection alone does not identify
+a missing platform archive. Preserve the private diagnostic and distinguish
+metadata transport/decoding failure from the known missing-archive response
+before deciding how to proceed. A controlled blocked-metadata case verified
+unchanged program/configuration bytes and a normal restart with the same identity.
+
 For the tested v2.33.1-to-v2.33.2 pair, the provider CLI actually replaces the
 program and exits 4, while a forced archive URL exits 0. Both are checked using
 the resulting program SHA and authenticated restart, independent of the code.
