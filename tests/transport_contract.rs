@@ -14,6 +14,154 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn remote_tunnel_connection_preserves_prefix_and_requires_target_identity() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let target = DeviceId::parse(ID)?;
+    for wrong_identity in [false, true] {
+        let actual = if wrong_identity {
+            ID.replacen('A', "B", 1)
+        } else {
+            ID.into()
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":actual})),
+        ])
+        .await?;
+        let gateway = ManagementEndpoint::http(&server.base)?;
+        let options = ConnectOptions::remote_tunnel(gateway, target.clone(), ApiKey::new(KEY)?)?;
+        let result = Client::connect(options).await;
+        if wrong_identity {
+            assert!(matches!(result, Err(Error::IdentityMismatch { .. })));
+        } else {
+            assert_eq!(result?.instance().device_id, target);
+        }
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with(&format!("GET /prefix/{ID}/rest/system/version ")));
+        assert!(requests[1].starts_with(&format!("GET /prefix/{ID}/rest/system/status ")));
+        assert!(requests.iter().all(|r| r
+            .to_ascii_lowercase()
+            .contains(&format!("x-api-key: {KEY}"))));
+    }
+    assert!(ConnectOptions::remote_tunnel(
+        ManagementEndpoint::unix_socket(std::env::temp_dir().join("synthetic.sock"))?,
+        target,
+        ApiKey::new(KEY)?
+    )
+    .is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn tunnel_probe_uses_canonical_route_and_keeps_negative_native_data_private() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let peer = DeviceId::parse(&ID.replacen('A', "B", 1))?;
+    for shape in ["denied", "available", "missing", "wrong-peer"] {
+        let mut body = serde_json::json!({"device":peer.as_str(),"tunnel":shape=="available","error":if shape=="available" {""} else {KEY},"futurePrivate":KEY});
+        if shape == "missing" {
+            body.as_object_mut().unwrap().remove("tunnel");
+        }
+        if shape == "available" {
+            body.as_object_mut().unwrap().remove("error");
+        }
+        if shape == "wrong-peer" {
+            body["device"] = ID.into();
+        }
+        let configured = serde_json::json!({"deviceID":peer.as_str(),"name":"peer","addresses":[],"compression":"metadata","paused":false});
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"devices":[configured]})),
+            Reply::json(body),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let result = client.probe_device_tunnel(&peer).await;
+        if matches!(shape, "missing" | "wrong-peer") {
+            assert!(matches!(result, Err(Error::MutationOutcomeUnknown { .. })));
+        } else {
+            let probe = result?;
+            assert_eq!(probe.device_id(), &peer);
+            assert_eq!(probe.tunnel_available(), shape == "available");
+            assert_eq!(
+                probe.native_error(),
+                if shape == "available" {
+                    None
+                } else {
+                    Some(KEY)
+                }
+            );
+            assert_eq!(probe.extra()["futurePrivate"], KEY);
+            assert!(!format!("{probe:?}").contains(KEY));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 5);
+        assert!(
+            requests[4].starts_with(&format!("GET /prefix/rest/tunnel/test/{}/ ", peer.as_str()))
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tunnel_probe_refuses_changed_local_identity_and_absent_or_self_peers() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let peer = DeviceId::parse(&ID.replacen('A', "B", 1))?;
+    for changed in [false, true] {
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":if changed {peer.as_str()} else {ID}})),
+        ];
+        if !changed {
+            replies.push(Reply::json(serde_json::json!({"devices":[]})));
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(client
+            .probe_device_tunnel(&DeviceId::parse(ID)?)
+            .await
+            .is_err());
+        let failure = client
+            .probe_device_tunnel(&peer)
+            .await
+            .err()
+            .ok_or("probe rejection expected")?;
+        if changed {
+            assert!(matches!(failure, Error::IdentityMismatch { .. }));
+        } else {
+            assert!(matches!(failure, Error::DeviceNotFound { .. }));
+        }
+        let requests = server.finish().await?;
+        assert!(!requests.iter().any(|r| r.contains("/tunnel/")));
+    }
+    Ok(())
+}
+
+#[test]
+fn tunnel_device_settings_are_explicit_and_missing_readback_stays_missing() -> TestResult {
+    use verysync_sidecar::{DeviceConfig, DevicePatch};
+    let patch = DevicePatch::default()
+        .allow_tunnel(false)
+        .remote_gui_port(42391)?;
+    assert_eq!(
+        serde_json::to_value(patch)?,
+        serde_json::json!({"allowTunnel":false,"remoteGUIPort":42391})
+    );
+    assert!(DevicePatch::default().remote_gui_port(0).is_err());
+    let device: DeviceConfig = serde_json::from_value(
+        serde_json::json!({"deviceID":ID,"name":"peer","addresses":[],"compression":"metadata","paused":true}),
+    )?;
+    assert_eq!(device.allow_tunnel, None);
+    assert_eq!(device.remote_gui_port, None);
+    let body = serde_json::to_value(device)?;
+    assert!(body.get("allowTunnel").is_none() && body.get("remoteGUIPort").is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn license_expiry_absence_zero_null_container_and_identity_changes_remain_distinct(
 ) -> TestResult {
     use verysync_sidecar::{LicenseEntries, LicenseExpiry, LicenseStatus};

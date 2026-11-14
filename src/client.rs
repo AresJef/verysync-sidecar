@@ -19,6 +19,7 @@ mod network_control;
 mod official_account_control;
 mod recovery;
 mod relay_control;
+mod remote_management;
 mod scan_control;
 mod scheduling;
 mod selective;
