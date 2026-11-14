@@ -153,7 +153,10 @@ impl StorageEndpoint {
     }
     /// Explicitly select the native insecureTls option for SFTP or WebDAV.
     /// This can disable target-side identity checks without changing controller
-    /// trust stores. Its effects need separate per-protocol acceptance.
+    /// trust stores. Its effects need separate per-protocol acceptance. False
+    /// alone does not prove verified server identity. The fixed macOS ARM core
+    /// accepted a probe despite a conflicting entry in its private-profile
+    /// known_hosts; that profile trust mechanism is not verified.
     pub fn insecure_tls(mut self, allow: bool) -> Result<Self> {
         if !matches!(self.fs_type.as_str(), "sftp" | "webdav") {
             return Err(invalid(
