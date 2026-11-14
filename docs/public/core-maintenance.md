@@ -105,7 +105,12 @@ caller's telemetry configuration. The isolated local native case verifies both
 authenticated collection and denied unauthenticated collection while that flag
 remains false. It also checks native GC count observation, complete heap/CPU
 gzip data, clone serialization, unchanged instance identity and normal owned
-process exit. Same-source six-native acceptance for profiles and metrics remains
+process exit. A separate response-body gate contract verifies that a cloned
+profile call cannot send its identity or profile request before the preceding
+profile body is complete. Native pprof timestamps combine a wall-clock start
+with an elapsed duration; their sum is retained for diagnostics and is not used
+as a cross-request ordering clock. No timestamp tolerance or speed claim is
+introduced. Same-source six-native acceptance for profiles and metrics remains
 pending; these observations are functional evidence, not a performance score.
 
 ## Explicit synchronization-index reset

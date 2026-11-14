@@ -224,6 +224,8 @@ async fn native_general_preferences_preserve_sections_disable_progress_and_chang
         .prefix("vs-general-options-")
         .tempdir()?
         .keep();
+    let inherited_priority = process_priority::observe(std::process::id()).await?;
+    assert_eq!(inherited_priority.len(), 1);
     let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
     let identity = core.client().instance().device_id.clone();
     let before = core.client().configuration().await?;
@@ -308,20 +310,32 @@ async fn native_general_preferences_preserve_sections_disable_progress_and_chang
         (2, 3, 4096)
     );
     let priority_after = process_priority::observe(core.process_id()).await?;
-    println!("native owned priorities: before={priority_before:?} after={priority_after:?}");
+    println!("native owned priorities: inherited={inherited_priority:?} before={priority_before:?} after={priority_after:?}");
     #[cfg(unix)]
     {
+        let inherited = inherited_priority[0].parse::<i32>()?;
         assert!(priority_before
             .iter()
-            .any(|p| p.parse::<i32>().is_ok_and(|v| v > 0)));
-        assert!(priority_after.iter().all(|p| p == "0"));
+            .any(|p| p.parse::<i32>().is_ok_and(|v| v > inherited)));
+        assert!(priority_after
+            .iter()
+            .all(|p| p.parse::<i32>().ok() == Some(inherited)));
     }
     #[cfg(windows)]
     {
         assert!(priority_before
             .iter()
             .any(|p| p == "BelowNormal" || p == "Idle"));
-        assert!(priority_after.iter().all(|p| p == "Normal"));
+        // CreateProcess inherits Idle/BelowNormal from the creating process
+        // when no explicit class is requested. Other parent classes default
+        // to Normal. Do not rewrite caller process priority to force a test.
+        // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw
+        let expected = match inherited_priority[0].as_str() {
+            "Idle" => "Idle",
+            "BelowNormal" => "BelowNormal",
+            _ => "Normal",
+        };
+        assert!(priority_after.iter().all(|p| p == expected));
     }
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));

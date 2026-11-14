@@ -17,7 +17,10 @@ fn observe_blocking(root: u32) -> TestResult<Vec<String>> {
     let mut root_seen = false;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let fields: Vec<_> = line.split_whitespace().collect();
-        if fields.len() == 3 && fields[1].parse::<u32>().ok() == Some(root) {
+        if fields.len() == 3
+            && (fields[0].parse::<u32>().ok() == Some(root)
+                || fields[1].parse::<u32>().ok() == Some(root))
+        {
             root_seen |= fields[0].parse::<u32>().ok() == Some(root);
             fields[2].parse::<i32>()?;
             priorities.push(fields[2].to_owned());

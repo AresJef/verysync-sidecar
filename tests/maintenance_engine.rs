@@ -547,13 +547,14 @@ async fn public_profiles_metrics_and_clone_serialization_preserve_the_owned_core
             "first_end_ns":first.0.checked_add(first.1),"second_start_ns":second.0,
             "controller_elapsed_ns":start.elapsed().as_nanos()})
     );
-    // Verify both complete requested one-second native intervals and actual
-    // non-overlap, rather than inferring serialization from a caller clock.
+    // Verify complete requested one-second native intervals. Native pprof uses
+    // a wall-clock Unix start and a monotonic elapsed duration; adding them is
+    // not a reliable cross-request non-overlap assertion (Windows CI observed
+    // an 11.2us overlap). The separate transport body-gate contract verifies
+    // clone request ordering through full response completion without changing
+    // native profile bytes or adding an arbitrary timestamp tolerance.
+    // https://github.com/golang/go/blob/go1.24.2/src/runtime/pprof/proto.go
     assert!(first.1 >= 1_000_000_000 && second.1 >= 1_000_000_000);
-    assert!(first
-        .0
-        .checked_add(first.1)
-        .is_some_and(|end| end <= second.0));
     assert!(format!("{heap:?} {one:?} {before:?}").len() < 512);
     assert_eq!(core.client().system_status().await?.device_id, identity);
     let gui = core
