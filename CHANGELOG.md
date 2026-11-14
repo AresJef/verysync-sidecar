@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add future-folder versioning and target archive-location controls with shared
+  policies, snapshot edits and actual inherited archive/restore checks. Keep full
+  save normalization visible when inactive parameter maps are filled natively.
+
 - Add native folder-type, block-order, copy-strategy and ordered attribute-filter
   selectors, including per-registration overrides without editing shared defaults.
   Support initial receive-encrypted registration and protect existing-type

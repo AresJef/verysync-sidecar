@@ -167,8 +167,53 @@ Strategy selection does not prove a particular system call, copy-on-write
 behavior, block transfer order or supported target filesystem. Initial encrypted
 registration does not prove encrypted data transfer or sharing permission.
 Attribute-filter configuration does not prove metadata propagation. These effects
-retain independent platform/data-path acceptance gates. Marker names, versioning
-template locations, sharing secrets and other remaining defaults are separate.
+retain independent platform/data-path acceptance gates. Marker names, sharing secrets
+and other remaining defaults retain separate controls.
+
+## Future-folder versioning and archive locations
+
+`folder_default_versioning()`, `set_folder_default_versioning()` and
+`set_folder_default_archive_location()` use the same native policies and
+`VersionArchiveLocation` inputs as registered folders. They retain inactive and
+unknown parameters and return actual `FolderVersioningUpdate` readback. Scoped
+default writes affect future registrations; existing folders keep their policy
+and archive selection. The SDK never migrates archived files, executes an
+external versioner command, cleans archives or restarts an instance implicitly.
+
+```no_run
+use verysync_sidecar::{Client, FolderVersioningPolicy, VersionArchiveLocation};
+
+async fn choose_future_retention(client: &Client) -> verysync_sidecar::Result<()> {
+    let actual = client.set_folder_default_versioning(
+        FolderVersioningPolicy::Simple {
+            keep: 2,
+            cleanout_days: 0,
+            cleanup_interval_seconds: 3600,
+        },
+    ).await?;
+    let location = client.set_folder_default_archive_location(
+        &VersionArchiveLocation::FolderDefault,
+    ).await?;
+    // Inspect both actual configurations and requested_fields_match values.
+    Ok(())
+}
+```
+
+Basic archive paths use target syntax, including a Windows target controlled
+from Unix. A fixed configured directory is not expanded into separate per-folder
+locations by the SDK. Changing a future location does not move or remove earlier
+archive data. The native test separately checks inherited selection, native
+browsing of a seeded synthetic archive, actual restored live bytes, excluded
+unselected archives and normal restart. Seeded archives do not establish native
+production of remote-change history; those tests are separate.
+
+`ConfigurationSnapshot::set_folder_default_versioning()` and
+`set_folder_default_archive_location()` support explicit complete-document saves.
+Complete native decoding can populate previously empty inactive versioning
+parameter maps on existing folders from current defaults. In that observed case,
+the complete-save receipt correctly reports `requested_fields_match == false`.
+Review actual readback; the SDK does not conceal normalization or retry a save.
+This differs from scoped default writes that preserve existing registrations.
 
 ## Complete configuration saves
 
