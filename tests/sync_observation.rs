@@ -1503,6 +1503,18 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
             .requested_mode_match
     );
     b.restart(Duration::from_secs(30)).await?;
+    // Managed restart binds a fresh private listener. Discovery is disabled,
+    // so the sole active dialer must explicitly receive that actual address.
+    let restarted_address = private_tcp(b.client()).await?;
+    assert!(
+        a.client()
+            .update_device(
+                &b_id,
+                &DevicePatch::default().addresses(vec![restarted_address])
+            )
+            .await?
+            .requested_fields_match
+    );
     assert!(
         !b.client()
             .folder_selective_configuration(folder)
