@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add native Local Sync basic endpoints and typed job, preview, execution,
+  result/history and scoped registration controls. Keep acknowledgements, actual
+  completion and per-protocol acceptance separate; no controller copy engine or
+  automatic schedules, retries or rollback are introduced.
+
 - Add explicit resource directory creation, same-volume copy/move, existing-file
   UTF-8 replacement and scoped deletion with collision/merge policies. Keep
   observed Windows directory partial failures and required positive acceptance

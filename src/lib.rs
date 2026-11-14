@@ -58,6 +58,7 @@ mod files;
 mod folders;
 mod ignores;
 mod invitations;
+mod local_sync;
 mod maintenance;
 mod managed;
 mod network;
@@ -116,6 +117,14 @@ pub use ignores::{IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
 pub use invitations::{
     DeviceIgnoreUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
     PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
+};
+pub use local_sync::{
+    CreateLocalSyncJob, LocalSyncAction, LocalSyncActionResult, LocalSyncConfiguration,
+    LocalSyncHealth, LocalSyncHistory, LocalSyncHistoryRecord, LocalSyncJob, LocalSyncJobId,
+    LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate, LocalSyncMode, LocalSyncOperation,
+    LocalSyncOperationId, LocalSyncPreview, LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId,
+    LocalSyncStatus, LocalSyncSummary, StorageDirectory, StorageEndpoint, StorageEntry,
+    StorageProbe,
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,

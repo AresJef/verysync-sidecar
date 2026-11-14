@@ -3738,3 +3738,176 @@ async fn resource_keep_both_ambiguous_parent_changes_are_unknown_without_retries
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn local_sync_target_syntax_subpaths_and_unbounded_pages_are_refused_before_requests(
+) -> TestResult {
+    use verysync_sidecar::{
+        CreateLocalSyncJob, LocalSyncJobId, LocalSyncJobPatch, LocalSyncMode, LocalSyncPreviewId,
+        PathStyle, StorageEndpoint, TargetPath,
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let unix = StorageEndpoint::local(TargetPath::remote(PathStyle::Unix, "/synthetic/source")?)?;
+    let windows = StorageEndpoint::local(TargetPath::remote(
+        PathStyle::Windows,
+        r"C:\synthetic\source",
+    )?)?;
+    let options = CreateLocalSyncJob::new(windows, unix.clone(), LocalSyncMode::MirrorAToB);
+    assert!(matches!(
+        client.create_local_sync_job(&options).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    for path in ["../escape", "/absolute", "a//b", "a/./b", r"a\b"] {
+        assert!(matches!(
+            client.browse_storage_endpoint(&unix, path).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    for name in ["", "..", "a/b"] {
+        assert!(matches!(
+            client.create_storage_directory(&unix, "", name).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    let job = LocalSyncJobId::parse("synthetic-job")?;
+    let preview = LocalSyncPreviewId::parse("synthetic-preview")?;
+    for limit in [0, 1001] {
+        assert!(matches!(
+            client
+                .local_sync_preview_actions(&job, &preview, 0, limit)
+                .await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert!(matches!(
+        client.local_sync_history(None, 0, 100).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert!(matches!(
+        client
+            .update_local_sync_job(&job, &LocalSyncJobPatch::default())
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert!(
+        CreateLocalSyncJob::new(unix.clone(), unix, LocalSyncMode::Bidirectional)
+            .delete_extraneous(true)
+            .is_err()
+    );
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_scoped_put_preserves_credentials_unknown_fields_and_exact_item_encoding(
+) -> TestResult {
+    use verysync_sidecar::{LocalSyncJobId, LocalSyncJobPatch};
+    let id = LocalSyncJobId::parse("private /?% job")?;
+    let original = serde_json::json!({"jobId":id.as_str(),"label":"old private label","group":"retained group",
+        "sideA":{"fsType":"basic","uri":"/private/source","transfers":2,"unknownEndpoint":{"value":7}},
+        "sideB":{"fsType":"sftp","uri":"sftp://private.invalid/target","transfers":4,"password":"retained synthetic password"},
+        "mode":"mirror_a_to_b","enabled":true,"syncOnStartup":false,"deleteExtraneous":false,
+        "unknownSetting":{"future":true},"scheduleMode":"off"});
+    let mut updated = original.clone();
+    updated["label"] = serde_json::json!("new private label");
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(original),
+        identity(),
+        Reply::json(updated.clone()),
+        identity(),
+        Reply::json(updated.clone()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let result = client
+        .update_local_sync_job(
+            &id,
+            &LocalSyncJobPatch::default().label("new private label")?,
+        )
+        .await?;
+    assert!(result.requested_fields_match);
+    assert_eq!(serde_json::to_value(&result.configuration)?, updated);
+    let debug = format!("{result:?}");
+    assert!(
+        !debug.contains("password")
+            && !debug.contains("private.invalid")
+            && !debug.contains("private label")
+    );
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("PUT "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0]
+        .starts_with("PUT /prefix/rest/localsync/jobs/private%20%2F%3F%25%20job HTTP/1.1\r\n"));
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split_once("\r\n\r\n")
+            .ok_or("request body absent")?
+            .1,
+    )?;
+    assert_eq!(body, updated);
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_http_success_error_envelope_is_unknown_once_and_changed_identity_prevents_probe(
+) -> TestResult {
+    use verysync_sidecar::{PathStyle, StorageEndpoint, TargetPath};
+    let endpoint =
+        StorageEndpoint::local(TargetPath::remote(PathStyle::Unix, "/synthetic/source")?)?;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(
+            serde_json::json!({"error":"synthetic invalid endpoint","code":"future_native_code"}),
+        ),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(
+        matches!(client.probe_storage_endpoint(&endpoint).await,Err(Error::MutationOutcomeUnknown{source,..})if matches!(source.as_ref(),Error::Api{response,..}if response.status()==200))
+    );
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split_once("\r\n\r\n")
+            .ok_or("request body absent")?
+            .1,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"fsType":"basic","uri":"/synthetic/source","transfers":2})
+    );
+    let other = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        Reply::json(serde_json::json!({"myID":other})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.probe_storage_endpoint(&endpoint).await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 3);
+    Ok(())
+}
