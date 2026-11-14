@@ -50,6 +50,12 @@ pub struct NetworkConfig {
     /// Actual reconnection interval in seconds, including engine normalization.
     #[serde(rename = "reconnectionIntervalS")]
     pub reconnection_interval_seconds: u64,
+    /// Stored outgoing-connection threshold, when reported. Its application
+    /// has not been established for every hot-change condition of the fixed core.
+    pub connection_limit_enough: Option<u32>,
+    /// Stored maximum simultaneous connections. Zero means no configured cap;
+    /// a settings receipt alone does not establish an actual connection count.
+    pub connection_limit_max: Option<u32>,
     /// Other actual options. Values may contain secrets; Debug omits them.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -87,6 +93,8 @@ pub struct NetworkPatch {
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) reconnection_interval_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) connection_limit_max: Option<u32>,
 }
 impl NetworkPatch {
     /// Replace the listening URL list; this does not change the management URL.
@@ -119,6 +127,13 @@ impl NetworkPatch {
         self.reconnection_interval_seconds = Some(value);
         self
     }
+    /// Set the maximum simultaneous connections. Zero removes the configured
+    /// cap. Observe live peers separately; existing connections are not promised
+    /// to be evicted. Values above i32::MAX are refused before network I/O.
+    pub fn connection_limit_max(mut self, value: u32) -> Self {
+        self.connection_limit_max = Some(value);
+        self
+    }
     pub(crate) fn validate(&self) -> Result<()> {
         if self.listen_addresses.is_none()
             && self.global_announce_enabled.is_none()
@@ -126,6 +141,7 @@ impl NetworkPatch {
             && self.local_announce_port.is_none()
             && self.local_announce_mc_addr.is_none()
             && self.reconnection_interval_seconds.is_none()
+            && self.connection_limit_max.is_none()
         {
             return Err(Error::InvalidConfiguration {
                 reason: "network patch must contain at least one field",
@@ -134,6 +150,14 @@ impl NetworkPatch {
         if self.reconnection_interval_seconds == Some(0) {
             return Err(Error::InvalidConfiguration {
                 reason: "reconnection interval must be nonzero",
+            });
+        }
+        if self
+            .connection_limit_max
+            .is_some_and(|value| value > i32::MAX as u32)
+        {
+            return Err(Error::InvalidConfiguration {
+                reason: "connection limit exceeds the portable native integer range",
             });
         }
         for value in self
@@ -171,6 +195,9 @@ impl NetworkPatch {
             && self
                 .reconnection_interval_seconds
                 .is_none_or(|x| x == v.reconnection_interval_seconds)
+            && self
+                .connection_limit_max
+                .is_none_or(|x| Some(x) == v.connection_limit_max)
     }
 }
 impl fmt::Debug for NetworkPatch {

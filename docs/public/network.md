@@ -1,7 +1,8 @@
 
 ## Network settings and live observations
 
-`network_configuration` reads listener, discovery and reconnection settings.
+`network_configuration` reads listener, discovery, reconnection and reported
+connection-limit settings.
 `update_network_configuration` sends only the fields explicitly selected by a
 `NetworkPatch`, checks the instance identity before writing, and reads back the
 configuration. Client clones serialize mutations. Independent configuration
@@ -15,6 +16,7 @@ let update = client.update_network_configuration(
     &NetworkPatch::default()
         .global_discovery(false)
         .local_discovery(false)
+        .connection_limit_max(8)
         .reconnection_interval_seconds(5)
 ).await?;
 assert!(update.requested_fields_match);
@@ -33,6 +35,33 @@ Unrecognized connection and transport labels are retained on reads; typed
 device writes reject unknown transport labels. `DevicePatch::allowed_transports`
 selects protocols independently of peer addresses and pause state. TCP has a
 separate native private-peer test; UDP and relay effects have separate gates.
+
+`NetworkPatch::connection_limit_max` selects the maximum simultaneous
+connections, including incoming connections. Zero removes the configured cap;
+it is sent explicitly. Values above `i32::MAX` are rejected before I/O for
+portability across native integer widths. This setter shares the existing
+identity check, clone mutation lock, single PATCH and actual readback. An absent
+or null reported maximum remains `None` and cannot produce a matching receipt
+for a selected value. A malformed readback after the write produces
+`MutationOutcomeUnknown`. Existing connections are not promised to be evicted
+when a cap is lowered. One device pair can use multiple underlying connections;
+do not equate a connection limit with a device limit.
+
+The native maximum test explicitly selects one connection per device pair,
+observes exactly one of two incoming peers throughout a twelve-second window
+under maximum one, and then observes both connected after explicitly selecting
+zero. Maximum two survives an owned restart with the same identity. Other
+options remain unchanged by the maximum-only PATCH, and original settings are
+restored before normal tree cleanup. This is a functional connection-count
+observation, with separate final platform acceptance.
+
+`NetworkConfig::connection_limit_enough` retains the engine's stored outgoing
+threshold as an optional observation. Its complete runtime contract remains
+pending: bounded private trials could save a change from one to two while a
+second outgoing peer still failed to connect within twenty seconds, including
+a trial selecting one connection per device pair. There is no typed setter for
+that threshold yet. The raw request entry point remains available for explicit
+version-specific investigation; a saved value is not a verified dialing effect.
 
 `discovery_cache` reads records with candidate `addresses` and retained unknown
 metadata. It does not start a query, enable discovery or establish connectivity.
