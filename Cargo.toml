@@ -19,6 +19,7 @@ include = [
     "/examples/**/*.rs",
     "/tests/**/*.rs",
     "/scripts/**/*.py",
+    "/scripts/storage-test-requirements.txt",
     "/docs/public/**/*.md",
     "/docs/capabilities.csv",
     "/docs/platforms.csv",
@@ -209,4 +210,9 @@ required-features = ["engine-tests", "download"]
 [[test]]
 name = "local_sync_engine"
 path = "tests/local_sync_engine.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "local_sync_protocol_engine"
+path = "tests/local_sync_protocol_engine.rs"
 required-features = ["engine-tests"]

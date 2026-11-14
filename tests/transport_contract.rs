@@ -3757,7 +3757,22 @@ async fn local_sync_target_syntax_subpaths_and_unbounded_pages_are_refused_befor
         PathStyle::Windows,
         r"C:\synthetic\source",
     )?)?;
-    let options = CreateLocalSyncJob::new(windows, unix.clone(), LocalSyncMode::MirrorAToB);
+    for label in ["", "   ", "\t"] {
+        assert!(CreateLocalSyncJob::new(
+            label,
+            unix.clone(),
+            unix.clone(),
+            LocalSyncMode::MirrorAToB
+        )
+        .is_err());
+        assert!(LocalSyncJobPatch::default().label(label).is_err());
+    }
+    let options = CreateLocalSyncJob::new(
+        "explicit synthetic label",
+        windows,
+        unix.clone(),
+        LocalSyncMode::MirrorAToB,
+    )?;
     assert!(matches!(
         client.create_local_sync_job(&options).await,
         Err(Error::InvalidConfiguration { .. })
@@ -3794,11 +3809,14 @@ async fn local_sync_target_syntax_subpaths_and_unbounded_pages_are_refused_befor
             .await,
         Err(Error::InvalidConfiguration { .. })
     ));
-    assert!(
-        CreateLocalSyncJob::new(unix.clone(), unix, LocalSyncMode::Bidirectional)
-            .delete_extraneous(true)
-            .is_err()
-    );
+    assert!(CreateLocalSyncJob::new(
+        "explicit two-way job",
+        unix.clone(),
+        unix.clone(),
+        LocalSyncMode::Bidirectional
+    )?
+    .delete_extraneous(true)
+    .is_err());
     assert_eq!(server.finish().await?.len(), 2);
     Ok(())
 }

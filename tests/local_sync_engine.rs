@@ -41,11 +41,15 @@ async fn public_local_sync_preview_execution_and_registration_changes_preserve_a
         .create_storage_directory(&a, "nested", "created 中文 %")
         .await?;
     assert!(source.join("nested").join("created 中文 %").is_dir());
-    let options = CreateLocalSyncJob::new(a.clone(), b.clone(), LocalSyncMode::MirrorAToB)
-        .label("explicit synthetic job")?
-        .group("test group")?
-        .ignore_permissions(true);
+    let options = CreateLocalSyncJob::new(
+        "explicit synthetic job",
+        a.clone(),
+        b.clone(),
+        LocalSyncMode::MirrorAToB,
+    )?
+    .ignore_permissions(true);
     let job = core.client().create_local_sync_job(&options).await?;
+    assert!(job.group.is_none());
     assert_eq!(core.client().local_sync_jobs().await?.len(), 1);
     assert!(!job.delete_extraneous && !job.sync_on_startup);
     assert_eq!(
@@ -155,6 +159,26 @@ async fn public_local_sync_preview_execution_and_registration_changes_preserve_a
     let mut expected = original;
     expected["label"] = serde_json::json!("renamed explicit job");
     assert_eq!(serde_json::to_value(&updated.configuration)?, expected);
+    let grouped = core
+        .client()
+        .update_local_sync_job(
+            &job.job_id,
+            &LocalSyncJobPatch::default().group("explicit group")?,
+        )
+        .await?;
+    assert!(grouped.requested_fields_match);
+    expected["group"] = serde_json::json!("explicit group");
+    assert_eq!(serde_json::to_value(&grouped.configuration)?, expected);
+    let ungrouped = core
+        .client()
+        .update_local_sync_job(&job.job_id, &LocalSyncJobPatch::default().group("")?)
+        .await?;
+    assert!(ungrouped.requested_fields_match && ungrouped.configuration.group.is_none());
+    expected
+        .as_object_mut()
+        .ok_or("job serialization is not an object")?
+        .remove("group");
+    assert_eq!(serde_json::to_value(&ungrouped.configuration)?, expected);
     assert!(!format!("{job:?} {preview:?} {run:?} {a:?} {history:?}")
         .contains(source.to_str().ok_or("private source UTF8")?));
     core.client().delete_local_sync_job(&job.job_id).await?;
@@ -185,6 +209,7 @@ async fn public_local_sync_preview_execution_and_registration_changes_preserve_a
         "actual_delete_registration_preserves_data":true,"actual_same_identity":true,
         "actual_nonempty_global_and_initial_idle_status":true,
         "actual_stale_preview_refused_without_data_change":true,
+        "actual_optional_and_explicit_group_roundtrip":true,
         "actual_normal_owned_tree_exit":true})
     );
     Ok(())

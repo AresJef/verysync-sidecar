@@ -124,7 +124,7 @@ pub use local_sync::{
     LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate, LocalSyncMode, LocalSyncOperation,
     LocalSyncOperationId, LocalSyncPreview, LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId,
     LocalSyncStatus, LocalSyncSummary, StorageDirectory, StorageEndpoint, StorageEntry,
-    StorageProbe,
+    StorageProbe, StorageProtocol,
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,

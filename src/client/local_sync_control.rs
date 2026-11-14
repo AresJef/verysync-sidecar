@@ -96,7 +96,11 @@ impl Client {
             job.label = label.clone();
         }
         if let Some(group) = &patch.group {
-            job.group = group.clone();
+            job.group = if group.is_empty() {
+                None
+            } else {
+                Some(group.clone())
+            };
         }
         if let Some(enabled) = patch.enabled {
             job.enabled = enabled;
@@ -129,7 +133,7 @@ impl Client {
             && patch
                 .group
                 .as_ref()
-                .is_none_or(|v| v == &configuration.group)
+                .is_none_or(|v| v.as_str() == configuration.group.as_deref().unwrap_or_default())
             && patch.enabled.is_none_or(|v| v == configuration.enabled);
         Ok(LocalSyncJobUpdate {
             configuration,

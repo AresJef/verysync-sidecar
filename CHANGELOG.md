@@ -2,6 +2,13 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit native remote endpoint selection and separate credentials, target
+  connection limits, SFTP key paths and SMB/WebDAV identity settings. Protocol
+  and platform effects remain independently verified, with private test peers.
+  Require a nonempty label in `CreateLocalSyncJob::new`; preserve omitted groups
+  as `Option<String>` and signed native storage sizes such as unknown `-1`.
+  These are intentional alpha API changes without compatibility aliases.
+
 - Add native Local Sync basic endpoints and typed job, preview, execution,
   result/history and scoped registration controls. Keep acknowledgements, actual
   completion and per-protocol acceptance separate; no controller copy engine or

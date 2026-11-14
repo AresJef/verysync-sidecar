@@ -288,7 +288,11 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::StorageProtocols),
+    LibraryCapability {
+        capability: Capability::StorageProtocols,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::IgnorePatterns,
         implementation: ImplementationStatus::Typed,

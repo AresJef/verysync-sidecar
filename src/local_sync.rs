@@ -5,6 +5,19 @@ use std::{collections::BTreeMap, fmt};
 
 type Extra = BTreeMap<String, serde_json::Value>;
 
+/// Explicit native remote backend; a URI does not prove data-effect acceptance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StorageProtocol {
+    /// Native SSH File Transfer Protocol backend.
+    Sftp,
+    /// Native FTP backend.
+    Ftp,
+    /// Native SMB backend.
+    Smb,
+    /// Native HTTP or HTTPS WebDAV backend.
+    WebDav,
+}
+
 macro_rules! identifier {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
@@ -74,6 +87,114 @@ pub struct StorageEndpoint {
     input_style: Option<PathStyle>,
 }
 impl StorageEndpoint {
+    /// Select a remote URI without embedded credentials, query or fragment.
+    /// This does not connect, download a client or start a server.
+    pub fn remote(protocol: StorageProtocol, uri: &str) -> Result<Self> {
+        if uri.len() > 32768 || uri.chars().any(char::is_control) {
+            return Err(invalid(
+                "storage URI exceeds its bound or contains controls",
+            ));
+        }
+        let url = url::Url::parse(uri).map_err(|_| invalid("invalid remote storage URI"))?;
+        let (kind, schemes): (&str, &[&str]) = match protocol {
+            StorageProtocol::Sftp => ("sftp", &["sftp"]),
+            StorageProtocol::Ftp => ("ftp", &["ftp"]),
+            StorageProtocol::Smb => ("smb", &["smb"]),
+            StorageProtocol::WebDav => ("webdav", &["http", "https"]),
+        };
+        if !schemes.contains(&url.scheme())
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(invalid("storage URI scheme, authority or private selectors differ from its explicit protocol"));
+        }
+        Ok(Self {
+            fs_type: kind.to_owned(),
+            uri: url.to_string(),
+            transfers: 4,
+            extra: Extra::new(),
+            input_style: None,
+        })
+    }
+    /// Select native username/password credentials without adding URI userinfo.
+    /// Explicit serialization can expose them; default Debug omits all values.
+    pub fn credentials(
+        mut self,
+        user: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Result<Self> {
+        if self.fs_type == "basic" {
+            return Err(invalid("basic endpoints do not take remote credentials"));
+        }
+        let (user, password) = (user.into(), password.into());
+        if user.is_empty()
+            || user.len() > 4096
+            || password.len() > 65536
+            || user.contains('\0')
+            || password.contains('\0')
+        {
+            return Err(invalid(
+                "storage credentials are empty, oversized or contain NUL",
+            ));
+        }
+        self.extra.insert("user".to_owned(), user.into());
+        self.extra.insert("password".to_owned(), password.into());
+        Ok(self)
+    }
+    /// Set native connection timeout seconds. Zero retains the native default;
+    /// the management request still has its separately configured deadline.
+    pub fn connection_timeout_seconds(mut self, seconds: u16) -> Self {
+        self.extra
+            .insert("connectTimeoutSec".to_owned(), seconds.into());
+        self
+    }
+    /// Explicitly select the native insecureTls option for SFTP or WebDAV.
+    /// This can disable target-side identity checks without changing controller
+    /// trust stores. Its effects need separate per-protocol acceptance.
+    pub fn insecure_tls(mut self, allow: bool) -> Result<Self> {
+        if !matches!(self.fs_type.as_str(), "sftp" | "webdav") {
+            return Err(invalid(
+                "insecureTls is not a verified option for this storage protocol",
+            ));
+        }
+        self.extra.insert("insecureTls".to_owned(), allow.into());
+        Ok(self)
+    }
+    /// Select an explicit target-system SFTP private-key file. The SDK opens no
+    /// key file or SSH configuration on the controller.
+    pub fn private_key_file(mut self, path: TargetPath) -> Result<Self> {
+        if self.fs_type != "sftp" {
+            return Err(invalid("private key files require an SFTP endpoint"));
+        }
+        let value = path.to_protocol()?;
+        if value.len() > 32768 {
+            return Err(invalid("SFTP private key path exceeds its bound"));
+        }
+        self.extra.insert("privateKey".to_owned(), value.into());
+        self.input_style = Some(path.style());
+        Ok(self)
+    }
+    /// Explicit native SMB guest selection; actual server permissions and
+    /// separate positive guest acceptance still apply.
+    pub fn smb_guest(mut self, guest: bool) -> Result<Self> {
+        if self.fs_type != "smb" {
+            return Err(invalid("guest authentication requires an SMB endpoint"));
+        }
+        self.extra.insert("guest".to_owned(), guest.into());
+        Ok(self)
+    }
+    /// Select an SMB domain/workgroup without consulting controller settings.
+    pub fn smb_domain(mut self, domain: impl Into<String>) -> Result<Self> {
+        if self.fs_type != "smb" {
+            return Err(invalid("domain selection requires an SMB endpoint"));
+        }
+        let domain = bounded_text(domain.into())?;
+        self.extra.insert("domain".to_owned(), domain.into());
+        Ok(self)
+    }
     /// Select one explicit basic filesystem path on the target. This performs
     /// no controller filesystem access or path expansion. The client verifies
     /// the supplied syntax against the selected core before writing.
@@ -109,7 +230,7 @@ impl StorageEndpoint {
     pub(crate) fn validate_target(&self, style: PathStyle) -> Result<()> {
         if self.input_style.is_some_and(|supplied| supplied != style) {
             return Err(invalid(
-                "basic storage path syntax differs from the selected core",
+                "storage filesystem path syntax differs from the selected core",
             ));
         }
         if self.uri.is_empty() || self.uri.len() > 32768 || self.uri.contains('\0') {
@@ -148,7 +269,8 @@ pub struct CreateLocalSyncJob {
     side_b: StorageEndpoint,
     mode: LocalSyncMode,
     label: String,
-    group: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group: Option<String>,
     enabled: bool,
     sync_on_startup: bool,
     delete_extraneous: bool,
@@ -167,22 +289,28 @@ impl CreateLocalSyncJob {
     /// # async fn analyze(client: &Client, source: TargetPath, target: TargetPath)
     /// # -> Result<LocalSyncOperation> {
     /// let options = CreateLocalSyncJob::new(
+    ///     "Explicit storage analysis",
     ///     StorageEndpoint::local(source)?, StorageEndpoint::local(target)?,
     ///     LocalSyncMode::MirrorAToB,
-    /// );
+    /// )?;
     /// let job = client.create_local_sync_job(&options).await?;
     /// // Analysis is explicit and does not execute the resulting actions.
     /// let operation = client.start_local_sync_preview(&job.job_id).await?;
     /// # Ok(operation)
     /// # }
     /// ```
-    pub fn new(side_a: StorageEndpoint, side_b: StorageEndpoint, mode: LocalSyncMode) -> Self {
-        Self {
+    pub fn new(
+        label: impl Into<String>,
+        side_a: StorageEndpoint,
+        side_b: StorageEndpoint,
+        mode: LocalSyncMode,
+    ) -> Result<Self> {
+        Ok(Self {
             side_a,
             side_b,
             mode,
-            label: String::new(),
-            group: String::new(),
+            label: job_label(label.into())?,
+            group: None,
             enabled: true,
             sync_on_startup: false,
             delete_extraneous: false,
@@ -190,16 +318,12 @@ impl CreateLocalSyncJob {
             watch_changes: false,
             schedule_mode: "off",
             parallel_file_ops: 1,
-        }
+        })
     }
-    /// Set an exact label, bounded to 4096 bytes without control characters.
-    pub fn label(mut self, label: impl Into<String>) -> Result<Self> {
-        self.label = bounded_text(label.into())?;
-        Ok(self)
-    }
-    /// Set an exact group name under the same bound as a label.
+    /// Set a bounded group name; an empty group selects no named group.
     pub fn group(mut self, group: impl Into<String>) -> Result<Self> {
-        self.group = bounded_text(group.into())?;
+        let group = bounded_text(group.into())?;
+        self.group = if group.is_empty() { None } else { Some(group) };
         Ok(self)
     }
     /// Explicitly allow or disable native permission synchronization.
@@ -246,8 +370,10 @@ pub struct LocalSyncJob {
     pub job_id: LocalSyncJobId,
     /// Private display label.
     pub label: String,
-    /// Private group label.
-    pub group: String,
+    /// Private group label when present. Native ungrouped jobs omit this field;
+    /// absence is retained and full-object updates omit it again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     /// First explicit storage endpoint.
     pub side_a: StorageEndpoint,
     /// Second explicit storage endpoint.
@@ -285,7 +411,7 @@ pub struct LocalSyncJobPatch {
 impl LocalSyncJobPatch {
     /// Select an exact bounded label.
     pub fn label(mut self, value: impl Into<String>) -> Result<Self> {
-        self.label = Some(bounded_text(value.into())?);
+        self.label = Some(job_label(value.into())?);
         Ok(self)
     }
     /// Select an exact bounded group.
@@ -433,8 +559,9 @@ pub struct StorageEntry {
     pub path: String,
     /// Actual directory classification.
     pub directory: bool,
-    /// Native reported size, without inventing directory-byte meaning.
-    pub size: u64,
+    /// Native signed size. FTP directories can report -1 for unknown; this is
+    /// preserved rather than changed to zero or an invented byte count.
+    pub size: i64,
     /// Native modification timestamp text.
     pub modified: String,
     /// Future private metadata.
@@ -550,6 +677,15 @@ fn bounded_text(value: String) -> Result<String> {
         Ok(value)
     }
 }
+fn job_label(value: String) -> Result<String> {
+    let value = bounded_text(value)?;
+    if value.trim().is_empty() {
+        return Err(invalid(
+            "Local Sync requires an explicit nonempty job label",
+        ));
+    }
+    Ok(value)
+}
 pub(crate) fn logical_subpath(value: &str) -> Result<()> {
     if value.len() > 32768
         || value.contains('\0')
@@ -565,4 +701,74 @@ pub(crate) fn logical_subpath(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    #[test]
+    fn explicit_remote_protocol_rejects_ambiguous_secrets_and_selectors() {
+        for (protocol, uri) in [
+            (StorageProtocol::Ftp, "sftp://host/root"),
+            (StorageProtocol::Sftp, "sftp://user:secret@host/root"),
+            (StorageProtocol::Smb, "smb://host/share?password=secret"),
+            (StorageProtocol::WebDav, "https://host/root#private"),
+            (StorageProtocol::Ftp, "ftp://host/\nroot"),
+        ] {
+            assert!(StorageEndpoint::remote(protocol, uri).is_err());
+        }
+        let endpoint =
+            StorageEndpoint::remote(StorageProtocol::Sftp, "sftp://example.invalid:2222/root")
+                .unwrap()
+                .credentials("synthetic-user", "synthetic-password")
+                .unwrap();
+        let encoded = serde_json::to_value(&endpoint).unwrap();
+        assert_eq!(encoded["user"], "synthetic-user");
+        assert_eq!(encoded["password"], "synthetic-password");
+        assert!(!endpoint.uri().contains("synthetic"));
+        let debug = format!("{endpoint:?}");
+        for private in [
+            "example.invalid",
+            "synthetic-user",
+            "synthetic-password",
+            "root",
+        ] {
+            assert!(!debug.contains(private));
+        }
+        assert!(endpoint.clone().smb_guest(true).is_err());
+        assert!(endpoint.credentials("", "password").is_err());
+        assert!(
+            StorageEndpoint::remote(StorageProtocol::Ftp, "ftp://example.invalid/")
+                .unwrap()
+                .insecure_tls(true)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn native_unknown_size_and_ungrouped_registration_are_retained() {
+        let endpoint =
+            StorageEndpoint::remote(StorageProtocol::Ftp, "ftp://example.invalid/").unwrap();
+        let options = CreateLocalSyncJob::new(
+            "explicit",
+            endpoint.clone(),
+            endpoint,
+            LocalSyncMode::MirrorAToB,
+        )
+        .unwrap();
+        let mut value = serde_json::to_value(options).unwrap();
+        assert!(value.get("group").is_none());
+        value["jobId"] = "synthetic-job".into();
+        let job: LocalSyncJob = serde_json::from_value(value).unwrap();
+        assert!(job.group.is_none());
+        assert!(serde_json::to_value(job).unwrap().get("group").is_none());
+        let directory: StorageEntry = serde_json::from_value(serde_json::json!({
+            "path":"directory", "directory":true,"size":-1,"modified":"native-time"}))
+        .unwrap();
+        assert_eq!(directory.size, -1);
+        assert!(serde_json::from_value::<StorageEntry>(
+            serde_json::json!({"path":"missing-size","directory":true,"modified":"native-time"})
+        )
+        .is_err());
+    }
 }

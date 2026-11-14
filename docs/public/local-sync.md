@@ -15,11 +15,36 @@ expand home directories or reinterpret a remote path with host filesystem APIs.
 Endpoint URIs and native extra settings can contain private credentials; default
 `Debug` omits them. Explicit getters and serialization expose private values.
 
+`StorageEndpoint::remote(protocol, uri)` explicitly selects FTP, SFTP, SMB or
+HTTP(S) WebDAV. The URI must match the selected protocol, identify a host and
+contain no userinfo, query or fragment. Supply credentials with
+`.credentials(user, password)`; they remain private native fields and are never
+added to the URI. The SDK connects only to the management target: the official
+core establishes the storage connection. Explicitly serializing an endpoint can
+expose its secrets.
+
+`connection_timeout_seconds()` configures the target's native connection limit;
+it does not extend the management request deadline. The fixed core's SFTP
+backend can retry failed SSH authentication internally through its native pacer.
+A management timeout does not prove a completed credential refusal; choose an
+explicit bounded management deadline when that final native result is required.
+The protocol fixture uses thirty seconds for this SFTP observation and ten for
+the other peers, recording the selected limit separately from actual duration.
+The SDK adds no retry. SFTP private-key paths use
+`private_key_file(TargetPath)` and the target's path syntax; the controller opens
+no key file. `insecure_tls(true)` explicitly disables native peer verification
+for SFTP/WebDAV and should be limited to deliberately trusted test endpoints.
+`smb_domain()` and `smb_guest()` select the native SMB authentication settings;
+positive domain/guest effects retain separate acceptance requirements.
+
 `local_sync_health()` returns actual target-reported availability. That flag is
 separate from protocol, platform and entitlement acceptance.
 `local_sync_configuration()`, `local_sync_jobs()` and `local_sync_job()` retain
-native fields and unknown settings. `create_local_sync_job()` selects both
-endpoints and a direction, then reads back the actual registration. Defaults
+native fields and unknown settings. `CreateLocalSyncJob::new(label, side_a, side_b, mode)` requires an explicit nonempty
+name before a request can be sent. `create_local_sync_job()` selects both endpoints
+and a direction, then reads back the actual registration. An ungrouped job
+retains `group: None`; native omission is preserved by scoped full-object
+updates. An explicitly empty patch group clears it. Defaults
 enable neither startup execution, watch, schedules nor mirror removal of
 destination-only data. `delete_extraneous(true)` is a separately explicit
 destructive mirror choice, with no SDK backup or rollback. Bidirectional mode
@@ -41,7 +66,9 @@ slash-separated relative components. Empty browse/parent paths select the
 endpoint root. Dot/parent, absolute, empty intermediate and backslash components
 are refused; directory names must be one nonempty component. Creating a directory
 requires independent native listing readback. None of these operations provide a
-controller filesystem fallback.
+controller filesystem fallback. `StorageEntry::size` is signed: FTP directories
+can report `-1` for unknown size. This value is preserved, separate from actual
+transferred byte counters.
 
 ## Analysis, execution and observation
 
@@ -90,9 +117,34 @@ result/history readback; scoped configuration preservation; registration deletio
 while retaining data; and normal owned-tree shutdown. Final same-source native
 acceptance on the other modern profiles remains pending.
 
+Separate local native FTP/SFTP/SMB/WebDAV cases have also observed incorrect
+password refusal, actual remote probe/browse/mkdir, explicit preview execution,
+exact remote payload/source retention and registration removal preserving data.
+These are bounded modern macOS observations, with independent loopback peers,
+not full protocol/platform acceptance. The SMB test peer corrects two known
+Impacket 0.13.1 wire details: it retains session identity in LOGOFF responses and
+returns a named-object absence error for a missing CREATE/OPEN name. Real
+credential validation, logout and filesystem effects remain in the peer; no
+native error is converted into success.
+
 Reverse mirror, bidirectional conflicts, selected execution, inflight controls,
 Local Sync events, watch/schedules, marker/baseline recovery and each of
 FTP/SFTP/SMB/WebDAV require separate native effects and verification. Their GUI
 presence, enum values, stored configuration or a basic endpoint success are not
 support claims. Licensed conditions, old architectures and final cross-network
 acceptance retain their independent project gates.
+
+## Test peer environments
+
+Protocol tests require an explicitly prepared private Python environment and
+`VERYSYNC_STORAGE_TEST_PYTHON`. The test-only preparation script installs fixed
+versions into a fresh virtual environment; neither Cargo builds nor library
+calls invoke it. Servers bind ephemeral loopback ports, use random synthetic
+credentials and independent directories, and remain owned by their exact test
+child until cleanup. They create no system account, service or SSH configuration.
+
+CI records the Rust test architecture, the core's reported architecture and the
+peer interpreter platform separately. On Windows ARM64 only the protocol peer
+uses a dedicated x64 Python because a fixed cryptographic dependency has no
+ARM64 wheel. The Rust executable and VerySync core retain their separate native
+ARM64 requirements. An emulated peer is never reported as native SDK execution.
