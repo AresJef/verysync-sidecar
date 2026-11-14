@@ -73,6 +73,11 @@ tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
 
 [[test]]
+name = "ldap_trusted_ca_engine"
+path = "tests/ldap_trusted_ca_engine.rs"
+required-features = ["engine-tests"]
+
+[[test]]
 name = "engine_control"
 path = "tests/engine_control.rs"
 required-features = ["engine-tests"]
