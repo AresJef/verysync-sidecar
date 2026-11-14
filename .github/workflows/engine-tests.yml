@@ -31,10 +31,10 @@ jobs:
   fixture:
     name: ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
-    # Complete native suites grew from baseline control to protocols/recovery.
-    # Two source1535 profiles reached the old 45-minute job capacity; individual
-    # native deadlines/workloads remain unchanged and failures still gate.
-    timeout-minutes: 55
+    # Source abe7 Windows AMD64 reached 55 minutes in the final mechanism probes
+    # after product suites completed. Allow the complete required bundle and its
+    # cleanup to finish; individual native deadlines and all outcome gates stay.
+    timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
