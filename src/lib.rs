@@ -83,6 +83,7 @@ mod selective;
 mod sharing;
 mod status;
 mod sync_observation;
+mod system_preferences;
 mod transports;
 mod upgrades;
 
@@ -205,6 +206,7 @@ pub use sync_observation::{
     CompletionSnapshot, DeviceStatistics, FolderErrorPage, FolderStatistics, FolderSyncError,
     LastFileObservation, ListPage, NeedPage, SyncFile, SyncFileKind, SyncFilePage,
 };
+pub use system_preferences::{NativePathSelection, SystemPreferences, SystemPreferencesPatch};
 pub use transports::{
     TrackerStatus, TransportConfig, TransportPatch, TransportStatus, TransportUpdate,
 };

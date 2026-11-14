@@ -75,6 +75,15 @@ impl ConfigurationSnapshot {
     pub fn diagnostics_options(&self) -> Result<crate::DiagnosticsOptions> {
         self.decode(&["options"])
     }
+    /// Read event logging, thumbnail and proxy selections with target-side paths.
+    pub fn system_preferences(&self) -> Result<crate::SystemPreferences> {
+        let wire: crate::system_preferences::WireSystemPreferences = self.decode(&["options"])?;
+        wire.into_public(self.style)
+    }
+    /// Edit explicit target selections without opening files or starting a proxy.
+    pub fn set_system_preferences(&mut self, patch: &crate::SystemPreferencesPatch) -> Result<()> {
+        self.merge(&["options"], &patch.body(self.style)?)
+    }
     /// Edit only explicit native crash settings, without uploading or accepting terms.
     pub fn set_crash_reporting(&mut self, patch: &crate::CrashReportingPatch) -> Result<()> {
         patch.validate()?;

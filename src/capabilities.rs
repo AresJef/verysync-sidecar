@@ -93,6 +93,8 @@ pub enum Capability {
     ConfigurationApplication,
     /// Diagnostic preferences, separate from actual report transmission.
     DiagnosticPreferences,
+    /// Native engine-event audit, thumbnail and proxy configuration selections.
+    SystemPreferences,
     /// Explicit API-key rotation and read-only reauthentication of the same instance.
     ManagementKeyRotation,
     /// Local GUI credential configuration and explicit native cookie sessions.
@@ -309,6 +311,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::SystemPreferences,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::GuiPreferences,
         implementation: ImplementationStatus::Typed,

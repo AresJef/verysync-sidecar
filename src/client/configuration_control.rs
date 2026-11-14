@@ -7,6 +7,36 @@ use crate::{
 use serde::{de::DeserializeOwned, Serialize};
 
 impl Client {
+    /// Read event-log, thumbnail and proxy selections using target path syntax.
+    pub async fn system_preferences(&self) -> Result<crate::SystemPreferences> {
+        let wire: crate::system_preferences::WireSystemPreferences = self
+            .connection
+            .get_json("read system preferences", "rest/config/options")
+            .await?;
+        wire.into_public(self.folder_path_style()?)
+    }
+    /// PATCH explicit selections and read actual values. The official program may
+    /// create event logs/cache data or use a proxy; this is not a connection/preview
+    /// receipt. The SDK does not open target paths, retry or restart the core.
+    pub async fn update_system_preferences(
+        &self,
+        patch: &crate::SystemPreferencesPatch,
+    ) -> Result<ConfigurationSectionUpdate<crate::SystemPreferences>> {
+        let style = self.folder_path_style()?;
+        let body = patch.body(style)?;
+        let update: ConfigurationSectionUpdate<crate::system_preferences::WireSystemPreferences> =
+            self.patch_configuration_section("rest/config/options", &body)
+                .await?;
+        let configuration = update
+            .configuration
+            .into_public(style)
+            .map_err(section_unknown)?;
+        Ok(ConfigurationSectionUpdate {
+            configuration,
+            requested_fields_match: update.requested_fields_match,
+        })
+    }
+
     /// Read native diagnostic preferences. Fixed legacy usage values do not
     /// establish consent, mutability or actual report transmission.
     pub async fn diagnostics_options(&self) -> Result<crate::DiagnosticsOptions> {
