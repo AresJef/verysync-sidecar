@@ -23,17 +23,31 @@ impl Service {
         root: &Path,
         write_delay: Duration,
     ) -> TestResult<Self> {
-        Self::configured(protocol, root, write_delay, false)
+        Self::configured(protocol, root, write_delay, false, None)
     }
     #[allow(dead_code)] // Shared fixture modules are compiled by separate targets.
     pub fn start_https(root: &Path) -> TestResult<Self> {
-        Self::configured(StorageProtocol::WebDav, root, Duration::ZERO, true)
+        Self::configured(StorageProtocol::WebDav, root, Duration::ZERO, true, None)
+    }
+    #[allow(dead_code)] // Shared fixture module, separate native test targets.
+    pub fn start_smb_auth(root: &Path, mode: &str) -> TestResult<Self> {
+        if !matches!(mode, "domain" | "guest") {
+            return Err("unknown explicit SMB test policy".into());
+        }
+        Self::configured(
+            StorageProtocol::Smb,
+            root,
+            Duration::ZERO,
+            false,
+            Some(mode),
+        )
     }
     fn configured(
         protocol: StorageProtocol,
         root: &Path,
         write_delay: Duration,
         tls: bool,
+        smb_auth: Option<&str>,
     ) -> TestResult<Self> {
         if write_delay.as_millis() > 100 {
             return Err("bounded write delay is test-only".into());
@@ -84,7 +98,7 @@ impl Service {
         let mut input = child.stdin.take().ok_or("private service stdin absent")?;
         serde_json::to_writer(
             &mut input,
-            &serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis(),"tls":tls}),
+            &serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis(),"tls":tls,"smb_auth":smb_auth}),
         )?;
         input.write_all(b"\n")?;
         drop(input);
@@ -145,7 +159,16 @@ impl Service {
         } else {
             endpoint
         };
-        service.endpoint = endpoint.clone().credentials(user.clone(), password)?;
+        service.endpoint = if smb_auth == Some("guest") {
+            endpoint.clone().smb_guest(true)?
+        } else {
+            let endpoint = endpoint.clone().credentials(user.clone(), password)?;
+            if smb_auth == Some("domain") {
+                endpoint.smb_domain("VS-SYNTHETIC")?
+            } else {
+                endpoint
+            }
+        };
         service.bad_endpoint =
             endpoint.credentials(user, "deliberately-incorrect-synthetic-password")?;
         Ok(service)

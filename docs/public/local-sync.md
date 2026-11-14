@@ -418,3 +418,20 @@ trusted-CA/server-identity acceptance. The SDK installs no CA, changes no system
 trust store and makes no universal trust-configuration promise for the target
 kernel. Final source/platform acceptance and a correctly trusted identity retain
 their separate gates; configuration flags are not certificate verification proof.
+
+
+## SMB domain and guest boundary
+
+The dedicated native cases observe the selected domain in the actual NTLM
+exchange at a private standalone peer. A different domain is rejected; a wrong
+password with the correct domain is also rejected by the peer's real NTLMv2
+verification. The correct combination probes and copies exact file contents.
+
+A separately selected credential-free guest endpoint produces an actual guest
+session flag and copies real bytes. The peer refuses a non-guest authentication
+attempt under that explicit policy. Source and target-only files remain intact
+and owned processes exit normally. The observations contain only policy match,
+username-presence, status and session flags, never NTLM hashes or passwords.
+These cases establish the selected native parameters and standalone protocol
+behavior. They do not claim Active Directory, Kerberos or arbitrary server guest
+permissions; final source/platform acceptance remains separate.

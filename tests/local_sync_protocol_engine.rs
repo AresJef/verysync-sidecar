@@ -276,3 +276,115 @@ async fn public_https_webdav_rejects_untrusted_certificate_and_requires_explicit
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn public_smb_domain_ntlm_and_guest_selection_have_actual_peer_and_data_effects() -> TestResult
+{
+    use verysync_sidecar::Error;
+    for mode in ["domain", "guest"] {
+        let root = tempfile::Builder::new()
+            .prefix("vs-smb-auth-")
+            .tempdir()?
+            .keep();
+        let source = root.join("source");
+        std::fs::create_dir(&source)?;
+        let payload = b"actual SMB selected authentication payload";
+        std::fs::write(source.join("auth.bin"), payload)?;
+        let mut peer = storage_service::Service::start_smb_auth(&root, mode)?;
+        std::fs::write(
+            peer.share.join("sentinel.bin"),
+            b"authentication target-only",
+        )?;
+        let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+        let identity = core.client().instance().device_id.clone();
+        let bad = if mode == "domain" {
+            peer.endpoint.clone().smb_domain("WRONG-SYNTHETIC")?
+        } else {
+            peer.bad_endpoint.clone().smb_guest(false)?
+        };
+        let refusal = core
+            .client()
+            .probe_storage_endpoint(&bad)
+            .await
+            .expect_err("private SMB authentication policy was ignored");
+        let cause = match &refusal {
+            Error::MutationOutcomeUnknown { source, .. } => source.as_ref(),
+            error => error,
+        };
+        assert!(
+            matches!(
+                cause,
+                Error::Api { .. } | Error::Http { .. } | Error::AccessDenied { .. }
+            ),
+            "expected native refusal rather than timeout: {cause:?}"
+        );
+        if mode == "domain" {
+            let wrong_password = peer.bad_endpoint.clone().smb_domain("VS-SYNTHETIC")?;
+            let error = core
+                .client()
+                .probe_storage_endpoint(&wrong_password)
+                .await
+                .expect_err("domain selection must not replace password verification");
+            let cause = match &error {
+                Error::MutationOutcomeUnknown { source, .. } => source.as_ref(),
+                error => error,
+            };
+            assert!(matches!(
+                cause,
+                Error::Api { .. } | Error::Http { .. } | Error::AccessDenied { .. }
+            ));
+        }
+        core.client().probe_storage_endpoint(&peer.endpoint).await?;
+        let job = core
+            .client()
+            .create_local_sync_job(
+                &CreateLocalSyncJob::new(
+                    "explicit SMB authentication",
+                    StorageEndpoint::local(TargetPath::local(&source))?,
+                    peer.endpoint.clone(),
+                    LocalSyncMode::MirrorAToB,
+                )?
+                .ignore_permissions(true),
+            )
+            .await?;
+        execute(&core, &job.job_id).await?;
+        assert_eq!(std::fs::read(peer.share.join("auth.bin"))?, payload);
+        assert_eq!(std::fs::read(source.join("auth.bin"))?, payload);
+        assert_eq!(
+            std::fs::read(peer.share.join("sentinel.bin"))?,
+            b"authentication target-only"
+        );
+        assert_eq!(core.client().system_status().await?.device_id, identity);
+        let exit = core.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+        peer.stop()?;
+        let records = std::fs::read_to_string(root.join("smb-auth-observations.jsonl"))?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(records
+            .iter()
+            .any(|r| r["policy_matched"] == false && r["status"] == 0xC000006Du64));
+        assert!(records
+            .iter()
+            .any(|r| r["policy_matched"] == true && r["status"] == 0));
+        if mode == "domain" {
+            assert!(records
+                .iter()
+                .any(|r| r["policy_matched"] == true && r["status"] == 0xC000006Du64));
+            assert!(records
+                .iter()
+                .any(|r| r["status"] == 0 && r["user_present"] == true && r["session_flags"] == 0));
+        } else {
+            assert!(records.iter().any(|r| r["status"] == 0
+                && r["user_present"] == false
+                && r["session_flags"] == 1));
+        }
+        println!(
+            "public SMB authentication boundary evidence: {}",
+            serde_json::json!({"mode":mode,"actual_wrong_policy_refused":true,"actual_native_authentication_fields_observed":true,"actual_native_probe_and_explicit_copy":true,"actual_source_and_target_payload_bytes":true,"actual_target_only_sentinel_retained":true,"actual_same_identity_and_normal_owned_exit":true,"peer_observations":records,"active_directory_or_kerberos_claimed":false})
+        );
+        std::fs::remove_dir_all(root)?;
+    }
+    Ok(())
+}
