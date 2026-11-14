@@ -131,3 +131,44 @@ temporary expiry, concurrency limits, disk-pressure handling, sleep prevention,
 remote-name replacement, packet QoS or a performance improvement. Network,
 bandwidth, upgrade and audit settings retain their separate typed APIs and
 verification boundaries. Full same-source platform acceptance remains separate.
+
+## Diagnostic preferences
+
+`diagnostics_options()` reads actual crash settings and legacy usage information.
+Destinations and the usage identifier require explicit accessors and are omitted
+from Debug, along with other private option values. A reported legacy accepted
+version is not an SDK consent record or evidence that a report was transmitted.
+
+The controlled baseline probes requested different `urAccepted`, `urSeen`,
+`urPostInsecurely`, `urURL` and `urInitialDelayS` values. Configuration readback
+normalized them to fixed values, including after normal restart. The typed API
+therefore exposes those observations for reading. It does not promise a
+configurable usage destination, opt-out or reporting behavior from those fields.
+An eight-second private-receiver observation saw no POST; that finite observation
+does not prove that reporting is globally absent. Platform conditions remain
+subject to the full final-source gate.
+
+`update_crash_reporting()` changes only explicit native crash settings. It checks
+fresh identity, sends one partial PATCH, and returns actual readback. The matching
+snapshot getter and `set_crash_reporting()` support reviewed complete saves too.
+
+```no_run
+use verysync_sidecar::{Client, CrashReportingPatch};
+
+async fn disable_native_crash_reports(client: &Client) -> verysync_sidecar::Result<()> {
+    let update = client.update_crash_reporting(
+        &CrashReportingPatch::default().enabled(false),
+    ).await?;
+    // Check update.requested_fields_match before interpreting the selection.
+    Ok(())
+}
+```
+
+An explicit URL selects an HTTP(S) collector; userinfo, fragments, zero ports,
+control characters and values above 32 KiB are rejected before a request.
+Query tokens remain private. URL validation does not authenticate a collector.
+Enabling reporting can affect future native network activity. The SDK does not
+generate a crash, upload a report, accept terms, retry writes or restart the core.
+The native case verifies both flag values, a private destination, unchanged usage
+and terms fields, normal restart persistence and normal owned exit. Actual crash
+upload and collector trust/authentication require separate evidence.

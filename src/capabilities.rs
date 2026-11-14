@@ -91,6 +91,8 @@ pub enum Capability {
     FullConfiguration,
     /// Native configuration application flag, separate from persistence.
     ConfigurationApplication,
+    /// Diagnostic preferences, separate from actual report transmission.
+    DiagnosticPreferences,
     /// Explicit API-key rotation and read-only reauthentication of the same instance.
     ManagementKeyRotation,
     /// Local GUI credential configuration and explicit native cookie sessions.
@@ -305,6 +307,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::DiagnosticPreferences,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::LdapAuthentication,
         implementation: ImplementationStatus::Typed,

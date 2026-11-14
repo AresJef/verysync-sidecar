@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Read native diagnostic preferences and explicitly update crash-report settings.
+  Preserve private destinations/identifiers without ordinary Debug disclosure.
+  Keep normalized legacy usage fields read-only rather than promising consent,
+  opt-out or report transmission from configuration readback.
+
 - Observe Windows upstream state locks without creating absent files. Keep the
   same regular-file, reparse-point and private-ACL checks on existing handles.
 

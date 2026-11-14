@@ -71,6 +71,15 @@ impl ConfigurationSnapshot {
     pub fn general_options(&self) -> Result<GeneralOptions> {
         self.decode(&["options"])
     }
+    /// Read actual diagnostic settings, retaining fixed legacy usage information.
+    pub fn diagnostics_options(&self) -> Result<crate::DiagnosticsOptions> {
+        self.decode(&["options"])
+    }
+    /// Edit only explicit native crash settings, without uploading or accepting terms.
+    pub fn set_crash_reporting(&mut self, patch: &crate::CrashReportingPatch) -> Result<()> {
+        patch.validate()?;
+        self.merge(&["options"], patch)
+    }
     /// Read the folder creation template, including possibly empty ID/path fields.
     pub fn folder_defaults(&self) -> Result<FolderDefaults> {
         self.decode(&["defaults", "folder"])
