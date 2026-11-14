@@ -7,6 +7,26 @@ use crate::{
 use serde::{de::DeserializeOwned, Serialize};
 
 impl Client {
+    /// Read native diagnostic preferences. Fixed legacy usage values do not
+    /// establish consent, mutability or actual report transmission.
+    pub async fn diagnostics_options(&self) -> Result<crate::DiagnosticsOptions> {
+        self.connection
+            .get_json("read diagnostic options", "rest/config/options")
+            .await
+    }
+
+    /// PATCH only explicit crash-report settings and return actual readback.
+    /// Does not crash, upload, retry, restart or accept terms. Enabling can affect
+    /// future native network activity; URL validation does not authenticate a collector.
+    pub async fn update_crash_reporting(
+        &self,
+        patch: &crate::CrashReportingPatch,
+    ) -> Result<ConfigurationSectionUpdate<crate::DiagnosticsOptions>> {
+        patch.validate()?;
+        self.patch_configuration_section("rest/config/options", patch)
+            .await
+    }
+
     /// Read the complete native configuration after checking authenticated identity.
     /// Unknown values and target paths are retained; Debug omits private values.
     pub async fn configuration(&self) -> Result<crate::ConfigurationSnapshot> {

@@ -50,6 +50,7 @@ mod capabilities;
 mod client;
 mod configuration;
 mod devices;
+mod diagnostics_preferences;
 mod endpoint;
 mod engine_source;
 mod error;
@@ -101,6 +102,7 @@ pub use devices::{
     CreateDeviceOptions, DeviceCompression, DeviceConfig, DeviceDefaults, DevicePatch,
     DeviceRemoval, DeviceUpdate,
 };
+pub use diagnostics_preferences::{CrashReportingPatch, DiagnosticsOptions};
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use engine_source::{EngineSource, LocalProgram, ProgramInfo};
 pub use error::{Error, ManagedStateLock, ProcessDiagnostic, ResponseDiagnostic, Result};

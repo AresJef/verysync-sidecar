@@ -14,6 +14,76 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn crash_preferences_keep_private_legacy_values_and_only_write_explicit_fields() -> TestResult
+{
+    use verysync_sidecar::CrashReportingPatch;
+    let endpoint = format!("https://collector.invalid/newcrash?token={KEY}");
+    let options = serde_json::json!({"urAccepted":3,"urSeen":3,"urUniqueId":KEY,"urURL":KEY,"urPostInsecurely":true,"urInitialDelayS":900,"crashReportingEnabled":false,"crURL":endpoint,"futureSecret":KEY});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(options),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let patch = CrashReportingPatch::default()
+        .enabled(false)
+        .url(endpoint.clone());
+    assert!(!format!("{patch:?}").contains(KEY));
+    let updated = client.update_crash_reporting(&patch).await?;
+    assert!(updated.requested_fields_match);
+    assert_eq!(updated.configuration.usage_identifier(), KEY);
+    assert_eq!(updated.configuration.crash_report_url(), endpoint);
+    assert_eq!(updated.configuration.extra["futureSecret"], KEY);
+    assert!(!format!("{updated:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split_once("\r\n\r\n")
+            .ok_or("crash patch absent")?
+            .1,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"crashReportingEnabled":false,"crURL":endpoint})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_crash_destinations_and_empty_changes_make_no_request() -> TestResult {
+    use verysync_sidecar::CrashReportingPatch;
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for patch in [
+        CrashReportingPatch::default(),
+        CrashReportingPatch::default().url("file:///private/collector"),
+        CrashReportingPatch::default().url("https://user:private@collector.invalid/"),
+        CrashReportingPatch::default().url("http://127.0.0.1:0/"),
+        CrashReportingPatch::default().url("https://collector.invalid/#fragment"),
+        CrashReportingPatch::default().url("https://collector.invalid/\nprivate"),
+    ] {
+        assert!(matches!(
+            client.update_crash_reporting(&patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn general_options_preserve_native_integral_and_fractional_disk_values_and_disabled_progress(
 ) -> TestResult {
     use verysync_sidecar::{DiskFreeRequirement, DiskSpaceUnit, GeneralOptionsPatch};

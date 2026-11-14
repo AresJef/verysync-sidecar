@@ -8,6 +8,82 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn native_crash_preferences_preserve_fixed_usage_fields_and_survive_restart() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-crash-preferences-")
+        .tempdir()?
+        .keep();
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let address = listener.local_addr()?;
+    assert_ne!(address.port(), 18886);
+    let url = format!("http://{address}/synthetic-crash-collector");
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let original = core.client().configuration().await?;
+    let before = original.diagnostics_options()?;
+    // Independently classify legacy requested values through the already-public
+    // raw API. A matching fixed readback is not consent or transmission evidence.
+    let legacy_ack=core.client().raw_request(&RawRequest::new(RawMethod::Patch,["rest","config","options"],RequestEffect::MayModify)?
+        .json_body(&serde_json::json!({"urAccepted":-1,"urSeen":0,"urPostInsecurely":false,"urURL":url,"urInitialDelayS":1}))?).await?;
+    assert_eq!(legacy_ack.status(), 200);
+    assert!(legacy_ack.body_bytes().is_empty());
+    let legacy = core.client().diagnostics_options().await?;
+    assert_eq!(legacy.usage_accepted_version, before.usage_accepted_version);
+    assert_eq!(legacy.usage_seen_version, before.usage_seen_version);
+    assert_eq!(legacy.usage_post_insecurely, before.usage_post_insecurely);
+    assert_eq!(
+        legacy.usage_initial_delay_seconds,
+        before.usage_initial_delay_seconds
+    );
+    assert!(legacy.usage_report_url() == before.usage_report_url());
+    for enabled in [false, true, false] {
+        let changed = core
+            .client()
+            .update_crash_reporting(
+                &CrashReportingPatch::default()
+                    .enabled(enabled)
+                    .url(url.clone()),
+            )
+            .await?;
+        assert!(changed.requested_fields_match);
+        assert_eq!(changed.configuration.crash_reporting_enabled, enabled);
+        assert!(changed.configuration.crash_report_url() == url);
+        assert_eq!(
+            changed.configuration.usage_accepted_version,
+            before.usage_accepted_version
+        );
+        assert_eq!(
+            changed.configuration.usage_seen_version,
+            before.usage_seen_version
+        );
+        assert!(changed.configuration.usage_report_url() == before.usage_report_url());
+        assert!(changed.configuration.usage_identifier() == before.usage_identifier());
+        assert_eq!(
+            changed.configuration.usage_initial_delay_seconds,
+            before.usage_initial_delay_seconds
+        );
+        assert_eq!(
+            changed.configuration.usage_post_insecurely,
+            before.usage_post_insecurely
+        );
+    }
+    core.restart(Duration::from_secs(30)).await?;
+    let persisted = core.client().diagnostics_options().await?;
+    assert!(!persisted.crash_reporting_enabled && persisted.crash_report_url() == url);
+    assert!(persisted.usage_identifier() == before.usage_identifier());
+    let full = core.client().configuration().await?;
+    assert!(!full.diagnostics_options()?.crash_reporting_enabled);
+    assert!(
+        full.native_document()["options"]["TOSAccepted"]
+            == original.native_document()["options"]["TOSAccepted"]
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    drop(listener);
+    println!("native_crash_preferences_effects=10 no_report_upload_requested=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart(
 ) -> TestResult {
     let root = tempfile::Builder::new()
