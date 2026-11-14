@@ -3,6 +3,8 @@
 mod discovery_fixture;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/network_limit_effects.rs"]
+mod network_limit_effects;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 use std::time::Duration;
