@@ -3,6 +3,8 @@
 mod managed_fixture;
 #[path = "common/peer_proxy.rs"]
 mod peer_proxy;
+#[path = "common/private_redial.rs"]
+mod private_redial;
 #[path = "common/sync_diagnostics.rs"]
 mod sync_diagnostics;
 use managed_fixture::{options, TestResult};
@@ -414,6 +416,10 @@ async fn actual_folder_offer_dismiss_ignore_unignore_and_explicit_read_only_acce
     let root = tempfile::Builder::new().prefix("vsif-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    // Explicit fixture scheduling, with every original observation deadline
+    // and data assertion retained. This does not change SDK/native defaults.
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
     assert!(b.client().pending_devices().await?.is_empty());

@@ -1,6 +1,8 @@
 //! Actual private device controls and their independent connection/file effects.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/private_redial.rs"]
+mod private_redial;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 use std::time::Duration;
@@ -241,6 +243,10 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
     let root = tempfile::Builder::new().prefix("vsdp-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    // Explicit fixture scheduling, with every original observation deadline
+    // and data assertion retained. This does not change SDK/native defaults.
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
     let a_path = root.join("source files");
@@ -261,6 +267,7 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
         .join_folder(&JoinFolderOptions::new(ro, TargetPath::local(b_path.clone())).paused(true))
         .await?
         .configuration;
+    println!("synthetic device effect stage: discover owned listeners");
     let a_addr = address(a.client()).await?;
     let b_addr = address(b.client()).await?;
     for (client, folder, peer, address) in [
@@ -294,18 +301,22 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
         .await?;
         client.resume_folder(&folder.id).await?;
     }
+    println!("synthetic device effect stage: scan and establish both initial connections");
     a.client().request_scan(&af.id).await?;
     connected(a.client(), &b_id, true).await?;
     connected(b.client(), &a_id, true).await?;
+    println!("synthetic device effect stage: receive exact initial payload within original 40s");
     tokio::time::timeout(Duration::from_secs(40), async {
         while std::fs::read(b_path.join("sample.bin")).ok().as_deref() != Some(sample.as_slice()) {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await?;
+    println!("synthetic device effect stage: pause device and disconnect both sides");
     assert!(a.client().pause_device(&b_id).await?.requested_fields_match);
     connected(a.client(), &b_id, false).await?;
     connected(b.client(), &a_id, false).await?;
+    println!("synthetic device effect stage: resume device and reconnect both sides");
     assert!(!a.client().folder(&af.id).await?.paused);
     assert!(
         a.client()
@@ -315,6 +326,7 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
     );
     connected(a.client(), &b_id, true).await?;
     connected(b.client(), &a_id, true).await?;
+    println!("synthetic device effect stage: remove registration and observe remote disconnect");
     let removed = a.client().remove_device(&b_id).await?;
     assert!(removed.configuration_absent && removed.remaining_folder_associations.is_empty());
     connected(b.client(), &a_id, false).await?;

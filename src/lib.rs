@@ -59,6 +59,7 @@ mod folders;
 mod ignores;
 mod invitations;
 mod local_sync;
+mod local_sync_events;
 mod maintenance;
 mod managed;
 mod network;
@@ -119,12 +120,20 @@ pub use invitations::{
     PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
 };
 pub use local_sync::{
-    CreateLocalSyncJob, LocalSyncAction, LocalSyncActionResult, LocalSyncConfiguration,
-    LocalSyncHealth, LocalSyncHistory, LocalSyncHistoryRecord, LocalSyncJob, LocalSyncJobId,
-    LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate, LocalSyncMode, LocalSyncOperation,
-    LocalSyncOperationId, LocalSyncPreview, LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId,
+    CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncActionResult,
+    LocalSyncCalendarRule, LocalSyncCalendarRuleInfo, LocalSyncConfiguration,
+    LocalSyncConflictPolicy, LocalSyncConflictResolution, LocalSyncConflictSide,
+    LocalSyncControlReceipt, LocalSyncHealth, LocalSyncHistory, LocalSyncHistoryRecord,
+    LocalSyncJob, LocalSyncJobId, LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate,
+    LocalSyncMarkerRepair, LocalSyncMode, LocalSyncOperation, LocalSyncOperationControl,
+    LocalSyncOperationId, LocalSyncPreview, LocalSyncPreviewId, LocalSyncProgress, LocalSyncRun,
+    LocalSyncRunId, LocalSyncSchedule, LocalSyncSelection, LocalSyncSelectionSummary,
     LocalSyncStatus, LocalSyncSummary, StorageDirectory, StorageEndpoint, StorageEntry,
-    StorageProbe,
+    StorageProbe, StorageProtocol,
+};
+pub use local_sync_events::{
+    LocalSyncEvent, LocalSyncEventBatch, LocalSyncEventCancellation, LocalSyncEventCursor,
+    LocalSyncEventGap, LocalSyncEventOptions, LocalSyncEventStreamItem, LocalSyncEventSubscription,
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,

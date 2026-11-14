@@ -3,14 +3,37 @@ use super::{mutation_error, Client};
 use crate::local_sync::{invalid, logical_subpath};
 use crate::{
     CreateLocalSyncJob, Error, LocalSyncAction, LocalSyncActionResult, LocalSyncConfiguration,
-    LocalSyncHealth, LocalSyncHistory, LocalSyncJob, LocalSyncJobId, LocalSyncJobPatch,
-    LocalSyncJobRemoval, LocalSyncJobUpdate, LocalSyncOperation, LocalSyncPreview,
-    LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId, LocalSyncStatus, ResponseDiagnostic, Result,
-    StorageDirectory, StorageEndpoint, StorageEntry, StorageProbe,
+    LocalSyncConflictResolution, LocalSyncHealth, LocalSyncHistory, LocalSyncJob, LocalSyncJobId,
+    LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate, LocalSyncOperation,
+    LocalSyncPreview, LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId, LocalSyncSelection,
+    LocalSyncSelectionSummary, LocalSyncStatus, ResponseDiagnostic, Result, StorageDirectory,
+    StorageEndpoint, StorageEntry, StorageProbe,
 };
+use crate::{LocalSyncControlReceipt, LocalSyncOperationControl, LocalSyncOperationId};
 use serde::de::DeserializeOwned;
 
 impl Client {
+    /// Read one native Local Sync event response after an explicit sequence.
+    /// Wait is 0..=55 seconds, separately bounded by the selected management
+    /// deadline. Returned cursor/reset/missed flags are not normalized away.
+    pub async fn local_sync_events(
+        &self,
+        after: u64,
+        wait_seconds: u8,
+    ) -> Result<crate::LocalSyncEventBatch> {
+        if wait_seconds > 55 {
+            return Err(invalid("Local Sync event wait exceeds native bound"));
+        }
+        self.local_sync_read(
+            "read native Local Sync events",
+            &["events"],
+            &[
+                ("after", &after.to_string()),
+                ("wait", &wait_seconds.to_string()),
+            ],
+        )
+        .await
+    }
     /// Read actual native Local Sync availability, independent of entitlement or
     /// evidence for an individual storage protocol.
     pub async fn local_sync_health(&self) -> Result<LocalSyncHealth> {
@@ -43,8 +66,8 @@ impl Client {
         }
         Ok(job)
     }
-    /// Register both explicit endpoints without starting, scheduling or watching
-    /// a sync. Actual readback follows the acknowledgement. On any uncertain
+    /// Register both explicit endpoints. Automatic triggers default off; explicit
+    /// startup/watch/schedule choices can cause native writes. On any uncertain
     /// write, reconcile the job list; the SDK never retries creation.
     pub async fn create_local_sync_job(
         &self,
@@ -79,16 +102,25 @@ impl Client {
         }
         Ok(observed)
     }
-    /// Replace only selected label/group/enabled fields in a freshly read full
-    /// native object, preserving endpoint credentials and unknown options. This
+    /// Replace selected native job settings in a freshly read full object,
+    /// preserving unselected endpoint credentials and unknown options. This
     /// is serialized for clones, but does not lock other management writers.
     pub async fn update_local_sync_job(
         &self,
         id: &LocalSyncJobId,
         patch: &LocalSyncJobPatch,
     ) -> Result<LocalSyncJobUpdate> {
-        if patch.label.is_none() && patch.group.is_none() && patch.enabled.is_none() {
+        if patch.label.is_none()
+            && patch.group.is_none()
+            && patch.enabled.is_none()
+            && patch.settings.is_empty()
+            && patch.side_a.is_none()
+            && patch.side_b.is_none()
+        {
             return Err(invalid("Local Sync update must select at least one field"));
+        }
+        for endpoint in [&patch.side_a, &patch.side_b].into_iter().flatten() {
+            endpoint.validate_target(self.folder_path_style()?)?;
         }
         let _guard = self.connection.mutation_lock.lock().await;
         let mut job = self.local_sync_job(id).await?;
@@ -96,10 +128,45 @@ impl Client {
             job.label = label.clone();
         }
         if let Some(group) = &patch.group {
-            job.group = group.clone();
+            job.group = if group.is_empty() {
+                None
+            } else {
+                Some(group.clone())
+            };
         }
         if let Some(enabled) = patch.enabled {
             job.enabled = enabled;
+        }
+        if let Some(endpoint) = &patch.side_a {
+            job.side_a = endpoint.clone();
+        }
+        if let Some(endpoint) = &patch.side_b {
+            job.side_b = endpoint.clone();
+        }
+        let mut body = value(&job)?;
+        for (key, val) in &patch.settings {
+            body[key] = val.clone();
+        }
+        let mode = body
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if (mode == "bisync"
+            && body
+                .get("deleteExtraneous")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true))
+            || (patch
+                .settings
+                .get("deleteExtraneous")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+                && !matches!(mode, "mirror_a_to_b" | "mirror_b_to_a"))
+            || (patch.settings.contains_key("conflictPolicy") && mode != "bisync")
+        {
+            return Err(invalid(
+                "requested native direction, deletion and conflict settings are incompatible",
+            ));
         }
         let operation = "update Local Sync job";
         let acknowledged: LocalSyncJob = self
@@ -108,7 +175,7 @@ impl Client {
                 reqwest::Method::PUT,
                 &["jobs", id.as_str()],
                 &[],
-                Some(&value(&job)?),
+                Some(&body),
                 true,
             )
             .await?;
@@ -122,15 +189,30 @@ impl Client {
             .local_sync_job(id)
             .await
             .map_err(|e| unknown(operation, e))?;
-        let requested_fields_match = patch
-            .label
-            .as_ref()
-            .is_none_or(|v| v == &configuration.label)
+        let observed_value = value(&configuration).map_err(|e| unknown(operation, e))?;
+        let mut endpoints_match = true;
+        for (name, endpoint) in [("sideA", &patch.side_a), ("sideB", &patch.side_b)] {
+            if let Some(endpoint) = endpoint {
+                let expected = value(endpoint).map_err(|e| unknown(operation, e))?;
+                endpoints_match &= observed_value
+                    .get(name)
+                    .is_some_and(|observed| requested_subset(&expected, observed));
+            }
+        }
+        let requested_fields_match = endpoints_match
+            && patch
+                .label
+                .as_ref()
+                .is_none_or(|v| v == &configuration.label)
             && patch
                 .group
                 .as_ref()
-                .is_none_or(|v| v == &configuration.group)
-            && patch.enabled.is_none_or(|v| v == configuration.enabled);
+                .is_none_or(|v| v.as_str() == configuration.group.as_deref().unwrap_or_default())
+            && patch.enabled.is_none_or(|v| v == configuration.enabled)
+            && patch
+                .settings
+                .iter()
+                .all(|(k, v)| selected_job_setting_matches(k, v, observed_value.get(k)));
         Ok(LocalSyncJobUpdate {
             configuration,
             requested_fields_match,
@@ -275,6 +357,162 @@ impl Client {
         }
         Ok(status)
     }
+    /// Control only the currently identified operation of this job. Clone writers
+    /// serialize the preflight, known empty acknowledgement and fresh readback;
+    /// other management writers still require caller coordination. A receipt is
+    /// not proof that in-flight I/O stopped or that prior writes were rolled back.
+    pub async fn control_local_sync_operation(
+        &self,
+        id: &LocalSyncJobId,
+        expected: &LocalSyncOperationId,
+        control: LocalSyncOperationControl,
+    ) -> Result<LocalSyncControlReceipt> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        if self.local_sync_status(id).await?.operation_id.as_ref() != Some(expected) {
+            return Err(invalid(
+                "Local Sync operation changed before explicit control",
+            ));
+        }
+        let route = match control {
+            LocalSyncOperationControl::Pause => "pause",
+            LocalSyncOperationControl::Resume => "resume",
+            LocalSyncOperationControl::Stop => "stop",
+        };
+        let operation = "control exact native Local Sync operation";
+        let ack: serde_json::Value = self
+            .local_sync_json(
+                operation,
+                reqwest::Method::POST,
+                &["jobs", id.as_str(), route],
+                &[],
+                None,
+                true,
+            )
+            .await?;
+        if ack.as_object().is_none_or(|v| !v.is_empty()) {
+            return Err(unknown(
+                operation,
+                invalid("native Local Sync control acknowledgement differs"),
+            ));
+        }
+        let observed = self
+            .local_sync_status(id)
+            .await
+            .map_err(|e| unknown(operation, e))?;
+        if observed.operation_id.as_ref() != Some(expected) {
+            return Err(unknown(
+                operation,
+                invalid("Local Sync operation changed before control readback"),
+            ));
+        }
+        Ok(LocalSyncControlReceipt {
+            job_id: id.clone(),
+            operation_id: expected.clone(),
+            control,
+            observed,
+        })
+    }
+    /// Explicitly rebuild native endpoint markers for a reviewed job snapshot.
+    /// The entire fresh configuration must still match that snapshot and the
+    /// native operation must be quiescent. This deliberately repairs a safety
+    /// marker; verify endpoint ownership and mounts before calling. No endpoint
+    /// directory creation, host filesystem fallback, retry or run is performed
+    /// by the SDK. The acknowledgement/status are separate from filesystem proof.
+    pub async fn rebuild_local_sync_markers(
+        &self,
+        expected: &LocalSyncJob,
+    ) -> Result<crate::LocalSyncMarkerRepair> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        let current = self.local_sync_repair_snapshot(expected).await?;
+        let operation = "rebuild native Local Sync markers";
+        let ack: serde_json::Value = self
+            .local_sync_json(
+                operation,
+                reqwest::Method::POST,
+                &["jobs", current.job_id.as_str(), "markers", "rebuild"],
+                &[],
+                Some(&serde_json::json!({"confirmed":true,"job":current})),
+                true,
+            )
+            .await?;
+        if ack.as_object().is_none_or(|o| !o.is_empty()) {
+            return Err(unknown(
+                operation,
+                invalid(
+                    "native marker rebuild acknowledgement differs from the known empty object",
+                ),
+            ));
+        }
+        let observed = self
+            .local_sync_status(&expected.job_id)
+            .await
+            .map_err(|e| unknown(operation, e))?;
+        Ok(crate::LocalSyncMarkerRepair {
+            job_id: expected.job_id.clone(),
+            observed,
+        })
+    }
+    /// Explicitly discard an incompatible two-way baseline and return a native
+    /// recovery preview for the entire reviewed job snapshot. This can change
+    /// deletion/conflict interpretation. It is not backup restoration or file
+    /// execution; review the new preview and choose a separate explicit run.
+    /// Current settings must still match and work must be quiescent. No retries,
+    /// automatic run, controller baseline edits or filesystem fallback occur.
+    pub async fn recover_local_sync_baseline(
+        &self,
+        expected: &LocalSyncJob,
+    ) -> Result<LocalSyncPreview> {
+        if expected.mode != "bisync" {
+            return Err(invalid("native baseline recovery requires a two-way job"));
+        }
+        let _guard = self.connection.mutation_lock.lock().await;
+        let current = self.local_sync_repair_snapshot(expected).await?;
+        let operation = "recover native Local Sync baseline";
+        let preview: LocalSyncPreview = self
+            .local_sync_json(
+                operation,
+                reqwest::Method::POST,
+                &["jobs", current.job_id.as_str(), "baseline", "recover"],
+                &[],
+                Some(&serde_json::json!({"confirmed":true,"job":current})),
+                true,
+            )
+            .await?;
+        if preview.job_id != expected.job_id {
+            return Err(unknown(
+                operation,
+                invalid("native baseline recovery selects a different job"),
+            ));
+        }
+        let observed = self
+            .local_sync_preview(&expected.job_id)
+            .await
+            .map_err(|e| unknown(operation, e))?;
+        if observed.id != preview.id || observed.operation_id != preview.operation_id {
+            return Err(unknown(
+                operation,
+                invalid("native baseline recovery preview changed before readback"),
+            ));
+        }
+        Ok(observed)
+    }
+    async fn local_sync_repair_snapshot(&self, expected: &LocalSyncJob) -> Result<LocalSyncJob> {
+        let current = self.local_sync_job(&expected.job_id).await?;
+        if value(&current)? != value(expected)? {
+            return Err(invalid(
+                "native repair configuration changed since the reviewed snapshot",
+            ));
+        }
+        current.side_a.validate_target(self.folder_path_style()?)?;
+        current.side_b.validate_target(self.folder_path_style()?)?;
+        let status = self.local_sync_status(&expected.job_id).await?;
+        if !matches!(status.state.as_str(), "idle" | "error") {
+            return Err(invalid(
+                "native repair requires a known quiescent operation state",
+            ));
+        }
+        Ok(current)
+    }
     /// Explicitly start analysis only. This acknowledges an operation; poll its
     /// exact identity and read the completed preview before choosing execution.
     pub async fn start_local_sync_preview(
@@ -358,6 +596,100 @@ impl Client {
         id: &LocalSyncJobId,
         preview: &LocalSyncPreviewId,
     ) -> Result<LocalSyncRun> {
+        self.run_local_sync_preview(id, preview, &LocalSyncSelection::all())
+            .await
+    }
+    /// Read native totals for an explicit selection without running it. The body
+    /// is a selection object; predicted bytes are not transferred-data evidence.
+    pub async fn local_sync_selection_summary(
+        &self,
+        id: &LocalSyncJobId,
+        preview: &LocalSyncPreviewId,
+        selection: &LocalSyncSelection,
+    ) -> Result<LocalSyncSelectionSummary> {
+        let current = self.local_sync_preview(id).await?;
+        if &current.id != preview {
+            return Err(invalid(
+                "Local Sync preview changed before selection summary",
+            ));
+        }
+        selection.selected_count(current.count)?;
+        self.local_sync_json(
+            "read native Local Sync selection totals",
+            reqwest::Method::POST,
+            &[
+                "jobs",
+                id.as_str(),
+                "previews",
+                preview.as_str(),
+                "selection-summary",
+            ],
+            &[],
+            Some(&value(selection)?),
+            false,
+        )
+        .await
+    }
+    /// Resolve reviewed conflicts in one exact preview without executing them.
+    /// The native core returns its replacement preview; the SDK independently
+    /// reads that identity back. A selected missing side can plan deletions.
+    pub async fn resolve_local_sync_conflict(
+        &self,
+        id: &LocalSyncJobId,
+        preview: &LocalSyncPreviewId,
+        resolution: &LocalSyncConflictResolution,
+    ) -> Result<LocalSyncPreview> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        if &self.local_sync_preview(id).await?.id != preview {
+            return Err(invalid(
+                "Local Sync preview changed before conflict resolution",
+            ));
+        }
+        let operation = "resolve exact native Local Sync conflicts";
+        let ack: LocalSyncPreview = self
+            .local_sync_json(
+                operation,
+                reqwest::Method::POST,
+                &[
+                    "jobs",
+                    id.as_str(),
+                    "previews",
+                    preview.as_str(),
+                    "resolve-conflicts",
+                ],
+                &[],
+                Some(&value(resolution)?),
+                true,
+            )
+            .await?;
+        if &ack.job_id != id {
+            return Err(unknown(
+                operation,
+                invalid("native conflict resolution selects another job"),
+            ));
+        }
+        let observed = self
+            .local_sync_preview(id)
+            .await
+            .map_err(|e| unknown(operation, e))?;
+        if observed.id != ack.id {
+            return Err(unknown(
+                operation,
+                invalid("native resolved preview changed before readback"),
+            ));
+        }
+        Ok(observed)
+    }
+    /// Execute only the explicit ranges in one still-current preview. The SDK
+    /// rejects out-of-range/empty selections and scan issues before native POST;
+    /// expiry, native dependencies and races remain authoritative on the core.
+    /// No automatic action expansion, conflict resolution, retry or rollback.
+    pub async fn run_local_sync_preview(
+        &self,
+        id: &LocalSyncJobId,
+        preview: &LocalSyncPreviewId,
+        selection: &LocalSyncSelection,
+    ) -> Result<LocalSyncRun> {
         let _guard = self.connection.mutation_lock.lock().await;
         let current = self.local_sync_preview(id).await?;
         if &current.id != preview || current.scan_issue_count != 0 {
@@ -365,14 +697,19 @@ impl Client {
                 "Local Sync preview changed or has unresolved scan issues",
             ));
         }
-        let operation = "run all exact Local Sync preview actions";
+        if selection.selected_count(current.count)? == 0 {
+            return Err(invalid(
+                "Local Sync execution requires a nonempty exact selection",
+            ));
+        }
+        let operation = "run exact Local Sync preview selection";
         let run: LocalSyncRun = self
             .local_sync_json(
                 operation,
                 reqwest::Method::POST,
                 &["jobs", id.as_str(), "run"],
                 &[],
-                Some(&serde_json::json!({"previewId":preview,"selection":{"all":true}})),
+                Some(&serde_json::json!({"previewId":preview,"selection":selection})),
                 true,
             )
             .await?;
@@ -517,14 +854,94 @@ fn page_limit(limit: u16) -> Result<()> {
         Ok(())
     }
 }
+fn selected_job_setting_matches(
+    key: &str,
+    expected: &serde_json::Value,
+    actual: Option<&serde_json::Value>,
+) -> bool {
+    actual.is_some_and(|actual| {
+        expected == actual
+            || (key == "ignoreLines"
+                && expected.as_array().is_some_and(Vec::is_empty)
+                && actual.is_null())
+    })
+}
 fn requested_subset(expected: &serde_json::Value, actual: &serde_json::Value) -> bool {
     match (expected, actual) {
-        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => a
-            .iter()
-            .all(|(key, v)| b.get(key).is_some_and(|actual| requested_subset(v, actual))),
+        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => a.iter().all(|(key, v)| {
+            match b.get(key) {
+                Some(actual)
+                    if key == "ignoreLines"
+                        && a.contains_key("sideA")
+                        && a.contains_key("sideB") =>
+                {
+                    selected_job_setting_matches(key, v, Some(actual))
+                }
+                Some(actual) => requested_subset(v, actual),
+                // Verified v2.33.2 endpoint serialization omits disabled SSH
+                // compression. Only this known SFTP false default is equivalent;
+                // missing credentials, true values and null remain mismatches.
+                None => {
+                    key == "enableCompression"
+                        && v == &serde_json::Value::Bool(false)
+                        && a.get("fsType").and_then(serde_json::Value::as_str) == Some("sftp")
+                }
+            }
+        }),
         _ => expected == actual,
     }
 }
 fn unknown(operation: &'static str, source: Error) -> Error {
     mutation_error(operation, true, source)
+}
+
+#[cfg(test)]
+mod subset_contracts {
+    use super::{requested_subset, selected_job_setting_matches};
+    use serde_json::json;
+    #[test]
+    fn only_the_observed_sftp_compression_false_default_can_be_omitted() {
+        assert!(selected_job_setting_matches(
+            "ignoreLines",
+            &json!([]),
+            Some(&json!(null))
+        ));
+        assert!(!selected_job_setting_matches(
+            "ignoreLines",
+            &json!([]),
+            None
+        ));
+        assert!(!selected_job_setting_matches(
+            "ignoreLines",
+            &json!(["*.tmp"]),
+            Some(&json!(null))
+        ));
+        assert!(!selected_job_setting_matches(
+            "password",
+            &json!([]),
+            Some(&json!(null))
+        ));
+        let expected = json!({"fsType":"sftp","enableCompression":false});
+        assert!(requested_subset(&expected, &json!({"fsType":"sftp"})));
+        assert!(!requested_subset(
+            &expected,
+            &json!({"fsType":"sftp","enableCompression":true})
+        ));
+        assert!(!requested_subset(
+            &expected,
+            &json!({"fsType":"sftp","enableCompression":null})
+        ));
+        assert!(!requested_subset(
+            &json!({"fsType":"sftp","enableCompression":true}),
+            &json!({"fsType":"sftp"})
+        ));
+        assert!(!requested_subset(
+            &json!({"fsType":"ftp","enableCompression":false}),
+            &json!({"fsType":"ftp"})
+        ));
+        assert!(!requested_subset(
+            &json!({"fsType":"sftp","password":"required"}),
+            &json!({"fsType":"sftp"})
+        ));
+    }
 }

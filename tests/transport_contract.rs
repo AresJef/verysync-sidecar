@@ -3757,7 +3757,22 @@ async fn local_sync_target_syntax_subpaths_and_unbounded_pages_are_refused_befor
         PathStyle::Windows,
         r"C:\synthetic\source",
     )?)?;
-    let options = CreateLocalSyncJob::new(windows, unix.clone(), LocalSyncMode::MirrorAToB);
+    for label in ["", "   ", "\t"] {
+        assert!(CreateLocalSyncJob::new(
+            label,
+            unix.clone(),
+            unix.clone(),
+            LocalSyncMode::MirrorAToB
+        )
+        .is_err());
+        assert!(LocalSyncJobPatch::default().label(label).is_err());
+    }
+    let options = CreateLocalSyncJob::new(
+        "explicit synthetic label",
+        windows,
+        unix.clone(),
+        LocalSyncMode::MirrorAToB,
+    )?;
     assert!(matches!(
         client.create_local_sync_job(&options).await,
         Err(Error::InvalidConfiguration { .. })
@@ -3794,11 +3809,14 @@ async fn local_sync_target_syntax_subpaths_and_unbounded_pages_are_refused_befor
             .await,
         Err(Error::InvalidConfiguration { .. })
     ));
-    assert!(
-        CreateLocalSyncJob::new(unix.clone(), unix, LocalSyncMode::Bidirectional)
-            .delete_extraneous(true)
-            .is_err()
-    );
+    assert!(CreateLocalSyncJob::new(
+        "explicit two-way job",
+        unix.clone(),
+        unix.clone(),
+        LocalSyncMode::Bidirectional
+    )?
+    .delete_extraneous(true)
+    .is_err());
     assert_eq!(server.finish().await?.len(), 2);
     Ok(())
 }
@@ -3909,5 +3927,596 @@ async fn local_sync_http_success_error_envelope_is_unknown_once_and_changed_iden
         Err(Error::IdentityMismatch { .. })
     ));
     assert_eq!(server.finish().await?.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_selection_and_resolution_keep_native_shapes_and_exact_preview_identities(
+) -> TestResult {
+    use verysync_sidecar::{
+        LocalSyncActionRange, LocalSyncConflictResolution, LocalSyncConflictSide, LocalSyncJobId,
+        LocalSyncPreviewId, LocalSyncSelection,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let id = LocalSyncJobId::parse("job /%")?;
+    let preview = LocalSyncPreviewId::parse("preview /%")?;
+    let snapshot = |name: &str| serde_json::json!({"id":name,"jobId":id,"operationId":"operation","count":3,"expiresAt":"native-time","scanIssueCount":0});
+    let old = snapshot(preview.as_str());
+    let resolved = snapshot("replacement-preview");
+    let totals = serde_json::json!({"resolvedConflicts":0,"permissionFiles":0,"copyFiles":1,"deleteFiles":0,"createDirectories":0,"deleteDirectories":0,"conflicts":0,"copyBytes":5});
+    let receipt = serde_json::json!({"id":"run-identity","jobId":id,"started":"native-time","finished":"0001-01-01T00:00:00Z","count":1,"summary":{"completed":0,"failed":0,"skipped":0}});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(old.clone()),
+        identity(),
+        Reply::json(totals),
+        identity(),
+        Reply::json(old.clone()),
+        identity(),
+        Reply::json(receipt),
+        identity(),
+        Reply::json(old),
+        identity(),
+        Reply::json(resolved.clone()),
+        identity(),
+        Reply::json(resolved),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let selection = LocalSyncSelection::including(vec![LocalSyncActionRange::single(0)])?;
+    assert_eq!(
+        client
+            .local_sync_selection_summary(&id, &preview, &selection)
+            .await?
+            .copy_bytes,
+        5
+    );
+    assert_eq!(
+        client
+            .run_local_sync_preview(&id, &preview, &selection)
+            .await?
+            .count,
+        1
+    );
+    let resolution =
+        LocalSyncConflictResolution::at_path("private/中文 %.txt", LocalSyncConflictSide::B)?;
+    assert!(!format!("{resolution:?}").contains("private"));
+    let replaced = client
+        .resolve_local_sync_conflict(&id, &preview, &resolution)
+        .await?;
+    assert_eq!(replaced.id.as_str(), "replacement-preview");
+    let requests = server.finish().await?;
+    let posts = requests
+        .iter()
+        .filter(|r| r.starts_with("POST "))
+        .collect::<Vec<_>>();
+    assert_eq!(posts.len(), 3);
+    assert!(posts[0].starts_with("POST /prefix/rest/localsync/jobs/job%20%2F%25/previews/preview%20%2F%25/selection-summary "));
+    let body = |request: &String| -> TestResult<serde_json::Value> {
+        Ok(serde_json::from_str(
+            request.split_once("\r\n\r\n").ok_or("missing body")?.1,
+        )?)
+    };
+    assert_eq!(
+        body(posts[0])?,
+        serde_json::json!({"all":false,"include":[[0,0]]})
+    );
+    assert_eq!(
+        body(posts[1])?,
+        serde_json::json!({"previewId":preview,"selection":{"all":false,"include":[[0,0]]}})
+    );
+    assert_eq!(
+        body(posts[2])?,
+        serde_json::json!({"path":"private/中文 %.txt","recursive":false,"side":"b"})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_events_report_internal_sequence_holes_without_consuming_queue_tail(
+) -> TestResult {
+    use verysync_sidecar::{EventGapReason, LocalSyncEventOptions, LocalSyncEventStreamItem};
+    let status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-a"}));
+    let event = |sequence| serde_json::json!({"sequence":sequence,"jobId":"","type":"future_native_kind","time":"native-time","private":KEY});
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),status(),status(),status(),Reply::json(serde_json::json!({"events":[event(1),event(3)],"cursor":3,"reset":false,"missed":false})),status()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut stream =
+        client.subscribe_local_sync_events(LocalSyncEventOptions::default().wait_seconds(0)?)?;
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Event{event,..}))if event.sequence==1&&event.kind=="future_native_kind")
+    );
+    assert_eq!(stream.cursor().last_sequence, 1);
+    assert_eq!(stream.buffered_items(), 2);
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::MissingEvents&&g.previous.last_sequence==1&&g.resume_from.last_sequence==2)
+    );
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Event{event,..}))if event.sequence==3)
+    );
+    assert_eq!(stream.cursor().last_sequence, 3);
+    assert!(!format!("{stream:?}").contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.contains("/rest/localsync/events?"))
+            .count(),
+        1
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_event_schema_failure_reports_gap_then_terminal_error_without_retry(
+) -> TestResult {
+    use verysync_sidecar::{EventGapReason, LocalSyncEventOptions, LocalSyncEventStreamItem};
+    let status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-a"}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        status(),
+        status(),
+        status(),
+        Reply::json(serde_json::json!({"events":[],"cursor":0,"reset":false})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut stream = client.subscribe_local_sync_events(LocalSyncEventOptions::default())?;
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::BatchUnavailable)
+    );
+    assert!(matches!(
+        stream.next().await,
+        Some(Err(Error::InvalidResponse { .. }))
+    ));
+    assert!(stream.next().await.is_none());
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.contains("/rest/localsync/events?"))
+            .count(),
+        1
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_event_observation_change_discards_cross_generation_batch() -> TestResult {
+    use verysync_sidecar::{EventGapReason, LocalSyncEventOptions, LocalSyncEventStreamItem};
+    let status = |boot: &str| Reply::json(serde_json::json!({"myID":ID,"startTime":boot}));
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),status("boot-a"),status("boot-a"),status("boot-a"),Reply::json(serde_json::json!({"events":[{"sequence":1,"jobId":"","type":"run_finished","time":"native-time"}],"cursor":1,"reset":false,"missed":false})),status("boot-b")]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut stream = client.subscribe_local_sync_events(LocalSyncEventOptions::default())?;
+    assert!(
+        matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::ObservationChanged&&g.resume_from.last_sequence==0&&g.resume_from.engine_started_at.as_deref()==Some("boot-b"))
+    );
+    assert_eq!(stream.buffered_items(), 0);
+    assert_eq!(server.finish().await?.len(), 6);
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_control_wrong_operation_never_posts_and_unknown_ack_never_retries() -> TestResult
+{
+    use verysync_sidecar::{LocalSyncJobId, LocalSyncOperationControl, LocalSyncOperationId};
+    for wrong in [true, false] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            Reply::json(
+                serde_json::json!({"jobId":"job","state":"running","operationId":"current-operation"}),
+            ),
+        ];
+        if !wrong {
+            replies.extend([
+                identity(),
+                Reply::json(serde_json::json!({"unrecognized":KEY})),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let id = LocalSyncJobId::parse("job")?;
+        let operation = LocalSyncOperationId::parse(if wrong {
+            "stale-operation"
+        } else {
+            "current-operation"
+        })?;
+        let result = client
+            .control_local_sync_operation(&id, &operation, LocalSyncOperationControl::Stop)
+            .await;
+        if wrong {
+            assert!(matches!(result, Err(Error::InvalidConfiguration { .. })));
+        } else {
+            assert!(matches!(result, Err(Error::MutationOutcomeUnknown { .. })));
+        }
+        assert_eq!(
+            server
+                .finish()
+                .await?
+                .iter()
+                .filter(|r| r.starts_with("POST "))
+                .count(),
+            usize::from(!wrong)
+        );
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_events_excessive_or_nonmonotonic_batches_fail_without_truncation() -> TestResult
+{
+    use verysync_sidecar::{EventGapReason, LocalSyncEventOptions, LocalSyncEventStreamItem};
+    for sequences in [vec![1, 2], vec![2, 1], vec![0]] {
+        let status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-a"}));
+        let events=sequences.iter().map(|sequence|serde_json::json!({"sequence":sequence,"type":"native-kind","time":"native-time"})).collect::<Vec<_>>();
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            status(),
+            status(),
+            status(),
+            Reply::json(
+                serde_json::json!({"events":events,"cursor":2,"reset":false,"missed":false}),
+            ),
+            status(),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let mut stream =
+            client.subscribe_local_sync_events(LocalSyncEventOptions::default().max_events(1)?)?;
+        assert!(
+            matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::BatchUnavailable)
+        );
+        assert!(matches!(
+            stream.next().await,
+            Some(Err(Error::InvalidResponse { .. }))
+        ));
+        assert!(stream.next().await.is_none());
+        assert_eq!(stream.cursor().last_sequence, 0);
+        assert_eq!(server.finish().await?.len(), 6);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_native_reset_and_missed_flags_remain_explicit_when_resuming() -> TestResult {
+    use verysync_sidecar::{
+        EventGapReason, LocalSyncEventCursor, LocalSyncEventOptions, LocalSyncEventStreamItem,
+    };
+    for reset in [true, false] {
+        let sequence = if reset { 5 } else { 8 };
+        let last = if reset { 7 } else { 1 };
+        let status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-a"}));
+        let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),status(),status(),status(),Reply::json(serde_json::json!({"events":[{"sequence":sequence,"type":"native-kind","time":"native-time"}],"cursor":sequence,"reset":reset,"missed":!reset})),status()]).await?;
+        let client = Client::connect(server.options()?).await?;
+        let cursor = LocalSyncEventCursor {
+            device_id: client.instance().device_id.clone(),
+            engine_started_at: Some("boot-a".into()),
+            last_sequence: last,
+        };
+        let mut stream =
+            client.subscribe_local_sync_events(LocalSyncEventOptions::default().resume(cursor))?;
+        assert!(
+            matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==EventGapReason::ResumedContinuityUnverified)
+        );
+        let expected = if reset {
+            EventGapReason::CursorReset
+        } else {
+            EventGapReason::MissingEvents
+        };
+        assert!(
+            matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Gap(g)))if g.reason==expected&&g.previous.last_sequence==last&&g.resume_from.last_sequence==sequence-1)
+        );
+        assert!(
+            matches!(stream.next().await,Some(Ok(LocalSyncEventStreamItem::Event{event,..}))if event.sequence==sequence)
+        );
+        assert_eq!(stream.cursor().last_sequence, sequence);
+        assert_eq!(server.finish().await?.len(), 6);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_automation_put_reports_normalization_and_preserves_unselected_private_options(
+) -> TestResult {
+    use verysync_sidecar::{
+        LocalSyncCalendarRule, LocalSyncJobId, LocalSyncJobPatch, LocalSyncSchedule,
+    };
+    let id = LocalSyncJobId::parse("synthetic-job")?;
+    let original = serde_json::json!({"jobId":id.as_str(),"label":"unchanged","sideA":{"fsType":"basic","uri":"/source","transfers":2},"sideB":{"fsType":"sftp","uri":"sftp://private.invalid/root","transfers":4,"password":"retained secret"},"mode":"mirror_a_to_b","enabled":false,"syncOnStartup":false,"deleteExtraneous":false,"watchChanges":false,"watchCheckIntervalMin":10,"scheduleMode":"off","scheduleIntervalSec":0,"futureSetting":{"keep":7}});
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(original.clone()),
+        identity(),
+        Reply::json(original.clone()),
+        identity(),
+        Reply::json(original.clone()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let patch = LocalSyncJobPatch::default()
+        .watch_changes(true, 10)?
+        .schedule(LocalSyncSchedule::interval(60)?)
+        .schedule(LocalSyncSchedule::calendar(
+            vec![LocalSyncCalendarRule::new(
+                vec![1, 7],
+                vec!["12:34".to_owned()],
+            )?],
+            "UTC",
+        )?);
+    let result = client.update_local_sync_job(&id, &patch).await?;
+    assert!(!result.requested_fields_match);
+    assert_eq!(result.configuration.watch_changes, Some(false));
+    assert_eq!(result.configuration.schedule_mode.as_deref(), Some("off"));
+    assert_eq!(serde_json::to_value(result.configuration)?, original);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    let writes: Vec<_> = requests.iter().filter(|x| x.starts_with("PUT ")).collect();
+    assert_eq!(writes.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("missing body")?)?;
+    assert_eq!(body["watchChanges"], true);
+    assert_eq!(body["scheduleMode"], "calendar");
+    assert_eq!(body["scheduleTimezone"], "UTC");
+    assert_eq!(
+        body["scheduleCalendar"][0]["weekdays"],
+        serde_json::json!([1, 7])
+    );
+    assert_eq!(
+        body["scheduleCalendar"][0]["times"],
+        serde_json::json!(["12:34"])
+    );
+    assert_eq!(body["scheduleIntervalSec"], 0);
+    assert_eq!(body["futureSetting"], original["futureSetting"]);
+    assert_eq!(body["sideB"]["password"], "retained secret");
+    assert_eq!(body["enabled"], false);
+    Ok(())
+}
+
+fn local_sync_repair_job_fixture() -> serde_json::Value {
+    serde_json::json!({"jobId":"synthetic-job","label":"reviewed","sideA":{"fsType":"basic","uri":"/reviewed/a","transfers":2},"sideB":{"fsType":"sftp","uri":"sftp://private.invalid/root","transfers":4,"password":"retained secret"},"mode":"bisync","enabled":true,"syncOnStartup":false,"deleteExtraneous":false,"watchChanges":false,"scheduleMode":"off","futureSetting":{"keep":7}})
+}
+#[tokio::test]
+async fn local_sync_repair_refuses_stale_reviewed_settings_active_work_and_non_two_way_baselines(
+) -> TestResult {
+    use verysync_sidecar::LocalSyncJob;
+    let original = local_sync_repair_job_fixture();
+    let expected: LocalSyncJob = serde_json::from_value(original.clone())?;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let mut changed = original.clone();
+    changed["sideA"]["uri"] = "/unreviewed/other".into();
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(changed),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.rebuild_local_sync_markers(&expected).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 4);
+    assert!(!requests.iter().any(|r| r.starts_with("POST ")));
+    for state in [
+        "scanning",
+        "running",
+        "paused",
+        "canceling",
+        "unknown-future",
+    ] {
+        let status = serde_json::json!({"jobId":"synthetic-job","state":state});
+        let server = ScriptedServer::start(vec![
+            version(),
+            identity(),
+            identity(),
+            Reply::json(original.clone()),
+            identity(),
+            Reply::json(status),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.recover_local_sync_baseline(&expected).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 6);
+        assert!(!requests.iter().any(|r| r.starts_with("POST ")));
+    }
+    let mut mirror = original;
+    mirror["mode"] = "mirror_a_to_b".into();
+    let mirror: LocalSyncJob = serde_json::from_value(mirror)?;
+    let server = ScriptedServer::start(vec![version(), identity()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.recover_local_sync_baseline(&mirror).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_marker_unknown_ack_is_one_confirmed_snapshot_post_without_retry() -> TestResult
+{
+    use verysync_sidecar::LocalSyncJob;
+    let original = local_sync_repair_job_fixture();
+    let expected: LocalSyncJob = serde_json::from_value(original.clone())?;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),Reply::json(original.clone()),identity(),Reply::json(serde_json::json!({"jobId":"synthetic-job","state":"error","lastError":"endpoint a: synchronization folder marker missing"})),identity(),Reply::json(serde_json::json!({"unknownAck":true}))]).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.rebuild_local_sync_markers(&expected).await,
+        Err(Error::MutationOutcomeUnknown { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    let writes: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+    assert_eq!(writes.len(), 1);
+    assert!(
+        writes[0].starts_with("POST /prefix/rest/localsync/jobs/synthetic-job/markers/rebuild ")
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("missing body")?)?;
+    assert_eq!(body, serde_json::json!({"confirmed":true,"job":original}));
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_baseline_wrong_ack_job_or_changed_preview_is_unknown_without_run() -> TestResult
+{
+    use verysync_sidecar::LocalSyncJob;
+    for wrong_job in [true, false] {
+        let original = local_sync_repair_job_fixture();
+        let expected: LocalSyncJob = serde_json::from_value(original.clone())?;
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let preview = serde_json::json!({"jobId":if wrong_job {"different-job"} else {"synthetic-job"},"id":"recovery-preview","operationId":"recovery-operation","count":1,"scanIssueCount":0,"expiresAt":"2099-01-01T00:00:00Z"});
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            Reply::json(original),
+            identity(),
+            Reply::json(serde_json::json!({"jobId":"synthetic-job","state":"idle"})),
+            identity(),
+            Reply::json(preview),
+        ];
+        if !wrong_job {
+            replies.push(identity());
+            replies.push(Reply::json(serde_json::json!({"jobId":"synthetic-job","id":"replacement-preview","operationId":"recovery-operation","count":1,"scanIssueCount":0,"expiresAt":"2099-01-01T00:00:00Z"})));
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.recover_local_sync_baseline(&expected).await,
+            Err(Error::MutationOutcomeUnknown { .. })
+        ));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), if wrong_job { 8 } else { 10 });
+        let writes: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0]
+            .starts_with("POST /prefix/rest/localsync/jobs/synthetic-job/baseline/recover "));
+        assert!(!requests.iter().any(|r| r.contains("/run ")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_complete_patch_refuses_incompatible_fresh_settings_and_target_syntax(
+) -> TestResult {
+    use verysync_sidecar::{
+        LocalSyncConflictPolicy, LocalSyncJobId, LocalSyncJobPatch, LocalSyncMode, PathStyle,
+        StorageEndpoint, TargetPath,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let id = LocalSyncJobId::parse("synthetic-job")?;
+    for case in 0..4 {
+        let mut original = local_sync_repair_job_fixture();
+        let patch = match case {
+            0 => LocalSyncJobPatch::default().delete_extraneous(true),
+            1 => {
+                original["mode"] = "mirror_a_to_b".into();
+                LocalSyncJobPatch::default().conflict_policy(LocalSyncConflictPolicy::Manual)
+            }
+            2 => {
+                original["mode"] = "mirror_a_to_b".into();
+                original["deleteExtraneous"] = true.into();
+                LocalSyncJobPatch::default().mode(LocalSyncMode::Bidirectional)
+            }
+            _ => {
+                original["mode"] = "unknown-future".into();
+                LocalSyncJobPatch::default().delete_extraneous(true)
+            }
+        };
+        let server = ScriptedServer::start(vec![
+            version(),
+            identity(),
+            identity(),
+            Reply::json(original),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.update_local_sync_job(&id, &patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 4);
+        assert!(!requests.iter().any(|r| r.starts_with("PUT ")));
+    }
+    let server = ScriptedServer::start(vec![version(), identity()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let windows =
+        StorageEndpoint::local(TargetPath::remote(PathStyle::Windows, r"C:\synthetic\new")?)?;
+    assert!(matches!(
+        client
+            .update_local_sync_job(&id, &LocalSyncJobPatch::default().side_a(windows))
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_endpoint_replacement_keeps_other_secrets_and_known_cleared_ignore_null(
+) -> TestResult {
+    use verysync_sidecar::{
+        LocalSyncJobId, LocalSyncJobPatch, PathStyle, StorageEndpoint, TargetPath,
+    };
+    let original = local_sync_repair_job_fixture();
+    let mut updated = original.clone();
+    updated["sideA"] = serde_json::json!({"fsType":"basic","uri":"/new/synthetic","transfers":3,"nativeDefault":7});
+    updated["ignoreLines"] = serde_json::Value::Null;
+    updated["parallelFileOps"] = 2.into();
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(original.clone()),
+        identity(),
+        Reply::json(updated.clone()),
+        identity(),
+        Reply::json(updated.clone()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let endpoint = StorageEndpoint::local(TargetPath::remote(PathStyle::Unix, "/new/synthetic")?)?
+        .parallel_transfers(3)?;
+    let result = client
+        .update_local_sync_job(
+            &LocalSyncJobId::parse("synthetic-job")?,
+            &LocalSyncJobPatch::default()
+                .side_a(endpoint)
+                .ignore_lines(Vec::new())?
+                .parallel_file_operations(2)?,
+        )
+        .await?;
+    assert!(result.requested_fields_match);
+    assert_eq!(serde_json::to_value(result.configuration)?, updated);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    let writes: Vec<_> = requests.iter().filter(|r| r.starts_with("PUT ")).collect();
+    assert_eq!(writes.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("missing body")?)?;
+    assert_eq!(
+        body["sideA"],
+        serde_json::json!({"fsType":"basic","uri":"/new/synthetic","transfers":3})
+    );
+    assert_eq!(body["sideB"], original["sideB"]);
+    assert_eq!(body["futureSetting"], original["futureSetting"]);
+    assert_eq!(body["ignoreLines"], serde_json::json!([]));
     Ok(())
 }

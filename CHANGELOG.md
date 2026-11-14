@@ -2,10 +2,52 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add bounded native transfer/channel preferences and full scoped Local Sync
+  endpoint, direction, ignore, file-operation and explicit mirror-deletion
+  settings. Preserve native null/omitted shapes and recognize only verified
+  clear/default readback semantics. Keep native unsupported compression and
+  unverified private-key behavior separate from configuration selection.
+
+- Verify native reverse, two-way newer/larger/manual conflicts and selected-only
+  data effects independently for FTP, SFTP, SMB and WebDAV with owned protocol
+  peers. Keep per-protocol authentication, in-flight and recovery conditions
+  separate from directional acceptance.
+
+- Add explicit marker rebuilding and two-way baseline recovery against complete
+  reviewed job snapshots. Refuse stale settings and active/unknown states, retain
+  exact acknowledgements and preview identities, and never execute recovery
+  plans automatically. Permission-comparison updates remain separately explicit.
+
+- Add explicit native startup, watch and interval/calendar schedule settings.
+  Automatic triggers default off; selecting them can start unattended native
+  writes. Scoped updates preserve other settings and report actual normalization.
+  Free watch/schedule requests are reconciled without mutation retries; licensed
+  positive execution remains pending. Startup copied real files on enablement
+  and after restart through the public API.
+
+- Add operation-identity-checked Local Sync pause/resume/stop receipts and native
+  progress/cancellation observations. Add separate pull-driven Local Sync events
+  with bounded batches, consumed cursors, explicit gaps and cancellation, without
+  background tasks, automatic recovery or global handlers.
+
+- Add explicit bounded Local Sync action selection and native selection totals,
+  reverse mirror effects and two-way newer/larger/manual conflict controls.
+  Manual resolution returns a readback-verified replacement preview without
+  executing it; predicted copy bytes remain distinct from completed transfers.
+  Empty/outside selections are refused before execution, with no automatic range
+  expansion, conflict resolution, retry or rollback.
+
+- Add explicit native remote endpoint selection and separate credentials, target
+  connection limits, SFTP key paths and SMB/WebDAV identity settings. Protocol
+  and platform effects remain independently verified, with private test peers.
+  Require a nonempty label in `CreateLocalSyncJob::new`; preserve omitted groups
+  as `Option<String>` and signed native storage sizes such as unknown `-1`.
+  These are intentional alpha API changes without compatibility aliases.
+
 - Add native Local Sync basic endpoints and typed job, preview, execution,
   result/history and scoped registration controls. Keep acknowledgements, actual
   completion and per-protocol acceptance separate; no controller copy engine or
-  automatic schedules, retries or rollback are introduced.
+  SDK scheduling timers, retries or rollback are introduced.
 
 - Add explicit resource directory creation, same-volume copy/move, existing-file
   UTF-8 replacement and scoped deletion with collision/merge policies. Keep
