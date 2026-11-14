@@ -172,3 +172,43 @@ generate a crash, upload a report, accept terms, retry writes or restart the cor
 The native case verifies both flag values, a private destination, unchanged usage
 and terms fields, normal restart persistence and normal owned exit. Actual crash
 upload and collector trust/authentication require separate evidence.
+
+## Event audit, thumbnails and native proxy preferences
+
+`system_preferences()` reads native event-audit, thumbnail and proxy selections.
+`update_system_preferences()` sends only explicit fields, checks fresh identity
+and returns actual readback. Complete snapshots provide matching typed getters
+and edits. `NativePathSelection::Default` sends the native empty selector;
+`Path(TargetPath)` retains the target's syntax and rejects a different path style.
+The SDK does not open these target paths, move old data, create a proxy or change
+its management HTTP client's independent proxy policy. Debug omits paths, proxy
+credentials and other private values.
+
+```no_run
+use verysync_sidecar::{Client, NativePathSelection, SystemPreferencesPatch, TargetPath};
+use std::path::PathBuf;
+
+async fn select_event_log(client: &Client, local_log: PathBuf) -> verysync_sidecar::Result<()> {
+    let update = client.update_system_preferences(
+        &SystemPreferencesPatch::default()
+            .event_audit_enabled(true)
+            .event_audit_file(NativePathSelection::Path(TargetPath::local(local_log))),
+    ).await?;
+    // Match readback and explicitly restart the owned core when required.
+    Ok(())
+}
+```
+
+Native event audit is separate from licensed folder-history records. The
+controlled case verifies actual bounded JSON event records, including
+`StartupComplete`, after explicit normal restart; it checks disabling/default
+selection, retained old log bytes and unrelated sample data. Native event data
+can contain private context. Configuration selection does not promise a log
+retention policy or every existing-file behavior.
+
+Thumbnail/cache configuration and actual preview/cache artifacts are separate.
+The proxy field is an explicitly selected native HTTP(S)/SOCKS5 URI, possibly
+with credentials; it is not a verified connection or authentication receipt.
+The isolated refusing proxy observed no request during its bounded startup
+probe, so no actual proxy transfer is claimed. Per-platform full-source, actual
+thumbnail-cache and proxy-routing conditions remain required evidence.

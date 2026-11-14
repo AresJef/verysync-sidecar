@@ -14,6 +14,106 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn system_preference_paths_keep_target_windows_syntax_and_explicit_native_defaults(
+) -> TestResult {
+    use verysync_sidecar::{NativePathSelection, PathStyle, SystemPreferencesPatch, TargetPath};
+    for clear in [false, true] {
+        let audit = if clear {
+            ""
+        } else {
+            r"D:\Audit With Space\events.json"
+        };
+        let cache = if clear { "" } else { r"C:\Native Cache" };
+        let wire = serde_json::json!({"auditEnabled":false,"auditFile":audit,"thumnailEnabled":false,"thumnailCacheDir":cache,"userProxyEnabled":false,"userProxyAddress":"","futureSecret":KEY});
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({})),
+            Reply::json(wire),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let selection = |path: &str| {
+            if path.is_empty() {
+                Ok::<_, verysync_sidecar::Error>(NativePathSelection::Default)
+            } else {
+                Ok(NativePathSelection::Path(TargetPath::remote(
+                    PathStyle::Windows,
+                    path,
+                )?))
+            }
+        };
+        let patch = SystemPreferencesPatch::default()
+            .event_audit_file(selection(audit)?)
+            .thumbnail_cache_directory(selection(cache)?);
+        let update = client.update_system_preferences(&patch).await?;
+        assert!(update.requested_fields_match);
+        match &update.configuration.event_audit_file {
+            NativePathSelection::Default => assert!(clear),
+            NativePathSelection::Path(path) => {
+                assert!(!clear);
+                assert_eq!(path.style(), PathStyle::Windows);
+                assert!(path.local_path().is_none());
+                assert_eq!(path.to_protocol()?, audit);
+            }
+        }
+        assert_eq!(update.configuration.extra["futureSecret"], KEY);
+        assert!(!format!("{update:?}").contains(KEY));
+        let requests = server.finish().await?;
+        let writes: Vec<_> = requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .collect();
+        assert_eq!(writes.len(), 1);
+        let body: serde_json::Value = serde_json::from_str(
+            writes[0]
+                .split_once("\r\n\r\n")
+                .ok_or("system preference patch absent")?
+                .1,
+        )?;
+        assert_eq!(
+            body,
+            serde_json::json!({"auditFile":audit,"thumnailCacheDir":cache})
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_preferences_reject_wrong_target_paths_and_invalid_proxy_before_requests(
+) -> TestResult {
+    use verysync_sidecar::{NativePathSelection, PathStyle, SystemPreferencesPatch, TargetPath};
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let wrong = SystemPreferencesPatch::default().event_audit_file(NativePathSelection::Path(
+        TargetPath::remote(PathStyle::Unix, "/private/audit")?,
+    ));
+    assert!(matches!(
+        client.update_system_preferences(&wrong).await,
+        Err(Error::InvalidPath { .. })
+    ));
+    for patch in [
+        SystemPreferencesPatch::default(),
+        SystemPreferencesPatch::default().proxy_address("file:///private/proxy"),
+        SystemPreferencesPatch::default().proxy_address("socks5://proxy.invalid:0"),
+        SystemPreferencesPatch::default().proxy_address("http://proxy.invalid/path"),
+        SystemPreferencesPatch::default().proxy_address("http://proxy.invalid/?private=token"),
+    ] {
+        assert!(matches!(
+            client.update_system_preferences(&patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn gui_preferences_share_single_write_reload_reconciliation_without_copying_credentials(
 ) -> TestResult {
     use verysync_sidecar::GuiPreferencesPatch;

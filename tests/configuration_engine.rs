@@ -8,6 +8,140 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn native_system_preferences_write_real_event_audit_and_preserve_target_selections(
+) -> TestResult {
+    use std::io::Read;
+    let root = tempfile::Builder::new()
+        .prefix("vs-system-preferences-")
+        .tempdir()?
+        .keep();
+    let audit = root.join("native event audit.log");
+    let cache = root.join("native thumbnail cache");
+    let sentinel = root.join("sentinel.bin");
+    std::fs::write(&sentinel, b"unrelated native preference sentinel")?;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let address = listener.local_addr()?;
+    assert_ne!(address.port(), 18886);
+    let proxy = format!("http://{address}");
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let before = core.client().configuration().await?;
+    let update = core
+        .client()
+        .update_system_preferences(
+            &SystemPreferencesPatch::default()
+                .event_audit_enabled(true)
+                .event_audit_file(NativePathSelection::Path(TargetPath::local(audit.clone())))
+                .thumbnail_enabled(true)
+                .thumbnail_cache_directory(NativePathSelection::Path(TargetPath::local(
+                    cache.clone(),
+                )))
+                .proxy_enabled(true)
+                .proxy_address(proxy.clone()),
+        )
+        .await?;
+    assert!(update.requested_fields_match);
+    assert!(
+        matches!(&update.configuration.event_audit_file,NativePathSelection::Path(path) if path.local_path().is_none()&&path.to_protocol().ok()==audit.to_str())
+    );
+    let after = core.client().configuration().await?;
+    for section in [
+        "folders",
+        "devices",
+        "gui",
+        "ldap",
+        "defaults",
+        "relayServer",
+    ] {
+        assert!(
+            before.native_document()[section] == after.native_document()[section],
+            "unrelated section changed"
+        );
+    }
+    core.restart(Duration::from_secs(30)).await?;
+    let persisted = core.client().system_preferences().await?;
+    assert!(
+        persisted.event_audit_enabled && persisted.thumbnail_enabled && persisted.proxy_enabled
+    );
+    assert!(persisted.proxy_address() == proxy);
+    assert!(
+        matches!(&persisted.thumbnail_cache_directory,NativePathSelection::Path(path) if path.to_protocol().ok()==cache.to_str())
+    );
+    let content = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match std::fs::File::open(&audit) {
+                Ok(file) => {
+                    let mut bytes = Vec::new();
+                    file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+                    assert!(
+                        bytes.len() <= 1024 * 1024,
+                        "private event audit observation exceeded bound"
+                    );
+                    if let Some(end) = bytes.iter().rposition(|b| *b == b'\n') {
+                        let text = std::str::from_utf8(&bytes[..=end])?;
+                        let events: Vec<serde_json::Value> = text
+                            .lines()
+                            .map(serde_json::from_str)
+                            .collect::<std::result::Result<_, _>>()?;
+                        if events.iter().any(|e| {
+                            e["type"] == "StartupComplete"
+                                && e["data"].is_object()
+                                && e["time"].is_string()
+                        }) {
+                            return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
+                                bytes[..=end].to_vec(),
+                            );
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    let disabled = core
+        .client()
+        .update_system_preferences(
+            &SystemPreferencesPatch::default()
+                .event_audit_enabled(false)
+                .event_audit_file(NativePathSelection::Default)
+                .thumbnail_enabled(false)
+                .thumbnail_cache_directory(NativePathSelection::Default)
+                .proxy_enabled(false)
+                .proxy_address(""),
+        )
+        .await?;
+    assert!(disabled.requested_fields_match);
+    assert!(matches!(
+        disabled.configuration.event_audit_file,
+        NativePathSelection::Default
+    ));
+    assert!(matches!(
+        disabled.configuration.thumbnail_cache_directory,
+        NativePathSelection::Default
+    ));
+    core.restart(Duration::from_secs(30)).await?;
+    assert!(
+        !core
+            .client()
+            .system_preferences()
+            .await?
+            .event_audit_enabled
+    );
+    assert!(std::fs::read(&audit)?.starts_with(&content));
+    assert_eq!(
+        std::fs::read(&sentinel)?,
+        b"unrelated native preference sentinel"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    drop(listener);
+    println!("native_system_preferences_effects=12 proxy_transfer_and_thumbnail_artifact_not_claimed=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_crash_preferences_preserve_fixed_usage_fields_and_survive_restart() -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("vs-crash-preferences-")

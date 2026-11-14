@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit event-audit, thumbnail and native proxy preferences with target
+  paths/default selectors and preserved unrelated options. Separate actual event
+  log data from licensed folder history, cache artifacts and proxy connections.
+
 - Add typed native GUI preferences with one bounded write/reload reconciliation,
   actual field matching and owned connection adoption. Retain credentials and
   listener selection, and redact submitted preference text in version errors.
