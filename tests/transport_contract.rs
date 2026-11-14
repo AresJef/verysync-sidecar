@@ -14,6 +14,177 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn license_expiry_absence_zero_null_container_and_identity_changes_remain_distinct(
+) -> TestResult {
+    use verysync_sidecar::{LicenseEntries, LicenseExpiry, LicenseStatus};
+    let null: LicenseStatus = serde_json::from_value(serde_json::json!({"licenses":null}))?;
+    assert!(matches!(null.licenses(), Some(LicenseEntries::Null)));
+    let status: LicenseStatus = serde_json::from_value(
+        serde_json::json!({"licenses":[{"subject":"Pro","expire":0},{"subject":"future-subject"}]}),
+    )?;
+    let Some(LicenseEntries::List(records)) = status.licenses() else {
+        return Err("license list absent".into());
+    };
+    assert_eq!(
+        records[0].expiry_at(i64::MAX),
+        Some(LicenseExpiry::Perpetual)
+    );
+    assert_eq!(records[1].expiry_at(0), None);
+    assert_eq!(records[1].trial(), None);
+    let changed = ID.replacen('A', "B", 1);
+    for after_write in [false, true] {
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":if after_write {ID} else {&changed}})),
+        ];
+        if after_write {
+            replies.extend([
+                Reply::json(serde_json::json!({})),
+                Reply::json(serde_json::json!({"myID":changed,"myLicense":{}})),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .fetch_licenses()
+            .await
+            .err()
+            .ok_or("license identity failure expected")?;
+        if after_write {
+            assert!(
+                matches!(error,Error::MutationOutcomeUnknown{source,..} if matches!(*source,Error::IdentityMismatch{..}))
+            );
+        } else {
+            assert!(matches!(error, Error::IdentityMismatch { .. }));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.contains("/rest/license/fetch"))
+                .count(),
+            usize::from(after_write)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn license_metadata_preserves_native_collection_shapes_and_explicit_expiry_reference(
+) -> TestResult {
+    use verysync_sidecar::{LicenseEntries, LicenseExpiry};
+    for collection in [
+        serde_json::json!([{ "subject":"Pro","expire":10,"issued_at":1,"trial":true,"futurePrivate":KEY}]),
+        serde_json::json!({KEY:{"subject":"Pro","expire":10,"issued_at":1,"trial":true,"futurePrivate":KEY}}),
+    ] {
+        let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"myID":ID,"myLicense":{"licenses":collection,"futurePrivate":KEY}}))]).await?;
+        let client = Client::connect(server.options()?).await?;
+        let status = client.license_status().await?;
+        assert_eq!(status.extra()["futurePrivate"], KEY);
+        let record = match status.licenses().ok_or("license collection absent")? {
+            LicenseEntries::List(v) => &v[0],
+            LicenseEntries::Map(v) => v.values().next().ok_or("map license absent")?,
+            LicenseEntries::Null => return Err("unexpected null licenses".into()),
+        };
+        assert!(record.is_pro());
+        assert_eq!(record.subject(), "Pro");
+        assert_eq!(record.trial(), Some(true));
+        assert_eq!(record.issued_unix_seconds(), Some(1));
+        assert_eq!(record.expiry_at(9), Some(LicenseExpiry::NotExpired));
+        assert_eq!(record.expiry_at(10), Some(LicenseExpiry::Expired));
+        assert_eq!(record.extra()["futurePrivate"], KEY);
+        assert!(!format!("{status:?} {record:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 3);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn license_refresh_and_trial_are_separate_single_changing_get_requests() -> TestResult {
+    use verysync_sidecar::LicenseRequestKind;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let status = || Reply::json(serde_json::json!({"myID":ID,"myLicense":{}}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"privateAck":KEY})),
+        status(),
+        identity(),
+        Reply::json(serde_json::json!({})),
+        status(),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let refresh = client.fetch_licenses().await?;
+    assert_eq!(refresh.request, LicenseRequestKind::Refresh);
+    assert!(refresh.status.licenses().is_none());
+    assert!(!format!("{refresh:?}").contains(KEY));
+    let trial = client.request_pro_trial().await?;
+    assert_eq!(trial.request, LicenseRequestKind::ProTrial);
+    assert!(trial.status.licenses().is_none());
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    assert!(requests[3].starts_with("GET /prefix/rest/license/fetch "));
+    assert!(requests[6].starts_with("GET /prefix/rest/license/trial "));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.contains("/rest/license/"))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn license_missing_metadata_bad_ack_and_explicit_nested_errors_never_become_success(
+) -> TestResult {
+    for native in [
+        serde_json::json!({"myID":ID}),
+        serde_json::json!({"myID":ID,"myLicense":null}),
+        serde_json::json!({"myID":ID,"myLicense":[]}),
+        serde_json::json!({"myID":ID,"myLicense":{"licenses":false}}),
+    ] {
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(native),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.license_status().await,
+            Err(Error::InvalidResponse { .. })
+        ));
+        assert_eq!(server.finish().await?.len(), 3);
+    }
+    for ack in [
+        serde_json::json!([]),
+        serde_json::json!({"error":{"code":5000,"message":KEY}}),
+    ] {
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(ack),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let e = client
+            .fetch_licenses()
+            .await
+            .err()
+            .ok_or("license error expected")?;
+        assert!(matches!(e, Error::MutationOutcomeUnknown { .. }));
+        assert!(!format!("{e:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn official_account_acknowledgement_is_separate_from_matching_observed_state() -> TestResult {
     use verysync_sidecar::{
         OfficialAccountCredentials, OfficialAccountState, OfficialAccountStatus,

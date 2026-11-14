@@ -8,6 +8,63 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn native_empty_license_metadata_and_uncertain_fetch_preserve_the_owned_instance(
+) -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-license-metadata-")
+        .tempdir()?
+        .keep();
+    let sentinel = root.join("sentinel.bin");
+    std::fs::write(&sentinel, b"license requests retain local data")?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let pid = core.process_id();
+    let before = core.client().configuration().await?;
+    let licenses = core.client().license_status().await?;
+    assert!(licenses.licenses().is_none() && licenses.extra().is_empty());
+    assert_eq!(
+        core.client().official_account_status().await?.state(),
+        OfficialAccountState::LoggedOut
+    );
+    // On the unlicensed/unlogged fixed baseline, a single explicit fetch has
+    // no complete management response. Preserve that actual uncertainty rather
+    // than reporting successful refresh or guessing an account prerequisite.
+    let failure = core
+        .client()
+        .fetch_licenses()
+        .await
+        .err()
+        .ok_or("native uncertain fetch expected")?;
+    assert!(
+        matches!(failure, Error::MutationOutcomeUnknown { source, .. } if matches!(*source, Error::Transport { .. }))
+    );
+    let after = core.client().license_status().await?;
+    assert!(after.licenses().is_none() && after.extra().is_empty());
+    assert_eq!(
+        core.client().official_account_status().await?.state(),
+        OfficialAccountState::LoggedOut
+    );
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    assert_eq!(core.process_id(), pid);
+    let unchanged = core.client().configuration().await?;
+    assert!(
+        unchanged.native_document() == before.native_document(),
+        "license request changed configuration"
+    );
+    core.restart(Duration::from_secs(30)).await?;
+    let persisted = core.client().license_status().await?;
+    assert!(persisted.licenses().is_none() && persisted.extra().is_empty());
+    assert_eq!(
+        std::fs::read(&sentinel)?,
+        b"license requests retain local data"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    println!("native_license_metadata_effects=10 trial_not_invoked=true licensed_positive_effects_pending=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn official_account_empty_logout_and_upstream_failure_preserve_gui_and_identity() -> TestResult
 {
     let root = tempfile::Builder::new()

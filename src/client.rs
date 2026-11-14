@@ -11,6 +11,7 @@ mod history_control;
 mod ignore_control;
 mod invitation_control;
 mod ldap_control;
+mod license_control;
 mod local_sync_control;
 mod maintenance_control;
 mod management_auth;

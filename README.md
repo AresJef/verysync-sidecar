@@ -1,5 +1,9 @@
 # verysync-sidecar
 
+The unreleased [license API](docs/public/licenses.md) preserves native license
+metadata and separates explicit refresh/trial acknowledgements from actual
+licensed effects. Authorized positive acceptance remains pending.
+
 The unreleased [official-account API](docs/public/official-accounts.md) separates
 explicit cloud-account login/logout from GUI sessions and licensed entitlements.
 Native acknowledgements, actual account state and upstream rejection codes have
