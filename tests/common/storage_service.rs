@@ -18,7 +18,16 @@ pub struct Service {
     pub python_platform: String,
 }
 impl Service {
-    pub fn start(protocol: StorageProtocol, root: &Path) -> TestResult<Self> {
+    pub fn start(
+        protocol: StorageProtocol,
+        root: &Path,
+        write_delay: Duration,
+    ) -> TestResult<Self> {
+        if write_delay.as_millis() > 100
+            || (protocol != StorageProtocol::Sftp && !write_delay.is_zero())
+        {
+            return Err("bounded delay is test-only and requires SFTP".into());
+        }
         let python = std::env::var_os("VERYSYNC_STORAGE_TEST_PYTHON")
             .ok_or("explicit private storage test interpreter required")?;
         let share = root.join("synthetic-share");
@@ -65,7 +74,7 @@ impl Service {
         let mut input = child.stdin.take().ok_or("private service stdin absent")?;
         serde_json::to_writer(
             &mut input,
-            &serde_json::json!({"root":service.share,"user":user,"password":password}),
+            &serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis()}),
         )?;
         input.write_all(b"\n")?;
         drop(input);

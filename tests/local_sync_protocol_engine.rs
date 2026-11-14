@@ -10,6 +10,60 @@ use verysync_sidecar::{
     StorageEndpoint, StorageProtocol, TargetPath,
 };
 
+fn native_rejection(
+    error: &verysync_sidecar::Error,
+    endpoint: &StorageEndpoint,
+    root: &std::path::Path,
+) {
+    let mut cause = error;
+    while let verysync_sidecar::Error::MutationOutcomeUnknown { source, .. } = cause {
+        cause = source;
+    }
+    let response = match cause {
+        verysync_sidecar::Error::Api { response, .. }
+        | verysync_sidecar::Error::Http { response }
+        | verysync_sidecar::Error::InvalidResponse { response, .. } => response,
+        _ => {
+            eprintln!("synthetic protocol failure category: {cause:?}");
+            return;
+        }
+    };
+    let decoded: serde_json::Value =
+        serde_json::from_slice(response.body_bytes()).unwrap_or(serde_json::Value::Null);
+    if let Some(message) = decoded.get("error").and_then(serde_json::Value::as_str) {
+        let mut redacted = message.to_owned();
+        for key in ["user", "password"] {
+            if let Some(secret) = endpoint
+                .extra()
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                redacted = redacted.replace(secret, "[SYNTHETIC_CREDENTIAL]");
+            }
+        }
+        let path = root.to_string_lossy();
+        redacted = redacted
+            .replace(path.as_ref(), "[SYNTHETIC_ROOT]")
+            .replace(&path.replace('\\', "/"), "[SYNTHETIC_ROOT]");
+        let bounded = redacted
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(512)
+            .collect::<String>();
+        eprintln!(
+            "synthetic native protocol rejection: status={} message={bounded}",
+            response.status()
+        );
+    } else {
+        eprintln!(
+            "synthetic native protocol rejection: status={} body_bytes={}",
+            response.status(),
+            response.body_bytes().len()
+        );
+    }
+}
+
 async fn execute(core: &ManagedInstance, id: &LocalSyncJobId) -> TestResult<LocalSyncRun> {
     let operation = core.client().start_local_sync_preview(id).await?;
     tokio::time::timeout(Duration::from_secs(20), async {
@@ -50,7 +104,7 @@ async fn protocol_effects(protocol: StorageProtocol) -> TestResult {
     std::fs::create_dir_all(source.join("nested"))?;
     let payload = b"actual VerySync native protocol payload";
     std::fs::write(source.join("nested").join("payload 中文 %.txt"), payload)?;
-    let mut server = storage_service::Service::start(protocol, &root)?;
+    let mut server = storage_service::Service::start(protocol, &root, Duration::ZERO)?;
     std::fs::write(
         server.share.join("sentinel.bin"),
         b"protocol destination-only sentinel",
@@ -114,7 +168,15 @@ async fn protocol_effects(protocol: StorageProtocol) -> TestResult {
     )?
     .ignore_permissions(true);
     let job = core.client().create_local_sync_job(&options).await?;
-    let completed = execute(&core, &job.job_id).await?;
+    let completed = match execute(&core, &job.job_id).await {
+        Ok(run) => run,
+        Err(error) => {
+            if let Some(native) = error.downcast_ref::<verysync_sidecar::Error>() {
+                native_rejection(native, &server.endpoint, &root);
+            }
+            return Err(error);
+        }
+    };
     assert_eq!(
         std::fs::read(server.share.join("nested").join("payload 中文 %.txt"))?,
         payload

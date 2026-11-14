@@ -9,9 +9,31 @@ use crate::{
     LocalSyncSelectionSummary, LocalSyncStatus, ResponseDiagnostic, Result, StorageDirectory,
     StorageEndpoint, StorageEntry, StorageProbe,
 };
+use crate::{LocalSyncControlReceipt, LocalSyncOperationControl, LocalSyncOperationId};
 use serde::de::DeserializeOwned;
 
 impl Client {
+    /// Read one native Local Sync event response after an explicit sequence.
+    /// Wait is 0..=55 seconds, separately bounded by the selected management
+    /// deadline. Returned cursor/reset/missed flags are not normalized away.
+    pub async fn local_sync_events(
+        &self,
+        after: u64,
+        wait_seconds: u8,
+    ) -> Result<crate::LocalSyncEventBatch> {
+        if wait_seconds > 55 {
+            return Err(invalid("Local Sync event wait exceeds native bound"));
+        }
+        self.local_sync_read(
+            "read native Local Sync events",
+            &["events"],
+            &[
+                ("after", &after.to_string()),
+                ("wait", &wait_seconds.to_string()),
+            ],
+        )
+        .await
+    }
     /// Read actual native Local Sync availability, independent of entitlement or
     /// evidence for an individual storage protocol.
     pub async fn local_sync_health(&self) -> Result<LocalSyncHealth> {
@@ -279,6 +301,61 @@ impl Client {
             return Err(invalid("native Local Sync status identity differs"));
         }
         Ok(status)
+    }
+    /// Control only the currently identified operation of this job. Clone writers
+    /// serialize the preflight, known empty acknowledgement and fresh readback;
+    /// other management writers still require caller coordination. A receipt is
+    /// not proof that in-flight I/O stopped or that prior writes were rolled back.
+    pub async fn control_local_sync_operation(
+        &self,
+        id: &LocalSyncJobId,
+        expected: &LocalSyncOperationId,
+        control: LocalSyncOperationControl,
+    ) -> Result<LocalSyncControlReceipt> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        if self.local_sync_status(id).await?.operation_id.as_ref() != Some(expected) {
+            return Err(invalid(
+                "Local Sync operation changed before explicit control",
+            ));
+        }
+        let route = match control {
+            LocalSyncOperationControl::Pause => "pause",
+            LocalSyncOperationControl::Resume => "resume",
+            LocalSyncOperationControl::Stop => "stop",
+        };
+        let operation = "control exact native Local Sync operation";
+        let ack: serde_json::Value = self
+            .local_sync_json(
+                operation,
+                reqwest::Method::POST,
+                &["jobs", id.as_str(), route],
+                &[],
+                None,
+                true,
+            )
+            .await?;
+        if ack.as_object().is_none_or(|v| !v.is_empty()) {
+            return Err(unknown(
+                operation,
+                invalid("native Local Sync control acknowledgement differs"),
+            ));
+        }
+        let observed = self
+            .local_sync_status(id)
+            .await
+            .map_err(|e| unknown(operation, e))?;
+        if observed.operation_id.as_ref() != Some(expected) {
+            return Err(unknown(
+                operation,
+                invalid("Local Sync operation changed before control readback"),
+            ));
+        }
+        Ok(LocalSyncControlReceipt {
+            job_id: id.clone(),
+            operation_id: expected.clone(),
+            control,
+            observed,
+        })
     }
     /// Explicitly start analysis only. This acknowledges an operation; poll its
     /// exact identity and read the completed preview before choosing execution.

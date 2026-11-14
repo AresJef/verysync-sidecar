@@ -118,8 +118,45 @@ target bytes and source retention when those effects matter.
 HTTP success is not native business success: the SDK rejects known error
 envelopes, malformed success schemas and wrong job identities. A failure after a
 possible write returns an unknown mutation outcome rather than retrying. Dropping
-a request future does not prove native work stopped. No implicit retry, polling,
-rollback, target restart or archive migration occurs.
+a request future does not prove native work stopped. No automatic mutation retry, rollback, target restart or archive migration occurs.
+
+## In-flight control and Local Sync events
+
+`control_local_sync_operation()` requires the reviewed job and operation IDs and
+an explicit pause, resume or stop choice. Client clones serialize the identity
+preflight, known acknowledgement and fresh status readback. Another management
+writer can still race them. The receipt contains actual observed status; it does
+not promise that current I/O stopped, earlier writes were undone or a target state
+will persist. Observe the exact run, `cancelled` and actual destination effects.
+Native progress counters are optional observations and may include cancelled
+work; they are separate from durable destination-byte proof.
+
+`local_sync_events(after, wait_seconds)` returns the native Local Sync event log,
+which uses `sequence`, `cursor`, `reset` and `missed`. These positions are distinct
+from P2P event IDs. Events identify a job and sequence, not an exact run or
+operation; correlate a run-finished event with fresh status and the reviewed
+run/result identity before treating that operation as completed. Global configuration events can report an empty job ID, kept
+as `None`; action zero is retained even when the native event uses it as a
+non-action placeholder. Unknown event categories and private payloads remain
+available without being printed by `Debug`.
+
+`subscribe_local_sync_events()` creates a bounded, pull-driven subscription.
+No network read starts until `next()` is polled, and no background task or global
+handler is installed. Without a resume cursor it requests the retained history
+from zero. The default batch bound is 1024 events, selectable up to 4096; native
+response-byte limits also apply. Oversized or malformed batches fail instead of
+being silently truncated. Event/gap buffering is bounded by twice the selected
+event limit plus two error notifications.
+
+The cursor advances only when an event or gap is consumed. Resumption always
+warns that continuity is unverified; an upstream start-time string is not a
+durable generation token. Changed before/after generations discard the batch.
+Reported resets, missing events and interior sequence holes produce explicit
+gaps. Refresh affected state after a gap. A transport/protocol error produces a
+gap and terminal error, with no automatic retry. Explicitly create a new
+subscription to resume. An independent cancellation handle aborts a pending read
+without sending a job or engine command. Native waits range from zero to 55
+seconds; the caller's management deadline remains independently enforced.
 
 ## Verification scope
 
@@ -143,7 +180,9 @@ native error is converted into success.
 
 Selected/excluded actions, reverse mirror and two-way newer/larger/manual
 conflicts have separate local native cases. Their final same-source platform
-gates remain pending. Inflight controls, Local Sync events, watch/schedules, marker/baseline recovery and each of
+gates remain pending. In-flight controls and Local Sync events have separate local native data,
+cancellation, reset and actual restart observations; final platform acceptance
+remains pending. Watch/schedules, marker/baseline recovery and each of
 FTP/SFTP/SMB/WebDAV require separate native effects and verification. Their GUI
 presence, enum values, stored configuration or a basic endpoint success are not
 support claims. Licensed conditions, old architectures and final cross-network

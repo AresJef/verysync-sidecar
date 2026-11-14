@@ -15,6 +15,7 @@ import socket
 import sys
 import sysconfig
 import threading
+import time
 
 
 def ready(protocol, port):
@@ -113,6 +114,14 @@ def sftp(config, root):
                 self.readfile = stream
             if flags & (os.O_WRONLY | os.O_RDWR):
                 self.writefile = stream
+
+        def write(self, offset, data):
+            # A bounded explicit fixture delay creates observable native work;
+            # it is not an SDK performance measurement or production throttle.
+            delay = config.get("write_delay_ms", 0)
+            if delay:
+                time.sleep(delay / 1000)
+            return super().write(offset, data)
 
         @guarded
         def stat(self):
@@ -279,6 +288,9 @@ def main():
     root = Path(config["root"]).resolve(strict=True)
     if not root.is_dir() or not config["user"] or not config["password"]:
         raise ValueError("explicit synthetic directory and credentials required")
+    delay = config.get("write_delay_ms", 0)
+    if not isinstance(delay, int) or not 0 <= delay <= 100 or (delay and args.protocol != "sftp"):
+        raise ValueError("invalid explicit test-only SFTP delay")
     logging.basicConfig(level=logging.ERROR)
     {"ftp": ftp, "sftp": sftp, "webdav": webdav, "smb": smb}[args.protocol](config, root)
 

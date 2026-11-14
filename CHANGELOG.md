@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add operation-identity-checked Local Sync pause/resume/stop receipts and native
+  progress/cancellation observations. Add separate pull-driven Local Sync events
+  with bounded batches, consumed cursors, explicit gaps and cancellation, without
+  background tasks, automatic recovery or global handlers.
+
 - Add explicit bounded Local Sync action selection and native selection totals,
   reverse mirror effects and two-way newer/larger/manual conflict controls.
   Manual resolution returns a readback-verified replacement preview without
