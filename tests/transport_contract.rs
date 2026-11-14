@@ -14,6 +14,134 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn gui_preferences_share_single_write_reload_reconciliation_without_copying_credentials(
+) -> TestResult {
+    use verysync_sidecar::GuiPreferencesPatch;
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let gui = serde_json::json!({"enabled":true,"authMode":"static","user":KEY,"password":KEY,"apiKey":KEY,"metricsWithoutAuth":true,"theme":"private-theme","debugging":false,"insecureAdminAccess":false,"insecureSkipHostcheck":false,"insecureAllowFrameLoading":false,"sendBasicAuthPrompt":false,"sessionCookieDurationS":0,"sessionCookiePath":"/prefix","futureSecret":KEY});
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({})),
+        version(),
+        identity(),
+        Reply::json(gui),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let patch = GuiPreferencesPatch::default()
+        .metrics_without_auth(true)
+        .theme("private-theme")
+        .session_cookie_path("/prefix");
+    assert!(!format!("{patch:?}").contains("private-theme"));
+    let update = client
+        .update_gui_preferences(&patch, Duration::from_secs(2))
+        .await?;
+    assert!(update.requested_fields_match && update.write_acknowledged);
+    assert!(update.configuration.theme() == "private-theme");
+    assert!(
+        !update.configuration.extra.contains_key("apiKey")
+            && !update.configuration.extra.contains_key("password")
+            && !update.configuration.extra.contains_key("user")
+    );
+    assert!(!format!("{update:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with("PATCH /prefix/rest/config/gui "));
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split_once("\r\n\r\n")
+            .ok_or("GUI patch absent")?
+            .1,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"metricsWithoutAuth":true,"theme":"private-theme","sessionCookiePath":"/prefix"})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_preferences_invalid_text_empty_patch_and_deadline_never_write() -> TestResult {
+    use verysync_sidecar::GuiPreferencesPatch;
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for patch in [
+        GuiPreferencesPatch::default(),
+        GuiPreferencesPatch::default().theme("private\nname"),
+        GuiPreferencesPatch::default().theme("x".repeat(129)),
+        GuiPreferencesPatch::default().session_cookie_path("relative"),
+        GuiPreferencesPatch::default().session_cookie_path("/a; injected"),
+        GuiPreferencesPatch::default().session_cookie_path("/a?query"),
+    ] {
+        assert!(matches!(
+            client
+                .update_gui_preferences(&patch, Duration::from_secs(1))
+                .await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert!(matches!(
+        client
+            .update_gui_preferences(
+                &GuiPreferencesPatch::default().metrics_without_auth(true),
+                Duration::ZERO
+            )
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_preference_echoes_in_incompatible_version_are_redacted_after_the_single_write(
+) -> TestResult {
+    use verysync_sidecar::GuiPreferencesPatch;
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(
+            serde_json::json!({"version":"v9.9.9-private-theme","os":"linux","arch":"amd64"}),
+        ),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .update_gui_preferences(
+            &GuiPreferencesPatch::default().theme("private-theme"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect_err("changed version cannot be reconciled");
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?}").contains("private-theme"));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn crash_preferences_keep_private_legacy_values_and_only_write_explicit_fields() -> TestResult
 {
     use verysync_sidecar::CrashReportingPatch;

@@ -60,6 +60,7 @@ mod file_mutations;
 mod file_transfers;
 mod files;
 mod folders;
+mod gui_preferences;
 mod gui_session;
 mod ignores;
 mod invitations;
@@ -127,6 +128,7 @@ pub use files::{
     ResourceChecksum, ResourceInfo, ResourcePath, ResourcePreview, ResourceVolume, ResourceVolumeId,
 };
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
+pub use gui_preferences::{GuiPreferences, GuiPreferencesPatch, GuiPreferencesUpdate};
 pub use gui_session::{
     GuiCredentialUpdate, GuiCredentials, GuiLoginOptions, GuiLogoutReceipt, GuiSession,
 };

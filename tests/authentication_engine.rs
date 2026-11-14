@@ -8,6 +8,149 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn gui_preferences_reload_preserve_credentials_and_control_actual_metrics_and_frame_headers(
+) -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-gui-preferences-")
+        .tempdir()?
+        .keep();
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let pid = core.process_id();
+    let before = core.client().configuration().await?;
+    let before_auth = core.client().gui_authentication().await?;
+    let original_key = before_auth.api_key()?;
+    let endpoint = core.client().endpoint().clone();
+    let builder = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .timeout(Duration::from_secs(3));
+    #[cfg(unix)]
+    let builder = match endpoint.socket_path() {
+        Some(path) => builder.unix_socket(path),
+        None => builder,
+    };
+    let http = builder.build()?;
+    let base = endpoint
+        .http_url()
+        .cloned()
+        .unwrap_or(url::Url::parse("http://localhost/")?);
+    let metrics_before = http
+        .get(base.join("metrics")?)
+        .send()
+        .await?
+        .status()
+        .as_u16();
+    assert!(matches!(metrics_before, 401 | 403));
+    let frame_before = http
+        .get(base.clone())
+        .send()
+        .await?
+        .headers()
+        .get("x-frame-options")
+        .is_some();
+    assert!(frame_before);
+    let enabled = core
+        .update_gui_preferences(
+            &GuiPreferencesPatch::default().metrics_without_auth(true),
+            Duration::from_secs(10),
+        )
+        .await?;
+    assert!(enabled.requested_fields_match && enabled.configuration.metrics_without_auth);
+    let mut metrics = http.get(base.join("metrics")?).send().await?;
+    assert_eq!(metrics.status().as_u16(), 200);
+    let mut bytes = Vec::new();
+    while let Some(chunk) = metrics.chunk().await? {
+        assert!(
+            bytes.len() + chunk.len() <= 1024 * 1024,
+            "native metrics exceeded private observation bound"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    let text = std::str::from_utf8(&bytes)?;
+    assert!(
+        text.lines().any(|l| l.starts_with("# HELP "))
+            && text.lines().any(|l| l.starts_with("# TYPE "))
+    );
+    let changed = core
+        .update_gui_preferences(
+            &GuiPreferencesPatch::default()
+                .metrics_without_auth(false)
+                .theme("dark")
+                .debugging(false)
+                .allow_frame_loading(true)
+                .send_basic_auth_prompt(true)
+                .session_cookie_duration_seconds(600)
+                .session_cookie_path("/"),
+            Duration::from_secs(10),
+        )
+        .await?;
+    assert!(changed.requested_fields_match);
+    assert_eq!(core.process_id(), pid);
+    assert!(!http
+        .get(base)
+        .send()
+        .await?
+        .headers()
+        .contains_key("x-frame-options"));
+    assert!(matches!(
+        http.get(
+            endpoint
+                .http_url()
+                .cloned()
+                .unwrap_or(url::Url::parse("http://localhost/")?)
+                .join("metrics")?
+        )
+        .send()
+        .await?
+        .status()
+        .as_u16(),
+        401 | 403
+    ));
+    let fresh = Client::connect(
+        ConnectOptions::new(endpoint, original_key).expected_device_id(identity.clone()),
+    )
+    .await?;
+    assert_eq!(fresh.system_status().await?.device_id, identity);
+    let after = core.client().configuration().await?;
+    for section in [
+        "folders",
+        "devices",
+        "options",
+        "defaults",
+        "ldap",
+        "relayServer",
+    ] {
+        assert!(
+            before.native_document()[section] == after.native_document()[section],
+            "unrelated configuration section changed"
+        );
+    }
+    for field in [
+        "user", "password", "apiKey", "authMode", "address", "enabled", "useTLS",
+    ] {
+        assert!(
+            before.native_document()["gui"][field] == after.native_document()["gui"][field],
+            "GUI connection or credential changed"
+        );
+    }
+    core.restart(Duration::from_secs(30)).await?;
+    let persisted = core.client().gui_preferences().await?;
+    assert!(
+        persisted.theme() == "dark"
+            && persisted.insecure_allow_frame_loading
+            && !persisted.metrics_without_auth
+    );
+    assert_eq!(persisted.session_cookie_duration_seconds, 600);
+    assert!(persisted.session_cookie_path() == "/");
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    println!("native_gui_preferences_effects=15");
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_ldap_search_filter_requires_a_matching_directory_entry() -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("vs-ldap-search-")

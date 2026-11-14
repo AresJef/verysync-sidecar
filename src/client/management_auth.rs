@@ -15,7 +15,7 @@ impl Client {
     ) -> Result<crate::GuiCredentialUpdate> {
         let body = serde_json::json!({"user":credentials.username,"password":credentials.password,"authMode":"static"});
         let (client, configuration, write_acknowledged) = self
-            .patch_gui_authentication(body, timeout, "set local GUI credentials")
+            .patch_gui_configuration(body, timeout, "set local GUI credentials")
             .await?;
         Ok(crate::GuiCredentialUpdate {
             username_matches: configuration.username == credentials.username,
@@ -38,7 +38,7 @@ impl Client {
             });
         }
         let (client, configuration, write_acknowledged) = self
-            .patch_gui_authentication(
+            .patch_gui_configuration(
                 serde_json::json!({"authMode":mode}),
                 timeout,
                 "set native GUI authentication mode",
@@ -52,7 +52,7 @@ impl Client {
         })
     }
 
-    async fn patch_gui_authentication(
+    pub(super) async fn patch_gui_configuration(
         &self,
         body: serde_json::Value,
         timeout: Duration,
@@ -96,14 +96,14 @@ impl Client {
                         continue;
                     }
                     Err(Error::IncompatibleVersion { mut actual }) => {
-                        for field in ["user", "password"] {
-                            if let Some(value) = body
-                                .get(field)
-                                .and_then(serde_json::Value::as_str)
-                                .filter(|s| !s.is_empty())
-                            {
-                                actual = actual.replace(value, "[REDACTED]");
-                            }
+                        for value in body
+                            .as_object()
+                            .into_iter()
+                            .flat_map(|m| m.values())
+                            .filter_map(serde_json::Value::as_str)
+                            .filter(|s| !s.is_empty())
+                        {
+                            actual = actual.replace(value, "[REDACTED]");
                         }
                         return Err(unknown(Error::IncompatibleVersion { actual }));
                     }
