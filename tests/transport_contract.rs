@@ -30,6 +30,8 @@ mod management_transport_contracts;
 mod network_limits_contracts;
 #[path = "common/system_actions_contracts.rs"]
 mod system_actions_contracts;
+#[path = "common/target_directory_contracts.rs"]
+mod target_directory_contracts;
 
 #[tokio::test]
 async fn remote_tunnel_connection_preserves_prefix_and_requires_target_identity() -> TestResult {

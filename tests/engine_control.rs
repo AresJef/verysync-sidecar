@@ -2,11 +2,15 @@
 
 #[path = "common/engine_fixture.rs"]
 mod engine_fixture;
+#[path = "common/managed_fixture.rs"]
+mod managed_fixture;
 
 #[path = "common/direct_restart_effects.rs"]
 mod direct_restart_effects;
 #[path = "common/response_proxy.rs"]
 mod response_proxy;
+#[path = "common/target_directory_effects.rs"]
+mod target_directory_effects;
 
 use engine_fixture::{EngineFixture, TestBinary, TestResult};
 use reqwest::{Method, StatusCode};

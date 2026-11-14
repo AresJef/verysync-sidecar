@@ -1,7 +1,5 @@
 //! The native inner-process restart exit and explicit owned relaunch are distinct.
-#[path = "managed_fixture.rs"]
-mod managed_fixture;
-use managed_fixture::{options, TestResult};
+use super::managed_fixture::{options, TestResult};
 use std::time::Duration;
 use verysync_sidecar::{CreateFolderOptions, FolderId, ManagedInstance, TargetPath};
 

@@ -49,8 +49,10 @@
 #![doc = include_str!("../docs/public/remote-management.md")]
 #![doc = include_str!("../docs/public/management-transport.md")]
 #![doc = include_str!("../docs/public/gui-listener.md")]
+#![doc = include_str!("../docs/public/target-directories.md")]
 
 mod auth;
+mod auxiliary;
 mod capabilities;
 mod client;
 mod configuration;
@@ -101,6 +103,7 @@ mod transports;
 mod upgrades;
 
 pub use auth::{ApiKey, DeviceId};
+pub use auxiliary::{TargetDirectoryCreation, TargetDirectoryEntry, TargetDirectoryLocation};
 pub use capabilities::{
     library_capabilities, Capability, CapabilityReport, ImplementationStatus, InstanceConditions,
     InstanceObservation, LibraryCapability, TargetSnapshot, TargetValidation, VerificationStatus,
