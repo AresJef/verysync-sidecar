@@ -28,13 +28,21 @@ def ready(protocol, port):
 
 def ftp(config, root):
     from pyftpdlib.authorizers import DummyAuthorizer
-    from pyftpdlib.handlers import FTPHandler
+    from pyftpdlib.handlers import FTPHandler, DTPHandler
     from pyftpdlib.servers import FTPServer
 
     authorizer = DummyAuthorizer()
     authorizer.add_user(config["user"], config["password"], str(root),
                         perm="elradfmwMT")
-    handler = type("OwnedFTPHandler", (FTPHandler,), {"authorizer": authorizer})
+    class OwnedDataHandler(DTPHandler):
+        def recv(self, buffer_size):
+            data = super().recv(buffer_size)
+            if data and config.get("write_delay_ms", 0):
+                time.sleep(config["write_delay_ms"] / 1000)
+            return data
+
+    handler = type("OwnedFTPHandler", (FTPHandler,),
+                   {"authorizer": authorizer, "dtp_handler": OwnedDataHandler})
     server = FTPServer(("127.0.0.1", 0), handler)
     server.max_cons = 32
     server.max_cons_per_ip = 32
@@ -45,6 +53,36 @@ def ftp(config, root):
 def webdav(config, root):
     from cheroot.wsgi import Server
     from wsgidav.wsgidav_app import WsgiDAVApp
+    from wsgidav.fs_dav_provider import FileResource
+
+    # This peer process owns these synthetic files. Delay its real writes,
+    # preserving the native handler's bytes, exceptions and close behavior.
+    if config.get("write_delay_ms", 0):
+        original_begin_write = FileResource.begin_write
+
+        class DelayedWrite:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def write(self, data):
+                if data:
+                    time.sleep(config["write_delay_ms"] / 1000)
+                return self.stream.write(data)
+
+            def __getattr__(self, name):
+                return getattr(self.stream, name)
+
+            def __enter__(self):
+                self.stream.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.stream.__exit__(*args)
+
+        def delayed_begin_write(self, *, content_type=None):
+            return DelayedWrite(original_begin_write(self, content_type=content_type))
+
+        FileResource.begin_write = delayed_begin_write
 
     app = WsgiDAVApp({
         "provider_mapping": {"/": str(root)},
@@ -352,6 +390,12 @@ def smb(config, root):
         return commands, packets, status
 
     server.getServer().hookSmb2Command(smb2.SMB2_READ, read_with_eof_error_body)
+    if config.get("write_delay_ms", 0):
+        def delayed_write(conn_id, smb_server, request):
+            time.sleep(config["write_delay_ms"] / 1000)
+            return SMB2Commands.smb2Write(conn_id, smb_server, request)
+
+        server.getServer().hookSmb2Command(smb2.SMB2_WRITE, delayed_write)
     server.addShare("synthetic", str(root))
     server.addCredential(config["user"], 0, compute_lmhash(config["password"]),
                          compute_nthash(config["password"]))
@@ -373,8 +417,8 @@ def main():
     if not root.is_dir() or not config["user"] or not config["password"]:
         raise ValueError("explicit synthetic directory and credentials required")
     delay = config.get("write_delay_ms", 0)
-    if not isinstance(delay, int) or not 0 <= delay <= 100 or (delay and args.protocol != "sftp"):
-        raise ValueError("invalid explicit test-only SFTP delay")
+    if not isinstance(delay, int) or not 0 <= delay <= 100:
+        raise ValueError("invalid explicit test-only write delay")
     logging.basicConfig(level=logging.ERROR)
     {"ftp": ftp, "sftp": sftp, "webdav": webdav, "smb": smb}[args.protocol](config, root)
 

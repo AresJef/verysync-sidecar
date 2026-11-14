@@ -37,6 +37,21 @@ fn completed(root: &Path) -> TestResult<usize> {
 #[tokio::test]
 async fn public_local_sync_controls_real_inflight_data_and_observes_native_event_continuity(
 ) -> TestResult {
+    runtime(StorageProtocol::Sftp).await
+}
+#[tokio::test]
+async fn public_ftp_controls_actual_inflight_data_and_native_events() -> TestResult {
+    runtime(StorageProtocol::Ftp).await
+}
+#[tokio::test]
+async fn public_smb_controls_actual_inflight_data_and_native_events() -> TestResult {
+    runtime(StorageProtocol::Smb).await
+}
+#[tokio::test]
+async fn public_webdav_controls_actual_inflight_data_and_native_events() -> TestResult {
+    runtime(StorageProtocol::WebDav).await
+}
+async fn runtime(protocol: StorageProtocol) -> TestResult {
     let root = tempfile::Builder::new().prefix("vlsrt-").tempdir()?.keep();
     let source = root.join("source");
     std::fs::create_dir(&source)?;
@@ -45,8 +60,7 @@ async fn public_local_sync_controls_real_inflight_data_and_observes_native_event
         std::fs::write(source.join(format!("file-{n:02}.bin")), &payload)?;
     }
     let before = snapshot(&source)?;
-    let mut peer =
-        storage_service::Service::start(StorageProtocol::Sftp, &root, Duration::from_millis(40))?;
+    let mut peer = storage_service::Service::start(protocol, &root, Duration::from_millis(40))?;
     std::fs::write(peer.share.join("sentinel.bin"), b"runtime destination-only")?;
     let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
     let identity = core.client().instance().device_id.clone();
@@ -272,7 +286,7 @@ async fn public_local_sync_controls_real_inflight_data_and_observes_native_event
     assert_eq!(snapshot(&peer.share)?, final_files);
     println!(
         "public native Local Sync runtime evidence: {}",
-        serde_json::json!({"actual_inflight_payload_before_pause":true,"actual_paused_state_and_file_hash_stability":true,"actual_resume_advances_files":true,"actual_stop_cancelled_exact_run":true,"actual_stopped_file_hash_stability":true,"actual_source_and_destination_only_retained":true,"wrong_operation_refused_before_control":true,"actual_native_pause_resume_finish_events":true,"actual_consumed_cursor_not_buffered_tail":true,"actual_native_future_cursor_reset":true,"actual_native_restart_continuity_gap":true,"actual_pending_read_cancelled_without_core_stop":true,"paused_complete_files":paused_count,"stopped_complete_files":final_count,"peer_platform":peer.python_platform})
+        serde_json::json!({"protocol":format!("{protocol:?}"),"actual_inflight_payload_before_pause":true,"actual_paused_state_and_file_hash_stability":true,"actual_resume_advances_files":true,"actual_stop_cancelled_exact_run":true,"actual_stopped_file_hash_stability":true,"actual_source_and_destination_only_retained":true,"wrong_operation_refused_before_control":true,"actual_native_pause_resume_finish_events":true,"actual_consumed_cursor_not_buffered_tail":true,"actual_native_future_cursor_reset":true,"actual_native_restart_continuity_gap":true,"actual_pending_read_cancelled_without_core_stop":true,"paused_complete_files":paused_count,"stopped_complete_files":final_count,"peer_platform":peer.python_platform})
     );
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));

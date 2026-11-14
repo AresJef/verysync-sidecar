@@ -125,11 +125,19 @@ a request future does not prove native work stopped. No automatic mutation retry
 A native `paused` state does not cancel an already opened file transfer. In one
 macOS ARM native run, an existing temporary payload committed more than one
 second after the pause readback. The SDK reports actual state and makes no
-immediate filesystem-quiescence promise. The dedicated SFTP test retains its initial one-second settling period, then
+immediate filesystem-quiescence promise. The dedicated per-protocol tests retain their initial one-second settling period, then
 waits up to five additional seconds for an already-open native temporary payload
 to commit. It then
 asserts one unchanged 500ms full-directory hash window while paused; it does not
 ignore temporary files, retry a failed stability window or change the workload.
+
+Separate FTP, SFTP, SMB and WebDAV native cases have each observed actual
+in-flight progress, paused file stability, resumed progress, cancellation of the
+exact run, stopped file stability, source/sentinel retention and native events.
+Each uses sixteen 256 KiB files and an explicit 40 ms delay at the private peer's
+real data-write boundary. This delay creates observable work; it is not an SDK
+throttle or a throughput measurement. Local macOS observations do not complete
+the final same-source platform gate or protocol-specific disconnect recovery.
 
 
 `control_local_sync_operation()` requires the reviewed job and operation IDs and
@@ -353,3 +361,11 @@ The public synthetic native case verifies endpoint/direction changes, actual
 ignore and clear behavior, explicit deletion, old endpoint and source retention,
 and a subsequent reverse copy into a new endpoint. Full source/platform acceptance
 and protocol-specific remaining conditions are independent of this local case.
+
+SFTP `insecure_tls(false)` preserves the native option; it is not evidence that
+the target consults a particular trust store. An isolated v2.33.2 macOS ARM core
+accepted a probe despite a conflicting synthetic host key in its private-profile
+`known_hosts`. That attempted profile trust mechanism is unverified. The test
+failed before positive identity/copy acceptance, and no system or controller SSH
+configuration was changed. Do not infer verified host identity from a successful
+probe or this flag alone; the native trust mechanism still needs separate proof.

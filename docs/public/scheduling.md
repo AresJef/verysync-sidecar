@@ -59,3 +59,20 @@ not an optimization speedup, throughput promise or universal burst guarantee.
 The fixed engine labels these private loopback peers `isLocal=false`; no local
 classification is inferred from an address. Actual exemption/enforcement for
 peers classified as LAN remains a separate final-network acceptance gate.
+
+### Private functional measurement conditions
+
+The current v3 bandwidth functional fixture explicitly verifies a five-second
+native redial interval on its two owned cores. The sender alone actively dials
+the receiver's loopback TCP listener; the receiver retains the authenticated peer
+with dynamic addressing while discovery/relay/NAT paths remain disabled. This is
+an explicit test condition and does not change SDK or production defaults.
+
+The same four global/device upload/download cases retain distinct 2 MiB payloads,
+64 KiB/s settings, complete 3–6 second counter windows, positive monotonic byte
+checks, the original byte bound, exact completed files/zero need after explicit
+limit removal, and normal owned cleanup. Changed reported connection epochs or
+counter decreases invalidate the whole trial. Earlier failed preparation and v2
+results are retained with their original identities; they are not combined with
+v3 acceptance data. These are absolute functional observations, with no promised
+throughput, SLA, speedup, CPU filtering or time deduction.

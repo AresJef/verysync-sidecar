@@ -23,10 +23,8 @@ impl Service {
         root: &Path,
         write_delay: Duration,
     ) -> TestResult<Self> {
-        if write_delay.as_millis() > 100
-            || (protocol != StorageProtocol::Sftp && !write_delay.is_zero())
-        {
-            return Err("bounded delay is test-only and requires SFTP".into());
+        if write_delay.as_millis() > 100 {
+            return Err("bounded write delay is test-only".into());
         }
         let python = std::env::var_os("VERYSYNC_STORAGE_TEST_PYTHON")
             .ok_or("explicit private storage test interpreter required")?;
