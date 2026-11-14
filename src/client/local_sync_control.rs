@@ -816,12 +816,20 @@ impl Client {
                 },
             )
         })?;
+        // A complete native run can legitimately contain an execution error.
+        // Only this exact run route and fully valid record schema distinguish
+        // it from an API-error envelope. Identity is still checked by its caller.
+        let native_run_record = parts.len() == 3
+            && parts[0] == "jobs"
+            && parts[2] == "run"
+            && serde_json::from_value::<LocalSyncRun>(decoded.clone()).is_ok();
         // Local Sync also uses HTTP-success error envelopes; preserve any extra
         // native error-code fields rather than accepting a malformed success.
         if decoded
             .get("error")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|e| !e.is_empty())
+            && !native_run_record
         {
             return Err(mutation_error(
                 operation,

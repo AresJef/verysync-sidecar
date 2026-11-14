@@ -1126,6 +1126,10 @@ pub struct LocalSyncRun {
     pub summary: LocalSyncSummary,
     /// Whether this native run was cancelled, when explicitly reported.
     pub cancelled: Option<bool>,
+    /// Native execution error, when reported in a complete run record. This is
+    /// data about failed work, not an API-request error or a success guarantee.
+    /// Debug omits this private text; inspect it alongside summary/cancelled.
+    pub error: Option<String>,
     /// Native error/stopped fields and future metadata.
     #[serde(flatten)]
     pub extra: Extra,

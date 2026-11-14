@@ -294,3 +294,237 @@ async fn runtime(protocol: StorageProtocol) -> TestResult {
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn public_ftp_disconnect_has_explicit_owned_recovery_and_exact_data() -> TestResult {
+    disconnected(StorageProtocol::Ftp).await
+}
+#[tokio::test]
+async fn public_sftp_disconnect_has_explicit_owned_recovery_and_exact_data() -> TestResult {
+    disconnected(StorageProtocol::Sftp).await
+}
+#[tokio::test]
+async fn public_smb_disconnect_has_explicit_owned_recovery_and_exact_data() -> TestResult {
+    disconnected(StorageProtocol::Smb).await
+}
+#[tokio::test]
+async fn public_webdav_disconnect_has_explicit_owned_recovery_and_exact_data() -> TestResult {
+    disconnected(StorageProtocol::WebDav).await
+}
+async fn ready_preview(
+    core: &ManagedInstance,
+    job: &LocalSyncJobId,
+) -> TestResult<LocalSyncPreview> {
+    let op = core.client().start_local_sync_preview(job).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let status = core.client().local_sync_status(job).await?;
+            assert_eq!(status.operation_id.as_ref(), Some(&op.id));
+            if status.state == "idle" {
+                assert!(status.last_error.as_deref().unwrap_or_default().is_empty());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await??;
+    let preview = core.client().local_sync_preview(job).await?;
+    assert_eq!(preview.operation_id, op.id);
+    assert_eq!(preview.scan_issue_count, 0);
+    Ok(preview)
+}
+async fn finished_run(
+    core: &ManagedInstance,
+    job: &LocalSyncJobId,
+    id: &LocalSyncRunId,
+) -> TestResult<LocalSyncRun> {
+    let mut last = None;
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let run = core.client().local_sync_run(job).await?;
+            assert_eq!(&run.id, id);
+            last = Some(serde_json::json!({"finished":run.finished,"completed":run.summary.completed,"failed":run.summary.failed,"skipped":run.summary.skipped,"extra_fields":run.extra.keys().collect::<Vec<_>>() }));
+            if !run.finished.starts_with("0001-") {
+                return Ok(run);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    if result.is_err() {
+        let status = core.client().local_sync_status(job).await?;
+        eprintln!("disconnect run did not finish within original bound: last={last:?} state={} error_present={} progress={:?}",status.state,status.last_error.as_deref().is_some_and(|e|!e.is_empty()),status.progress.as_ref().map(|p|(p.finished_files,p.finished_actions,p.bytes_transferred)));
+    }
+    result?
+}
+async fn disconnected(protocol: StorageProtocol) -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vls-disconnect-")
+        .tempdir()?
+        .keep();
+    let source = root.join("source");
+    std::fs::create_dir(&source)?;
+    for n in 0..16 {
+        std::fs::write(source.join(format!("file-{n:02}.bin")), vec![0x5a; 262144])?;
+    }
+    let original = snapshot(&source)?;
+    let mut peer = storage_service::Service::start(protocol, &root, Duration::from_millis(40))?;
+    std::fs::write(
+        peer.share.join("sentinel.bin"),
+        b"disconnect destination-only",
+    )?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let job = core
+        .client()
+        .create_local_sync_job(
+            &CreateLocalSyncJob::new(
+                "explicit disconnect",
+                StorageEndpoint::local(TargetPath::local(&source))?,
+                peer.endpoint.clone(),
+                LocalSyncMode::MirrorAToB,
+            )?
+            .ignore_permissions(true),
+        )
+        .await?;
+    // Establish actual persisted registration before intentionally interrupting
+    // a later run. An in-memory create/readback is not an fsync receipt.
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(
+        core.client().local_sync_job(&job.job_id).await?.job_id,
+        job.job_id
+    );
+    let preview = ready_preview(&core, &job.job_id).await?;
+    let receipt = core
+        .client()
+        .run_local_sync_preview_all(&job.job_id, &preview.id)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let count = completed(&peer.share)?;
+            if count > 0 {
+                assert!(count < 16);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await??;
+    assert_eq!(
+        core.client().local_sync_status(&job.job_id).await?.state,
+        "running"
+    );
+    peer.stop()?;
+    let interrupted = core.client().local_sync_status(&job.job_id).await?;
+    let operation = interrupted
+        .operation_id
+        .ok_or("interrupted operation absent")?;
+    let saved_results;
+    let recovered_by_force = if protocol == StorageProtocol::Ftp {
+        core.client()
+            .control_local_sync_operation(&job.job_id, &operation, LocalSyncOperationControl::Stop)
+            .await?;
+        let failed = finished_run(&core, &job.job_id, &receipt.id).await?;
+        assert!(failed.summary.completed > 0 && failed.summary.failed > 0);
+        assert_eq!(failed.cancelled, Some(true));
+        assert!(failed
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.is_empty()));
+        saved_results = core
+            .client()
+            .local_sync_run_results(&job.job_id, &failed.id, 0, 100)
+            .await?;
+        assert!(saved_results.iter().any(|result| result
+            .extra
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|e| !e.is_empty())));
+        false
+    } else {
+        // Deliberately selected by this test caller. A protocol I/O wait may
+        // outlive a native stop request; the SDK never escalates automatically.
+        let unfinished = core.client().local_sync_run(&job.job_id).await?;
+        assert_eq!(unfinished.id, receipt.id);
+        assert!(unfinished.finished.starts_with("0001-"));
+        // Capture a real run receipt. Action pages can still be unavailable
+        // while their results have not been published; no empty page is invented.
+        saved_results = Vec::new();
+        let terminated = core.force_stop(Duration::from_secs(10)).await?;
+        assert!(terminated.tree_stopped && terminated.forced);
+        if let Err(error) = core.restart(Duration::from_secs(30)).await {
+            for name in [".verysync-sidecar-lease", "verysync.lock"] {
+                use fs2::FileExt;
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(root.join("core").join(name))?;
+                eprintln!(
+                    "private restart lock {name}: {:?}",
+                    file.try_lock_exclusive().map_err(|e| e.kind())
+                );
+            }
+            return Err(error.into());
+        }
+        assert_eq!(core.client().system_status().await?.device_id, identity);
+        true
+    };
+    let partial = snapshot(&peer.share)?;
+    let partial_count = completed(&peer.share)?;
+    assert!(partial_count > 0 && partial_count < 16);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(snapshot(&peer.share)?, partial);
+    assert_eq!(snapshot(&source)?, original);
+    assert_eq!(
+        std::fs::read(peer.share.join("sentinel.bin"))?,
+        b"disconnect destination-only"
+    );
+    // A new private peer has a new address and credentials. Recovery is an
+    // explicit caller action, not an SDK retry or an implicit file rollback.
+    let mut recovered_peer = storage_service::Service::start(protocol, &root, Duration::ZERO)?;
+    let updated = core
+        .client()
+        .update_local_sync_job(
+            &job.job_id,
+            &LocalSyncJobPatch::default().side_b(recovered_peer.endpoint.clone()),
+        )
+        .await?;
+    assert!(updated.requested_fields_match);
+    assert_eq!(snapshot(&recovered_peer.share)?, partial);
+    let repaired = ready_preview(&core, &job.job_id).await?;
+    assert_ne!(repaired.id, preview.id);
+    assert!(repaired.count > 0);
+    assert_eq!(snapshot(&recovered_peer.share)?, partial);
+    let next = core
+        .client()
+        .run_local_sync_preview_all(&job.job_id, &repaired.id)
+        .await?;
+    assert_ne!(next.id, receipt.id);
+    let complete = finished_run(&core, &job.job_id, &next.id).await?;
+    assert_eq!(complete.summary.failed, 0);
+    assert_eq!(completed(&recovered_peer.share)?, 16);
+    assert_eq!(snapshot(&source)?, original);
+    assert_eq!(
+        std::fs::read(recovered_peer.share.join("sentinel.bin"))?,
+        b"disconnect destination-only"
+    );
+    // Native results belong to the current run, not durable run history.
+    // Previously read records stay caller-owned; a stale run must not silently
+    // return the current run's results or be retried under another identity.
+    assert!(recovered_by_force || !saved_results.is_empty());
+    assert!(
+        matches!(core.client().local_sync_run_results(&job.job_id, &receipt.id, 0, 100).await, Err(Error::Http{response}) if response.status()==409)
+    );
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    recovered_peer.stop()?;
+    println!(
+        "public protocol disconnect recovery evidence: {}",
+        serde_json::json!({"protocol":format!("{protocol:?}"),"actual_inflight_copy_before_owned_peer_stop":true,"actual_explicit_owned_recovery":true,"actual_prior_run_receipt_retained":true,"actual_completed_partial_files_retained":true,"actual_full_partial_snapshot_stable_without_retry":true,"actual_source_and_sentinel_preserved":true,"actual_explicit_new_endpoint_readback":true,"actual_new_preview_has_remaining_actions_without_copy":true,"actual_separate_explicit_new_run":true,"actual_all_sixteen_exact_destination_payloads":true,"actual_stale_result_identity_refused":true,"actual_same_identity_and_final_normal_owned_exit":true,"partial_complete_files":partial_count,"explicit_force_before_restart":recovered_by_force,"old_native_completion_claimed":false})
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}

@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Preserve a complete Local Sync run's native execution error as private typed
+  data alongside finish time, counts and cancellation. Continue rejecting API
+  error envelopes, malformed records and wrong job identities. Distinguish
+  current-run result pages, explicit interrupted-work recovery and owned force
+  termination from durable history, normal stop and automatic rollback.
+
 - Add bounded native transfer/channel preferences and full scoped Local Sync
   endpoint, direction, ignore, file-operation and explicit mirror-deletion
   settings. Preserve native null/omitted shapes and recognize only verified
