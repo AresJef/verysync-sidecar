@@ -87,3 +87,10 @@ mode, the unchanged remaining GUI configuration and the actual filesystem mode
 before recording the observed effect. The original acknowledgement stays
 unknown. Separate controlled-response cases cover both applied and unchanged
 readbacks and require exactly one PATCH followed by GET requests.
+
+On an original native listener-release timeout, the fixture may take a passive
+snapshot for the exact test executable and report only listener counts for its
+two retained addresses and whether the owner observed process exit. It does not
+connect to a possibly reused endpoint, signal a process, change the original
+eight-second verdict, or expose raw process IDs, addresses or paths. A diagnostic
+snapshot is separate from successful listener release.

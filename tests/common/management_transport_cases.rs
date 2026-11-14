@@ -289,7 +289,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
     println!("native_gui_listener_stage=wait_released_address");
     // Passively bind the exact released owned address; do not probe any endpoint
     // that might have been reused by another process after the listener closes.
-    let guard = tokio::time::timeout(Duration::from_secs(8), async {
+    let released = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             match std::net::TcpListener::bind(initial) {
                 Ok(listener) => return Ok::<_, std::io::Error>(listener),
@@ -300,7 +300,64 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
             }
         }
     })
-    .await??;
+    .await;
+    let guard = match released {
+        Ok(result) => result?,
+        Err(error) => {
+            // Observe only exact fixture executable images after the original
+            // failure. Never connect to an address that another owner may reuse.
+            let observed = if let Some(python) = std::env::var_os("VERYSYNC_TEST_PYTHON") {
+                let output = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new(python)
+                        .arg(
+                            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                                .join("scripts/prepare-test-engine.py"),
+                        )
+                        .arg("list-owned-listeners")
+                        .output()
+                })
+                .await;
+                match output {
+                    Ok(Ok(output)) if output.status.success() && output.stdout.len() <= 8192 => {
+                        serde_json::from_slice::<serde_json::Value>(&output.stdout).ok()
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let listener_count = |port| {
+                observed
+                    .as_ref()
+                    .and_then(|value| value["tcp_listeners"].as_array())
+                    .map(|rows| {
+                        rows.iter()
+                            .filter(|row| row["port"].as_u64() == Some(u64::from(port)))
+                            .count()
+                    })
+            };
+            let owner_exit_ready = {
+                use std::{future::Future, task::Poll};
+                let mut wait = Box::pin(core.wait_for_exit());
+                std::future::poll_fn(|context| {
+                    Poll::Ready(matches!(wait.as_mut().poll(context), Poll::Ready(_)))
+                })
+                .await
+            };
+            eprintln!(
+                "native listener release original failure: {}",
+                serde_json::json!({
+                    "original_deadline_seconds":8,"original_failure_retained":true,
+                    "passive_exact_image_snapshot_available":observed.is_some(),
+                    "initial_owned_listener_count":listener_count(initial.port()),
+                    "previous_tls_owned_listener_count":listener_count(changed.port()),
+                    "owner_exit_report_ready":owner_exit_ready,
+                    "no_endpoint_probe_or_signal":true,"raw_pids_addresses_and_paths_omitted":true
+                })
+            );
+            return Err(error.into());
+        }
+    };
     println!("native_gui_listener_stage=explicit_force_cleanup");
     // Disabling management is not process exit. Explicit forced cleanup is a
     // separate caller choice for this synthetic fixture, never a library fallback.
