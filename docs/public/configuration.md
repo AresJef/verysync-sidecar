@@ -94,9 +94,40 @@ separately. A malformed or failed readback after acknowledgment returns
 retained file bytes are checked independently by native integration tests.
 
 `general_options()` and `update_general_options()` also provide scoped read/PATCH
-operations for temporary-file retention, progress intervals, folder/dial/request
-concurrency, low-priority policy and sleep-prevention policy. Numeric zero values
-retain the engine's interpretation. These are configuration contracts; they do
-not certify actual expiry timing, concurrency, process scheduling, system sleep
-behavior, or a performance improvement. Network, bandwidth, upgrade and audit
-settings retain their separate typed APIs and verification boundaries.
+operations for temporary-file retention, signed progress intervals, folder/dial/
+request concurrency, process-priority policy, sleep-prevention policy, minimum
+configuration-volume free space, temporary index blocks, remote-name adoption,
+full-index resend after upgrade and IP traffic class. `-1` explicitly requests
+disabled native progress reporting. Numeric zero values retain the engine's
+interpretation. Optional additional readback fields remain `None` when absent;
+missing values are not invented as zero or false.
+
+```no_run
+use verysync_sidecar::{Client, DiskFreeRequirement, DiskSpaceUnit, GeneralOptionsPatch};
+
+async fn select_general_preferences(client: &Client) -> verysync_sidecar::Result<()> {
+    let threshold = DiskFreeRequirement::new(256.0, DiskSpaceUnit::Megabytes)?;
+    let update = client.update_general_options(
+        &GeneralOptionsPatch::default()
+            .min_home_disk_free(threshold)
+            .progress_update_interval_seconds(-1),
+    ).await?;
+    // Inspect requested_fields_match; application and persistence are separate.
+    Ok(())
+}
+```
+
+`DiskFreeRequirement` preserves native `%`, `kB`, `MB`, `GB` and `TB` selectors;
+byte units are decimal. Values must be finite and nonnegative, and percentages
+cannot exceed 100. Unknown readback units are retained and rejected by typed
+edits, including complete-snapshot edits. The SDK neither measures the controller
+disk nor reserves space. The native configuration/index volume is the target.
+
+The controlled case checks all five unit selectors, fractional values, partial
+field preservation, disabled progress selection and normal restart persistence.
+It independently observes the owned process/group's OS priority before and after
+an explicit low-priority policy change and restart. This does not certify actual
+temporary expiry, concurrency limits, disk-pressure handling, sleep prevention,
+remote-name replacement, packet QoS or a performance improvement. Network,
+bandwidth, upgrade and audit settings retain their separate typed APIs and
+verification boundaries. Full same-source platform acceptance remains separate.

@@ -93,6 +93,7 @@ impl ConfigurationSnapshot {
     }
     /// Edit explicit general fields while retaining every other native value.
     pub fn set_general_options(&mut self, patch: &GeneralOptionsPatch) -> Result<()> {
+        patch.validate()?;
         self.merge(&["options"], patch)
     }
     /// Edit future-folder defaults without changing existing registrations.

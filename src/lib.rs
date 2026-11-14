@@ -94,7 +94,8 @@ pub use client::{
 };
 pub use configuration::{
     ConfigurationSectionUpdate, ConfigurationSnapshot, ConfigurationSyncState, ConfigurationUpdate,
-    FolderDefaults, FolderDefaultsPatch, GeneralOptions, GeneralOptionsPatch,
+    DiskFreeRequirement, DiskSpaceUnit, FolderDefaults, FolderDefaultsPatch, GeneralOptions,
+    GeneralOptionsPatch,
 };
 pub use devices::{
     CreateDeviceOptions, DeviceCompression, DeviceConfig, DeviceDefaults, DevicePatch,

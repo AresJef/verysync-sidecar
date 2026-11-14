@@ -85,6 +85,7 @@ impl Client {
         &self,
         patch: &crate::GeneralOptionsPatch,
     ) -> Result<ConfigurationSectionUpdate<crate::GeneralOptions>> {
+        patch.validate()?;
         self.patch_configuration_section("rest/config/options", patch)
             .await
     }
