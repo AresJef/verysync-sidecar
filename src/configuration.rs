@@ -28,6 +28,18 @@ pub struct FolderDefaults {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 impl FolderDefaults {
+    /// Read the actual versioning template, preserving archive location and
+    /// inactive/unknown parameters. This does not prove existing archive data.
+    pub fn versioning_configuration(&self) -> crate::Result<crate::FolderVersioningConfiguration> {
+        serde_json::from_value(self.extra.get("versioning").cloned().ok_or(
+            crate::Error::InvalidConfiguration {
+                reason: "native default versioning configuration is absent",
+            },
+        )?)
+        .map_err(|_| crate::Error::InvalidConfiguration {
+            reason: "native default versioning configuration has an unknown schema",
+        })
+    }
     fn decode<T: serde::de::DeserializeOwned>(&self) -> crate::Result<T> {
         let value = serde_json::to_value(self).map_err(|_| crate::Error::InvalidConfiguration {
             reason: "folder template cannot be encoded",

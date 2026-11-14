@@ -119,6 +119,35 @@ impl ConfigurationSnapshot {
         patch.validate()?;
         self.merge(&["defaults", "folder"], patch)
     }
+    /// Edit a future-folder versioning policy while retaining native location,
+    /// inactive parameters and every unrelated complete-document field.
+    pub fn set_folder_default_versioning(
+        &mut self,
+        policy: crate::FolderVersioningPolicy,
+    ) -> Result<()> {
+        policy.validate()?;
+        let mut expected = self.folder_defaults()?.versioning_configuration()?;
+        policy.apply(&mut expected)?;
+        self.merge(
+            &["defaults", "folder"],
+            &serde_json::json!({"versioning":expected}),
+        )
+    }
+    /// Edit only the future-folder basic archive location using target syntax.
+    /// No archive migration or controller filesystem access is performed.
+    pub fn set_folder_default_archive_location(
+        &mut self,
+        location: &crate::VersionArchiveLocation,
+    ) -> Result<()> {
+        let path = location.protocol(self.style)?;
+        let mut expected = self.folder_defaults()?.versioning_configuration()?;
+        expected.filesystem_path = path.into();
+        expected.filesystem_type = "basic".into();
+        self.merge(
+            &["defaults", "folder"],
+            &serde_json::json!({"versioning":expected}),
+        )
+    }
     /// Edit future-device defaults; unknown enum inputs are rejected.
     pub fn set_device_defaults(&mut self, patch: &DevicePatch) -> Result<()> {
         patch.validate(true)?;

@@ -374,23 +374,7 @@ impl Client {
         folder: &FolderId,
         location: &VersionArchiveLocation,
     ) -> Result<FolderVersioningUpdate> {
-        let path = match location {
-            VersionArchiveLocation::FolderDefault => "",
-            VersionArchiveLocation::BasicDirectory(path) => {
-                if path.style() != self.folder_path_style()? {
-                    return Err(Error::InvalidPath {
-                        reason: "archive path syntax differs from the target",
-                    });
-                }
-                let value = path.to_protocol()?;
-                if value.len() > 32768 {
-                    return Err(Error::InvalidPath {
-                        reason: "archive path exceeds its text bound",
-                    });
-                }
-                value
-            }
-        };
+        let path = location.protocol(self.folder_path_style()?)?;
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
         let mut expected = self.read_folder_versioning(folder).await?;

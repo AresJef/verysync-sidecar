@@ -90,6 +90,27 @@ impl fmt::Debug for VersionArchiveLocation {
         })
     }
 }
+impl VersionArchiveLocation {
+    pub(crate) fn protocol(&self, style: crate::PathStyle) -> Result<&str> {
+        match self {
+            Self::FolderDefault => Ok(""),
+            Self::BasicDirectory(path) => {
+                if path.style() != style {
+                    return Err(Error::InvalidPath {
+                        reason: "archive path syntax differs from the target",
+                    });
+                }
+                let value = path.to_protocol()?;
+                if value.len() > 32768 {
+                    return Err(Error::InvalidPath {
+                        reason: "archive path exceeds its text bound",
+                    });
+                }
+                Ok(value)
+            }
+        }
+    }
+}
 impl FolderVersioningPolicy {
     pub(crate) fn apply(&self, config: &mut FolderVersioningConfiguration) -> Result<()> {
         let (kind, keep, days, interval) = match self {
