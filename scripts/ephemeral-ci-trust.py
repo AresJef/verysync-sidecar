@@ -123,6 +123,8 @@ def record_command_result(arguments, path, code):
     operations = {"find-certificate", "add-trusted-cert", "remove-trusted-cert",
                   "delete-certificate", "probe-admin-trust", "install", "rm", "update-ca-certificates"}
     operation = next((value for value in arguments if value in operations), "windows-root-store")
+    if operation == "delete-certificate" and "-t" in arguments:
+        operation = "delete-certificate-and-trust"
     with (path.parent / "ephemeral-ca-command-results.jsonl").open("a", encoding="utf-8") as output:
         output.write(json.dumps({"operation": operation, "exit": code}) + "\n")
 
@@ -216,22 +218,16 @@ def mutate(action, path, identity):
             commands = [["sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot",
                          "-k", "/Library/Keychains/System.keychain", str(path)]]
         else:
-            # Removing trust before the keychain certificate hangs on hosted
-            # macOS. The native diagnostic proves deletion alone leaves trust.
-            # Reverse the order, then explicitly remove that exact remaining
-            # record and verify both independent postconditions. Never import
-            # a replacement trust store or change authorization policies.
+            # The standalone removal command constructs a certificate from a
+            # file and hangs on hosted macOS. Apple SecurityTool's combined -t
+            # path instead gets the persistent keychain certificate, removes
+            # its user/admin settings when root, then deletes that exact item.
+            # Preserve independent absence checks; this is not a timeout waiver.
             if not macos_certificate_absent(path, identity):
-                code = run(["sudo", "-n", "security", "delete-certificate", "-Z", identity["sha256"],
+                code = run(["sudo", "-n", "security", "delete-certificate", "-t", "-Z", identity["sha256"],
                             "/Library/Keychains/System.keychain"], path)
                 if code != 0:
                     raise RuntimeError("exact generated CA deletion failed; private lease retained")
-            trust = probe_macos_admin_trust(path)
-            if trust == 3:
-                if run(["sudo", "-n", "security", "remove-trusted-cert", "-d", str(path)], path) != 0:
-                    raise RuntimeError("exact administrative CA trust removal failed; private lease retained")
-            elif trust != 0:
-                raise RuntimeError("exact administrative CA trust is unobservable; private lease retained")
             if probe_macos_admin_trust(path) != 0:
                 raise RuntimeError("exact macOS CA cleanup incomplete; private lease retained")
             return

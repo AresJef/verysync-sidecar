@@ -20,14 +20,13 @@ class EphemeralTrustScopeTests(unittest.TestCase):
         with mock.patch.object(TRUST.sys, "platform", "darwin"):
             with mock.patch.object(TRUST, "macos_certificate_absent", return_value=False):
                 with mock.patch.object(TRUST, "run", return_value=0) as run:
-                    with mock.patch.object(TRUST, "probe_macos_admin_trust", side_effect=[3, 0]) as probe:
+                    with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=0) as probe:
                         TRUST.mutate("remove", path, identity)
             self.assertEqual(run.call_args_list, [
-                mock.call(["sudo", "-n", "security", "delete-certificate", "-Z", "a" * 64,
+                mock.call(["sudo", "-n", "security", "delete-certificate", "-t", "-Z", "a" * 64,
                            "/Library/Keychains/System.keychain"], path),
-                mock.call(["sudo", "-n", "security", "remove-trusted-cert", "-d", str(path)], path),
             ])
-            self.assertEqual(probe.call_count, 2)
+            self.assertEqual(probe.call_count, 1)
 
     def test_macos_already_absent_keychain_and_trust_need_no_mutating_command(self):
         with mock.patch.object(TRUST.sys, "platform", "darwin"):
