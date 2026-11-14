@@ -374,6 +374,47 @@ def smb(config, root):
     windows_smb_open_sharing(root)
     server = SimpleSMBServer(listenAddress="127.0.0.1", listenPort=0)
     server.setSMB2Support(True)
+    policy = config.get("smb_auth")
+    if policy not in (None, "domain", "guest"):
+        raise ValueError("unknown explicit SMB authentication policy")
+    if policy:
+        from impacket import ntlm
+        from impacket.spnego import SPNEGO_NegTokenResp
+        original_auth = SMB2Commands._ntlm_auth
+        observation_lock = threading.Lock()
+
+        def policy_auth(token, conn_data, smb_server, raw_ntlm):
+            authenticate = token.startswith(b"NTLMSSP\x00") and int.from_bytes(token[8:12], "little") == 3
+            matched = True
+            user_present = False
+            if authenticate:
+                message = ntlm.NTLMAuthChallengeResponse()
+                message.fromString(token)
+                domain = message["domain_name"].decode("utf-16le")
+                user_present = bool(message["user_name"])
+                matched = domain == "VS-SYNTHETIC" if policy == "domain" else not user_present
+            if authenticate and not matched:
+                response = smb2.SMB2SessionSetup_Response()
+                reject = SPNEGO_NegTokenResp()
+                reject["NegState"] = b"\x02"
+                response["SecurityBufferOffset"] = 0x48
+                response["Buffer"] = reject.getData()
+                response["SecurityBufferLength"] = len(response["Buffer"])
+                status = 0xC000006D  # STATUS_LOGON_FAILURE, never success.
+            else:
+                response, status = original_auth(token, conn_data, smb_server, raw_ntlm)
+            if authenticate:
+                # No NTLM hashes, challenge responses, names or passwords.
+                record = {"policy": policy, "policy_matched": matched,
+                          "user_present": user_present, "status": status,
+                          "session_flags": smb2.SMB2SessionSetup_Response(
+                              response.getData())["SessionFlags"]}
+                with observation_lock:
+                    with (root.parent / "smb-auth-observations.jsonl").open("a", encoding="utf-8") as log:
+                        log.write(json.dumps(record) + "\n")
+            return response, status
+
+        SMB2Commands._ntlm_auth = staticmethod(policy_auth)
 
     def logoff_with_session_identity(conn_id, smb_server, request):
         # MS-SMB2 3.2.5.4 requires locating the session by response SessionId:
@@ -424,8 +465,9 @@ def smb(config, root):
 
         server.getServer().hookSmb2Command(smb2.SMB2_WRITE, delayed_write)
     server.addShare("synthetic", str(root))
-    server.addCredential(config["user"], 0, compute_lmhash(config["password"]),
-                         compute_nthash(config["password"]))
+    if policy != "guest":
+        server.addCredential(config["user"], 0, compute_lmhash(config["password"]),
+                             compute_nthash(config["password"]))
     # Impacket's two private named-pipe RPC listeners are also loopback-only.
     # Retain these exact in-process threads until the owned fixture process exits.
     ready("smb", server.getServer().server_address[1])
