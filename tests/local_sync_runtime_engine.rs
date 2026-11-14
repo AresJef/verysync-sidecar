@@ -109,6 +109,31 @@ async fn public_local_sync_controls_real_inflight_data_and_observes_native_event
         .await?;
     assert_eq!(pause.observed.state, "paused");
     tokio::time::sleep(Duration::from_secs(1)).await;
+    // The native paused state gates new work but is not an I/O cancellation
+    // acknowledgement: an already opened temporary payload can still commit.
+    // Wait for that actual per-file boundary, then retain the full, single
+    // 500ms hash-stability assertion. Do not discard temporary files from it.
+    let pause_drain_started = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let status = core.client().local_sync_status(&job.job_id).await?;
+            assert_eq!(status.state, "paused");
+            assert_eq!(status.operation_id.as_ref(), Some(&operation));
+            let entries = std::fs::read_dir(&peer.share)?.collect::<std::io::Result<Vec<_>>>()?;
+            let temporary = entries.iter().any(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|n| n.starts_with(".verysync-") && n.ends_with(".tmp"))
+            });
+            if !temporary {
+                return Ok::<(), Box<dyn std::error::Error + Send + Sync>>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    let pause_inflight_drain_millis = pause_drain_started.elapsed().as_millis();
+    println!("native paused in-flight drain milliseconds: {pause_inflight_drain_millis}");
     let paused = snapshot(&peer.share)?;
     let paused_count = completed(&peer.share)?;
     assert!(paused_count > 0 && paused_count < 16);

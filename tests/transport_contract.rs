@@ -4277,3 +4277,135 @@ async fn local_sync_automation_put_reports_normalization_and_preserves_unselecte
     assert_eq!(body["enabled"], false);
     Ok(())
 }
+
+fn local_sync_repair_job_fixture() -> serde_json::Value {
+    serde_json::json!({"jobId":"synthetic-job","label":"reviewed","sideA":{"fsType":"basic","uri":"/reviewed/a","transfers":2},"sideB":{"fsType":"sftp","uri":"sftp://private.invalid/root","transfers":4,"password":"retained secret"},"mode":"bisync","enabled":true,"syncOnStartup":false,"deleteExtraneous":false,"watchChanges":false,"scheduleMode":"off","futureSetting":{"keep":7}})
+}
+#[tokio::test]
+async fn local_sync_repair_refuses_stale_reviewed_settings_active_work_and_non_two_way_baselines(
+) -> TestResult {
+    use verysync_sidecar::LocalSyncJob;
+    let original = local_sync_repair_job_fixture();
+    let expected: LocalSyncJob = serde_json::from_value(original.clone())?;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let mut changed = original.clone();
+    changed["sideA"]["uri"] = "/unreviewed/other".into();
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(changed),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.rebuild_local_sync_markers(&expected).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 4);
+    assert!(!requests.iter().any(|r| r.starts_with("POST ")));
+    for state in [
+        "scanning",
+        "running",
+        "paused",
+        "canceling",
+        "unknown-future",
+    ] {
+        let status = serde_json::json!({"jobId":"synthetic-job","state":state});
+        let server = ScriptedServer::start(vec![
+            version(),
+            identity(),
+            identity(),
+            Reply::json(original.clone()),
+            identity(),
+            Reply::json(status),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.recover_local_sync_baseline(&expected).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 6);
+        assert!(!requests.iter().any(|r| r.starts_with("POST ")));
+    }
+    let mut mirror = original;
+    mirror["mode"] = "mirror_a_to_b".into();
+    let mirror: LocalSyncJob = serde_json::from_value(mirror)?;
+    let server = ScriptedServer::start(vec![version(), identity()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.recover_local_sync_baseline(&mirror).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_marker_unknown_ack_is_one_confirmed_snapshot_post_without_retry() -> TestResult
+{
+    use verysync_sidecar::LocalSyncJob;
+    let original = local_sync_repair_job_fixture();
+    let expected: LocalSyncJob = serde_json::from_value(original.clone())?;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),Reply::json(original.clone()),identity(),Reply::json(serde_json::json!({"jobId":"synthetic-job","state":"error","lastError":"endpoint a: synchronization folder marker missing"})),identity(),Reply::json(serde_json::json!({"unknownAck":true}))]).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.rebuild_local_sync_markers(&expected).await,
+        Err(Error::MutationOutcomeUnknown { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    let writes: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+    assert_eq!(writes.len(), 1);
+    assert!(
+        writes[0].starts_with("POST /prefix/rest/localsync/jobs/synthetic-job/markers/rebuild ")
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("missing body")?)?;
+    assert_eq!(body, serde_json::json!({"confirmed":true,"job":original}));
+    Ok(())
+}
+#[tokio::test]
+async fn local_sync_baseline_wrong_ack_job_or_changed_preview_is_unknown_without_run() -> TestResult
+{
+    use verysync_sidecar::LocalSyncJob;
+    for wrong_job in [true, false] {
+        let original = local_sync_repair_job_fixture();
+        let expected: LocalSyncJob = serde_json::from_value(original.clone())?;
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let preview = serde_json::json!({"jobId":if wrong_job {"different-job"} else {"synthetic-job"},"id":"recovery-preview","operationId":"recovery-operation","count":1,"scanIssueCount":0,"expiresAt":"2099-01-01T00:00:00Z"});
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            Reply::json(original),
+            identity(),
+            Reply::json(serde_json::json!({"jobId":"synthetic-job","state":"idle"})),
+            identity(),
+            Reply::json(preview),
+        ];
+        if !wrong_job {
+            replies.push(identity());
+            replies.push(Reply::json(serde_json::json!({"jobId":"synthetic-job","id":"replacement-preview","operationId":"recovery-operation","count":1,"scanIssueCount":0,"expiresAt":"2099-01-01T00:00:00Z"})));
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.recover_local_sync_baseline(&expected).await,
+            Err(Error::MutationOutcomeUnknown { .. })
+        ));
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), if wrong_job { 8 } else { 10 });
+        let writes: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0]
+            .starts_with("POST /prefix/rest/localsync/jobs/synthetic-job/baseline/recover "));
+        assert!(!requests.iter().any(|r| r.contains("/run ")));
+    }
+    Ok(())
+}

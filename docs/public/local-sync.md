@@ -122,6 +122,16 @@ a request future does not prove native work stopped. No automatic mutation retry
 
 ## In-flight control and Local Sync events
 
+A native `paused` state does not cancel an already opened file transfer. In one
+macOS ARM native run, an existing temporary payload committed more than one
+second after the pause readback. The SDK reports actual state and makes no
+immediate filesystem-quiescence promise. The dedicated SFTP test retains its initial one-second settling period, then
+waits up to five additional seconds for an already-open native temporary payload
+to commit. It then
+asserts one unchanged 500ms full-directory hash window while paused; it does not
+ignore temporary files, retry a failed stability window or change the workload.
+
+
 `control_local_sync_operation()` requires the reviewed job and operation IDs and
 an explicit pause, resume or stop choice. Client clones serialize the identity
 preflight, known acknowledgement and fresh status readback. Another management
@@ -238,3 +248,37 @@ execution. Licensed positive watch/schedule acceptance remains pending. Native
 startup synchronization has separately copied real synthetic data on enablement
 and after a core restart through the public Rust API. Optional observed schedule
 fields retain missing values as unknown; unknown native modes are preserved.
+
+## Explicit marker and baseline recovery
+
+`rebuild_local_sync_markers(&reviewed_job)` and
+`recover_local_sync_baseline(&reviewed_job)` take a complete job snapshot obtained
+from `local_sync_job`. Verify the endpoint paths, mounts and ownership before
+choosing either operation. The client compares a fresh full configuration with
+the reviewed snapshot and refuses stale settings. Scanning, running, paused,
+canceling and unknown states are refused; known idle/error states are eligible.
+The clone mutation lock does not exclude external writers or make these checks
+an atomic transaction.
+
+Marker rebuilding deliberately recreates native safety markers. Its receipt is
+a known empty acknowledgement plus separately observed status, not proof of a
+remote filesystem effect. The SDK creates no endpoint directories itself and
+performs no copy fallback or automatic synchronization.
+
+Baseline recovery deliberately discards incompatible two-way comparison state
+and returns a readback-verified native recovery preview. This can change how
+future deletions and conflicts are interpreted. It is not file backup restoration.
+Review the replacement preview and select a separate explicit run. Recovery can
+remove the old baseline before execution; it does not provide rollback. A
+successful explicit run can establish the new baseline. An incompatible setting
+change such as `LocalSyncJobPatch::ignore_permissions` requires this separate
+recovery choice; the SDK does not recover implicitly.
+
+The public native test creates a real missing marker and a comparison-rule
+mismatch, observes both native guards, rebuilds the actual marker directory,
+retains original files and test backups, reviews recovery without file execution,
+then explicitly runs and verifies the new baseline and clean analysis after a
+core restart. Local success and the complete six-profile source gate are separate.
+Missing baseline files alone do not necessarily produce a native failure; the
+comparison mismatch is the tested recovery trigger. Per-backend recovery and
+fault conditions remain independently required.

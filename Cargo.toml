@@ -231,3 +231,8 @@ required-features = ["engine-tests"]
 name = "local_sync_automation_engine"
 path = "tests/local_sync_automation_engine.rs"
 required-features = ["engine-tests"]
+
+[[test]]
+name = "local_sync_repair_engine"
+path = "tests/local_sync_repair_engine.rs"
+required-features = ["engine-tests"]

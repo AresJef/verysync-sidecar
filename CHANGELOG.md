@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit marker rebuilding and two-way baseline recovery against complete
+  reviewed job snapshots. Refuse stale settings and active/unknown states, retain
+  exact acknowledgements and preview identities, and never execute recovery
+  plans automatically. Permission-comparison updates remain separately explicit.
+
 - Add explicit native startup, watch and interval/calendar schedule settings.
   Automatic triggers default off; selecting them can start unattended native
   writes. Scoped updates preserve other settings and report actual normalization.

@@ -125,11 +125,11 @@ pub use local_sync::{
     LocalSyncConflictPolicy, LocalSyncConflictResolution, LocalSyncConflictSide,
     LocalSyncControlReceipt, LocalSyncHealth, LocalSyncHistory, LocalSyncHistoryRecord,
     LocalSyncJob, LocalSyncJobId, LocalSyncJobPatch, LocalSyncJobRemoval, LocalSyncJobUpdate,
-    LocalSyncMode, LocalSyncOperation, LocalSyncOperationControl, LocalSyncOperationId,
-    LocalSyncPreview, LocalSyncPreviewId, LocalSyncProgress, LocalSyncRun, LocalSyncRunId,
-    LocalSyncSchedule, LocalSyncSelection, LocalSyncSelectionSummary, LocalSyncStatus,
-    LocalSyncSummary, StorageDirectory, StorageEndpoint, StorageEntry, StorageProbe,
-    StorageProtocol,
+    LocalSyncMarkerRepair, LocalSyncMode, LocalSyncOperation, LocalSyncOperationControl,
+    LocalSyncOperationId, LocalSyncPreview, LocalSyncPreviewId, LocalSyncProgress, LocalSyncRun,
+    LocalSyncRunId, LocalSyncSchedule, LocalSyncSelection, LocalSyncSelectionSummary,
+    LocalSyncStatus, LocalSyncSummary, StorageDirectory, StorageEndpoint, StorageEntry,
+    StorageProbe, StorageProtocol,
 };
 pub use local_sync_events::{
     LocalSyncEvent, LocalSyncEventBatch, LocalSyncEventCancellation, LocalSyncEventCursor,
