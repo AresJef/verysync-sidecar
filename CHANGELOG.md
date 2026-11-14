@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit official-account status, login and logout with typed native
+  rejection codes, private credential/session formatting and fresh observed
+  state. Keep GUI authentication and commercial entitlements separate; do not
+  infer login success from an HTTP-success error envelope.
+
 - Validate native priority relative to caller inheritance and verify cloned
   profiling request order through complete HTTP response bodies. Keep native
   profile timestamps as diagnostics and preserve bounded, redacted protocol

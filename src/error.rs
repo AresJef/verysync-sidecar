@@ -110,6 +110,15 @@ pub enum Error {
         /// Bounded original rejection payload, omitted from ordinary formatting.
         response: ResponseDiagnostic,
     },
+    /// The native official-account endpoint explicitly returned a nested error.
+    /// Code 5000 also describes upstream service/network failures; it is not
+    /// automatically an incorrect-password or management-authentication error.
+    OfficialAccountRejected {
+        /// Exact native signed error code, including future codes.
+        code: i64,
+        /// Bounded private native envelope, excluded from ordinary formatting.
+        response: ResponseDiagnostic,
+    },
     /// This sharing group is already registered locally; no POST was sent.
     ShareAlreadyConfigured {
         /// Actual existing local registration ID.
@@ -397,6 +406,7 @@ impl fmt::Display for Error {
             Self::UnlistedProgramVersion => formatter.write_str("requested program version is not in the fixed catalog"),
             Self::UnsupportedProgramTarget { .. } => formatter.write_str("requested program target is not in the fixed catalog"),
             Self::ShareKeyRejected { .. } => formatter.write_str("engine rejected the sharing key"),
+            Self::OfficialAccountRejected { code, .. } => write!(formatter, "native official account request rejected (code {code})"),
             Self::LicenseRequired { code, .. } => write!(formatter, "engine requires a feature license (code {code})"),
             Self::IgnorePatternsRejected { .. } => formatter.write_str("engine reported invalid stored ignore patterns; inspect or explicitly restore the rules"),
             Self::ShareAlreadyConfigured { .. } => formatter.write_str("sharing group is already configured locally"),

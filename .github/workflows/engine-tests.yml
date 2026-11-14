@@ -211,7 +211,7 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target configuration_engine --evidence-dir "${{ runner.temp }}/vs-configuration-proxy"
-      - name: Verify credential rotation, old-key refusal and explicit owner reconnection
+      - name: Verify management credentials, GUI sessions, LDAP and official-account boundaries
         id: native_authentication_engine
         continue-on-error: true
         run: >-

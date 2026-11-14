@@ -14,6 +14,242 @@ const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
 #[tokio::test]
+async fn official_account_acknowledgement_is_separate_from_matching_observed_state() -> TestResult {
+    use verysync_sidecar::{
+        OfficialAccountCredentials, OfficialAccountState, OfficialAccountStatus,
+    };
+    let unknown: OfficialAccountStatus = serde_json::from_value(serde_json::json!({"uid":null}))?;
+    assert_eq!(unknown.state(), OfficialAccountState::Unknown);
+    assert!(unknown.extra()["uid"].is_null());
+    for login in [false, true] {
+        let observed = if login {
+            serde_json::json!({})
+        } else {
+            serde_json::json!({"uid":99})
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({})),
+            Reply::json(serde_json::json!({"myID":ID,"account":observed})),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let receipt = if login {
+            client
+                .login_official_account(&OfficialAccountCredentials::new("synthetic-account", KEY)?)
+                .await?
+        } else {
+            client.logout_official_account().await?
+        };
+        assert!(!receipt.expected_state_matches);
+        assert_eq!(
+            receipt.status.state(),
+            if login {
+                OfficialAccountState::LoggedOut
+            } else {
+                OfficialAccountState::LoggedIn
+            }
+        );
+        assert_eq!(server.finish().await?.len(), 5);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_account_identity_changes_prevent_writes_or_make_post_readback_unknown(
+) -> TestResult {
+    use verysync_sidecar::OfficialAccountCredentials;
+    let changed = ID.replacen('A', "B", 1);
+    for after_write in [false, true] {
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":if after_write {ID} else {&changed}})),
+        ];
+        if after_write {
+            replies.extend([
+                Reply::json(serde_json::json!({})),
+                Reply::json(serde_json::json!({"myID":changed,"account":{}})),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .login_official_account(&OfficialAccountCredentials::new("synthetic-account", KEY)?)
+            .await
+            .err()
+            .ok_or("identity error expected")?;
+        if after_write {
+            assert!(
+                matches!(error,Error::MutationOutcomeUnknown{source,..} if matches!(*source,Error::IdentityMismatch{..}))
+            );
+        } else {
+            assert!(matches!(error, Error::IdentityMismatch { .. }));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests.iter().filter(|r| r.starts_with("POST ")).count(),
+            usize::from(after_write)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_accounts_preserve_unknown_state_and_separate_single_login_and_logout(
+) -> TestResult {
+    use verysync_sidecar::{OfficialAccountCredentials, OfficialAccountState};
+    let identity =
+        |account: serde_json::Value| Reply::json(serde_json::json!({"myID":ID,"account":account}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(serde_json::json!({})),
+        identity(serde_json::json!({"futurePrivate":KEY})),
+        identity(serde_json::json!({})),
+        Reply::json(serde_json::json!({"nativeAcknowledgement":KEY})),
+        identity(serde_json::json!({"uid":42,"futurePrivate":KEY})),
+        identity(serde_json::json!({"uid":42})),
+        Reply::json(serde_json::json!({})),
+        identity(serde_json::json!({})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert_eq!(
+        client.official_account_status().await?.state(),
+        OfficialAccountState::Unknown
+    );
+    let credentials = OfficialAccountCredentials::new(" user@example.invalid ", KEY)?;
+    assert!(!format!("{credentials:?}").contains(KEY));
+    let login = client.login_official_account(&credentials).await?;
+    assert!(login.expected_state_matches);
+    assert_eq!(login.status.state(), OfficialAccountState::LoggedIn);
+    assert_eq!(login.status.user_id(), Some(42));
+    assert_eq!(login.status.extra()["futurePrivate"], KEY);
+    assert!(!format!("{login:?}").contains(KEY));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(login.acknowledgement.body_bytes())?
+            ["nativeAcknowledgement"],
+        KEY
+    );
+    let logout = client.logout_official_account().await?;
+    assert!(logout.expected_state_matches);
+    assert_eq!(logout.status.state(), OfficialAccountState::LoggedOut);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 9);
+    assert!(requests[4].starts_with("POST /prefix/rest/account/login "));
+    let body: serde_json::Value = serde_json::from_str(
+        requests[4]
+            .split_once("\r\n\r\n")
+            .ok_or("account body missing")?
+            .1,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"username":" user@example.invalid ","password":KEY})
+    );
+    assert!(requests[7].starts_with("GET /prefix/rest/account/logout "));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.contains("/rest/account/"))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_account_nested_rejection_is_typed_and_malformed_ack_is_unknown_once() -> TestResult
+{
+    use verysync_sidecar::OfficialAccountCredentials;
+    for malformed in [false, true] {
+        let ack = if malformed {
+            serde_json::json!({"error":{"code":"future-code","message":KEY}})
+        } else {
+            serde_json::json!({"error":{"code":5000,"message":KEY,"futurePrivate":KEY}})
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(ack),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let credentials = OfficialAccountCredentials::new("synthetic-account", KEY)?;
+        let error = client
+            .login_official_account(&credentials)
+            .await
+            .err()
+            .ok_or("account error expected")?;
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        if malformed {
+            assert!(
+                matches!(error,Error::MutationOutcomeUnknown{source,..} if matches!(*source,Error::InvalidResponse{..}))
+            );
+        } else {
+            assert!(matches!(
+                error,
+                Error::OfficialAccountRejected { code: 5000, .. }
+            ));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 4);
+        assert_eq!(
+            requests.iter().filter(|r| r.starts_with("POST ")).count(),
+            1
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_account_missing_state_and_failed_post_readback_never_become_logout_success(
+) -> TestResult {
+    use verysync_sidecar::OfficialAccountCredentials;
+    assert!(OfficialAccountCredentials::new("", KEY).is_err());
+    assert!(OfficialAccountCredentials::new("   ", KEY).is_err());
+    assert!(OfficialAccountCredentials::new("user\n", KEY).is_err());
+    assert!(OfficialAccountCredentials::new("user", "").is_err());
+    assert!(OfficialAccountCredentials::new("user", "private\0password").is_err());
+    for state in [
+        serde_json::json!({"myID":ID}),
+        serde_json::json!({"myID":ID,"account":null}),
+        serde_json::json!({"myID":ID,"account":[]}),
+        serde_json::json!({"myID":ID,"account":{"uid":"42"}}),
+    ] {
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(state),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.official_account_status().await,
+            Err(Error::InvalidResponse { .. })
+        ));
+        assert_eq!(server.finish().await?.len(), 3);
+    }
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(
+        matches!(client.logout_official_account().await,Err(Error::MutationOutcomeUnknown{source,..}) if matches!(*source,Error::InvalidResponse{..}))
+    );
+    assert_eq!(server.finish().await?.len(), 5);
+    Ok(())
+}
+
+#[tokio::test]
 async fn system_preference_paths_keep_target_windows_syntax_and_explicit_native_defaults(
 ) -> TestResult {
     use verysync_sidecar::{NativePathSelection, PathStyle, SystemPreferencesPatch, TargetPath};

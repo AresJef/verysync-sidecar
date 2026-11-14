@@ -44,6 +44,7 @@
 #![doc = include_str!("../docs/public/file-history.md")]
 #![doc = include_str!("../docs/public/configuration.md")]
 #![doc = include_str!("../docs/public/management-authentication.md")]
+#![doc = include_str!("../docs/public/official-accounts.md")]
 
 mod auth;
 mod capabilities;
@@ -71,6 +72,7 @@ mod maintenance;
 mod managed;
 mod management_auth;
 mod network;
+mod official_account;
 mod operations;
 mod path;
 mod raw;
@@ -174,6 +176,9 @@ pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
 pub use network::{
     ConnectionSnapshot, ConnectionTotals, DeviceTransport, DiscoveryRecord, ListenerStatus,
     NetworkConfig, NetworkPatch, NetworkUpdate, PeerConnection, PeerConnectionType,
+};
+pub use official_account::{
+    OfficialAccountChange, OfficialAccountCredentials, OfficialAccountState, OfficialAccountStatus,
 };
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};

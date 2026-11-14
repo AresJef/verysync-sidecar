@@ -1,5 +1,10 @@
 # verysync-sidecar
 
+The unreleased [official-account API](docs/public/official-accounts.md) separates
+explicit cloud-account login/logout from GUI sessions and licensed entitlements.
+Native acknowledgements, actual account state and upstream rejection codes have
+separate results; authenticated cloud-session acceptance remains pending.
+
 Unreleased [file transfers](docs/public/file-transfers.md) stream explicit local
 inputs/outputs with finite bounds, inclusive ranges, all seven native archive
 formats and post-upload digest verification. Complete native acceptance is pending.

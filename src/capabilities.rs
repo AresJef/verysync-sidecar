@@ -105,6 +105,8 @@ pub enum Capability {
     LdapAuthentication,
     /// Account, configuration and commercial authorization.
     AccountLicense,
+    /// Explicit official-account status, login and logout, separate from GUI auth.
+    OfficialAccount,
     /// Storage protocol integrations.
     StorageProtocols,
     /// LocalSync controls.
@@ -311,6 +313,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::OfficialAccount,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::SystemPreferences,
         implementation: ImplementationStatus::Typed,
