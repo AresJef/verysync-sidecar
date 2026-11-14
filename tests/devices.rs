@@ -1,6 +1,8 @@
 //! Actual private device controls and their independent connection/file effects.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/private_redial.rs"]
+mod private_redial;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 use std::time::Duration;
@@ -241,6 +243,10 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
     let root = tempfile::Builder::new().prefix("vsdp-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    // Explicit fixture scheduling, with every original observation deadline
+    // and data assertion retained. This does not change SDK/native defaults.
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
     let a_path = root.join("source files");
