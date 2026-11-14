@@ -129,6 +129,14 @@ settings. This operation performs no directory bind and leaves GUI mode unchange
 `set_gui_auth_mode()` separately selects static or LDAP authentication, reconciling
 the API-key connection across native GUI reload. These writes are independent;
 callers coordinate other writers and inspect both readbacks before logging in.
+The fixed program captures directory settings when its GUI authentication handler
+loads. Updating LDAP fields while LDAP mode is already active can leave that
+handler using its previous fields even after configuration readback succeeds.
+Configure the directory before activating LDAP. For an existing LDAP handler,
+coordinate an explicit transition to static mode, update the directory, then
+select LDAP again, or explicitly restart the owned program. The library does not
+toggle authentication modes or restart the program implicitly. A same-mode PATCH
+is not evidence of a reload. Account for concurrent GUI users before changing mode.
 
 ```no_run
 use verysync_sidecar::{GuiAuthMode, LdapPatch, LdapTransport, ManagedInstance};
@@ -158,8 +166,24 @@ usable after the private directory stops. The test peer is an explicitly started
 loopback-only process with synthetic credentials and exact child cleanup; the SDK
 does not depend on it or start a directory service.
 
-Native TLS/StartTLS selectors and search fields retain separate effect and trust
-conditions. Configuration readback does not establish a TLS handshake, trusted
-directory identity or search-filter membership. No trust store is modified and no
-certificate bypass is enabled implicitly. Full same-source platform evidence and
-the remaining directory conditions are required before broad support claims.
+The controlled search case observes an actual LDAP search after successful bind:
+`searchBaseDN=dc=example,dc=test` and `searchFilter=(uid=%s)` admit the matching
+entry. An empty search result caused by a nonmatching filter or base refuses GUI
+login despite a correct bind. These cases establish the native search requirement,
+not compatibility with every directory schema or group-membership filter.
+
+The controlled TLS and StartTLS cases observe encrypted successful binds and
+encrypted result 49 for incorrect passwords. StartTLS must complete its extended
+operation and TLS handshake before any bind credentials reach the peer. They use
+an ephemeral self-signed loopback certificate and explicitly set
+`insecure_skip_verify(true)` for the positive case. This setting bypasses server
+identity verification and is not a production trust recommendation. No trust store
+is modified and bypass is never enabled implicitly.
+
+With verification retained, native TLS refuses the untrusted self-signed
+certificate before bind. The pinned program's StartTLS path instead fails before
+TLS negotiation with `either ServerName or InsecureSkipVerify must be specified
+in the tls.Config`; it does not reach certificate validation in this case. The
+library preserves this native limitation and performs no automatic downgrade or
+bypass. A trusted-certificate positive path, further directory conditions and full
+same-source platform evidence remain required before broad support claims.

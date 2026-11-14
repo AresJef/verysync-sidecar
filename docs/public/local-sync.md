@@ -177,8 +177,10 @@ Reconcile actual partial files/status, explicitly update a changed endpoint,
 review a fresh preview, then choose a separate run. An ordinary Client does not
 acquire process ownership over an existing instance.
 
-Private recovery cases distinguish FTP's cancelled/failed run and saved action
-errors from deliberately chosen owned termination for the other protocols.
+Private recovery cases distinguish FTP's failed run and saved action errors from
+deliberately chosen owned termination for the other protocols. A peer failure can
+finish before a separate stop request arrives, so the optional native `cancelled`
+flag is preserved as observed; an acknowledged stop never fabricates cancellation.
 Each still requires unchanged source/sentinel, retained partial files, a fresh
 preview without copying, separate execution and sixteen exact completed payloads.
 An interrupted old run is never relabelled successful. Local effects and the

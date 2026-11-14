@@ -30,6 +30,9 @@ pub struct ManagedExit {
     pub forced: bool,
     /// Whether the private process group or Job has no live members.
     pub tree_stopped: bool,
+    /// Whether the owned upstream state lock was observed available after tree
+    /// exit. The separate library lease is released before publishing this report.
+    pub state_released: bool,
     /// Bounded private output, excluded from ordinary Debug text.
     pub diagnostic: ProcessDiagnostic,
 }
@@ -254,9 +257,9 @@ impl ManagedInstance {
     pub async fn wait_for_exit(&mut self) -> Result<ManagedExit> {
         loop {
             if let Some(report) = self.exit.borrow().as_ref().cloned() {
-                if !report.tree_stopped {
+                if !report.tree_stopped || !report.state_released {
                     return Err(Error::ManagedFailure {
-                        reason: "owned process-tree cleanup could not be confirmed",
+                        reason: "owned process-tree or state cleanup could not be confirmed",
                     });
                 }
                 return Ok(report);
@@ -362,7 +365,12 @@ fn owner_thread(
             }
         }
     };
-    let tree_stopped = process.finish().is_ok() && process.tree_stopped().unwrap_or(false);
+    // Process status and upstream resource release are separate observations.
+    // Use the same final five-second cleanup window rather than extending it.
+    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+    let tree_stopped =
+        process.finish_before(cleanup_deadline).is_ok() && process.tree_stopped().unwrap_or(false);
+    let state_released = tree_stopped && lease.confirm_engine_released(cleanup_deadline).is_ok();
     let _ = capture.seek(SeekFrom::Start(0));
     let mut diagnostic = Vec::new();
     let _ = Read::by_ref(&mut capture)
@@ -373,6 +381,7 @@ fn owner_thread(
         signal: exit_signal(status.as_ref()),
         forced,
         tree_stopped,
+        state_released,
         diagnostic: ProcessDiagnostic::new(diagnostic),
     };
     drop(process);

@@ -11,6 +11,9 @@ impl Client {
     /// PATCH only explicit directory fields, recheck identity and return actual
     /// readback. Does not change GUI auth mode, install certificates, perform a
     /// directory bind, retry a write or restart the native process.
+    /// The fixed program's active GUI handler can retain old LDAP fields until
+    /// an explicit GUI mode transition or program restart. Readback alone does
+    /// not establish that an existing handler uses the updated fields.
     pub async fn update_ldap_configuration(
         &self,
         patch: &LdapPatch,

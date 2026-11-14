@@ -422,13 +422,16 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
         .operation_id
         .ok_or("interrupted operation absent")?;
     let saved_results;
+    let observed_old_cancellation;
     let recovered_by_force = if protocol == StorageProtocol::Ftp {
         core.client()
             .control_local_sync_operation(&job.job_id, &operation, LocalSyncOperationControl::Stop)
             .await?;
         let failed = finished_run(&core, &job.job_id, &receipt.id).await?;
         assert!(failed.summary.completed > 0 && failed.summary.failed > 0);
-        assert_eq!(failed.cancelled, Some(true));
+        // A disconnect can finish with native errors before the separate stop
+        // request arrives. Preserve optional cancellation instead of inventing it.
+        observed_old_cancellation = failed.cancelled;
         assert!(failed
             .error
             .as_deref()
@@ -444,6 +447,7 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
             .is_some_and(|e| !e.is_empty())));
         false
     } else {
+        observed_old_cancellation = None;
         // Deliberately selected by this test caller. A protocol I/O wait may
         // outlive a native stop request; the SDK never escalates automatically.
         let unfinished = core.client().local_sync_run(&job.job_id).await?;
@@ -453,7 +457,7 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
         // while their results have not been published; no empty page is invented.
         saved_results = Vec::new();
         let terminated = core.force_stop(Duration::from_secs(10)).await?;
-        assert!(terminated.tree_stopped && terminated.forced);
+        assert!(terminated.tree_stopped && terminated.state_released && terminated.forced);
         if let Err(error) = core.restart(Duration::from_secs(30)).await {
             for name in [".verysync-sidecar-lease", "verysync.lock"] {
                 use fs2::FileExt;
@@ -574,7 +578,7 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
     recovered_peer.stop()?;
     println!(
         "public protocol disconnect recovery evidence: {}",
-        serde_json::json!({"protocol":format!("{protocol:?}"),"actual_inflight_copy_before_owned_peer_stop":true,"actual_explicit_owned_recovery":true,"actual_prior_run_receipt_retained":true,"actual_completed_partial_files_retained":true,"actual_full_partial_snapshot_stable_without_retry":true,"actual_source_and_sentinel_preserved":true,"actual_explicit_new_endpoint_readback":true,"actual_new_preview_has_remaining_actions_without_copy":true,"actual_separate_explicit_new_run":true,"actual_all_sixteen_exact_destination_payloads":true,"actual_stale_result_identity_refused":true,"actual_same_identity_and_final_normal_owned_exit":true,"partial_complete_files":partial_count,"explicit_force_before_restart":recovered_by_force,"old_native_completion_claimed":false})
+        serde_json::json!({"protocol":format!("{protocol:?}"),"actual_inflight_copy_before_owned_peer_stop":true,"actual_explicit_owned_recovery":true,"actual_prior_run_receipt_retained":true,"actual_completed_partial_files_retained":true,"actual_full_partial_snapshot_stable_without_retry":true,"actual_source_and_sentinel_preserved":true,"actual_explicit_new_endpoint_readback":true,"actual_new_preview_has_remaining_actions_without_copy":true,"actual_separate_explicit_new_run":true,"actual_all_sixteen_exact_destination_payloads":true,"actual_stale_result_identity_refused":true,"actual_same_identity_and_final_normal_owned_exit":true,"partial_complete_files":partial_count,"explicit_force_before_restart":recovered_by_force,"observed_old_run_cancelled":observed_old_cancellation,"old_native_completion_claimed":false})
     );
     std::fs::remove_dir_all(root)?;
     Ok(())
