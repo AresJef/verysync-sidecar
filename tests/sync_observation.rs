@@ -1550,9 +1550,13 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
     }
     a.client().pause_device(&b_id).await?;
     b.client().pause_device(&a_id).await?;
-    for core in [&mut b, &mut a] {
+    // End this fixture's sole active dialer first. Each owned core retains
+    // its original ten-second normal-exit requirement; no force fallback.
+    for (name, core) in [("sender", &mut a), ("receiver", &mut b)] {
+        eprintln!("selective owned normal shutdown: core={name} begin");
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+        eprintln!("selective owned normal shutdown: core={name} complete");
     }
     std::fs::remove_dir_all(root)?;
     println!(
