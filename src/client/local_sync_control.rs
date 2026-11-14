@@ -102,8 +102,8 @@ impl Client {
         }
         Ok(observed)
     }
-    /// Replace selected labels, enablement or automatic triggers in a freshly read full
-    /// native object, preserving endpoint credentials and unknown options. This
+    /// Replace selected native job settings in a freshly read full object,
+    /// preserving unselected endpoint credentials and unknown options. This
     /// is serialized for clones, but does not lock other management writers.
     pub async fn update_local_sync_job(
         &self,
@@ -114,8 +114,13 @@ impl Client {
             && patch.group.is_none()
             && patch.enabled.is_none()
             && patch.settings.is_empty()
+            && patch.side_a.is_none()
+            && patch.side_b.is_none()
         {
             return Err(invalid("Local Sync update must select at least one field"));
+        }
+        for endpoint in [&patch.side_a, &patch.side_b].into_iter().flatten() {
+            endpoint.validate_target(self.folder_path_style()?)?;
         }
         let _guard = self.connection.mutation_lock.lock().await;
         let mut job = self.local_sync_job(id).await?;
@@ -132,9 +137,36 @@ impl Client {
         if let Some(enabled) = patch.enabled {
             job.enabled = enabled;
         }
+        if let Some(endpoint) = &patch.side_a {
+            job.side_a = endpoint.clone();
+        }
+        if let Some(endpoint) = &patch.side_b {
+            job.side_b = endpoint.clone();
+        }
         let mut body = value(&job)?;
         for (key, val) in &patch.settings {
             body[key] = val.clone();
+        }
+        let mode = body
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if (mode == "bisync"
+            && body
+                .get("deleteExtraneous")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true))
+            || (patch
+                .settings
+                .get("deleteExtraneous")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+                && !matches!(mode, "mirror_a_to_b" | "mirror_b_to_a"))
+            || (patch.settings.contains_key("conflictPolicy") && mode != "bisync")
+        {
+            return Err(invalid(
+                "requested native direction, deletion and conflict settings are incompatible",
+            ));
         }
         let operation = "update Local Sync job";
         let acknowledged: LocalSyncJob = self
@@ -158,10 +190,20 @@ impl Client {
             .await
             .map_err(|e| unknown(operation, e))?;
         let observed_value = value(&configuration).map_err(|e| unknown(operation, e))?;
-        let requested_fields_match = patch
-            .label
-            .as_ref()
-            .is_none_or(|v| v == &configuration.label)
+        let mut endpoints_match = true;
+        for (name, endpoint) in [("sideA", &patch.side_a), ("sideB", &patch.side_b)] {
+            if let Some(endpoint) = endpoint {
+                let expected = value(endpoint).map_err(|e| unknown(operation, e))?;
+                endpoints_match &= observed_value
+                    .get(name)
+                    .is_some_and(|observed| requested_subset(&expected, observed));
+            }
+        }
+        let requested_fields_match = endpoints_match
+            && patch
+                .label
+                .as_ref()
+                .is_none_or(|v| v == &configuration.label)
             && patch
                 .group
                 .as_ref()
@@ -170,7 +212,7 @@ impl Client {
             && patch
                 .settings
                 .iter()
-                .all(|(k, v)| observed_value.get(k) == Some(v));
+                .all(|(k, v)| selected_job_setting_matches(k, v, observed_value.get(k)));
         Ok(LocalSyncJobUpdate {
             configuration,
             requested_fields_match,
@@ -812,14 +854,94 @@ fn page_limit(limit: u16) -> Result<()> {
         Ok(())
     }
 }
+fn selected_job_setting_matches(
+    key: &str,
+    expected: &serde_json::Value,
+    actual: Option<&serde_json::Value>,
+) -> bool {
+    actual.is_some_and(|actual| {
+        expected == actual
+            || (key == "ignoreLines"
+                && expected.as_array().is_some_and(Vec::is_empty)
+                && actual.is_null())
+    })
+}
 fn requested_subset(expected: &serde_json::Value, actual: &serde_json::Value) -> bool {
     match (expected, actual) {
-        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => a
-            .iter()
-            .all(|(key, v)| b.get(key).is_some_and(|actual| requested_subset(v, actual))),
+        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => a.iter().all(|(key, v)| {
+            match b.get(key) {
+                Some(actual)
+                    if key == "ignoreLines"
+                        && a.contains_key("sideA")
+                        && a.contains_key("sideB") =>
+                {
+                    selected_job_setting_matches(key, v, Some(actual))
+                }
+                Some(actual) => requested_subset(v, actual),
+                // Verified v2.33.2 endpoint serialization omits disabled SSH
+                // compression. Only this known SFTP false default is equivalent;
+                // missing credentials, true values and null remain mismatches.
+                None => {
+                    key == "enableCompression"
+                        && v == &serde_json::Value::Bool(false)
+                        && a.get("fsType").and_then(serde_json::Value::as_str) == Some("sftp")
+                }
+            }
+        }),
         _ => expected == actual,
     }
 }
 fn unknown(operation: &'static str, source: Error) -> Error {
     mutation_error(operation, true, source)
+}
+
+#[cfg(test)]
+mod subset_contracts {
+    use super::{requested_subset, selected_job_setting_matches};
+    use serde_json::json;
+    #[test]
+    fn only_the_observed_sftp_compression_false_default_can_be_omitted() {
+        assert!(selected_job_setting_matches(
+            "ignoreLines",
+            &json!([]),
+            Some(&json!(null))
+        ));
+        assert!(!selected_job_setting_matches(
+            "ignoreLines",
+            &json!([]),
+            None
+        ));
+        assert!(!selected_job_setting_matches(
+            "ignoreLines",
+            &json!(["*.tmp"]),
+            Some(&json!(null))
+        ));
+        assert!(!selected_job_setting_matches(
+            "password",
+            &json!([]),
+            Some(&json!(null))
+        ));
+        let expected = json!({"fsType":"sftp","enableCompression":false});
+        assert!(requested_subset(&expected, &json!({"fsType":"sftp"})));
+        assert!(!requested_subset(
+            &expected,
+            &json!({"fsType":"sftp","enableCompression":true})
+        ));
+        assert!(!requested_subset(
+            &expected,
+            &json!({"fsType":"sftp","enableCompression":null})
+        ));
+        assert!(!requested_subset(
+            &json!({"fsType":"sftp","enableCompression":true}),
+            &json!({"fsType":"sftp"})
+        ));
+        assert!(!requested_subset(
+            &json!({"fsType":"ftp","enableCompression":false}),
+            &json!({"fsType":"ftp"})
+        ));
+        assert!(!requested_subset(
+            &json!({"fsType":"sftp","password":"required"}),
+            &json!({"fsType":"sftp"})
+        ));
+    }
 }

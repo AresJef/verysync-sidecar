@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add bounded native transfer/channel preferences and full scoped Local Sync
+  endpoint, direction, ignore, file-operation and explicit mirror-deletion
+  settings. Preserve native null/omitted shapes and recognize only verified
+  clear/default readback semantics. Keep native unsupported compression and
+  unverified private-key behavior separate from configuration selection.
+
 - Verify native reverse, two-way newer/larger/manual conflicts and selected-only
   data effects independently for FTP, SFTP, SMB and WebDAV with owned protocol
   peers. Keep per-protocol authentication, in-flight and recovery conditions

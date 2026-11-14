@@ -164,7 +164,10 @@ impl StorageEndpoint {
         Ok(self)
     }
     /// Select an explicit target-system SFTP private-key file. The SDK opens no
-    /// key file or SSH configuration on the controller.
+    /// key file or SSH configuration on the controller. This selects the bundled
+    /// GUI's native path field, not proof of key authentication. The fixed
+    /// v2.33.2 macOS ARM core rejected a valid synthetic RSA path before
+    /// authentication; positive key/host-identity acceptance remains pending.
     pub fn private_key_file(mut self, path: TargetPath) -> Result<Self> {
         if self.fs_type != "sftp" {
             return Err(invalid("private key files require an SFTP endpoint"));
@@ -210,6 +213,38 @@ impl StorageEndpoint {
             extra: Extra::new(),
             input_style: Some(path.style()),
         })
+    }
+    /// Select 1..=32 native parallel transfers. This configuration does not
+    /// promise observed concurrency, compression or a throughput improvement.
+    pub fn parallel_transfers(mut self, transfers: u16) -> Result<Self> {
+        if !(1..=32).contains(&transfers) {
+            return Err(invalid("native endpoint transfers must be 1 through 32"));
+        }
+        self.transfers = transfers;
+        Ok(self)
+    }
+    /// Select 1..=256 native SFTP channels; actual transport behavior is separate.
+    pub fn sftp_channels(mut self, channels: u16) -> Result<Self> {
+        if self.fs_type != "sftp" || !(1..=256).contains(&channels) {
+            return Err(invalid(
+                "native SFTP channels require SFTP and 1 through 256",
+            ));
+        }
+        self.extra
+            .insert("sftpChannels".to_owned(), channels.into());
+        Ok(self)
+    }
+    /// Explicit SFTP compression preference. Readback is not proof of negotiated
+    /// wire compression, and the SDK starts no external SSH client. The fixed
+    /// macOS ARM baseline returned a native unsupported-operation error during
+    /// analysis when this preference was enabled; configuration is not support.
+    pub fn sftp_compression(mut self, enabled: bool) -> Result<Self> {
+        if self.fs_type != "sftp" {
+            return Err(invalid("native SSH compression requires an SFTP endpoint"));
+        }
+        self.extra
+            .insert("enableCompression".to_owned(), enabled.into());
+        Ok(self)
     }
     /// Exact upstream backend category, including an unknown future value.
     pub fn filesystem_type(&self) -> &str {
@@ -575,6 +610,8 @@ pub struct CreateLocalSyncJob {
     watch_check_interval_min: Option<u32>,
     parallel_file_ops: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
+    ignore_lines: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     conflict_policy: Option<LocalSyncConflictPolicy>,
 }
 impl CreateLocalSyncJob {
@@ -617,6 +654,7 @@ impl CreateLocalSyncJob {
             schedule: LocalSyncSchedule::off(),
             watch_check_interval_min: None,
             parallel_file_ops: 1,
+            ignore_lines: None,
             conflict_policy: None,
         })
     }
@@ -645,6 +683,20 @@ impl CreateLocalSyncJob {
     pub fn schedule(mut self, schedule: LocalSyncSchedule) -> Self {
         self.schedule = schedule;
         self
+    }
+    /// Select 1..=32 simultaneous native file operations, without a concurrency
+    /// or performance guarantee.
+    pub fn parallel_file_operations(mut self, operations: u8) -> Result<Self> {
+        parallel_operations(operations)?;
+        self.parallel_file_ops = operations;
+        Ok(self)
+    }
+    /// Select exact bounded native Local Sync ignore rules. No controller ignore
+    /// file is opened, and include-file directives are not supported here.
+    pub fn ignore_lines(mut self, lines: Vec<String>) -> Result<Self> {
+        validate_ignore_lines(&lines)?;
+        self.ignore_lines = Some(lines);
+        Ok(self)
     }
     /// Select the native simultaneous-change policy for a two-way job.
     /// No conflict is resolved or file changed by constructing this option.
@@ -761,8 +813,74 @@ pub struct LocalSyncJobPatch {
     pub(crate) group: Option<String>,
     pub(crate) enabled: Option<bool>,
     pub(crate) settings: Extra,
+    pub(crate) side_a: Option<StorageEndpoint>,
+    pub(crate) side_b: Option<StorageEndpoint>,
 }
 impl LocalSyncJobPatch {
+    /// Replace the first explicitly selected target-side endpoint. This can
+    /// change future data destinations and invalidate a two-way baseline.
+    pub fn side_a(mut self, endpoint: StorageEndpoint) -> Self {
+        self.side_a = Some(endpoint);
+        self
+    }
+    /// Replace the second explicitly selected target-side endpoint. Unselected
+    /// endpoint credentials remain as read; no file is migrated by the SDK.
+    pub fn side_b(mut self, endpoint: StorageEndpoint) -> Self {
+        self.side_b = Some(endpoint);
+        self
+    }
+    /// Select a native direction. Incompatible mirror deletion or selected
+    /// conflict settings are refused against the fresh complete configuration.
+    pub fn mode(mut self, mode: LocalSyncMode) -> Self {
+        self.settings.insert(
+            "mode".to_owned(),
+            match mode {
+                LocalSyncMode::MirrorAToB => "mirror_a_to_b",
+                LocalSyncMode::MirrorBToA => "mirror_b_to_a",
+                LocalSyncMode::Bidirectional => "bisync",
+            }
+            .into(),
+        );
+        self
+    }
+    /// Explicitly choose mirror deletion of destination-only files. This is
+    /// destructive, has no rollback and is refused for two-way/unknown modes.
+    pub fn delete_extraneous(mut self, allow: bool) -> Self {
+        self.settings
+            .insert("deleteExtraneous".to_owned(), allow.into());
+        self
+    }
+    /// Select a two-way conflict preference without resolving an existing plan.
+    pub fn conflict_policy(mut self, policy: LocalSyncConflictPolicy) -> Self {
+        self.settings.insert(
+            "conflictPolicy".to_owned(),
+            match policy {
+                LocalSyncConflictPolicy::Newer => "newer",
+                LocalSyncConflictPolicy::Larger => "larger",
+                LocalSyncConflictPolicy::Manual => "manual",
+            }
+            .into(),
+        );
+        self
+    }
+    /// Select exact bounded Local Sync ignore rules; no include file is opened.
+    pub fn ignore_lines(mut self, lines: Vec<String>) -> Result<Self> {
+        validate_ignore_lines(&lines)?;
+        self.settings.insert(
+            "ignoreLines".to_owned(),
+            serde_json::Value::Array(lines.into_iter().map(Into::into).collect()),
+        );
+        Ok(self)
+    }
+    /// Select 1..=32 native file operations. This is configuration readback,
+    /// separate from actual parallelism or a performance result.
+    pub fn parallel_file_operations(mut self, operations: u8) -> Result<Self> {
+        parallel_operations(operations)?;
+        self.settings
+            .insert("parallelFileOps".to_owned(), operations.into());
+        Ok(self)
+    }
+
     /// Explicitly request startup synchronization. Enabling it can cause writes
     /// immediately or at a future core start; inspect actual readback separately.
     pub fn sync_on_startup(mut self, enabled: bool) -> Self {
@@ -1188,6 +1306,33 @@ fn watch_interval(minutes: u32) -> Result<()> {
     }
 }
 
+fn parallel_operations(operations: u8) -> Result<()> {
+    if (1..=32).contains(&operations) {
+        Ok(())
+    } else {
+        Err(invalid("native file operations must be 1 through 32"))
+    }
+}
+fn validate_ignore_lines(lines: &[String]) -> Result<()> {
+    if lines.len() > 1024
+        || lines.iter().any(|line| {
+            line.len() > 4096
+                || line.contains(['\0', '\r', '\n'])
+                || line.split_whitespace().next() == Some("#include")
+        })
+        || lines
+            .iter()
+            .try_fold(0usize, |sum, line| sum.checked_add(line.len() + 1))
+            .is_none_or(|n| n > 65536)
+    {
+        Err(invalid(
+            "Local Sync ignore rules exceed their bounds or request unsupported include files",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod contract_tests {
     use super::*;
@@ -1278,6 +1423,36 @@ mod contract_tests {
             .watch_changes(true, 525601)
             .is_err());
         assert!(LocalSyncJobPatch::default().watch_changes(true, 0).is_ok());
+    }
+    #[test]
+    fn endpoint_and_job_configuration_bounds_preserve_explicit_scope() {
+        let ftp = StorageEndpoint::remote(StorageProtocol::Ftp, "ftp://example.invalid/").unwrap();
+        assert!(ftp.clone().parallel_transfers(0).is_err());
+        assert!(ftp.clone().parallel_transfers(33).is_err());
+        assert!(ftp.clone().sftp_channels(1).is_err());
+        assert!(ftp.sftp_compression(true).is_err());
+        let sftp =
+            StorageEndpoint::remote(StorageProtocol::Sftp, "sftp://example.invalid/").unwrap();
+        assert!(sftp.clone().sftp_channels(0).is_err());
+        assert!(sftp.clone().sftp_channels(257).is_err());
+        assert!(sftp.sftp_channels(256).is_ok());
+        for n in [0, 33] {
+            assert!(LocalSyncJobPatch::default()
+                .parallel_file_operations(n)
+                .is_err());
+        }
+        for lines in [
+            vec!["#include secrets".to_owned()],
+            vec!["line\nother".to_owned()],
+            vec!["a".repeat(4097)],
+            vec!["a".repeat(4096); 17],
+            vec!["x".to_owned(); 1025],
+        ] {
+            assert!(LocalSyncJobPatch::default().ignore_lines(lines).is_err());
+        }
+        assert!(LocalSyncJobPatch::default()
+            .ignore_lines(vec!["#includedummy comment".to_owned(), "*.tmp".to_owned()])
+            .is_ok());
     }
     #[test]
     fn selection_ranges_keep_zero_and_refuse_overflow_overlap_and_outside_ids() {
