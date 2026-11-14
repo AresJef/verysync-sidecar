@@ -11,6 +11,7 @@ mod file_transfer;
 mod folder_options;
 mod gui_listener;
 mod gui_preferences;
+mod gui_resources;
 mod history_control;
 mod ignore_control;
 mod invitation_control;

@@ -127,3 +127,58 @@ impl fmt::Debug for PendingNativeLink {
             .finish_non_exhaustive()
     }
 }
+
+/// Private GUI metadata returned by the native `meta.js` resource. The library
+/// parses its fixed JSON assignment without evaluating JavaScript.
+#[derive(Clone, Deserialize)]
+pub struct NativeGuiMetadata {
+    /// Native authentication observation for this request.
+    pub authenticated: bool,
+    /// Native certificate identity, checked against the connected instance.
+    #[serde(rename = "deviceID")]
+    pub device_id: crate::DeviceId,
+    /// Native short display identity, not a globally unique lookup key.
+    #[serde(rename = "deviceIDShort")]
+    pub short_device_id: String,
+    /// Whether the native GUI reports authentication enabled.
+    #[serde(rename = "isAuthEnabled")]
+    pub authentication_enabled: bool,
+    /// Other bounded native metadata, retained as private data.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for NativeGuiMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeGuiMetadata")
+            .field("authenticated", &self.authenticated)
+            .field("authentication_enabled", &self.authentication_enabled)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The native QR resource's bounded PNG bytes. The data can encode private
+/// sharing credentials. Its signature/IHDR and declared media type are checked;
+/// the library does not decode images or display them on the caller's system.
+#[derive(Clone)]
+pub struct NativeQrCode {
+    pub(crate) bytes: Vec<u8>,
+    /// Width from the PNG's IHDR, in pixels.
+    pub width: u32,
+    /// Height from the PNG's IHDR, in pixels.
+    pub height: u32,
+}
+impl NativeQrCode {
+    /// Explicitly borrow the private native image bytes.
+    pub fn png_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+impl fmt::Debug for NativeQrCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeQrCode")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("byte_count", &self.bytes.len())
+            .finish()
+    }
+}

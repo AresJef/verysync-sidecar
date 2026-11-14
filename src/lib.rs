@@ -51,6 +51,7 @@
 #![doc = include_str!("../docs/public/gui-listener.md")]
 #![doc = include_str!("../docs/public/target-directories.md")]
 #![doc = include_str!("../docs/public/native-helpers.md")]
+#![doc = include_str!("../docs/public/native-gui-resources.md")]
 
 mod auth;
 mod auxiliary;
@@ -105,8 +106,8 @@ mod upgrades;
 
 pub use auth::{ApiKey, DeviceId};
 pub use auxiliary::{
-    NativeUsageReport, PendingNativeLink, TargetDirectoryCreation, TargetDirectoryEntry,
-    TargetDirectoryLocation, TargetIpLocation,
+    NativeGuiMetadata, NativeQrCode, NativeUsageReport, PendingNativeLink, TargetDirectoryCreation,
+    TargetDirectoryEntry, TargetDirectoryLocation, TargetIpLocation,
 };
 pub use capabilities::{
     library_capabilities, Capability, CapabilityReport, ImplementationStatus, InstanceConditions,
