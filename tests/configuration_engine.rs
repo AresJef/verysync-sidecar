@@ -3,6 +3,8 @@
 mod device_options_cases;
 #[path = "common/folder_options_cases.rs"]
 mod folder_options_cases;
+#[path = "common/folder_policy_cases.rs"]
+mod folder_policy_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/process_priority.rs"]

@@ -7,6 +7,18 @@ use std::{collections::BTreeMap, fmt};
 /// false or zero. Matching configuration is not proof of platform or data effects.
 #[derive(Clone, Deserialize)]
 pub struct FolderAdvancedConfig {
+    /// Actual native folder type, independent of sharing-key permission.
+    #[serde(rename = "type")]
+    pub folder_type: Option<crate::FolderType>,
+    /// Configured native block pull order.
+    #[serde(rename = "blockPullOrder")]
+    pub block_pull_order: Option<crate::BlockPullOrder>,
+    /// Configured native copy strategy; not proof of its actual syscall path.
+    #[serde(rename = "copyRangeMethod")]
+    pub copy_range_method: Option<crate::CopyRangeMethod>,
+    /// Actual ordered native extended-attribute filter and size selectors.
+    #[serde(rename = "xattrFilter")]
+    pub extended_attribute_filter: Option<crate::ExtendedAttributeFilter>,
     /// Native permission-bit ignore selection.
     #[serde(rename = "ignorePerms")]
     pub ignore_permissions: Option<bool>,
@@ -108,6 +120,14 @@ impl fmt::Debug for FolderAdvancedConfig {
 /// is implied. In particular, disabling fsync can reduce target durability.
 #[derive(Clone, Default, Serialize)]
 pub struct FolderAdvancedPatch {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    folder_type: Option<crate::FolderType>,
+    #[serde(rename = "blockPullOrder", skip_serializing_if = "Option::is_none")]
+    block_pull_order: Option<crate::BlockPullOrder>,
+    #[serde(rename = "copyRangeMethod", skip_serializing_if = "Option::is_none")]
+    copy_range_method: Option<crate::CopyRangeMethod>,
+    #[serde(rename = "xattrFilter", skip_serializing_if = "Option::is_none")]
+    extended_attribute_filter: Option<crate::ExtendedAttributeFilter>,
     #[serde(rename = "ignorePerms", skip_serializing_if = "Option::is_none")]
     ignore_permissions: Option<bool>,
     #[serde(rename = "autoNormalize", skip_serializing_if = "Option::is_none")]
@@ -173,6 +193,27 @@ pub struct FolderAdvancedPatch {
     tags: Option<Vec<String>>,
 }
 impl FolderAdvancedPatch {
+    /// Select native folder type. Existing transitions to/from receive-encrypted
+    /// are refused; select it during initial registration instead.
+    pub fn folder_type(mut self, value: crate::FolderType) -> Self {
+        self.folder_type = Some(value);
+        self
+    }
+    /// Select native block order without claiming a particular transfer order.
+    pub fn block_pull_order(mut self, value: crate::BlockPullOrder) -> Self {
+        self.block_pull_order = Some(value);
+        self
+    }
+    /// Select a native copy method without assuming platform/filesystem support.
+    pub fn copy_range_method(mut self, value: crate::CopyRangeMethod) -> Self {
+        self.copy_range_method = Some(value);
+        self
+    }
+    /// Replace ordered attribute rules and explicit native size selectors.
+    pub fn extended_attribute_filter(mut self, value: crate::ExtendedAttributeFilter) -> Self {
+        self.extended_attribute_filter = Some(value);
+        self
+    }
     /// Native permission-bit ignore selection.
     pub fn ignore_permissions(mut self, value: bool) -> Self {
         self.ignore_permissions = Some(value);
@@ -309,6 +350,23 @@ impl FolderAdvancedPatch {
         self
     }
     pub(crate) fn validate(&self) -> Result<()> {
+        if matches!(self.folder_type, Some(crate::FolderType::Unknown(_)))
+            || matches!(
+                self.block_pull_order,
+                Some(crate::BlockPullOrder::Unknown(_))
+            )
+            || matches!(
+                self.copy_range_method,
+                Some(crate::CopyRangeMethod::Unknown(_))
+            )
+        {
+            return Err(invalid(
+                "unknown folder policy cannot be submitted by a typed mutation",
+            ));
+        }
+        if let Some(filter) = &self.extended_attribute_filter {
+            filter.validate()?;
+        }
         if [
             self.copiers,
             self.hashers,
@@ -346,6 +404,24 @@ impl FolderAdvancedPatch {
     pub(crate) fn body(&self) -> Result<serde_json::Value> {
         self.validate()?;
         serde_json::to_value(self).map_err(|_| invalid("advanced folder patch cannot be encoded"))
+    }
+    pub(crate) fn validate_existing(&self, current: &crate::FolderConfig) -> Result<()> {
+        if let Some(desired) = &self.folder_type {
+            let previous = current
+                .extra
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| invalid("existing folder type is absent or invalid"))?;
+            if previous != desired.native_name()
+                && (previous == "receiveencrypted"
+                    || matches!(desired, crate::FolderType::ReceiveEncrypted))
+            {
+                return Err(invalid(
+                    "existing folder cannot transition to or from receive-encrypted",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 impl fmt::Debug for FolderAdvancedPatch {

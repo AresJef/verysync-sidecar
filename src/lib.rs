@@ -66,6 +66,7 @@ mod file_mutations;
 mod file_transfers;
 mod files;
 mod folder_options;
+mod folder_policies;
 mod folders;
 mod gui_listener;
 mod gui_preferences;
@@ -142,6 +143,9 @@ pub use files::{
     ResourceChecksum, ResourceInfo, ResourcePath, ResourcePreview, ResourceVolume, ResourceVolumeId,
 };
 pub use folder_options::{FolderAdvancedConfig, FolderAdvancedPatch};
+pub use folder_policies::{
+    BlockPullOrder, CopyRangeMethod, ExtendedAttributeFilter, ExtendedAttributeRule, FolderType,
+};
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
 pub use gui_listener::{
     GuiListenAddress, GuiListenerConfig, GuiListenerPatch, GuiListenerUpdate, GuiSocketPermissions,

@@ -598,6 +598,11 @@ impl Client {
     /// scanning and synchronization can continue afterward; inspect folder status.
     /// After cancellation or MutationOutcomeUnknown, read the ID before retrying.
     pub async fn create_folder(&self, options: &CreateFolderOptions) -> Result<FolderConfig> {
+        let advanced = options
+            .advanced
+            .as_ref()
+            .map(crate::FolderAdvancedPatch::body)
+            .transpose()?;
         let style = self.folder_path_style()?;
         if options.path.style() != style {
             return Err(Error::InvalidPath {
@@ -631,6 +636,15 @@ impl Client {
             .await?;
         defaults.insert("id".to_owned(), serde_json::json!(options.id.as_str()));
         defaults.insert("path".to_owned(), serde_json::json!(path));
+        if let Some(body) = advanced {
+            defaults.extend(
+                body.as_object()
+                    .ok_or(Error::InvalidConfiguration {
+                        reason: "initial folder settings must be an object",
+                    })?
+                    .clone(),
+            );
+        }
         if let Some(label) = &options.label {
             defaults.insert("label".to_owned(), serde_json::json!(label));
         }
@@ -644,12 +658,22 @@ impl Client {
                 &serde_json::Value::Object(defaults),
             )
             .await?;
-        self.folder(&options.id)
-            .await
-            .map_err(|source| Error::MutationOutcomeUnknown {
-                operation: "read back created folder",
-                source: Box::new(source),
-            })
+        let configuration =
+            self.folder(&options.id)
+                .await
+                .map_err(|source| Error::MutationOutcomeUnknown {
+                    operation: "read back created folder",
+                    source: Box::new(source),
+                })?;
+        if options.advanced.is_some() {
+            configuration.advanced_configuration().map_err(|source| {
+                Error::MutationOutcomeUnknown {
+                    operation: "read back created folder",
+                    source: Box::new(source),
+                }
+            })?;
+        }
+        Ok(configuration)
     }
 
     /// Change only the requested fields, then return actual configuration readback.
