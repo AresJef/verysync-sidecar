@@ -320,6 +320,15 @@ Captured argument bytes and the owned executable are removed after the suite;
 only sanitized identity/count/removal metadata remains in shared evidence.
 The library neither installs this helper nor changes caller/global environments.
 
+The dedicated wallpaper suite is run twice: ordinary blocked egress must
+produce a typed source error, and the explicit --allow-wallpaper-source run
+requires an actual image plus conditional 304. That flag is refused for other
+suites and appends only the Bing domain suffix to the owned child proxy bypass.
+It never changes the caller or OS environment. Proxy summaries state the bypass
+separately; they are not proof of system-wide network isolation. Both native
+outcomes are mandatory CI steps; no provider response is replaced with a mock
+image and no upstream picture/body is stored in shared evidence.
+
 ## Public content
 
 The repository tracks source, tests, English user documentation, CI and sanitized
