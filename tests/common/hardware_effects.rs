@@ -75,6 +75,53 @@ fn trace_hardware<T>(component: &'static str, result: &verysync_sidecar::Result<
     );
 }
 
+#[cfg(all(target_os = "linux", target_arch = "s390x"))]
+fn trace_s390x_cpu_prerequisites() {
+    use std::io::Read;
+    let read_bounded = |path: &std::path::Path, limit: u64| {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(limit + 1).read_to_end(&mut bytes))
+            .ok()
+            .filter(|_| bytes.len() as u64 <= limit)
+            .map(|_| bytes)
+    };
+    let cpuinfo = read_bounded(std::path::Path::new("/proc/cpuinfo"), 1_048_576);
+    let text = cpuinfo
+        .as_deref()
+        .and_then(|bytes| std::str::from_utf8(bytes).ok());
+    let exact_processor_key = text.map(|text| {
+        text.lines().any(|line| {
+            line.split_once(':')
+                .is_some_and(|(key, _)| key.trim() == "processor")
+        })
+    });
+    let s390_processor_record = text.map(|text| {
+        text.lines().any(|line| {
+            line.split_once(':').is_some_and(|(key, value)| {
+                key.trim().strip_prefix("processor ").is_some_and(|id| {
+                    !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())
+                }) && value.contains("version")
+            })
+        })
+    });
+    let binary = std::env::var_os("VERYSYNC_TEST_BINARY")
+        .and_then(|path| read_bounded(std::path::Path::new(&path), 67_108_864));
+    let ghw_013 = binary.as_ref().map(|bytes| {
+        let record = b"\ndep\tgithub.com/jaypipes/ghw\tv0.13.0\t";
+        bytes.windows(record.len()).any(|window| window == record)
+    });
+    println!(
+        "native s390x CPU prerequisites: {}",
+        serde_json::json!({
+            "explicit_s390x_emulation_profile":std::env::var("VERYSYNC_TEST_EMULATION_PROFILE").ok().as_deref()==Some("linux-s390x-standard"),
+            "guest_cpuinfo_bounded_utf8":text.is_some(),"exact_processor_key_present":exact_processor_key,
+            "s390_processor_record_present":s390_processor_record,"fixed_core_ghw_013_build_record":ghw_013,
+            "original_positive_cpu_assertion_unchanged":true,"hardware_attributes_omitted":true
+        })
+    );
+}
+
 #[tokio::test]
 async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state() -> TestResult {
     let root = tempfile::Builder::new()
@@ -102,6 +149,12 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
     // Complete each independent read once before propagating any failure.
     // Native empty/refused inventory is separate from positive hardware data.
     let cpu = cpu?;
+    #[cfg(all(target_os = "linux", target_arch = "s390x"))]
+    if cpu.total_cores == 0 || cpu.total_threads == 0 {
+        trace_s390x_cpu_prerequisites();
+        println!("native s390x CPU shape: total_cores_zero={} total_threads_zero={} processors_reported={} processors_empty={}",
+            cpu.total_cores==0,cpu.total_threads==0,cpu.processors.is_some(),cpu.processors.as_ref().is_some_and(Vec::is_empty));
+    }
     assert!(cpu.total_cores > 0 && cpu.total_threads > 0);
     assert!(!cpu
         .processors

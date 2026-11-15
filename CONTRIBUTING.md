@@ -87,6 +87,10 @@ panic case. POWER8 is the selected profile; bounded POWER9/POWER10 observations
 cannot replace its result. A failed standalone unwind prevents starting a native
 core for those SDK cases. This separates runtime prerequisites from SDK cleanup.
 
+S390x zero-CPU failures record bounded guest procfs shape and the fixed core's
+ghw dependency record without printing hardware attributes or changing the
+positive CPU-data assertion. Native inventory effects remain a separate gate.
+
 ```sh
 cargo +1.85.0 fetch --locked
 python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \
