@@ -5,6 +5,9 @@ use std::{
     time::Duration,
 };
 use verysync_sidecar::{Error, ManagedInstance};
+#[cfg(windows)]
+#[path = "native_opener_trace.rs"]
+mod native_opener_trace;
 
 #[tokio::test]
 async fn actual_native_target_path_completions_preserve_prefixes_selectors_and_owned_data(
@@ -1306,6 +1309,8 @@ async fn actual_native_folder_open_requests_capture_exact_owned_target_dispatch(
         )
         .await?;
     let identity = owner.client().instance().device_id.clone();
+    #[cfg(windows)]
+    let _dispatch_trace = native_opener_trace::Trace::maybe_start(owner.process_id(), &capture);
     for (location, expected) in [
         (NativeFolderOpenLocation::Folder, &data),
         (NativeFolderOpenLocation::Trash, &archive),
@@ -1337,6 +1342,18 @@ async fn actual_native_folder_open_requests_capture_exact_owned_target_dispatch(
         })
         .await;
         if dispatched.as_ref().is_err() || dispatched.as_ref().is_ok_and(|result| result.is_err()) {
+            let locality = match tokio::time::timeout(
+                Duration::from_secs(1),
+                owner.client().core_log_text(None),
+            )
+            .await
+            {
+                Ok(Ok(log)) => {
+                    serde_json::json!({"available":true,"known_native_locality_denial_marker":log.text.contains("Open Folder Remote access UI can not open directory"),"raw_text_logged":false})
+                }
+                _ => serde_json::json!({"available":false,"raw_text_logged":false}),
+            };
+            eprintln!("native opener locality observation: {locality}");
             eprintln!(
                 "native folder opener dispatch diagnostic: {}",
                 serde_json::json!({
