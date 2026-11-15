@@ -83,8 +83,45 @@ def prepare_native_opener(cargo, toolchain, evidence_dir, env):
     env["VERYSYNC_TEST_OPENER_EXECUTABLE"] = str(executable)
     return {"fixture_only": True, "name": name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
 
+def mount_namespace_identity():
+    return os.readlink("/proc/self/ns/mnt")
+
+
+def isolate_linux_browser(command, evidence_dir, env):
+    if env.get("GITHUB_ACTIONS") != "true" or env.get("RUNNER_OS") != "Linux" or os.getuid() == 0:
+        raise ValueError("browser mount isolation requires an unprivileged isolated GitHub Linux VM")
+    runner_temp = Path(env["RUNNER_TEMP"]).resolve(strict=True)
+    if not evidence_dir.resolve(strict=True).is_relative_to(runner_temp):
+        raise ValueError("browser fixture must be inside the explicit runner temporary root")
+    invalid = evidence_dir / "owned-native-opener" / "invalid-native-browser"
+    invalid.write_bytes(b"owned invalid browser executable; deliberately no executable header\n")
+    invalid.chmod(0o755)
+    env["VERYSYNC_TEST_BROWSER_ISOLATION"] = "linux-private-mount-fallback-v1"
+    allowed = {"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL",
+               "CARGO_HOME", "CARGO_TARGET_DIR", "CARGO_NET_OFFLINE", "CARGO_TERM_COLOR",
+               "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
+               "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+               "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+               "GITHUB_ACTIONS", "RUNNER_OS", "RUNNER_TEMP", "RUNNER_TRACKING_ID",
+               "VERYSYNC_TEST_BINARY", "VERYSYNC_TEST_BINARY_SHA256",
+               "VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE",
+               "VERYSYNC_TEST_BROWSER_HOLD", "VERYSYNC_TEST_BROWSER_ISOLATION", "BROWSER"}
+    plan = {"uid": os.getuid(), "gid": os.getgid(), "groups": os.getgroups(), "caller_pid": os.getpid(),
+            "parent_namespace": mount_namespace_identity(), "invalid_source": str(invalid),
+            "command": command, "cwd": str(Path(__file__).resolve().parents[1]),
+            "receipt": str(evidence_dir / "browser-mount-namespace.json"),
+            "env": {key: value for key, value in env.items() if key in allowed}}
+    payload = evidence_dir / "private-browser-mount-plan.json"
+    with open(payload, "x", encoding="utf-8", opener=lambda p, f: os.open(p, f, 0o600)) as output:
+        json.dump(plan, output)
+    return ["sudo", "--non-interactive", "/usr/bin/unshare", "--mount", "--propagation", "private", "--fork",
+            sys.executable, str(Path(__file__).with_name("browser-linux-namespace.py")), str(payload)]
+
+
 def isolate_browser_command(command, evidence_dir, env):
     """Test-only pinned macOS native Chrome rejection and owned open fallback."""
+    if sys.platform == "linux":
+        return isolate_linux_browser(command, evidence_dir, env)
     if sys.platform != "darwin":
         raise ValueError("native browser selector isolation not verified on this platform")
     profile = evidence_dir / "browser-exec.sb"

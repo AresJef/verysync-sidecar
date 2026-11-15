@@ -408,8 +408,8 @@ through its existing owner type. A dispatched desktop request cannot
 promise graphical rollback after native failure or caller cancellation.
 
 `browser_engine` executes the pinned native CLI through a separate helper state.
-Run it through `run-isolated-engine-tests.py`, which currently requires macOS
-and applies a temporary policy denying all eight pinned Chrome candidates.
+Run it through `run-isolated-engine-tests.py`. On macOS the wrapper applies
+a temporary policy denying all eight pinned Chrome candidates.
 Native application mode ignores `BROWSER`; the test captures its `open` fallback
 using the exact owned fixture. The actor continues after the native root result,
 then explicitly stops. The outer wrapper checks each exact actor PID for actual
@@ -437,3 +437,17 @@ library cancellation. The only native unsafe call in this test fixture is a
 narrowly scoped read of its own direct parent PID. The temporary policy blocks
 the four enumerated browser bundles and four native executable paths; it leaves
 the runner's Xcode toolchain usable during Cargo compilation.
+
+The Linux browser fixture is restricted to an explicit GitHub Linux VM and
+runner temporary root. A one-shot `sudo unshare --mount` setup verifies the
+original wrapper's kernel PID ancestry, UID/groups and distinct mount namespace,
+makes mount propagation private, and binds exact invalid bytes only over the
+five pinned Chrome candidates that exist. It drops to the original UID/groups
+and requires zero effective/permitted/ambient capabilities before executing
+Cargo or SDK code. The CLI's fallback then reaches the owned `xdg-open` fixture.
+No host browser file is overwritten, no daemon is installed, and foreign
+programs are not executed locally. The plan copies an environment allowlist
+that excludes registry/publishing/cloud credentials. This fixture still needs
+native Linux acceptance; its cancellation integration remains a separate gap.
+Windows browser execution remains refused until its distinct ShellExecute
+fallback can be controlled. Both native outcome gaps remain explicit.
