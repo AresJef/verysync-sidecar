@@ -773,3 +773,120 @@ async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity()
     eprintln!("native storage paths evidence: {{\"actual_complete_nine_native_paths\":true,\"explicit_owned_home_and_profile\":true,\"absent_default_directory_stays_absent\":true,\"running_owner_refused\":true,\"invalid_deadlines_refused\":true,\"configuration_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"synthetic_sample_retained\":true,\"both_normal_owned_tree_exits\":true}}");
     Ok(())
 }
+
+#[tokio::test]
+async fn actual_native_completion_instructions_keep_private_text_and_owned_profile() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        LocalProgram, ManagedOptions, NativeCompletionAction, NativeCompletionOutcome,
+    };
+    let root = tempfile::Builder::new()
+        .prefix("vcomplete-")
+        .tempdir()?
+        .keep();
+    let state = root.join("core");
+    let selected = options(&state)?;
+    let filename = if cfg!(windows) {
+        "owned engine \u{4e8c}.exe"
+    } else {
+        "owned engine \u{4e8c}"
+    };
+    let program = root.join(filename);
+    std::fs::copy(selected.program().path(), &program)?;
+    let digest: [u8; 32] = Sha256::digest(std::fs::read(&program)?).into();
+    #[cfg(unix)]
+    let endpoint = verysync_sidecar::ManagementEndpoint::unix_socket(state.join("gui.sock"))?;
+    #[cfg(windows)]
+    let endpoint = {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        verysync_sidecar::ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?
+    };
+    let opts = ManagedOptions::new(
+        LocalProgram::new(&program)?.expected_sha256(digest),
+        &state,
+        endpoint,
+    )?
+    .startup_timeout(Duration::from_secs(25))?;
+    let mut core = ManagedInstance::start(opts).await?;
+    let id = core.client().instance().device_id.clone();
+    assert!(matches!(
+        core.native_completion_instructions(
+            NativeCompletionAction::Install,
+            Duration::from_secs(10)
+        )
+        .await,
+        Err(verysync_sidecar::Error::ManagedFailure { .. })
+    ));
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    let protected = [
+        "setting.dat",
+        "key.pem",
+        "cert.pem",
+        "https-key.pem",
+        "https-cert.pem",
+    ];
+    let before = protected
+        .iter()
+        .map(|n| std::fs::read(core.state_directory().join(n)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let sentinel = core.state_directory().join("profile").join(".zshrc");
+    let bytes = b"synthetic shell customization must remain unchanged\n";
+    std::fs::write(&sentinel, bytes)?;
+    assert!(matches!(
+        core.native_completion_instructions(NativeCompletionAction::Install, Duration::ZERO)
+            .await,
+        Err(verysync_sidecar::Error::InvalidConfiguration { .. })
+    ));
+    #[cfg(unix)]
+    {
+        let outside = root.join("outside-profile.txt");
+        std::fs::write(&outside, b"outside owned-state boundary")?;
+        let alias = core
+            .state_directory()
+            .join("profile")
+            .join("unexpected-alias");
+        std::os::unix::fs::symlink(&outside, &alias)?;
+        assert!(matches!(
+            core.native_completion_instructions(
+                NativeCompletionAction::Install,
+                Duration::from_secs(10)
+            )
+            .await,
+            Err(verysync_sidecar::Error::UnmanagedState)
+        ));
+        assert_eq!(std::fs::read(&outside)?, b"outside owned-state boundary");
+        assert_eq!(std::fs::read(&sentinel)?, bytes);
+        std::fs::remove_file(alias)?;
+    }
+    for action in [
+        NativeCompletionAction::Install,
+        NativeCompletionAction::Uninstall,
+    ] {
+        let exit = core
+            .native_completion_instructions(action, Duration::from_secs(10))
+            .await?;
+        assert_eq!(exit.action, action);
+        assert_eq!(exit.code, Some(0));
+        assert!(exit.tree_stopped);
+        assert_eq!(exit.outcome, NativeCompletionOutcome::InstructionText);
+        let text = exit
+            .instruction_text()
+            .ok_or("missing native completion instructions")?;
+        assert!(text.contains(filename));
+        assert_eq!(text.as_bytes(), exit.diagnostic.body_bytes());
+        assert!(!format!("{exit:?}").contains(filename));
+        assert_eq!(std::fs::read(&sentinel)?, bytes);
+        for (n, expected) in protected.iter().zip(&before) {
+            assert_eq!(&std::fs::read(core.state_directory().join(n))?, expected);
+        }
+    }
+    core.restart(Duration::from_secs(10)).await?;
+    assert_eq!(core.client().instance().device_id, id);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert_eq!(std::fs::read(&sentinel)?, bytes);
+    std::fs::remove_dir_all(&root)?;
+    eprintln!("native completion evidence: {{\"actual_install_and_uninstall_text\":true,\"unicode_and_space_program_path_preserved\":true,\"no_sdk_shell_evaluation\":true,\"synthetic_shell_configuration_retained\":true,\"private_state_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"both_normal_owned_tree_exits\":true}}");
+    Ok(())
+}

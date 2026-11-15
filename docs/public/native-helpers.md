@@ -276,3 +276,49 @@ if exit.outcome == NativeStoragePathsOutcome::Success {
 }
 # Ok(()) }
 ```
+
+## Native shell completion instructions
+
+`native_completion_instructions(action, timeout)` explicitly invokes the native
+`install-completions` command, optionally with `--uninstall`, on a confirmed
+stopped owned instance. `NativeCompletionAction` selects the exact native flag.
+The method retains the executable hash check, private state lease/profile,
+bounded 64 KiB capture, alias rejection, cancellation and contained cleanup.
+Running owners and invalid deadlines are rejected. The private state traversal
+does not inspect registered synchronization roots.
+
+`NativeCompletionExit` preserves the actual native code, exact private output
+and action. `InstructionText` means exit zero and nonempty UTF-8 text without
+NUL; `instruction_text()` borrows those exact bytes as text. It does not certify
+valid shell syntax, the correct shell, installation, removal, or effective
+completion. Empty/malformed text and nonzero exits remain separate outcomes.
+Debug hides the output. The SDK never evaluates, quotes, rewrites or executes
+the returned instructions, and never changes the caller's environment.
+
+The fixed macOS v2.33.2 program printed the same two zsh instruction lines for
+both actions and for the tested `SHELL` environment values. It preserved the
+synthetic shell customization and all protected state/identity material.
+Executable paths containing spaces and Unicode remain literal in the native
+text, including its original shell quoting choices. Other platforms retain
+their own native results and require corresponding execution evidence.
+
+Native helper initialization or another platform's native action can affect
+its explicit owned profile. Post-dispatch errors or deadlines therefore remain
+uncertain mutations without automatic retry. State aliases/reparse points are
+refused before invocation. Like other stopped CLI commands, this invalidates
+the previous clean-generation backup eligibility.
+
+```no_run
+# async fn example(core: &mut verysync_sidecar::ManagedInstance) -> verysync_sidecar::Result<()> {
+use std::time::Duration;
+use verysync_sidecar::{NativeCompletionAction, NativeCompletionOutcome};
+core.shutdown(Duration::from_secs(10)).await?;
+let exit = core.native_completion_instructions(
+    NativeCompletionAction::Install, Duration::from_secs(10),
+).await?;
+if exit.outcome == NativeCompletionOutcome::InstructionText {
+    let exact_native_text = exit.instruction_text();
+    let _ = exact_native_text; // Present or review it under caller policy.
+}
+# Ok(()) }
+```
