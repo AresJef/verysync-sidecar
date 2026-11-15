@@ -148,22 +148,33 @@ def finish_browser_actors(directory):
         raise ValueError("bounded exact owned actor PIDs required")
     must_exit = list((directory / "captured").glob("*.must-exit"))
     native_roots = list((directory / "captured").glob("*.native-root"))
+    detached_actors = list((directory / "captured").glob("*.detached"))
+    detached_openers = list((directory / "captured").glob("*.detached-opener"))
     required = {call.stem for call in must_exit + native_roots}
-    if any(not pid.isdecimal() or not 1 < int(pid) <= 0xffffffff for pid in required):
+    detached = {call.stem for call in detached_actors + detached_openers}
+    if len(required | detached) > 16 or any(
+            not pid.isdecimal() or not 1 < int(pid) <= 0xffffffff for pid in required | detached):
         raise ValueError("exact native cancellation PIDs required")
+    if (must_exit or detached) and len(native_roots) != 1:
+        raise ValueError("one exact cancelled native root required")
+    if detached and (len(detached_actors) != 1 or len(detached_openers) != 1 or required & detached):
+        raise ValueError("exact separate native-detached opener and actor required")
+
+    def alive(pid):
+        result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "stat="],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, timeout=2)
+        if result.returncode not in (0, 1):
+            raise OSError("owned browser exit observation unavailable")
+        state = result.stdout.strip()
+        return bool(state) and not state.startswith("Z")
 
     def observe_ended(pids):
         pending = {int(pid) for pid in pids}
         deadline = time.monotonic() + 3
         while pending and time.monotonic() < deadline:
             for pid in list(pending):
-                result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "stat="],
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE, text=True, timeout=2)
-                if result.returncode not in (0, 1):
-                    raise OSError("owned browser exit observation unavailable")
-                state = result.stdout.strip()
-                if not state or state.startswith("Z"):
+                if not alive(pid):
                     pending.remove(pid)
             if pending:
                 time.sleep(0.01)
@@ -173,13 +184,24 @@ def finish_browser_actors(directory):
     # Cancellation must already have ended these processes. Never turn a
     # missing SDK cleanup into a pass by sending our actor's normal stop first.
     observe_ended(required)
+    # Linux's native opener can establish a separate process group. Observe
+    # those exact fixture PIDs before sending any cleanup marker; GUI rollback
+    # is not promised by the browser API. Never report their survival as exit.
+    detached_alive = {pid: alive(pid) for pid in sorted(detached)}
+    if detached:
+        (directory / "captured" / "release-native-root").write_bytes(b"outer exact opener cleanup")
     for call in owned.values():
         if call.stem not in required:
             call.with_suffix(".stop").write_bytes(b"outer test-owned cleanup")
-    observe_ended(owned)
+    observe_ended(set(owned) | detached)
     return {"captured_actor_count": len(calls), "journaled_actor_count": len(actors),
             "cancellation_actor_count": len(must_exit), "native_cancelled_root_count": len(native_roots),
-            "cancellation_native_exit_before_outer_cleanup": True,
+            "cancellation_detached_actor_count": len(detached_actors),
+            "cancellation_detached_opener_count": len(detached_openers),
+            "cancellation_native_root_exit_before_outer_cleanup": True if native_roots else None,
+            "cancellation_native_exit_before_outer_cleanup": not any(detached_alive.values()) if required else None,
+            "cancellation_desktop_outlived_native_root": any(detached_alive.values()) if detached else None,
+            "detached_pid_alive_before_outer_cleanup": detached_alive,
             "every_actor_native_exit_observed": True, "observer_outside_browser_sandbox": True}
 
 class BlockedProxy(socketserver.ThreadingTCPServer):
