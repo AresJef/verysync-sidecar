@@ -54,6 +54,12 @@
 #![doc = include_str!("../docs/public/native-hardware.md")]
 #![doc = include_str!("../docs/public/native-gui-resources.md")]
 
+// Linux MIPS uses the reverse of the generic Linux stream/datagram values.
+// An incorrect libc architecture selection otherwise becomes a runtime
+// EPROTOTYPE during management connection establishment.
+#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "mips64"))]
+const _: () = assert!(libc::SOCK_STREAM == 2 && libc::SOCK_DGRAM == 1);
+
 mod auth;
 mod auxiliary;
 mod capabilities;

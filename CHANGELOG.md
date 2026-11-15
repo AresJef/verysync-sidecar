@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Pin the verified libc 0.2.186 Unix bindings and assert the MIPS64 GNU socket
+  ABI at compile time. Preserve the original runtime deadlines and report
+  actual platform effects separately from successful compilation.
+
 - Add typed native CPU, memory, disk/partition and NIC observations with private
   nested values, nullable records, signed unknowns and connected-target mount
   paths. Preserve native unsupported errors separately from successful data.

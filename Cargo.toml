@@ -49,7 +49,8 @@ url = "2.5.8"
 rawzip = { version = "0.5.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.191"
+# Keep the verified MIPS64 GNU ABI until newer bindings pass the compile guard.
+libc = "=0.2.186"
 
 [target.'cfg(windows)'.dependencies]
 dunce = "1.0.5"
