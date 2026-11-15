@@ -46,7 +46,9 @@ def prepare_native_opener(cargo, toolchain, evidence_dir, env):
     directory = evidence_dir / "owned-native-opener"
     capture = directory / "captured"
     capture.mkdir(mode=0o700, parents=True, exist_ok=False)
-    name = "explorer.exe" if os.name == "nt" else ("open" if sys.platform == "darwin" else "xdg-open")
+    # The pinned Windows core's actual process-start trace dispatches rundll32,
+    # rather than Explorer. Keep the owned capture ahead of the system command.
+    name = "rundll32.exe" if os.name == "nt" else ("open" if sys.platform == "darwin" else "xdg-open")
     executable = directory / name
     shutil.copy2(source, executable)
     if hashlib.sha256(executable.read_bytes()).digest() != hashlib.sha256(source.read_bytes()).digest():

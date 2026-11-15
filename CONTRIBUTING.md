@@ -319,6 +319,12 @@ assertions distinguish the actual native dispatch from an empty HTTP receipt.
 Captured argument bytes and the owned executable are removed after the suite;
 only sanitized identity/count/removal metadata remains in shared evidence.
 The library neither installs this helper nor changes caller/global environments.
+On Windows, the fixed core was independently observed starting `rundll32.exe`.
+The owned fixture therefore captures that executable and requires the entire
+`url.dll,FileProtocolHandler` plus exact target argument sequence. macOS `open`
+and Linux `xdg-open` require the exact single target argument. Both normal and
+trash requests retain the same three-second bound and zero automatic retries;
+capturing dispatch does not establish that a desktop window opened.
 
 The dedicated wallpaper suite is run twice: ordinary blocked egress must
 produce a typed source error, and the explicit --allow-wallpaper-source run

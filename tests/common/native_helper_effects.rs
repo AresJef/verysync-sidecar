@@ -1247,7 +1247,7 @@ fn native_opener_capture_shapes(
             "file_url_argument":args.iter().map(|s| s.starts_with(b"file:")).collect::<Vec<_>>(),
             "non_utf8_arguments":args.iter().filter(|s| std::str::from_utf8(s).is_err()).count(),
             "known_dispatch_flags":args.iter().filter_map(|s| {
-                ["/c", "start", "/e", "/e,", "/select,"].into_iter().find(|flag| *s == flag.as_bytes())
+                ["/c", "start", "/e", "/e,", "/select,", "url.dll,FileProtocolHandler"].into_iter().find(|flag| *s == flag.as_bytes())
             }).collect::<Vec<_>>(),
         }));
     }
@@ -1327,12 +1327,18 @@ async fn actual_native_folder_open_requests_capture_exact_owned_target_dispatch(
             .as_bytes()
             .to_vec();
         wanted.push(0);
+        // Require the complete platform dispatch, including the Windows DLL
+        // entry point. A matching path among unrelated arguments is insufficient.
+        #[cfg(windows)]
+        let expected_dispatch = [b"url.dll,FileProtocolHandler\0".as_slice(), &wanted].concat();
+        #[cfg(not(windows))]
+        let expected_dispatch = wanted.clone();
         let dispatched = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 for record in std::fs::read_dir(&capture)? {
                     let record = record?;
                     if record.path().extension().is_some_and(|v| v == "argv")
-                        && std::fs::read(record.path())? == wanted
+                        && std::fs::read(record.path())? == expected_dispatch
                     {
                         return Ok::<_, std::io::Error>(());
                     }
