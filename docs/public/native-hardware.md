@@ -47,6 +47,14 @@ positive support evidence. Other platforms, fields and permissions retain their
 actual native conditions and require final candidate validation. Malformed or
 missing schemas are invalid responses rather than empty data.
 
+The observed GitHub-hosted Macs have additional block-backend limitations:
+the Intel runner reports an explicit zero total and empty disk list, while the
+ARM64 runner returns ghw's IORegistry node-shape error. Empty native data remains
+empty data; a native error remains `Error::Api`. Neither establishes usable
+disk inventory or capacity on those hosts. The SDK does not synthesize disks,
+substitute controller hardware, or bypass the native backend. Positive block
+inventory on the local Mac and the Windows/Linux runners is separate evidence.
+
 Inventories can contain hardware addresses, serial numbers, identifiers,
 filesystem labels, mount locations and other private data. Their normal Debug
 formatting omits values, including nested records and unknown fields. Explicit

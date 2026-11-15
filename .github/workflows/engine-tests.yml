@@ -457,7 +457,7 @@ jobs:
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Require original hardware data and backend-refusal assertions with safe component diagnostics
+      - name: Verify native hardware data and exact observed backend-refusal conditions
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target engine_control --test-filter hardware_effects

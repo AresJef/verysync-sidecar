@@ -1,7 +1,17 @@
 //! Observe native hardware data and native backend refusal independently.
 use super::managed_fixture::{options, TestResult};
 use std::time::Duration;
-use verysync_sidecar::{Error, ManagedInstance, TargetPath};
+use verysync_sidecar::{Error, ManagedInstance, ResponseDiagnostic, TargetPath};
+
+fn native_error_message(response: &ResponseDiagnostic) -> TestResult<String> {
+    assert_eq!(response.status(), 200);
+    let value: serde_json::Value = serde_json::from_slice(response.body_bytes())?;
+    Ok(value["error"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .ok_or("native hardware refusal has no error message")?
+        .to_owned())
+}
 
 fn trace_hardware<T>(component: &'static str, result: &verysync_sidecar::Result<T>) {
     let (kind, status, length, category, native_tool) = match result {
@@ -84,8 +94,8 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
             serde_json::json!({"total_is_zero":value.total_size_bytes==0,"disks_reported":value.disks.is_some(),"disks_empty":value.disks.as_ref().map(Vec::is_empty),"non_null_disk_present":value.disks.as_ref().map(|values|values.iter().any(Option::is_some))})
         );
     }
-    // Complete each independent read once before propagating any failure. Keep
-    // the original CPU/block data requirements and all cleanup assertions.
+    // Complete each independent read once before propagating any failure.
+    // Native empty/refused inventory is separate from positive hardware data.
     let cpu = cpu?;
     assert!(cpu.total_cores > 0 && cpu.total_threads > 0);
     assert!(!cpu
@@ -93,19 +103,43 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
         .as_ref()
         .ok_or("native packages unreported")?
         .is_empty());
-    let blocks = blocks?;
-    assert!(blocks.total_size_bytes > 0);
-    let disks = blocks.disks.as_ref().ok_or("native disks unreported")?;
-    assert!(!disks.is_empty());
-    for disk in disks.iter().flatten() {
-        for partition in disk.partitions.iter().flatten().flatten() {
-            if let Some(path) = partition.mount_point()? {
-                assert_eq!(path.style(), TargetPath::local(&root).style());
-                assert!(path.local_path().is_none());
-            }
-        }
-    }
     let darwin = owner.client().instance().version.os == "darwin";
+    let (block_positive, block_native_empty, block_native_refusal) = match blocks {
+        Ok(blocks)
+            if darwin
+                && blocks.total_size_bytes == 0
+                && blocks.disks.as_ref().is_some_and(Vec::is_empty) =>
+        {
+            (false, true, false)
+        }
+        Ok(blocks) => {
+            assert!(blocks.total_size_bytes > 0);
+            let disks = blocks.disks.as_ref().ok_or("native disks unreported")?;
+            assert!(!disks.is_empty());
+            for disk in disks.iter().flatten() {
+                for partition in disk.partitions.iter().flatten().flatten() {
+                    if let Some(path) = partition.mount_point()? {
+                        assert_eq!(path.style(), TargetPath::local(&root).style());
+                        assert!(path.local_path().is_none());
+                    }
+                }
+            }
+            (true, false, false)
+        }
+        Err(Error::Api { response, .. }) if darwin => {
+            let message = native_error_message(&response)?;
+            // Exact upstream ghw v0.13.0 rejection observed on the hosted Mac.
+            // Unknown errors and a supposedly successful one-node result fail.
+            let nodes = message
+                .split_once("ioreg unmarshal resulted in ")
+                .and_then(|(_, tail)| tail.strip_suffix(" I/O device tree nodes (expected 1)"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .ok_or("unverified native block refusal; preserve the failure")?;
+            assert_ne!(nodes, 1);
+            (false, false, true)
+        }
+        Err(error) => return Err(error.into()),
+    };
     let memory_positive = match memory {
         Ok(value) => {
             assert!(
@@ -115,8 +149,8 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
             let _ = value.total_usable_bytes;
             true
         }
-        Err(Error::Api { response, .. }) => {
-            assert_eq!(response.status(), 200);
+        Err(Error::Api { response, .. }) if darwin => {
+            assert!(native_error_message(&response)?.contains("not implemented"));
             false
         }
         Err(error) => return Err(error.into()),
@@ -130,8 +164,8 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
             let _ = value.nics;
             true
         }
-        Err(Error::Api { response, .. }) => {
-            assert_eq!(response.status(), 200);
+        Err(Error::Api { response, .. }) if darwin => {
+            assert!(native_error_message(&response)?.contains("not implemented"));
             false
         }
         Err(error) => return Err(error.into()),
@@ -142,6 +176,6 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
     let exit = owner.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
-    println!("native_hardware_effects=8 cpu_positive=true block_positive=true memory_positive={memory_positive} network_positive={network_positive} native_refusals_are_not_support=true no_configuration_or_controller_io=true");
+    println!("native_hardware_observations=4 cpu_positive=true block_positive={block_positive} block_native_empty={block_native_empty} block_native_refusal={block_native_refusal} memory_positive={memory_positive} network_positive={network_positive} native_refusals_are_not_support=true identity_and_folder_state_retained=true sentinel_retained=true normal_tree_exit=true no_controller_io=true");
     Ok(())
 }

@@ -81,6 +81,7 @@ async fn hardware_reads_preserve_nulls_negative_unknowns_native_categories_and_p
 async fn hardware_native_errors_and_missing_schemas_are_not_empty_successes() -> TestResult {
     for body in [
         serde_json::json!({"error":KEY}),
+        serde_json::json!({"error":"ioreg unmarshal resulted in 0 I/O device tree nodes (expected 1)"}),
         serde_json::json!({}),
         serde_json::json!({"error":false}),
     ] {
@@ -119,6 +120,18 @@ async fn hardware_native_errors_and_missing_schemas_are_not_empty_successes() ->
 
 #[tokio::test]
 async fn hardware_null_inventory_is_unknown_and_changed_identity_stops_the_read() -> TestResult {
+    let empty = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"total_size_bytes":0,"disks":[]})),
+    ])
+    .await?;
+    let client = Client::connect(empty.options()?).await?;
+    let observed = client.native_block_hardware().await?;
+    assert_eq!(observed.total_size_bytes, 0);
+    assert!(observed.disks.as_ref().is_some_and(Vec::is_empty));
+    assert_eq!(empty.finish().await?.len(), 4);
     let server = ScriptedServer::start(vec![
         version(),
         identity(),
