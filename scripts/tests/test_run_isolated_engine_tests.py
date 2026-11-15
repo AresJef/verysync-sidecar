@@ -328,9 +328,19 @@ class NativeOpenerContracts(unittest.TestCase):
             self.assertEqual(env["PATH"],str(executable.parent)+HELPER.os.pathsep+"original-child-path")
             self.assertEqual(HELPER.os.environ.copy(),original)
             self.assertTrue(receipt["fixture_only"])
-            self.assertIn("--manifest-path",build.call_args.args[0])
-            self.assertIn("--offline",build.call_args.args[0])
-            self.assertIs(build.call_args.kwargs["env"],env)
+            cargo_calls = [call for call in build.call_args_list
+                           if call.args[0][:2] == ["explicit-cargo", "+1.85.0"]]
+            self.assertEqual(len(cargo_calls), 1)
+            self.assertIn("--manifest-path", cargo_calls[0].args[0])
+            self.assertIn("--offline", cargo_calls[0].args[0])
+            self.assertIs(cargo_calls[0].kwargs["env"], env)
+            if HELPER.os.name == "nt":
+                probes = [call for call in build.call_args_list
+                          if call.args[0][:2] == [sys.executable, "-c"]]
+                self.assertEqual(len(probes), 1)
+                self.assertEqual(probes[0].kwargs["env"]["SYSTEMROOT"],
+                                 env["VERYSYNC_TEST_OPENER_SYSTEM_ROOT"])
+                self.assertNotIn("SYSTEMROOT", env)
 
     def test_missing_compiled_helper_is_refused_before_capture_or_environment_changes(self):
         from types import SimpleNamespace
