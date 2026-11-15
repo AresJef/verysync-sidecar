@@ -55,6 +55,13 @@ descendant inventory and verify panic cleanup; exact official-core inventory
 remains a separate gate. This test-fixture behavior does not replace the public
 managed-runtime lifecycle tests.
 
+The native Unix fixture panic case also requires positive exact-executable
+inventory and verifies that no matching image survives outside its original
+group. A separate public managed-owner panic case catches caller unwinding,
+checks exact exit and lease release, retains identity files, explicitly restarts
+the same state and requires normal shutdown. These distinguish test-fixture
+cleanup from the library's ready-owner cleanup.
+
 ```sh
 cargo +1.85.0 fetch --locked
 python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \

@@ -214,6 +214,8 @@ jobs:
               output.write('VERYSYNC_TEST_EMULATOR_SHA256=' + emulator_sha + '\n')
           info = {'execution': 'QEMU user emulation', 'runner_arch': os.environ['RUNNER_ARCH'],
                   'rust_target': target, 'cpu': os.environ['QEMU_CPU'],
+                  'controller_dev_opt_level': os.environ['CARGO_PROFILE_DEV_OPT_LEVEL'],
+                  'controller_test_opt_level': os.environ['CARGO_PROFILE_TEST_OPT_LEVEL'],
                   'controller_sysroot': os.environ['QEMU_LD_PREFIX'], 'image': image,
                   'qemu_sha256': emulator_sha,
                   'native_arm_host': False, 'minimum_kernel_verified': False}

@@ -301,6 +301,38 @@ async fn cancelled_start_by_sdk_deadline_cleans_an_observed_process() -> TestRes
 }
 
 #[tokio::test]
+async fn unwinding_a_ready_owner_cleans_the_exact_core_and_reuses_state() -> TestResult {
+    let binary = source()?.path().to_owned();
+    assert!(
+        inventory(&binary).await?.is_empty(),
+        "a previous case left an exact program alive"
+    );
+    let root = lifecycle_root()?;
+    let state = root.path().join("state");
+    let settings = options(source()?, &state)?;
+    let owner = start_checked(settings.clone()).await?;
+    let identity = owner.client().instance().device_id.clone();
+    let files = private_identity(&state)?;
+    assert!(inventory(&binary).await?.contains(&owner.process_id()));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _owner = owner;
+        panic!("synthetic caller panic exercises ready managed-owner cleanup");
+    }));
+    assert!(result.is_err());
+    wait_no_processes(&binary).await?;
+    wait_state_available(&state).await?;
+    assert_eq!(private_identity(&state)?, files);
+    let mut retried = start_checked(settings).await?;
+    assert_eq!(retried.client().instance().device_id, identity);
+    assert_eq!(private_identity(&state)?, files);
+    let exit = retried.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    wait_no_processes(&binary).await?;
+    println!("public ready-owner panic evidence: actual_core_observed=true unwind_caught=true exact_image_exit=true lease_released=true identity_files_retained=true explicit_retry_same_identity=true normal_retry_exit=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn cancelled_start_by_runtime_shutdown_keeps_cleanup_independent() -> TestResult {
     let mut case = StartupCase::blocked()?;
     let binary = case.binary.clone();
