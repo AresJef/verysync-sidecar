@@ -6,6 +6,28 @@ use crate::{
 };
 use std::collections::BTreeMap;
 impl Client {
+    /// Read one full native index FileInfo observation for a strictly relative
+    /// target path. Fresh identity and configured-folder checks precede one GET.
+    /// Missing index objects remain native HTTP errors, not zero-file successes.
+    /// Native zero local records and advertised availability do not establish
+    /// filesystem existence, peer reachability or a completed transfer. No scan,
+    /// retry, filesystem I/O or peer contact is performed by this method.
+    pub async fn index_file_info(
+        &self,
+        folder: &FolderId,
+        path: &crate::TargetPath,
+    ) -> Result<crate::IndexFileInfo> {
+        let file = crate::scans::validate_subpath(path, self.folder_path_style()?)?;
+        self.system_status().await?;
+        self.folder(folder).await?;
+        self.connection
+            .get_json_with_query(
+                "read native indexed file metadata",
+                "rest/db/file",
+                &[("folder", folder.as_str()), ("file", file)],
+            )
+            .await
+    }
     /// Read the selected folder's native index tree once. This differs from
     /// selective-mode browsing and file-manager resources. The default returns
     /// root entries at level zero; explicit None depth retains native unlimited

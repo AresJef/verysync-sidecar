@@ -256,7 +256,8 @@ pub use sharing::{
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
 pub use sync_observation::{
     CompletionSnapshot, DeviceStatistics, FolderErrorPage, FolderStatistics, FolderSyncError,
-    IndexBrowseOptions, IndexTree, IndexTreeEntry, LastFileObservation, ListPage, NeedPage,
+    IndexBrowseOptions, IndexFileAvailability, IndexFileInfo, IndexFileMetadata,
+    IndexFileSignature, IndexTree, IndexTreeEntry, LastFileObservation, ListPage, NeedPage,
     SyncFile, SyncFileKind, SyncFilePage,
 };
 pub use system_preferences::{NativePathSelection, SystemPreferences, SystemPreferencesPatch};

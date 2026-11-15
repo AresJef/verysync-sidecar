@@ -364,3 +364,134 @@ impl fmt::Debug for IndexTree {
             .finish_non_exhaustive()
     }
 }
+
+/// Native encoded signature metadata. The SDK preserves it without checking a
+/// signature, interpreting its version tag or treating it as a trust decision.
+#[derive(Clone, Deserialize)]
+pub struct IndexFileSignature {
+    /// Native signature format tag, independent from crate/core version numbers.
+    #[serde(rename = "Version")]
+    pub version: u32,
+    /// Exact native encoded Sign value; None retains a native null/absence.
+    #[serde(rename = "Sign")]
+    pub encoded_signature: Option<String>,
+    /// Unmodeled values, potentially private.
+    /// Additional native metadata, potentially private.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for IndexFileSignature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexFileSignature")
+            .field("version", &self.version)
+            .field("has_encoded_signature", &self.encoded_signature.is_some())
+            .finish_non_exhaustive()
+    }
+}
+/// One exact full native FileInfo index record. A zero local record with an
+/// empty name/version vector is preserved; it does not establish a local file.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexFileMetadata {
+    /// Exact untrusted index name, not a controller filesystem path.
+    pub name: String,
+    /// Actual native type, including preserved unfamiliar labels.
+    #[serde(rename = "type")]
+    pub kind: SyncFileKind,
+    /// Reported size; a zero local record retains zero.
+    pub size: u64,
+    /// Exact native timestamp including offset/precision or placeholder value.
+    pub modified: String,
+    /// Exact native short modifier identifier; it is not a full DeviceId.
+    pub modified_by: String,
+    /// Native tombstone flag, without filesystem deletion by the SDK.
+    pub deleted: bool,
+    /// Native ignored-state observation.
+    pub ignored: bool,
+    /// Native invalid-state observation.
+    pub invalid: bool,
+    /// Native permission-presence flag, without a controller access test.
+    pub no_permissions: bool,
+    /// Exact native permission string, without host-mode conversion.
+    pub permissions: String,
+    /// Uninterpreted native local bit flags.
+    pub local_flags: u32,
+    /// Native rescan-required flag; reading it does not start a scan.
+    pub must_rescan: bool,
+    /// Native declared block count; block data is not fetched.
+    pub num_blocks: u64,
+    /// Exact native encoded block-list hash; not an SDK-verified content digest.
+    pub blocks_hash: Option<String>,
+    /// Exact native previous block-list hash or retained null/absence.
+    pub previous_blocks_hash: Option<String>,
+    /// Native index sequence, without a cross-request transaction guarantee.
+    pub sequence: u64,
+    /// Native version-vector strings in their reported order. No clock merge,
+    /// sorting, global identifier or freshness inference is performed.
+    pub version: Vec<String>,
+    /// Exact native signature metadata, without SDK signature verification.
+    pub signature: IndexFileSignature,
+    /// Native per-platform extension payloads, retained without interpreting
+    /// unverified ownership, extended-attribute, ACL or platform schemas.
+    pub platform: BTreeMap<String, serde_json::Value>,
+    /// Additional native metadata, potentially private.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for IndexFileMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexFileMetadata")
+            .field("kind", &self.kind)
+            .field("size", &self.size)
+            .field("deleted", &self.deleted)
+            .field("ignored", &self.ignored)
+            .field("invalid", &self.invalid)
+            .finish_non_exhaustive()
+    }
+}
+/// One native advertised source. This does not prove reachability or a completed
+/// download, and the SDK does not contact the listed device.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexFileAvailability {
+    #[serde(rename = "id")]
+    /// Full native advertised-source device identifier.
+    pub device_id: crate::DeviceId,
+    /// Native flag that this source advertises temporary file data.
+    pub from_temporary: bool,
+    /// Additional native metadata, potentially private.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for IndexFileAvailability {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexFileAvailability")
+            .field("from_temporary", &self.from_temporary)
+            .finish_non_exhaustive()
+    }
+}
+/// One full native index observation, separate from resource-file metadata,
+/// filesystem existence and completed synchronization. Global/local records
+/// and advertised availability are not made into one durable transaction.
+#[derive(Clone, Deserialize)]
+pub struct IndexFileInfo {
+    /// Native global index record; not a completed-transfer receipt.
+    pub global: IndexFileMetadata,
+    /// Native local index record, including an empty zero record when absent.
+    pub local: IndexFileMetadata,
+    /// None preserves native null/absence; Some empty remains explicitly empty.
+    pub availability: Option<Vec<IndexFileAvailability>>,
+    /// Additional native metadata, potentially private.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for IndexFileInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexFileInfo")
+            .field(
+                "availability_count",
+                &self.availability.as_ref().map(Vec::len),
+            )
+            .finish_non_exhaustive()
+    }
+}

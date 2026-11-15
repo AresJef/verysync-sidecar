@@ -32,6 +32,8 @@ mod gui_resource_contracts;
 mod hardware_contracts;
 #[path = "common/index_browse_contracts.rs"]
 mod index_browse_contracts;
+#[path = "common/index_file_contracts.rs"]
+mod index_file_contracts;
 #[path = "common/management_transport_contracts.rs"]
 mod management_transport_contracts;
 #[path = "common/native_helper_contracts.rs"]
