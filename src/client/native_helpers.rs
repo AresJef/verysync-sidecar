@@ -1,13 +1,67 @@
 //! Explicit native helpers, without local UI or automatic link handling.
 use super::{mutation_error, Client};
 use crate::{
-    DeviceId, Error, NativeUsageReport, PendingNativeLink, ResponseDiagnostic, Result,
-    TargetIpLocation,
+    DeviceId, Error, NativeHealth, NativeHealthStatus, NativeUsageReport, PendingNativeLink,
+    ResponseDiagnostic, Result, TargetIpLocation,
 };
 use serde::Deserialize;
 use std::{collections::BTreeMap, net::IpAddr};
 
 impl Client {
+    /// Read the selected program's native HTTP health snapshot. The native route
+    /// itself is unauthenticated; this method uses the existing authenticated
+    /// connection and checks its expected identity before the read. It is not a
+    /// pre-authentication port probe or proof that synchronization has completed.
+    pub async fn native_health(&self) -> Result<NativeHealth> {
+        #[derive(Deserialize)]
+        struct Reply {
+            status: Option<String>,
+            #[serde(default)]
+            error: Option<String>,
+            #[serde(flatten)]
+            extra: BTreeMap<String, serde_json::Value>,
+        }
+        let operation = "read native health";
+        self.system_status().await?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                operation,
+                reqwest::Method::GET,
+                self.connection.management_url("rest/noauth/health", &[])?,
+                None,
+                false,
+            )
+            .await?;
+        let invalid = || Error::InvalidResponse {
+            operation,
+            response: ResponseDiagnostic::new(status, bytes.clone()),
+        };
+        let reply: Reply = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        if reply
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.is_empty())
+        {
+            return Err(Error::Api {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes),
+            });
+        }
+        let native_status = reply
+            .status
+            .filter(|status| !status.is_empty())
+            .ok_or_else(invalid)?;
+        Ok(NativeHealth {
+            status: if native_status == "OK" {
+                NativeHealthStatus::Ok
+            } else {
+                NativeHealthStatus::Other(native_status)
+            },
+            extra: reply.extra,
+        })
+    }
+
     /// Normalize/validate a device ID using the target's native service. This
     /// accepts native forms such as lowercase or ungrouped text, unlike the
     /// local layout-only `DeviceId::parse`. It neither adds a device nor verifies

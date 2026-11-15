@@ -9,6 +9,96 @@ fn identity() -> Reply {
 }
 
 #[tokio::test]
+async fn native_health_preserves_status_and_unknown_fields_without_logging_values() -> TestResult {
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"status":"OK","future":KEY})),
+        identity(),
+        Reply::json(serde_json::json!({"status":KEY,"future":KEY})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let healthy = client.native_health().await?;
+    assert!(matches!(
+        healthy.status,
+        verysync_sidecar::NativeHealthStatus::Ok
+    ));
+    assert_eq!(healthy.status.native_value(), "OK");
+    assert_eq!(healthy.extra["future"], KEY);
+    let other = client.native_health().await?;
+    assert!(
+        matches!(&other.status, verysync_sidecar::NativeHealthStatus::Other(value) if value == KEY)
+    );
+    assert_eq!(other.status.native_value(), KEY);
+    assert!(!format!("{other:?} {:?}", other.status).contains(KEY));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    for index in [3, 5] {
+        assert!(requests[index].starts_with("GET /prefix/rest/noauth/health HTTP/1.1"));
+        assert!(requests[index]
+            .to_ascii_lowercase()
+            .contains("x-api-key: synthetic-transport-key"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_health_rejects_missing_empty_or_invalid_native_status() -> TestResult {
+    for body in [
+        serde_json::json!({"future":KEY}),
+        serde_json::json!({"status":"","future":KEY}),
+        serde_json::json!({"status":null}),
+        serde_json::json!({"status":true}),
+        serde_json::json!({"status":1}),
+        serde_json::json!([]),
+        serde_json::json!({"status":"OK","error":{ "private":KEY }}),
+    ] {
+        let server =
+            ScriptedServer::start(vec![version(), identity(), identity(), Reply::json(body)])
+                .await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client.native_health().await.unwrap_err();
+        assert!(matches!(error, Error::InvalidResponse { .. }));
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_health_keeps_native_body_errors_and_changed_identity_separate() -> TestResult {
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"status":"OK","error":KEY})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client.native_health().await.unwrap_err();
+    assert!(matches!(error, Error::Api { .. }));
+    assert!(!format!("{error:?}").contains(KEY));
+    assert_eq!(server.finish().await?.len(), 4);
+
+    let other = ID.replacen('A', "B", 1);
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        Reply::json(serde_json::json!({"myID":other})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.native_health().await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_helper_contracts_preserve_values_without_logging_or_automatic_link_actions(
 ) -> TestResult {
     let server=ScriptedServer::start(vec![version(),identity(),

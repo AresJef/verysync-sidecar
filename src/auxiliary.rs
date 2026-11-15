@@ -3,6 +3,49 @@ use crate::TargetPath;
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 
+/// Exact status text from the target's native HTTP health handler.
+#[derive(Clone, Eq, PartialEq)]
+pub enum NativeHealthStatus {
+    /// The fixed handler's explicit `OK` token.
+    Ok,
+    /// Other native status text, preserved without interpreting readiness.
+    Other(String),
+}
+impl NativeHealthStatus {
+    /// Borrow the exact native status token. Unknown text is not normalized.
+    pub fn native_value(&self) -> &str {
+        match self {
+            Self::Ok => "OK",
+            Self::Other(value) => value,
+        }
+    }
+}
+impl fmt::Debug for NativeHealthStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ok => f.write_str("Ok"),
+            Self::Other(_) => f.write_str("Other(..)"),
+        }
+    }
+}
+
+/// One native HTTP health snapshot. This does not observe folder completion,
+/// operation authorization or the outcome of a task started by a caller.
+#[derive(Clone)]
+pub struct NativeHealth {
+    /// Exact native health status, including unrecognized future tokens.
+    pub status: NativeHealthStatus,
+    /// Other native response fields; ordinary Debug omits their private values.
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for NativeHealth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeHealth")
+            .field("status", &self.status)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Native configuration/data locations, interpreted on the connected target.
 /// These observations do not read or create controller files.
 #[derive(Clone)]
