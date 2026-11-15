@@ -377,3 +377,9 @@ no command lines, titles or SID output. The observer has a readiness handshake,
 observer is reported separately and does not replace or relax the original
 request, three-second capture predicate or failure. One bounded native text-log
 read reports only whether the known locality-denial marker was present.
+
+The same focused Windows matrix separately runs the two actual native paths
+and completion cases. On failure they report bounded line shapes, known static
+heading indices and an allowlist of diagnostic words, without outputting paths
+or arbitrary native text. Original exits, assertions and deadlines remain
+required; this diagnostic neither accepts native failure nor repairs a parser.
