@@ -46,10 +46,15 @@ a different model's success cannot validate the requested model. A successful
 version probe is neither Rust runtime acceptance nor minimum-native-ISA proof.
 The probe uses the same private controlling stderr terminal and bounded stdout
 file as the Rust metadata helper, an independent process session and child-only
-signal settings. Each selected CPU retains the original 12-second probe limit.
-A plain pipe launch is a different condition; its timeout does not prove that
-the same CPU cannot run the library. Timeout cleanup targets only the exact
-unreaped child's private group, and the job still requires exact-core cleanup.
+signal settings. Before each invocation it writes the SDK's private startup-
+disabled application configuration. Each CPU is observed in independent states
+through the SDK's registered direct-core execution and an explicit emulator
+invocation. Each invocation retains the original 12-second limit. The requested
+CPU must pass the SDK execution path itself; an explicit-emulator result cannot
+replace it. Both results remain recorded, and neither establishes SDK runtime
+acceptance. A plain pipe launch or missing startup configuration is a different
+condition. Timeout cleanup targets only the exact unreaped child's private
+group, and the job still requires exact-core cleanup.
 
 MIPS, LoongArch64, PPC64LE, RISC-V64, S390x and the two Windows legacy
 packages retain separate execution requirements. Cross compilation, user-mode
