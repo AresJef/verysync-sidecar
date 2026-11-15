@@ -494,3 +494,47 @@ jobs:
       - name: Require exact owned-executable cleanup after the original result
         if: always()
         run: python scripts/prepare-test-engine.py check-cleanup
+
+  windows-folder-opener-diagnosis:
+    name: Folder opener diagnosis only (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install native Rust and fetch locked dependencies
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed private core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Preserve the original strict native dispatch predicate and deadline
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target engine_control
+          --test-filter actual_native_folder_open_requests_capture_exact_owned_target_dispatch
+          --evidence-dir "${{ runner.temp }}/vs-windows-folder-opener-diagnosis"
+      - name: Require exact owned-executable cleanup after the original result
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup

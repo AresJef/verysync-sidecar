@@ -1204,6 +1204,84 @@ async fn actual_native_path_writeability_keeps_native_limit_and_owned_data() -> 
     Ok(())
 }
 
+fn native_opener_capture_shapes(
+    capture: &std::path::Path,
+    wanted: &[u8],
+) -> TestResult<serde_json::Value> {
+    use std::io::Read;
+    let expected = wanted.strip_suffix(&[0]).unwrap_or(wanted);
+    let mut records = Vec::new();
+    for record in std::fs::read_dir(capture)?.take(32) {
+        let record = record?;
+        if !record.path().extension().is_some_and(|v| v == "argv") {
+            continue;
+        }
+        let metadata = record.path().symlink_metadata()?;
+        if !metadata.is_file() || metadata.len() > 65536 {
+            records.push(serde_json::json!({"bounded_regular_capture":false}));
+            continue;
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(record.path())?
+            .take(65537)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 65536 {
+            records.push(serde_json::json!({"bounded_regular_capture":false}));
+            continue;
+        }
+        let payload = bytes.strip_suffix(&[0]).unwrap_or(&bytes);
+        let args: Vec<&[u8]> = if bytes.is_empty() {
+            Vec::new()
+        } else {
+            payload.split(|b| *b == 0).collect()
+        };
+        records.push(serde_json::json!({
+            "bounded_regular_capture":true, "nul_terminated":bytes.last() == Some(&0),
+            "argc":args.len(), "argument_bytes":args.iter().map(|s| s.len()).collect::<Vec<_>>(),
+            "exact_expected_argument":args.iter().map(|s| *s == expected).collect::<Vec<_>>(),
+            "quoted_expected_argument":args.iter().map(|s| s.strip_prefix(b"\"").and_then(|s| s.strip_suffix(b"\"")).is_some_and(|s| s == expected)).collect::<Vec<_>>(),
+            "contains_expected_argument":args.iter().map(|s| !expected.is_empty() && s.windows(expected.len()).any(|w| w == expected)).collect::<Vec<_>>(),
+            "file_url_argument":args.iter().map(|s| s.starts_with(b"file:")).collect::<Vec<_>>(),
+            "non_utf8_arguments":args.iter().filter(|s| std::str::from_utf8(s).is_err()).count(),
+            "known_dispatch_flags":args.iter().filter_map(|s| {
+                ["/c", "start", "/e", "/e,", "/select,"].into_iter().find(|flag| *s == flag.as_bytes())
+            }).collect::<Vec<_>>(),
+        }));
+    }
+    Ok(serde_json::json!({"observed_records":records,"record_limit":32,"raw_values_logged":false}))
+}
+
+#[test]
+fn native_opener_shape_diagnostics_keep_argument_values_private_and_reads_bounded() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let expected = b"private-target-with-spaces";
+    let mut wanted = expected.to_vec();
+    wanted.push(0);
+    let mut captured = b"/select,\0\"".to_vec();
+    captured.extend_from_slice(expected);
+    captured.extend_from_slice(b"\"\0");
+    std::fs::write(root.path().join("1.argv"), captured)?;
+    let shapes = native_opener_capture_shapes(root.path(), &wanted)?;
+    let row = &shapes["observed_records"][0];
+    assert_eq!(row["argc"], 2);
+    assert_eq!(row["quoted_expected_argument"][1], true);
+    assert_eq!(row["contains_expected_argument"][1], true);
+    assert_eq!(row["known_dispatch_flags"][0], "/select,");
+    assert!(!shapes.to_string().contains("private-target-with-spaces"));
+    std::fs::write(root.path().join("2.argv"), vec![b'x'; 65537])?;
+    let shapes = native_opener_capture_shapes(root.path(), &wanted)?;
+    assert_eq!(
+        shapes["observed_records"]
+            .as_array()
+            .ok_or("missing records")?
+            .iter()
+            .filter(|v| v["bounded_regular_capture"] == false)
+            .count(),
+        1
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn actual_native_folder_open_requests_capture_exact_owned_target_dispatch() -> TestResult {
     use verysync_sidecar::{CreateFolderOptions, FolderId, NativeFolderOpenLocation, TargetPath};
@@ -1244,7 +1322,7 @@ async fn actual_native_folder_open_requests_capture_exact_owned_target_dispatch(
             .as_bytes()
             .to_vec();
         wanted.push(0);
-        tokio::time::timeout(Duration::from_secs(3), async {
+        let dispatched = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 for record in std::fs::read_dir(&capture)? {
                     let record = record?;
@@ -1257,7 +1335,18 @@ async fn actual_native_folder_open_requests_capture_exact_owned_target_dispatch(
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
-        .await??;
+        .await;
+        if dispatched.as_ref().is_err() || dispatched.as_ref().is_ok_and(|result| result.is_err()) {
+            eprintln!(
+                "native folder opener dispatch diagnostic: {}",
+                serde_json::json!({
+                    "location":format!("{location:?}"), "platform":std::env::consts::OS,
+                    "expected_bytes":wanted.len(), "captures":native_opener_capture_shapes(&capture, &wanted)?,
+                    "deadline_unchanged_s":3, "automatic_request_retries":0,
+                })
+            );
+        }
+        dispatched??;
     }
     assert_eq!(
         std::fs::read(data.join("sample.txt"))?,

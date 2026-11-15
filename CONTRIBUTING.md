@@ -345,3 +345,11 @@ The same accepted source tree is not automatically run again merely because its
 PR was merged. The lighter quality workflow still runs on main pushes. A direct
 main change requires an explicit native workflow dispatch before claiming native
 acceptance; an absent run is never a passing result.
+
+Windows folder-opener diagnosis jobs run the original exact-argument case alone
+on both standard Windows architectures. A mismatch reports bounded argument
+counts, lengths, known flags and equality/quoting/URI shape booleans; raw paths
+and arguments are omitted. The original three-second deadline, zero automatic
+request retries, strict predicate and complete native gate remain unchanged.
+The wrapper removes the owned capture/executable before printing a safe cleanup
+summary. A focused diagnostic result alone does not establish platform acceptance.
