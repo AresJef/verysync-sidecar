@@ -127,6 +127,49 @@ async fn removal_events(client: &Client, since: u64) -> TestResult<Vec<serde_jso
         .collect())
 }
 
+async fn removal_disconnect(
+    client: &Client,
+    peer: &DeviceId,
+    since: u64,
+    removal_started: std::time::SystemTime,
+) -> TestResult<&'static str> {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let snapshot = raw(
+                client,
+                RawMethod::Get,
+                &["rest", "system", "connections"],
+                None,
+            )
+            .await?;
+            let peers = snapshot["connections"]
+                .as_object()
+                .ok_or("connection map missing")?;
+            let connected = match peers.get(peer.as_str()) {
+                None => false,
+                Some(value) => value["connected"]
+                    .as_bool()
+                    .ok_or("peer connection state missing")?,
+            };
+            if !connected {
+                return TestResult::Ok("remote_connection_snapshot");
+            }
+            let events = removal_events(client, since).await?;
+            if device_removal_diagnostic::has_disconnect_event(
+                &events,
+                peer.as_str(),
+                since,
+                removal_started,
+                std::time::SystemTime::now(),
+            ) {
+                return TestResult::Ok("remote_native_disconnect_event");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?
+}
+
 async fn removal_state_diagnostic(
     role: &'static str,
     client: &Client,
@@ -427,9 +470,10 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
     let removal_started = std::time::SystemTime::now();
     let removed = a.client().remove_device(&b_id).await?;
     assert!(removed.configuration_absent && removed.remaining_folder_associations.is_empty());
-    let disconnect = connected(b.client(), &a_id, false).await;
-    // Diagnose native lifecycle state without changing the original 20s
-    // condition, extending it, retrying removal, or exposing IDs/addresses.
+    let disconnect = removal_disconnect(b.client(), &a_id, b_since, removal_started).await;
+    // Diagnose native lifecycle state without extending the original 20s
+    // deadline, retrying removal, or exposing IDs/addresses. A reconnect cannot
+    // erase the exact remote peer's native disconnect event after this DELETE.
     let source_diagnostic = async {
         match tokio::time::timeout(
             Duration::from_secs(3),
@@ -485,7 +529,7 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
         "synthetic original removal disconnect condition passed={}",
         disconnect.is_ok()
     );
-    disconnect?;
+    println!("synthetic removal disconnect evidence: {}", disconnect?);
     assert_eq!(std::fs::read(a_path.join("sample.bin"))?, sample);
     assert_eq!(std::fs::read(b_path.join("sample.bin"))?, sample);
     assert_eq!(a.client().folder(&af.id).await?.id, af.id);
