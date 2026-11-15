@@ -18,6 +18,37 @@ use tempfile::TempDir;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+fn readiness_error_summary(error: &(dyn std::error::Error + 'static)) -> Json {
+    let mut cause = Some(error);
+    let mut reqwest = None;
+    let mut io_errors = Vec::new();
+    let mut json_error = false;
+    let mut depth = 0;
+    while let Some(error) = cause {
+        if depth == 8 {
+            break;
+        }
+        depth += 1;
+        if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            reqwest = Some(serde_json::json!({
+                "builder":error.is_builder(),"connect":error.is_connect(),
+                "timeout":error.is_timeout(),"request":error.is_request(),
+                "body":error.is_body(),"decode":error.is_decode(),
+                "status":error.status().map(|s|s.as_u16())
+            }));
+        }
+        if let Some(error) = error.downcast_ref::<io::Error>() {
+            io_errors.push(serde_json::json!({
+                "kind":format!("{:?}",error.kind()),"raw_os_error":error.raw_os_error()
+            }));
+        }
+        json_error |= error.is::<serde_json::Error>();
+        cause = error.source();
+    }
+    serde_json::json!({"reqwest":reqwest,"io_errors":io_errors,"json_error":json_error,
+        "chain_depth":depth,"chain_limit_reached":cause.is_some(),"messages_omitted":true})
+}
+
 #[cfg(windows)]
 #[path = "windows_fixture.rs"]
 mod windows_fixture;
@@ -296,16 +327,19 @@ impl EngineFixture {
                 )
                 .into());
             }
-            if let Ok(status) = fixture.read_json("/rest/system/status").await {
-                if status["myID"].as_str() != Some(fixture.device_id.as_str()) {
-                    return Err(
-                        "management endpoint identity does not belong to the fixture".into(),
-                    );
+            let error = match fixture.read_json("/rest/system/status").await {
+                Ok(status) => {
+                    if status["myID"].as_str() != Some(fixture.device_id.as_str()) {
+                        return Err(
+                            "management endpoint identity does not belong to the fixture".into(),
+                        );
+                    }
+                    break;
                 }
-                break;
-            }
+                Err(error) => error,
+            };
             if Instant::now() >= deadline {
-                return Err(format!("isolated engine did not become authenticated and ready before its deadline: {}", fixture.startup_diagnostic(&password)).into());
+                return Err(format!("isolated engine did not become authenticated and ready before its deadline; last_request_error={}: {}", readiness_error_summary(error.as_ref()), fixture.startup_diagnostic(&password)).into());
             }
             tokio::time::sleep(Duration::from_millis(40)).await;
         }
@@ -385,6 +419,9 @@ impl EngineFixture {
 
     pub async fn read_json(&self, route: &str) -> TestResult<Json> {
         let mut response = self.request(Method::GET, route)?.send().await?;
+        if let Err(error) = response.error_for_status_ref() {
+            return Err(error.without_url().into());
+        }
         if !response.status().is_success() {
             return Err("fixture management read rejected".into());
         }
@@ -750,6 +787,35 @@ fn device_id_output(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod fixture_unit_tests {
+    #[test]
+    fn readiness_summary_keeps_io_classification_without_private_messages() {
+        let secret = "synthetic-secret /private/state?token=private-value";
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, secret);
+        let summary = super::readiness_error_summary(&error);
+        assert_eq!(summary["io_errors"][0]["kind"], "PermissionDenied");
+        assert!(summary["io_errors"][0]["raw_os_error"].is_null());
+        assert_eq!(summary["messages_omitted"], true);
+        assert!(!summary.to_string().contains(secret));
+        let native = std::io::Error::from_raw_os_error(2);
+        assert_eq!(
+            super::readiness_error_summary(&native)["io_errors"][0]["raw_os_error"],
+            2
+        );
+    }
+
+    #[test]
+    fn readiness_summary_keeps_reqwest_classification_without_private_urls() {
+        let error = reqwest::Client::new()
+            .get("http://[synthetic-secret-invalid/?token=private-value")
+            .build()
+            .expect_err("the deliberately malformed private URL must be rejected");
+        let summary = super::readiness_error_summary(&error);
+        assert_eq!(summary["reqwest"]["builder"], true);
+        assert_eq!(summary["reqwest"]["connect"], false);
+        assert!(!summary.to_string().contains("synthetic-secret"));
+        assert!(!summary.to_string().contains("private-value"));
+    }
+
     #[cfg(unix)]
     fn exact_program_inventory() -> super::TestResult<Vec<u32>> {
         let python = std::env::var_os("VERYSYNC_TEST_PYTHON").unwrap_or_else(|| "python3".into());
