@@ -700,3 +700,76 @@ async fn public_core_errors_logs_levels_and_owned_diagnostics() -> TestResult {
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity() -> TestResult {
+    use verysync_sidecar::{Error, NativeStoragePathsOutcome};
+    let root = tempfile::Builder::new().prefix("vpaths-").tempdir()?.keep();
+    let sentinel = root.join("synthetic sample \u{4e8c}.txt");
+    let sample = b"native paths must never modify synchronization data";
+    std::fs::write(&sentinel, sample)?;
+    let state_input = root.join("owned state \u{4e8c}");
+    let mut core = ManagedInstance::start(options(&state_input)?).await?;
+    let id = core.client().instance().device_id.clone();
+    assert!(matches!(
+        core.inspect_native_storage_paths(Duration::from_secs(10))
+            .await,
+        Err(Error::ManagedFailure { .. })
+    ));
+    assert_eq!(core.client().system_status().await?.device_id, id);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    let state = core.state_directory().to_owned();
+    let protected = [
+        "setting.dat",
+        "key.pem",
+        "cert.pem",
+        "https-key.pem",
+        "https-cert.pem",
+    ];
+    let before = protected
+        .iter()
+        .map(|name| std::fs::read(state.join(name)))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(matches!(
+        core.inspect_native_storage_paths(Duration::ZERO).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert!(core
+        .inspect_native_storage_paths(Duration::from_nanos(1))
+        .await
+        .is_err());
+    let exit = core
+        .inspect_native_storage_paths(Duration::from_secs(10))
+        .await?;
+    assert_eq!(exit.outcome, NativeStoragePathsOutcome::Success);
+    assert!(exit.tree_stopped && exit.code == Some(0));
+    let paths = exit.paths.as_ref().ok_or("missing native typed paths")?;
+    assert_eq!(paths.configuration_file, state.join("setting.dat"));
+    assert_eq!(paths.device_private_key, state.join("key.pem"));
+    assert_eq!(paths.device_certificate, state.join("cert.pem"));
+    assert_eq!(paths.https_private_key, state.join("https-key.pem"));
+    assert_eq!(paths.https_certificate, state.join("https-cert.pem"));
+    assert_eq!(paths.database_directory, state.join("index-v2"));
+    assert_eq!(paths.log_file, state.join("verysync.log"));
+    assert_eq!(paths.gui_override_directory, state.join("gui"));
+    assert_eq!(
+        paths.default_sync_directory,
+        state.join("profile").join("Sync")
+    );
+    assert!(!paths.default_sync_directory.exists());
+    assert!(!format!("{exit:?}").contains("owned state"));
+    assert!(std::str::from_utf8(exit.diagnostic.body_bytes())?.contains("Configuration file:"));
+    for (name, bytes) in protected.iter().zip(&before) {
+        assert_eq!(&std::fs::read(state.join(name))?, bytes);
+    }
+    assert_eq!(std::fs::read(&sentinel)?, sample);
+    core.restart(Duration::from_secs(10)).await?;
+    assert_eq!(core.client().instance().device_id, id);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert_eq!(std::fs::read(&sentinel)?, sample);
+    std::fs::remove_dir_all(&root)?;
+    eprintln!("native storage paths evidence: {{\"actual_complete_nine_native_paths\":true,\"explicit_owned_home_and_profile\":true,\"absent_default_directory_stays_absent\":true,\"running_owner_refused\":true,\"invalid_deadlines_refused\":true,\"configuration_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"synthetic_sample_retained\":true,\"both_normal_owned_tree_exits\":true}}");
+    Ok(())
+}
