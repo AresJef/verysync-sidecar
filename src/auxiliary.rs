@@ -390,3 +390,29 @@ impl fmt::Debug for TargetPathCompletions {
             .finish_non_exhaustive()
     }
 }
+
+/// Explicit target-native location for a registered folder's open request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFolderOpenLocation {
+    /// The registered folder itself; native category normal.
+    Folder,
+    /// The native trash/archive location; native category trash.
+    Trash,
+}
+/// Acknowledgement of an explicit native folder-open request. The fixed core
+/// ignores opener launch errors and can silently ignore nonlocal requests.
+/// This receipt never proves a desktop window opened or a process succeeded.
+#[derive(Clone)]
+pub struct NativeFolderOpenReceipt {
+    /// Exact registration selected for the request, omitted from Debug.
+    pub folder: crate::FolderId,
+    /// Explicit selected native location.
+    pub location: NativeFolderOpenLocation,
+}
+impl fmt::Debug for NativeFolderOpenReceipt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeFolderOpenReceipt")
+            .field("location", &self.location)
+            .finish_non_exhaustive()
+    }
+}
