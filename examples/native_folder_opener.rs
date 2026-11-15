@@ -14,6 +14,21 @@ fn own_native_parent() -> libc::pid_t {
     unsafe { libc::getppid() }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if env::var("VERYSYNC_TEST_OPENER_RUNTIME_PROBE").as_deref() == Ok("1") {
+        if env::args_os().skip(1).collect::<Vec<_>>()
+            != [std::ffi::OsStr::new("--verysync-test-loopback-runtime")]
+        {
+            return Err("exact test-only runtime probe argument required".into());
+        }
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        assert!(listener.local_addr()?.ip().is_loopback());
+        println!(
+            "{{\"owned_opener_runtime_probe\":true,\"target_arch\":\"{}\",\"pointer_bits\":{},\"loopback_bind\":true}}",
+            env::consts::ARCH,
+            usize::BITS
+        );
+        return Ok(());
+    }
     let root = PathBuf::from(
         env::var_os("VERYSYNC_TEST_OPENER_CAPTURE_DIR")
             .ok_or("explicit owned capture directory required")?,

@@ -12,6 +12,7 @@ import select
 import shutil
 import socket
 import socketserver
+import struct
 import subprocess
 import sys
 import threading
@@ -25,6 +26,67 @@ DISCOVERY_HOSTS = frozenset({
     "discovery-v6-1.verysync.cn",
 })
 
+def windows_pe_machine(path):
+    """Read the bounded PE signature and COFF machine; never execute the image.
+
+    Format: https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
+    """
+    with path.open("rb") as source:
+        header = source.read(64)
+        if len(header) != 64 or header[:2] != b"MZ":
+            raise ValueError("regular PE image required")
+        offset = struct.unpack_from("<I", header, 0x3c)[0]
+        if not 64 <= offset <= 1024 * 1024:
+            raise ValueError("bounded PE header offset required")
+        source.seek(offset)
+        coff = source.read(6)
+        if len(coff) != 6 or coff[:4] != b"PE\0\0":
+            raise ValueError("exact PE signature required")
+        return struct.unpack_from("<H", coff, 4)[0]
+
+
+def windows_wow64_directory():
+    import ctypes
+    buffer = ctypes.create_unicode_buffer(32768)
+    query = ctypes.WinDLL("kernel32", use_last_error=True).GetSystemWow64DirectoryW
+    query.argtypes = [ctypes.c_wchar_p, ctypes.c_uint]
+    query.restype = ctypes.c_uint
+    size = query(buffer, len(buffer))
+    if not 0 < size < len(buffer):
+        raise OSError("actual x86 Windows system directory query failed")
+    return Path(buffer.value)
+
+
+def windows_socket_provider(executable):
+    machine = windows_pe_machine(executable)
+    if machine not in {0x014c, 0x8664, 0xaa64}:
+        raise ValueError("verified Windows opener architecture required")
+    runtime = Path(os.environ["SYSTEMROOT"]) / "System32" / "mswsock.dll"
+    if machine == 0x014c and windows_pe_machine(runtime) != machine:
+        # Query the actual x86 directory rather than copying the Python host's
+        # 64-bit provider. Only the owned child adopts the private SystemRoot.
+        runtime = windows_wow64_directory() / "mswsock.dll"
+    if not runtime.is_absolute() or not runtime.is_file() or runtime.is_symlink():
+        raise ValueError("exact native Windows socket provider required")
+    if machine == 0x014c and windows_pe_machine(runtime) != machine:
+        raise ValueError("x86 opener requires an actual x86 socket provider")
+    return runtime, machine
+
+
+def probe_windows_opener_runtime(executable, env, machine):
+    target = {0x014c: ("x86", 32), 0x8664: ("x86_64", 64), 0xaa64: ("aarch64", 64)}[machine]
+    probe = subprocess.run(
+        [str(executable), "--verysync-test-loopback-runtime"],
+        env=dict(env, VERYSYNC_TEST_OPENER_RUNTIME_PROBE="1"),
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+    )
+    if probe.returncode != 0:
+        raise ValueError(f"owned Windows socket preflight failed: machine={hex(machine)}, "
+                         f"exit={probe.returncode}, diagnostic={probe.stderr.decode('utf-8', errors='replace')[-512:]!r}")
+    expected = {"owned_opener_runtime_probe": True, "target_arch": target[0],
+                "pointer_bits": target[1], "loopback_bind": True}
+    if json.loads(probe.stdout) != expected:
+        raise ValueError("owned Windows socket preflight returned a mismatched target receipt")
 
 
 def prepare_native_opener(cargo, toolchain, evidence_dir, env):
@@ -55,9 +117,7 @@ def prepare_native_opener(cargo, toolchain, evidence_dir, env):
         executable.parent.mkdir(parents=True)
         # Winsock's registered provider expands SystemRoot too. Preserve that
         # native OS runtime in the private copy; never modify the OS directory.
-        runtime = Path(os.environ["SYSTEMROOT"]) / "System32" / "mswsock.dll"
-        if not runtime.is_absolute() or not runtime.is_file() or runtime.is_symlink():
-            raise ValueError("exact native Windows socket provider required")
+        runtime, machine = windows_socket_provider(source)
         runtime_copy = executable.parent / runtime.name
         shutil.copy2(runtime, runtime_copy)
         if hashlib.sha256(runtime.read_bytes()).digest() != hashlib.sha256(runtime_copy.read_bytes()).digest():
@@ -65,23 +125,27 @@ def prepare_native_opener(cargo, toolchain, evidence_dir, env):
         # Only the exact dispatch test's separate child adopts this value.
         # Do not change SystemRoot for Cargo, the suite, or the caller.
         env["VERYSYNC_TEST_OPENER_SYSTEM_ROOT"] = str(system_root)
-        probe_env = dict(env, SYSTEMROOT=str(system_root))
-        probe = subprocess.run(
-            [sys.executable, "-c", "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); s.close()"],
-            env=probe_env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, timeout=10,
-        )
-        if probe.returncode != 0:
-            raise ValueError("owned Windows socket provider preflight failed")
     else:
         executable = directory / name
     shutil.copy2(source, executable)
     if hashlib.sha256(executable.read_bytes()).digest() != hashlib.sha256(source.read_bytes()).digest():
         raise ValueError("owned native opener copy differs")
+    receipt = {"fixture_only": True, "name": name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    if os.name == "nt":
+        print("Owned Windows socket provider candidate: " + json.dumps({
+            "target_pe_machine": hex(machine),
+            "socket_provider_pe_machine": hex(windows_pe_machine(runtime_copy)),
+            "socket_provider_sha256": hashlib.sha256(runtime_copy.read_bytes()).hexdigest(),
+            "owned_copy_byte_verified": True,
+        }), flush=True)
+        probe_windows_opener_runtime(executable, dict(env, SYSTEMROOT=str(system_root)), machine)
+        receipt.update(target_pe_machine=hex(machine),
+                       socket_provider_pe_machine=hex(windows_pe_machine(runtime_copy)),
+                       target_runtime_preflight=True)
     env["PATH"] = str(executable.parent) + os.pathsep + env.get("PATH", "")
     env["VERYSYNC_TEST_OPENER_CAPTURE_DIR"] = str(capture)
     env["VERYSYNC_TEST_OPENER_EXECUTABLE"] = str(executable)
-    return {"fixture_only": True, "name": name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    return receipt
 
 def mount_namespace_identity():
     return os.readlink("/proc/self/ns/mnt")
@@ -499,7 +563,7 @@ def main():
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TARGET_FILE"] = str(discovery_file)
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TOKEN"] = discovery_token
         opener = None
-        for name in ("VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE", "VERYSYNC_TEST_OPENER_SYSTEM_ROOT", "VERYSYNC_TEST_OPENER_OWNED_CHILD", "VERYSYNC_TEST_BROWSER_HOLD", "VERYSYNC_TEST_BROWSER_ACTOR", "VERYSYNC_TEST_BROWSER_ISOLATION"):
+        for name in ("VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE", "VERYSYNC_TEST_OPENER_SYSTEM_ROOT", "VERYSYNC_TEST_OPENER_OWNED_CHILD", "VERYSYNC_TEST_OPENER_RUNTIME_PROBE", "VERYSYNC_TEST_BROWSER_HOLD", "VERYSYNC_TEST_BROWSER_ACTOR", "VERYSYNC_TEST_BROWSER_ISOLATION"):
             env.pop(name, None)
         if args.test_target in {"engine_control", "browser_engine"}:
             opener = prepare_native_opener(args.cargo, args.toolchain, args.evidence_dir, env)
@@ -545,7 +609,7 @@ def main():
                     opener["captured_calls"] = captures
                     opener["owned_capture_and_executable_removed"] = not owned_opener.exists()
                     (args.evidence_dir / "native-opener-fixture.json").write_text(json.dumps(opener), encoding="utf-8")
-                    print("Isolated native opener observations: " + json.dumps({key: opener[key] for key in ("fixture_only", "name", "sha256", "captured_calls", "owned_capture_and_executable_removed") if key in opener}, sort_keys=True), flush=True)
+                    print("Isolated native opener observations: " + json.dumps({key: opener[key] for key in ("fixture_only", "name", "sha256", "captured_calls", "owned_capture_and_executable_removed", "target_pe_machine", "socket_provider_pe_machine", "target_runtime_preflight") if key in opener}, sort_keys=True), flush=True)
             finally:
                 proxy.shutdown()
                 server.join(timeout=5)

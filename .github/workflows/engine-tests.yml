@@ -529,6 +529,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - package: windows-386-standard
+            runner: windows-2022
+            rust: i686-pc-windows-msvc
+            target: engine_control
+            filter: actual_native_folder_open_requests_capture_exact_owned_target_dispatch
+            trace: "0"
           - package: windows-amd64-standard
             runner: windows-2022
             rust: x86_64-pc-windows-msvc

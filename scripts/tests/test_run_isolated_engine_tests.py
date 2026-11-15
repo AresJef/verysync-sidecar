@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import socket
+import struct
 import sys
 import tempfile
 import threading
@@ -261,6 +262,62 @@ class ProxyContracts(unittest.TestCase):
 
 
 class NativeOpenerContracts(unittest.TestCase):
+    @staticmethod
+    def pe_fixture(path, machine):
+        data = bytearray(134)
+        data[:2] = b"MZ"
+        struct.pack_into("<I", data, 0x3c, 128)
+        data[128:132] = b"PE\0\0"
+        struct.pack_into("<H", data, 132, machine)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def test_x86_opener_selects_and_verifies_actual_32_bit_socket_provider(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "owned-x86.exe"
+            self.pe_fixture(source, 0x014c)
+            self.pe_fixture(root / "System32" / "mswsock.dll", 0x8664)
+            wow64 = root / "queried-x86-system-directory"
+            self.pe_fixture(wow64 / "mswsock.dll", 0x014c)
+            with patch.dict(HELPER.os.environ, {"SYSTEMROOT": str(root)}), \
+                 patch.object(HELPER, "windows_wow64_directory", return_value=wow64) as query:
+                runtime, machine = HELPER.windows_socket_provider(source)
+                self.assertEqual(runtime, wow64 / "mswsock.dll")
+                self.assertEqual(machine, 0x014c)
+                query.assert_called_once_with()
+                self.pe_fixture(wow64 / "mswsock.dll", 0x8664)
+                with self.assertRaises(ValueError):
+                    HELPER.windows_socket_provider(source)
+
+    def test_target_runtime_probe_executes_owned_artifact_and_requires_matching_receipt(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            executable = Path(temporary) / "rundll32.exe"
+            self.pe_fixture(executable, 0x014c)
+            env = {"SYSTEMROOT": "synthetic-owned-root"}
+            valid = {"owned_opener_runtime_probe": True, "target_arch": "x86",
+                     "pointer_bits": 32, "loopback_bind": True}
+            with patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=json.dumps(valid).encode(), stderr=b"")) as probe:
+                HELPER.probe_windows_opener_runtime(executable, env, 0x014c)
+            self.assertEqual(probe.call_args.args[0], [str(executable), "--verysync-test-loopback-runtime"])
+            self.assertEqual(probe.call_args.kwargs["env"]["VERYSYNC_TEST_OPENER_RUNTIME_PROBE"], "1")
+            self.assertNotIn("VERYSYNC_TEST_OPENER_RUNTIME_PROBE", env)
+            for receipt in [dict(valid, pointer_bits=64), dict(valid, target_arch="x86_64"),
+                            dict(valid, loopback_bind=False)]:
+                with patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=0, stdout=json.dumps(receipt).encode(), stderr=b"")):
+                    with self.assertRaises(ValueError):
+                        HELPER.probe_windows_opener_runtime(executable, env, 0x014c)
+
+    def test_pe_reader_refuses_non_pe_and_unbounded_header_offsets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "not-executed.exe"
+            for content in [b"not a PE image", b"MZ" + bytes(58) + b"\xff\xff\xff\xff"]:
+                path.write_bytes(content)
+                with self.assertRaises(ValueError):
+                    HELPER.windows_pe_machine(path)
     def test_linux_browser_plan_requires_owned_vm_and_excludes_credentials(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -404,14 +461,20 @@ class NativeOpenerContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
             source=root/"compiled opener fixture"
-            source.write_bytes(b"synthetic regular artifact, not executed")
+            self.pe_fixture(source, 0x8664)
             evidence=root/"evidence"
             evidence.mkdir()
             env={"PATH":"original-child-path","CARGO_TARGET_DIR":"explicit-target"}
             original=HELPER.os.environ.copy()
             messages={"reason":"compiler-artifact","target":{"kind":["example"],"name":"native_folder_opener"},"executable":str(source)}
             result=SimpleNamespace(returncode=0,stdout=json.dumps(messages),stderr="")
-            with patch.object(HELPER.subprocess,"run",return_value=result) as build:
+            def run(command, **kwargs):
+                if command[:2] == ["explicit-cargo", "+1.85.0"]:
+                    return result
+                return SimpleNamespace(returncode=0, stdout=json.dumps({
+                    "owned_opener_runtime_probe": True, "target_arch": "x86_64",
+                    "pointer_bits": 64, "loopback_bind": True}).encode(), stderr=b"")
+            with patch.object(HELPER.subprocess,"run",side_effect=run) as build:
                 receipt=HELPER.prepare_native_opener("explicit-cargo","1.85.0",evidence,env)
             executable=Path(env["VERYSYNC_TEST_OPENER_EXECUTABLE"])
             self.assertEqual(executable.read_bytes(),source.read_bytes())
@@ -431,7 +494,7 @@ class NativeOpenerContracts(unittest.TestCase):
             self.assertIs(cargo_calls[0].kwargs["env"], env)
             if HELPER.os.name == "nt":
                 probes = [call for call in build.call_args_list
-                          if call.args[0][:2] == [sys.executable, "-c"]]
+                          if call.args[0] == [str(executable), "--verysync-test-loopback-runtime"]]
                 self.assertEqual(len(probes), 1)
                 self.assertEqual(probes[0].kwargs["env"]["SYSTEMROOT"],
                                  env["VERYSYNC_TEST_OPENER_SYSTEM_ROOT"])
