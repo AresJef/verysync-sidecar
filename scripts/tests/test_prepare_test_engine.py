@@ -14,6 +14,7 @@ from unittest.mock import patch, Mock
 from types import SimpleNamespace
 import warnings
 import zipfile
+import hashlib
 
 SOURCE = Path(__file__).resolve().parents[1] / "prepare-test-engine.py"
 SPEC = importlib.util.spec_from_file_location("prepare_test_engine", SOURCE)
@@ -212,6 +213,56 @@ class CatalogSelectionContracts(unittest.TestCase):
                         HELPER.prepare(args)
                 fetch.assert_not_called()
                 self.assertEqual(list(Path(parent).iterdir()), [])
+
+
+class EmulatedOwnershipContracts(unittest.TestCase):
+    def setUp(self):
+        # Procfs device numbers are synthetic on every host, including Windows.
+        for name, value in [("major", 42), ("minor", 17)]:
+            patcher = patch.object(HELPER.os, name, return_value=value, create=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.temp = tempfile.TemporaryDirectory(prefix="vs-emulator-observer-")
+        self.root = Path(self.temp.name)
+        self.core = self.root / "private core"
+        self.core.write_bytes(b"synthetic mapped core")
+        self.core = self.core.resolve()
+        self.proc = self.root / "proc"
+        self.pid = self.proc / "123"
+        self.pid.mkdir(parents=True)
+        (self.pid / "stat").write_text("123 (qemu-arm) " + " ".join(["S"] + ["0"] * 18 + ["42"]))
+        (self.pid / "cmdline").write_bytes(b"/private/qemu-arm\0" + os.fsencode(self.core) + b"\0serve\0")
+        info = self.core.stat()
+        self.mapping = f"1000-2000 r-xp 00000000 {os.major(info.st_dev):02x}:{os.minor(info.st_dev):02x} {info.st_ino} private core\n"
+        (self.pid / "maps").write_text(self.mapping)
+        (self.pid / "exe").write_bytes(b"synthetic pinned emulator")
+        self.digest = hashlib.sha256((self.pid / "exe").read_bytes()).hexdigest()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def observed(self):
+        return HELPER.linux_emulated_processes(self.core, self.digest, self.proc)
+
+    def test_emulator_identity_mapped_core_and_exact_argument_are_all_required(self):
+        self.assertEqual(self.observed(), [123])
+        (self.pid / "exe").write_bytes(b"unrelated emulator image")
+        self.assertEqual(self.observed(), [])
+        (self.pid / "exe").write_bytes(b"synthetic pinned emulator")
+        (self.pid / "maps").write_text("")
+        self.assertEqual(self.observed(), [])
+        (self.pid / "maps").write_text(self.mapping)
+        (self.pid / "cmdline").write_bytes(b"/private/qemu-arm\0" + os.fsencode(self.core) + b"-other\0")
+        self.assertEqual(self.observed(), [])
+
+    def test_changed_process_birth_is_not_reported_as_a_stable_owner(self):
+        with patch.object(HELPER, "linux_process_stamp", side_effect=[42, 43]):
+            self.assertEqual(self.observed(), [])
+
+    def test_original_core_image_identity_is_retained_when_binfmt_preserves_it(self):
+        (self.pid / "exe").unlink()
+        (self.pid / "exe").hardlink_to(self.core)
+        self.assertEqual(self.observed(), [123])
 
 
 if __name__ == "__main__":
