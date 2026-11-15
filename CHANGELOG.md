@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add full native indexed-file metadata, advertised sources and encoded signature
+  records, preserving native empty local state without inferring file presence,
+  completed downloads or signature trust.
+
 - Add native indexed-tree snapshots with explicit depth, target-relative prefix
   and directory filters, exact private recursive metadata and no implicit scan.
 

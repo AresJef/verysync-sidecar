@@ -7,6 +7,326 @@ use std::{
 use verysync_sidecar::{Error, ManagedInstance};
 
 #[tokio::test]
+async fn actual_native_index_file_metadata_preserves_native_records_and_missing_objects(
+) -> TestResult {
+    use verysync_sidecar::{
+        CreateFolderOptions, FolderId, FolderScanPatch, FolderState, SyncFileKind, TargetPath,
+    };
+    let root = tempfile::Builder::new()
+        .prefix("vs-index-file-")
+        .tempdir()?
+        .keep();
+    let data = root.join("synthetic data");
+    let branch = std::path::Path::new("branch \u{4e8c} % +");
+    std::fs::create_dir_all(data.join(branch))?;
+    let original = b"synthetic native index bytes";
+    std::fs::write(data.join("root.txt"), original)?;
+    std::fs::write(data.join(branch).join("child.txt"), b"distinct child bytes")?;
+    let mut owner = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let id = owner.client().instance().device_id.clone();
+    let folder = FolderId::parse("typed-native-index-file")?;
+    owner
+        .client()
+        .create_folder(
+            &CreateFolderOptions::new(folder.clone(), TargetPath::local(&data)).paused(true),
+        )
+        .await?;
+    owner
+        .client()
+        .update_folder_scan_configuration(
+            &folder,
+            &FolderScanPatch::default()
+                .watcher(false)
+                .rescan_interval_seconds(0)
+                .disable_initial_scan(false),
+        )
+        .await?;
+    owner.client().resume_folder(&folder).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let status = owner.client().folder_status(&folder).await?;
+            if status.state == Some(FolderState::Idle) && status.local_files == Some(2) {
+                return Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await??;
+    let configuration = std::fs::read(root.join("core").join("setting.dat"))?;
+    let file = owner
+        .client()
+        .index_file_info(&folder, &TargetPath::local("root.txt"))
+        .await?;
+    assert_eq!(file.global.name, "root.txt");
+    assert_eq!(file.local.name, "root.txt");
+    assert_eq!(file.global.kind, SyncFileKind::File);
+    assert_eq!(file.global.size, original.len() as u64);
+    assert_eq!(file.local.size, original.len() as u64);
+    assert!(!file.global.version.is_empty());
+    assert_eq!(file.global.version, file.local.version);
+    assert!(file.availability.is_none());
+    assert!(!file.global.deleted && !file.global.ignored && !file.global.invalid);
+    assert_eq!(file.global.num_blocks, 1);
+    assert!(file
+        .global
+        .blocks_hash
+        .as_ref()
+        .is_some_and(|v| !v.is_empty()));
+    assert!(file.global.previous_blocks_hash.is_none());
+    let child = owner
+        .client()
+        .index_file_info(&folder, &TargetPath::local(branch.join("child.txt")))
+        .await?;
+    assert!(child.global.name.ends_with("child.txt"));
+    assert_eq!(child.global.size, b"distinct child bytes".len() as u64);
+    let directory = owner
+        .client()
+        .index_file_info(&folder, &TargetPath::local(branch))
+        .await?;
+    assert_eq!(directory.global.kind, SyncFileKind::Directory);
+    assert_eq!(directory.global.size, 0);
+    assert_eq!(directory.global.num_blocks, 0);
+    assert!(directory.global.blocks_hash.is_none());
+    assert!(matches!(
+        owner
+            .client()
+            .index_file_info(&folder, &TargetPath::local("absent.txt"))
+            .await,
+        Err(Error::Http { response }) if response.status()==404
+    ));
+    std::fs::write(
+        data.join("unscanned.txt"),
+        b"caller explicitly scans this later",
+    )?;
+    assert!(matches!(
+        owner
+            .client()
+            .index_file_info(&folder, &TargetPath::local("unscanned.txt"))
+            .await,
+        Err(Error::Http { response }) if response.status()==404
+    ));
+    assert_eq!(
+        owner.client().folder_status(&folder).await?.local_files,
+        Some(2)
+    );
+    owner.client().request_scan(&folder).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let status = owner.client().folder_status(&folder).await?;
+            if status.state == Some(FolderState::Idle) && status.local_files == Some(3) {
+                return Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await??;
+    let scanned = owner
+        .client()
+        .index_file_info(&folder, &TargetPath::local("unscanned.txt"))
+        .await?;
+    assert_eq!(
+        scanned.global.size,
+        b"caller explicitly scans this later".len() as u64
+    );
+    assert_eq!(owner.client().system_status().await?.device_id, id);
+    assert_eq!(
+        std::fs::read(root.join("core").join("setting.dat"))?,
+        configuration
+    );
+    assert_eq!(std::fs::read(data.join("root.txt"))?, original);
+    assert_eq!(
+        std::fs::read(data.join(branch).join("child.txt"))?,
+        b"distinct child bytes"
+    );
+    assert_eq!(
+        std::fs::read(data.join("unscanned.txt"))?,
+        b"caller explicitly scans this later"
+    );
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("native_index_file_metadata_snapshots=4 native_missing_objects=2 nested_unicode_target_path=true directory_kind_and_null_hash=true null_availability_retained=true unscanned_file_not_fabricated=true explicit_scan_effect_separate=true identity_configuration_and_three_files_retained=true normal_owned_exit=true");
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_native_index_file_availability_preserves_zero_local_state() -> TestResult {
+    use verysync_sidecar::{
+        BandwidthPatch, Client, CreateDeviceOptions, DeviceId, DevicePatch, DeviceTransport,
+        FolderId, JoinFolderOptions, RawMethod, RawRequest, RequestEffect, TargetPath,
+    };
+    async fn address(client: &Client) -> TestResult<String> {
+        Ok(tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                for status in client.listener_status().await?.into_values() {
+                    for address in status.lan_addresses {
+                        if address
+                            .strip_prefix("tcp://")
+                            .and_then(|s| s.parse::<std::net::SocketAddr>().ok())
+                            .is_some_and(|a| {
+                                a.ip().is_loopback() && a.port() != 0 && a.port() != 18886
+                            })
+                        {
+                            return Ok::<_, Error>(address);
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await??)
+    }
+    async fn associate(
+        client: &Client,
+        folder: &FolderId,
+        peer: &DeviceId,
+        address: &str,
+    ) -> TestResult {
+        assert!(
+            client
+                .create_device(
+                    &CreateDeviceOptions::new(peer.clone()).settings(
+                        DevicePatch::default()
+                            .addresses(vec![address.to_owned()])
+                            .allowed_transports(vec![DeviceTransport::Tcp])
+                            .paused(false)
+                    )
+                )
+                .await?
+                .requested_fields_match
+        );
+        client.share_folder_with(folder, peer).await?;
+        Ok(())
+    }
+
+    let root = tempfile::Builder::new()
+        .prefix("vs-index-peer-")
+        .tempdir()?
+        .keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let aid = a.client().instance().device_id.clone();
+    let bid = b.client().instance().device_id.clone();
+    assert_ne!(aid, bid);
+    let aa = address(a.client()).await?;
+    let ba = address(b.client()).await?;
+    let keys = a.client().generate_share().await?;
+    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
+    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
+    let origin = root.join("source files");
+    let received = root.join("receiver files");
+    std::fs::create_dir_all(&origin)?;
+    let mut seed = 0x34abcdef12345678u64;
+    let sample: Vec<u8> = (0..131072)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as u8
+        })
+        .collect();
+    std::fs::write(origin.join("sample.bin"), &sample)?;
+    let af = a
+        .client()
+        .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(&origin)).paused(true))
+        .await?;
+    let bf = b
+        .client()
+        .join_folder(&JoinFolderOptions::new(ro, TargetPath::local(&received)).paused(true))
+        .await?;
+    assert!(
+        b.client()
+            .update_bandwidth_configuration(
+                &BandwidthPatch::default()
+                    .max_receive_kib_per_second(1)
+                    .limit_in_lan(true)
+            )
+            .await?
+            .requested_fields_match
+    );
+    let setup = RawRequest::new(
+        RawMethod::Patch,
+        ["rest", "config", "folders", bf.configuration.id.as_str()],
+        RequestEffect::MayModify,
+    )?
+    .json_body(&serde_json::json!({"antsPullerEnabled":false,"pullerSessionEnabled":false}))?;
+    assert_eq!(b.client().raw_request(&setup).await?.status(), 200);
+    associate(a.client(), &af.configuration.id, &bid, &ba).await?;
+    associate(b.client(), &bf.configuration.id, &aid, &aa).await?;
+    a.client().resume_folder(&af.configuration.id).await?;
+    b.client().resume_folder(&bf.configuration.id).await?;
+    a.client().request_scan(&af.configuration.id).await?;
+    let file = TargetPath::local("sample.bin");
+    let info = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match b
+                .client()
+                .index_file_info(&bf.configuration.id, &file)
+                .await
+            {
+                Ok(info)
+                    if info
+                        .availability
+                        .as_ref()
+                        .is_some_and(|records| !records.is_empty()) =>
+                {
+                    return Ok::<_, Error>(info)
+                }
+                Ok(_) => {}
+                Err(Error::Http { response }) if response.status() == 404 => {}
+                Err(error) => return Err(error),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    assert_eq!(info.global.name, "sample.bin");
+    assert_eq!(info.global.size, sample.len() as u64);
+    assert_eq!(info.global.kind, verysync_sidecar::SyncFileKind::File);
+    assert!(info.local.name.is_empty());
+    assert!(info.local.version.is_empty());
+    assert_eq!(info.local.size, 0);
+    assert_eq!(info.local.num_blocks, 0);
+    assert!(info.local.blocks_hash.is_none());
+    assert_eq!(info.local.signature.version, 0);
+    assert!(info.local.signature.encoded_signature.is_none());
+    assert!(!received.join("sample.bin").exists());
+    let available = info
+        .availability
+        .as_ref()
+        .ok_or("nonempty availability required")?;
+    assert!(available
+        .iter()
+        .any(|source| source.device_id == aid && !source.from_temporary));
+    assert_eq!(info.global.signature.version, 3);
+    let encoded = info
+        .global
+        .signature
+        .encoded_signature
+        .as_ref()
+        .ok_or("native shared-file signature absent")?;
+    assert!(!encoded.is_empty());
+    let debug = format!(
+        "{info:?} {:?} {:?} {:?} {available:?}",
+        info.global, info.local, info.global.signature
+    );
+    assert!(!debug.contains(encoded));
+    assert!(!debug.contains(aid.as_str()));
+    assert!(!debug.contains(keys.read_only_key.expose_secret()));
+    assert!(!debug.contains(keys.read_write_key.expose_secret()));
+    println!("native_index_file_availability=true actual_private_peer_matches=true non_temporary_source_record=true shared_native_signature_version3_preserved_without_verification=true zero_local_record_preserved=true receiver_file_not_complete=true no_wan_or_completion_claim=true caller_fixture_polling_separate_from_single_sdk_reads=true");
+    assert_eq!(std::fs::read(origin.join("sample.bin"))?, sample);
+    assert_eq!(a.client().system_status().await?.device_id, aid);
+    assert_eq!(b.client().system_status().await?.device_id, bid);
+    for owner in [&mut b, &mut a] {
+        let exit = owner.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    }
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn actual_native_index_browse_keeps_depth_filters_and_index_only_observations() -> TestResult
 {
     use verysync_sidecar::{

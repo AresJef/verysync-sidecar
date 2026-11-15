@@ -112,3 +112,59 @@ identity/configuration/synthetic bytes. With watching and automatic rescans
 disabled, an unscanned synthetic file stays absent from the index snapshot.
 This local effect evidence is separate from full same-source native platform
 acceptance, which remains pending.
+
+## Full native indexed-file metadata
+
+`index_file_info(folder, path)` reads the distinct `/rest/db/file` observation.
+It checks the authenticated identity and current configured folder, validates a
+strictly relative TargetPath in the target's syntax, and sends one GET with the
+exact once-encoded file name. It performs no controller filesystem lookup,
+implicit scan, download, peer contact or retry. A missing indexed object retains
+the native HTTP 404 and bounded private diagnostic; an unconfigured folder is
+refused by the configuration preflight. Concurrent changes can still produce a
+native error after that separate preflight.
+
+`IndexFileInfo` retains complete native global and local metadata records and
+advertised availability. Each `IndexFileMetadata` preserves untrusted names,
+file/directory/unknown kinds, exact modification timestamps and short modifier
+IDs, sizes, deletion/ignore/invalid flags, permission strings, local flags,
+rescan state, block counts/hashes, sequences, native version-vector strings and
+signature metadata. No host-path conversion, permission enforcement, vector
+clock merge, timestamp rewriting or implicit follow-up operation occurs.
+
+A native local record can have an empty name, empty version vector, zero size,
+zero block/sequence/signature values and a placeholder timestamp while the
+global record names a remote file. The DTO preserves that actual record; it
+does not turn it into an existing zero-byte local file or fabricate absent
+metadata. Global index knowledge does not prove filesystem access or completion.
+Native availability null stays None, while an explicit empty list stays Some
+empty. `IndexFileAvailability` preserves each full device ID and the native
+fromTemporary flag without probing a source or inferring that a transfer ended.
+
+Native encoded block-list hashes are not SDK-verified content digests.
+`IndexFileSignature` preserves the native Version tag and encoded Sign value
+without interpreting its format version, validating the signature or making a
+trust decision. Per-platform extension payloads remain explicit opaque JSON
+objects; unverified ownership, ACL and extended-attribute schemas are not
+normalized or applied. Unknown fields remain inspectable. Ordinary Debug omits
+private names, times, modifier IDs, permissions, vectors, hashes, signatures,
+peer IDs and extension values. Explicitly redact those fields before logging.
+
+```no_run
+# async fn indexed_file(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+use verysync_sidecar::TargetPath;
+let path = std::path::Path::new("reports").join("annual.bin");
+let info = client.index_file_info(folder, &TargetPath::local(path)).await?;
+// Inspect actual global/local records; availability is not a download receipt.
+# let _ = info;
+# Ok(()) }
+```
+
+Controlled native cases distinguish file/directory metadata, nested target paths,
+native missing-object errors, unscanned-file absence and a separately requested
+scan. A separate two-core private-loopback case observes a real advertised peer
+and signed global metadata while the receiver retains the native zero local
+record and has no completed file. Its explicit rate/configuration setup and
+caller-controlled polling are test fixtures, not implicit behavior of this read.
+They do not establish WAN behavior, completed downloads or signature trust.
+Full same-source native platform acceptance remains pending.
