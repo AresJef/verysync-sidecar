@@ -40,7 +40,8 @@ class ProxyContracts(unittest.TestCase):
                     patch.object(HELPER.sys, "stdout", console), \
                     patch.dict(HELPER.os.environ, {"VERYSYNC_TEST_BINARY": str(binary),
                                                    "VERYSYNC_TEST_BINARY_SHA256": "0" * 64}), \
-                    patch.object(HELPER.subprocess, "Popen", return_value=process):
+                    patch.object(HELPER.subprocess, "Popen", return_value=process), \
+                    patch.object(HELPER, "prepare_native_opener", return_value={"fixture_only": True}):
                 self.assertEqual(HELPER.main(), 7)
                 console.flush()
                 self.assertEqual(console_bytes.getvalue().decode("utf-8").splitlines()[0],
@@ -241,6 +242,48 @@ class ProxyContracts(unittest.TestCase):
                 proxy.shutdown()
                 server.join(timeout=2)
                 self.assertFalse(server.is_alive())
+
+
+
+
+
+class NativeOpenerContracts(unittest.TestCase):
+    def test_exact_artifact_is_copied_into_owned_child_path_without_parent_environment_changes(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            source=root/"compiled opener fixture"
+            source.write_bytes(b"synthetic regular artifact, not executed")
+            evidence=root/"evidence"
+            evidence.mkdir()
+            env={"PATH":"original-child-path","CARGO_TARGET_DIR":"explicit-target"}
+            original=HELPER.os.environ.copy()
+            messages={"reason":"compiler-artifact","target":{"kind":["example"],"name":"native_folder_opener"},"executable":str(source)}
+            result=SimpleNamespace(returncode=0,stdout=json.dumps(messages),stderr="")
+            with patch.object(HELPER.subprocess,"run",return_value=result) as build:
+                receipt=HELPER.prepare_native_opener("explicit-cargo","1.85.0",evidence,env)
+            executable=Path(env["VERYSYNC_TEST_OPENER_EXECUTABLE"])
+            self.assertEqual(executable.read_bytes(),source.read_bytes())
+            self.assertEqual(Path(env["VERYSYNC_TEST_OPENER_CAPTURE_DIR"]).parent,executable.parent)
+            self.assertEqual(env["PATH"],str(executable.parent)+HELPER.os.pathsep+"original-child-path")
+            self.assertEqual(HELPER.os.environ.copy(),original)
+            self.assertTrue(receipt["fixture_only"])
+            self.assertIn("--manifest-path",build.call_args.args[0])
+            self.assertIn("--offline",build.call_args.args[0])
+            self.assertIs(build.call_args.kwargs["env"],env)
+
+    def test_missing_compiled_helper_is_refused_before_capture_or_environment_changes(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence=Path(temporary)/"evidence"
+            evidence.mkdir()
+            env={"PATH":"kept"}
+            result=SimpleNamespace(returncode=0,stdout="",stderr="")
+            with patch.object(HELPER.subprocess,"run",return_value=result):
+                with self.assertRaises(ValueError):
+                    HELPER.prepare_native_opener("explicit-cargo","1.85.0",evidence,env)
+            self.assertEqual(env,{"PATH":"kept"})
+            self.assertEqual(list(evidence.iterdir()),[])
 
 
 if __name__ == "__main__":

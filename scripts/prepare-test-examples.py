@@ -9,10 +9,10 @@ import subprocess
 import sys
 
 
-def build_artifacts(cargo, selection):
+def build_artifacts(cargo, selection, env=None):
     """Use Cargo's actual executable paths, including explicit cross targets."""
     command = [*cargo, "build", *selection, "--locked", "--message-format=json"]
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, env=env)
     if result.stderr:
         sys.stderr.write(result.stderr)
     artifacts = {}

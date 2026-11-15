@@ -26,6 +26,36 @@ DISCOVERY_HOSTS = frozenset({
 })
 
 
+
+def prepare_native_opener(cargo, toolchain, evidence_dir, env):
+    """Capture explicit native desktop dispatch using a task-owned executable."""
+    import importlib.util
+    module_path = Path(__file__).with_name("prepare-test-examples.py")
+    spec = importlib.util.spec_from_file_location("native_opener_artifacts", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    artifacts = module.build_artifacts(
+        [cargo, f"+{toolchain}"],
+        ["--example", "native_folder_opener", "--features", "engine-tests", "--offline",
+         "--manifest-path", str(Path(__file__).resolve().parents[1] / "Cargo.toml")],
+        env=env,
+    )
+    source = artifacts.get("native_folder_opener")
+    if source is None or not source.is_absolute() or not source.is_file() or source.is_symlink():
+        raise ValueError("Cargo did not identify the exact regular native opener fixture")
+    directory = evidence_dir / "owned-native-opener"
+    capture = directory / "captured"
+    capture.mkdir(mode=0o700, parents=True, exist_ok=False)
+    name = "explorer.exe" if os.name == "nt" else ("open" if sys.platform == "darwin" else "xdg-open")
+    executable = directory / name
+    shutil.copy2(source, executable)
+    if hashlib.sha256(executable.read_bytes()).digest() != hashlib.sha256(source.read_bytes()).digest():
+        raise ValueError("owned native opener copy differs")
+    env["PATH"] = str(directory) + os.pathsep + env.get("PATH", "")
+    env["VERYSYNC_TEST_OPENER_CAPTURE_DIR"] = str(capture)
+    env["VERYSYNC_TEST_OPENER_EXECUTABLE"] = str(executable)
+    return {"fixture_only": True, "name": name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+
 class BlockedProxy(socketserver.ThreadingTCPServer):
     daemon_threads = True
     allow_reuse_address = False
@@ -315,6 +345,12 @@ def main():
         if discovery_file:
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TARGET_FILE"] = str(discovery_file)
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TOKEN"] = discovery_token
+        opener = None
+        for name in ("VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE"):
+            env.pop(name, None)
+        if args.test_target == "engine_control":
+            opener = prepare_native_opener(args.cargo, args.toolchain, args.evidence_dir, env)
+            (args.evidence_dir / "native-opener-fixture.json").write_text(json.dumps(opener), encoding="utf-8")
         label = args.test_target or "mechanism-" + args.mechanism
         log_path = args.evidence_dir / (label.replace("_", "-") + ".log")
         try:
@@ -338,8 +374,18 @@ def main():
                         print(line, end="", flush=True)
                     returncode = process.wait()
         finally:
-            proxy.shutdown()
-            server.join(timeout=5)
+            try:
+                if opener is not None:
+                    owned_opener = args.evidence_dir / "owned-native-opener"
+                    captures = sum(1 for _ in (owned_opener / "captured").glob("*.argv"))
+                    if owned_opener.exists():
+                        shutil.rmtree(owned_opener)
+                    opener["captured_calls"] = captures
+                    opener["owned_capture_and_executable_removed"] = not owned_opener.exists()
+                    (args.evidence_dir / "native-opener-fixture.json").write_text(json.dumps(opener), encoding="utf-8")
+            finally:
+                proxy.shutdown()
+                server.join(timeout=5)
         with proxy.guard:
             observed = [{"method": method, "hostname": host, "count": count}
                         for (method, host), count in sorted(proxy.observed.items())]
