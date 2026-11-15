@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add typed native system locations and explicit folder temporary/session-file
+  cleanup. Retain special output/template values, target path syntax and private
+  fields; distinguish native receipts from independently observed file removal.
+
 - Add future-folder versioning and target archive-location controls with shared
   policies, snapshot edits and actual inherited archive/restore checks. Keep full
   save normalization visible when inactive parameter maps are filled natively.

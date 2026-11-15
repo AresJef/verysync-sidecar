@@ -41,3 +41,36 @@ when needed, and validate names before constructing paths for another purpose.
 Directory reads do not establish permission to write, synchronization progress,
 or the state of another backend. Native creation readback establishes a directory
 observation at that moment; external writers can still change it later.
+
+`native_system_paths()` reads the connected program's actual configuration,
+data, profile, configuration-file and database locations as `TargetPath` values.
+Other native entries remain exact strings: `logFile` can be `-` for standard
+output, and audit/panic filenames can contain native timestamp templates.
+The SDK neither expands these values nor treats them as controller paths.
+
+`request_folder_temporary_cleanup(folder)` explicitly invokes the registered
+native folder runner's cleanup. In the fixed program it targets
+`.verysync/*.tmp` and `.verysync/*.sess`. Matching directories and their contents
+can be removed recursively. Nonmatching nested directories, ordinary `.tmp`
+files outside that marker, and controller files are outside this selection.
+This GET changes state: the SDK checks identity and folder registration,
+serializes it, and sends it once. Paused/nonrunning native runners can refuse
+the request even while the folder remains configured.
+
+```no_run
+# async fn maintenance(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+let locations = client.native_system_paths().await?;
+let receipt = client.request_folder_temporary_cleanup(folder).await?;
+assert_eq!(&receipt.folder, folder);
+// Observe required target file effects independently before proceeding.
+# let _ = locations;
+# Ok(()) }
+```
+
+An empty native error string is an acknowledgement, without a removed-file count
+or proof that every removal succeeded. The core can log per-file failures while
+still returning that receipt. Native error envelopes and uncertain responses
+after sending remain `MutationOutcomeUnknown`; the SDK performs no retry,
+rollback, automatic scan or implicit restart. Other controllers can change the
+registration after the preflight read. Coordinate maintenance with the caller's
+data and transfer policy, and verify the effects the application requires.

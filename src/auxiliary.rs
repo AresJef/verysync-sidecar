@@ -3,6 +3,46 @@ use crate::TargetPath;
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 
+/// Native configuration/data locations, interpreted on the connected target.
+/// These observations do not read or create controller files.
+#[derive(Clone)]
+pub struct NativeSystemPaths {
+    /// Native `baseDir-config` location.
+    pub configuration_directory: TargetPath,
+    /// Native `baseDir-data` location.
+    pub data_directory: TargetPath,
+    /// Native process profile home, independent of the controller's home.
+    pub user_home_directory: TargetPath,
+    /// Native `config` file location.
+    pub configuration_file: TargetPath,
+    /// Native active database location, without opening it on the controller.
+    pub database_directory: TargetPath,
+    /// Other exact native values. These can be filename templates or `-` for
+    /// standard output, so they are not automatically converted to paths.
+    pub extra: BTreeMap<String, String>,
+}
+impl fmt::Debug for NativeSystemPaths {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeSystemPaths").finish_non_exhaustive()
+    }
+}
+
+/// Receipt for one explicit native temporary-file cleanup request. It reports
+/// neither a removal count nor proof that every native removal succeeded.
+#[derive(Clone)]
+pub struct FolderTemporaryCleanup {
+    /// Exact opaque registration selected for the native request.
+    pub folder: crate::FolderId,
+    /// Additional private native acknowledgement fields.
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for FolderTemporaryCleanup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FolderTemporaryCleanup")
+            .finish_non_exhaustive()
+    }
+}
+
 /// One native directory-picker starting location. A location is a target path,
 /// not a file-manager volume or a path on a remote caller's machine.
 #[derive(Clone)]

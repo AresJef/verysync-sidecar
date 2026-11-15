@@ -106,8 +106,9 @@ mod upgrades;
 
 pub use auth::{ApiKey, DeviceId};
 pub use auxiliary::{
-    NativeGuiMetadata, NativeQrCode, NativeUsageReport, PendingNativeLink, TargetDirectoryCreation,
-    TargetDirectoryEntry, TargetDirectoryLocation, TargetIpLocation,
+    FolderTemporaryCleanup, NativeGuiMetadata, NativeQrCode, NativeSystemPaths, NativeUsageReport,
+    PendingNativeLink, TargetDirectoryCreation, TargetDirectoryEntry, TargetDirectoryLocation,
+    TargetIpLocation,
 };
 pub use capabilities::{
     library_capabilities, Capability, CapabilityReport, ImplementationStatus, InstanceConditions,

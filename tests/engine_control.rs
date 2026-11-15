@@ -5,6 +5,8 @@ mod engine_fixture;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 
+#[path = "common/auxiliary_maintenance_effects.rs"]
+mod auxiliary_maintenance_effects;
 #[path = "common/direct_restart_effects.rs"]
 mod direct_restart_effects;
 #[path = "common/gui_resource_effects.rs"]
