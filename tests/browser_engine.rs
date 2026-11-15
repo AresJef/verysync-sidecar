@@ -27,7 +27,11 @@ impl Capture {
             || std::env::var_os("BROWSER").as_deref() != Some(executable.as_os_str())
             || std::env::var("VERYSYNC_TEST_BROWSER_HOLD").as_deref() != Ok("1")
             || std::env::var("VERYSYNC_TEST_BROWSER_ISOLATION").as_deref()
-                != Ok("macos-seatbelt-fallback-v1")
+                != Ok(if cfg!(target_os = "macos") {
+                    "macos-seatbelt-fallback-v1"
+                } else {
+                    "linux-private-mount-fallback-v1"
+                })
         {
             return Err("explicit isolated browser fixture required".into());
         }
@@ -282,57 +286,65 @@ async fn actual_native_browser_preserves_primary_and_releases_only_successful_la
     assert_eq!(capture.calls()?.len(), 2);
     assert_eq!(snapshot(&state)?, before);
     assert_eq!(snapshot(&helper)?, helper_before);
-    fs::write(
-        capture.0.join("hold-native-root"),
-        b"test-only bounded cancellation point",
-    )?;
-    let cancelled_helper = root.path().join("cancelled-helper");
-    let mut request =
-        Box::pin(core.request_native_browser(&cancelled_helper, false, Duration::from_secs(15)));
-    tokio::select! {
-        _=&mut request => return Err("native request finished before the controlled cancellation point".into()),
-        ready=tokio::time::timeout(Duration::from_secs(10),async {
-            while !capture.0.join("native-root-held").is_file() || capture.calls()?.len()!=3 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok::<_,Box<dyn std::error::Error+Send+Sync>>(())
-        }) => ready??,
-    }
-    let cancelled_call = capture
-        .calls()?
-        .into_iter()
-        .find(|p| !p.with_extension("after-root").exists())
-        .ok_or("cancelled native argv absent")?;
-    let mut expected_url = url.as_bytes().to_vec();
-    expected_url.push(0);
-    assert_eq!(fs::read(cancelled_call)?, expected_url);
-    let cancelled_before = snapshot(&cancelled_helper)?;
-    drop(request);
-    let fence = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(cancelled_helper.join(".verysync-sidecar-lease"))?;
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            match fs2::FileExt::try_lock_exclusive(&fence) {
-                Ok(()) => break,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    tokio::time::sleep(Duration::from_millis(10)).await
+    #[cfg(target_os = "macos")]
+    {
+        fs::write(
+            capture.0.join("hold-native-root"),
+            b"test-only bounded cancellation point",
+        )?;
+        let cancelled_helper = root.path().join("cancelled-helper");
+        let mut request = Box::pin(core.request_native_browser(
+            &cancelled_helper,
+            false,
+            Duration::from_secs(15),
+        ));
+        tokio::select! {
+            _=&mut request => return Err("native request finished before the controlled cancellation point".into()),
+            ready=tokio::time::timeout(Duration::from_secs(10),async {
+                while !capture.0.join("native-root-held").is_file() || capture.calls()?.len()!=3 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                Err(e) => return Err(e),
-            }
+                Ok::<_,Box<dyn std::error::Error+Send+Sync>>(())
+            }) => ready??,
         }
-        Ok::<_, std::io::Error>(())
-    })
-    .await??;
-    assert_eq!(snapshot(&cancelled_helper)?, cancelled_before);
-    assert_eq!(snapshot(&state)?, before);
-    assert_eq!(snapshot(&helper)?, helper_before);
-    assert_eq!(fs::read(&sentinel)?, b"primary caller data preserved");
-    assert_eq!(capture.calls()?.len(), 3);
-    // The outer wrapper must independently observe the exact native CLI PID
-    // and cancellation actor dead before it sends any cleanup stop markers.
-    drop(fence);
-    eprintln!("native browser evidence: exact_owned_url_calls=3 successful_root_receipts=2 native_failed_opener_code=1 failure_never_releases_descendants=true cancellation_after_native_root_and_actor_started=true cancellation_lease_released=true cancelled_helper_bytes_preserved=true verify_live_identity=true verify_false_after_normal_stop=true desktop_actor_executed_after_each_success_result=true cancellation_native_exit_before_outer_cleanup_required=true independent_helper_keys=true primary_config_keys_data_preserved=true helper_reused=true overlap_refused=true program_drift_refused=true real_desktop_opened=false");
+        let cancelled_call = capture
+            .calls()?
+            .into_iter()
+            .find(|p| !p.with_extension("after-root").exists())
+            .ok_or("cancelled native argv absent")?;
+        let mut expected_url = url.as_bytes().to_vec();
+        expected_url.push(0);
+        assert_eq!(fs::read(cancelled_call)?, expected_url);
+        let cancelled_before = snapshot(&cancelled_helper)?;
+        drop(request);
+        let fence = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(cancelled_helper.join(".verysync-sidecar-lease"))?;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match fs2::FileExt::try_lock_exclusive(&fence) {
+                    Ok(()) => break,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        tokio::time::sleep(Duration::from_millis(10)).await
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok::<_, std::io::Error>(())
+        })
+        .await??;
+        assert_eq!(snapshot(&cancelled_helper)?, cancelled_before);
+        assert_eq!(snapshot(&state)?, before);
+        assert_eq!(snapshot(&helper)?, helper_before);
+        assert_eq!(fs::read(&sentinel)?, b"primary caller data preserved");
+        assert_eq!(capture.calls()?.len(), 3);
+        // The outer wrapper must independently observe the exact native CLI PID
+        // and cancellation actor dead before it sends any cleanup stop markers.
+        drop(fence);
+        eprintln!("native browser evidence: exact_owned_url_calls=3 successful_root_receipts=2 native_failed_opener_code=1 failure_never_releases_descendants=true cancellation_after_native_root_and_actor_started=true cancellation_lease_released=true cancelled_helper_bytes_preserved=true verify_live_identity=true verify_false_after_normal_stop=true desktop_actor_executed_after_each_success_result=true cancellation_native_exit_before_outer_cleanup_required=true independent_helper_keys=true primary_config_keys_data_preserved=true helper_reused=true overlap_refused=true program_drift_refused=true real_desktop_opened=false");
+    }
+    #[cfg(not(target_os = "macos"))]
+    eprintln!("native browser Linux evidence: exact_owned_url_calls=2 normal_root_receipts=2 native_failed_opener_code=1 independent_helper_keys=true primary_state_preserved=true cancellation_integration_pending=true actual_actor_exit_requires_outer_wrapper=true");
     Ok(())
 }

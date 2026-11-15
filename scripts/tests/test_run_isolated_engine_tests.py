@@ -261,6 +261,33 @@ class ProxyContracts(unittest.TestCase):
 
 
 class NativeOpenerContracts(unittest.TestCase):
+    def test_linux_browser_plan_requires_owned_vm_and_excludes_credentials(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            evidence = root / "evidence"
+            (evidence / "owned-native-opener").mkdir(parents=True)
+            env = {"GITHUB_ACTIONS": "true", "RUNNER_OS": "Linux", "RUNNER_TEMP": str(root),
+                   "PATH": "explicit-tools", "CARGO_REGISTRY_TOKEN": "must-not-copy", "AWS_SECRET_ACCESS_KEY": "must-not-copy"}
+            with patch.object(HELPER.sys, "platform", "linux"), \
+                 patch.object(HELPER.os, "getuid", return_value=1001, create=True), \
+                 patch.object(HELPER.os, "getgid", return_value=1001, create=True), \
+                 patch.object(HELPER.os, "getgroups", return_value=[1001], create=True), \
+                 patch.object(HELPER, "mount_namespace_identity", return_value="mnt:[12345]"):
+                command = HELPER.isolate_browser_command(["explicit-cargo", "test"], evidence, env)
+            self.assertEqual(command[:7], ["sudo", "--non-interactive", "/usr/bin/unshare", "--mount", "--propagation", "private", "--fork"])
+            plan_path = Path(command[-1])
+            plan = json.loads(plan_path.read_text())
+            self.assertEqual(plan["command"], ["explicit-cargo", "test"])
+            self.assertEqual(plan["uid"], 1001)
+            if HELPER.os.name != "nt":
+                self.assertEqual(plan_path.stat().st_mode & 0o077, 0)
+            self.assertNotIn("CARGO_REGISTRY_TOKEN", plan["env"])
+            self.assertNotIn("AWS_SECRET_ACCESS_KEY", plan["env"])
+            self.assertEqual(plan["env"]["VERYSYNC_TEST_BROWSER_ISOLATION"], "linux-private-mount-fallback-v1")
+            with patch.object(HELPER.sys, "platform", "linux"):
+                with self.assertRaises(ValueError):
+                    HELPER.isolate_browser_command(["must-not-run"], evidence, {})
+
     def test_browser_command_requires_verified_native_selector_isolation(self):
         with tempfile.TemporaryDirectory() as temporary:
             evidence = Path(temporary)
@@ -278,7 +305,7 @@ class NativeOpenerContracts(unittest.TestCase):
             for candidate in ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"]:
                 self.assertIn(f'(literal "/usr/bin/{candidate}")', policy)
             self.assertEqual(HELPER.os.environ.copy(), original)
-            for platform in ["linux", "win32"]:
+            for platform in ["win32"]:
                 with patch.object(HELPER.sys, "platform", platform):
                     with self.assertRaises(ValueError):
                         HELPER.isolate_browser_command(["must-not-run"], evidence, {})
