@@ -850,3 +850,139 @@ async fn actual_native_helpers_normalize_ids_collect_reports_and_preserve_explic
     println!("native_helper_observations native_health_ok=true health_matches_independent_native_response=true migration_completed_baseline_matches_independent_native_response=true migration_not_started=true migration_active_effect_not_observed=true native_id_normalization_and_checksum_rejection=true explicit_loopback_lookup=true report_collection_without_consent_change=true random_quality_not_asserted=true empty_link_only_native_effect=true");
     Ok(())
 }
+
+#[tokio::test]
+async fn actual_native_support_bundle_contains_valid_private_archive_and_preserves_owned_state(
+) -> TestResult {
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        ApiKey, Client, ConnectOptions, CreateFolderOptions, FolderId, TargetPath,
+    };
+    let root = tempfile::Builder::new().prefix("vns-").tempdir()?.keep();
+    let state = root.join("core");
+    let settings = options(&state)?;
+    let endpoint = settings.management_endpoint().clone();
+    let mut owner = ManagedInstance::start(settings).await?;
+    let id = owner.client().instance().device_id.clone();
+    assert!(!owner.client().gui_preferences().await?.debugging);
+    let data = root.join("synthetic bundle data");
+    std::fs::create_dir(&data)?;
+    let sample = b"retained private bundle sentinel";
+    std::fs::write(data.join("sentinel.txt"), sample)?;
+    let folder = FolderId::parse("typed-native-support-bundle")?;
+    owner
+        .client()
+        .create_folder(&CreateFolderOptions::new(folder, TargetPath::local(&data)).paused(true))
+        .await?;
+    let config = std::fs::read(state.join("setting.dat"))?;
+    let before = Sha256::digest(std::fs::read(data.join("sentinel.txt"))?);
+    let hashes = ["key.pem", "cert.pem", ".verysync-sidecar-identity"]
+        .into_iter()
+        .map(|name| std::fs::read(state.join(name)).map(|v| Sha256::digest(v).to_vec()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let bundle = owner.client().collect_core_support_bundle().await?;
+    assert!(bundle.body_bytes().len() > 4096);
+    assert!(!format!("{bundle:?}").contains("synthetic bundle data"));
+    let archive = root.join("private bundle.debug");
+    std::fs::write(&archive, bundle.body_bytes())?;
+    let inspect = r#"import gzip,json,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    entries=z.infolist()
+    assert len(entries)<=64 and sum(e.file_size for e in entries)<=8*1024*1024
+    assert all(e.file_size<=2*1024*1024 for e in entries)
+    assert z.testzip() is None
+    names={e.filename for e in entries}
+    required={'config.json.txt','log-inmemory.txt','version-platform.json.txt','usage-reporting.json.txt','metrics.txt','connection-stats.json.txt'}
+    assert required<=names
+    config=json.loads(z.read('config.json.txt'))
+    assert config['gui']['apiKey']=='REDACTED'
+    assert config['gui']['debugging'] is False and len(config['folders'])==1
+    version=json.loads(z.read('version-platform.json.txt'))
+    assert version['version']=='v2.33.2'
+    profiles=[e for e in entries if e.filename.endswith('.pprof')]
+    for entry in profiles:
+        assert gzip.decompress(z.read(entry))
+    goroutines=[e for e in entries if e.filename.startswith('verysync-goroutine-')]
+    for entry in goroutines:
+        assert b'goroutine' in z.read(entry)
+    print(json.dumps({'zip_entries':len(entries),'native_gzip_profiles':len(profiles),'native_goroutine_reports':len(goroutines),'zip_all_crc_valid':True,'actual_native_config_api_key_redacted':True,'native_redaction_not_complete_privacy_guarantee':True,'native_version_metadata_matches':True}))
+"#;
+    let validation = {
+        use std::io::Read;
+        struct Inspector(std::process::Child);
+        impl Drop for Inspector {
+            fn drop(&mut self) {
+                if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+        }
+        let stdout = tempfile::NamedTempFile::new_in(&root)?;
+        let stderr = tempfile::NamedTempFile::new_in(&root)?;
+        let mut command = std::process::Command::new(
+            std::env::var_os("VERYSYNC_TEST_PYTHON").ok_or("explicit fixture Python missing")?,
+        );
+        command
+            .arg("-c")
+            .arg(inspect)
+            .arg(&archive)
+            .stdin(std::process::Stdio::null())
+            .stdout(stdout.as_file().try_clone()?)
+            .stderr(stderr.as_file().try_clone()?);
+        let mut child = Inspector(command.spawn()?);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.0.try_wait()? {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("owned archive inspector deadline".into());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let mut error = String::new();
+        stderr.reopen()?.take(4097).read_to_string(&mut error)?;
+        assert!(error.len() <= 4096);
+        assert!(status.success(), "native ZIP validation failed: {error}");
+        let mut output = String::new();
+        stdout.reopen()?.take(4097).read_to_string(&mut output)?;
+        assert!(output.len() <= 4096);
+        output
+    };
+    println!("native support archive validation: {}", validation.trim());
+    let decoded = rmpv::decode::read_value(&mut std::io::Cursor::new(&config))?;
+    let key = decoded["4"]["6"]
+        .as_str()
+        .ok_or("private credential missing")?;
+    let small = Client::connect(
+        ConnectOptions::new(endpoint, ApiKey::new(key)?)
+            .expected_device_id(id.clone())
+            .response_limit(4096)?,
+    )
+    .await?;
+    assert!(
+        matches!(small.collect_core_support_bundle().await,Err(Error::MutationOutcomeUnknown{source,..}) if matches!(source.as_ref(),Error::ResponseTooLarge{limit:4096}))
+    );
+    assert_eq!(owner.client().system_status().await?.device_id, id);
+    assert!(!owner.client().gui_preferences().await?.debugging);
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
+    assert_eq!(
+        Sha256::digest(std::fs::read(data.join("sentinel.txt"))?),
+        before
+    );
+    for (name, hash) in ["key.pem", "cert.pem", ".verysync-sidecar-identity"]
+        .into_iter()
+        .zip(hashes)
+    {
+        assert_eq!(
+            Sha256::digest(std::fs::read(state.join(name))?).as_slice(),
+            hash
+        );
+    }
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("native_support_bundle_typed=true collected_with_debugging_false=true explicit_caller_fixture_storage_only=true actual_compressed_response_limit=true response_limit_keeps_collection_uncertain=true identity_configuration_and_sample_sha_preserved=true normal_owned_tree_exit=true");
+    Ok(())
+}

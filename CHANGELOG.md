@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit native support ZIP collection with bounded private bytes,
+  mutation uncertainty and no implicit save, extraction or request retry.
+
 - Add native event-name selections with bounded canonical filters and validated
   serialized cursors. Different selections retain separate source identities.
 
