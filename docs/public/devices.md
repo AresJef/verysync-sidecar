@@ -75,6 +75,24 @@ or failed readback can leave an applied change: inspect the exact identity and
 folder associations before deciding to retry. `MutationOutcomeUnknown` retains
 that distinction. Ordinary diagnostics omit upstream payload values.
 
+## Explicitly disconnect before deleting a registration
+
+`disconnect_and_remove_device(&peer, timeout)` separately expresses a stronger
+operation: patch only this peer's pause field, require a present native connection
+entry reporting `connected=false`, then issue one DELETE and return its actual
+configuration snapshot. A missing connection row is not invented as a disconnected
+record. The positive total deadline includes clone-lock acquisition and all calls.
+The previous configuration in the result precedes the pause. No data path is
+opened and no modification is retried. Cancellation/failure can leave the peer
+paused or deleted; after a submitted modification, errors retain an unknown-outcome
+wrapper. Callers must reconcile state before retrying.
+
+This explicit operation does not revoke shared keys or promise the peer remains
+disconnected after deletion. The original `remove_device()` remains a single
+DELETE without an implicit pause or rejection policy. Native acceptance of these
+two semantics is recorded separately; a passing explicit disconnect case does
+not turn the single-DELETE disconnect regression into a pass.
+
 ## Additional peer and default selections
 
 `DeviceConfig::advanced_configuration()` and
