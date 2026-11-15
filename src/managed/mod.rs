@@ -6,10 +6,12 @@ mod backup;
 mod bootstrap;
 mod command;
 mod database;
+mod paths;
 pub use backup::{StateBackup, StateBackupInfo, StateBackupOptions};
 pub use database::{
     DatabaseCommand, DatabaseCommandExit, DatabaseCommandOutcome, DatabaseCountRow,
 };
+pub use paths::{NativeStoragePaths, NativeStoragePathsExit, NativeStoragePathsOutcome};
 #[cfg(feature = "download")]
 mod cache;
 #[cfg(feature = "download")]
