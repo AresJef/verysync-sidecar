@@ -13,6 +13,7 @@ mod folder_options;
 mod gui_listener;
 mod gui_preferences;
 mod gui_resources;
+mod hardware_control;
 mod history_control;
 mod ignore_control;
 mod invitation_control;

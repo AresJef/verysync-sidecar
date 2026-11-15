@@ -11,6 +11,8 @@ mod auxiliary_maintenance_effects;
 mod direct_restart_effects;
 #[path = "common/gui_resource_effects.rs"]
 mod gui_resource_effects;
+#[path = "common/hardware_effects.rs"]
+mod hardware_effects;
 #[path = "common/native_helper_effects.rs"]
 mod native_helper_effects;
 #[path = "common/response_proxy.rs"]

@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add typed native CPU, memory, disk/partition and NIC observations with private
+  nested values, nullable records, signed unknowns and connected-target mount
+  paths. Preserve native unsupported errors separately from successful data.
+
 - Add typed native system locations and explicit folder temporary/session-file
   cleanup. Retain special output/template values, target path syntax and private
   fields; distinguish native receipts from independently observed file removal.

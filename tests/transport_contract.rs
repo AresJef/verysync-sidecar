@@ -28,6 +28,8 @@ mod auxiliary_maintenance_contracts;
 mod gui_listener_contracts;
 #[path = "common/gui_resource_contracts.rs"]
 mod gui_resource_contracts;
+#[path = "common/hardware_contracts.rs"]
+mod hardware_contracts;
 #[path = "common/management_transport_contracts.rs"]
 mod management_transport_contracts;
 #[path = "common/native_helper_contracts.rs"]
