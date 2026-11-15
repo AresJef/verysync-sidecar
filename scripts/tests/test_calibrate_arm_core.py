@@ -125,8 +125,8 @@ class OtherVersionProfileContracts(unittest.TestCase):
             "linux-ppc64le-standard": ("qemu-ppc64le", "power9"),
             "linux-riscv64-standard": ("qemu-riscv64", "rv64"),
             "linux-s390x-standard": ("qemu-s390x", "max"),
-            "linux-mips-standard": ("qemu-mips", "24Kf"),
-            "linux-mipsle-standard": ("qemu-mipsel", "24Kf"),
+            "linux-mips-standard": ("qemu-mips-binfmt-P", "24Kf"),
+            "linux-mipsle-standard": ("qemu-mipsel-binfmt-P", "24Kf"),
             "linux-mips64-standard": ("qemu-mips64", "MIPS64R2-generic"),
             "linux-mips64le-standard": ("qemu-mips64el", "MIPS64R2-generic"),
         }

@@ -377,7 +377,7 @@ jobs:
           - package: linux-mips-standard
             rust: mips-unknown-linux-gnu
             platform: mips
-            emulator: qemu-mips
+            emulator: qemu-mips-binfmt-P
             compiler: mips-linux-gnu
             cc: mips-linux-gnu-gcc
             cxx: mips-linux-gnu-g++
@@ -388,7 +388,7 @@ jobs:
           - package: linux-mipsle-standard
             rust: mipsel-unknown-linux-gnu
             platform: mipsle
-            emulator: qemu-mipsel
+            emulator: qemu-mipsel-binfmt-P
             compiler: mipsel-linux-gnu
             cc: mipsel-linux-gnu-gcc
             cxx: mipsel-linux-gnu-g++
@@ -454,6 +454,16 @@ jobs:
                                  'VERYSYNC_CARGO': str(adapter)}.items():
                   output.write(key + '=' + value + chr(10))
           PYSTD
+      - name: Resolve the explicit Cargo launcher without dereferencing rustup shims
+        run: |
+          python - <<'PYCARGO'
+          import os, pathlib, shutil
+          cargo = shutil.which(os.environ['VERYSYNC_CARGO'])
+          if not cargo or not pathlib.Path(cargo).is_absolute() or any(c in cargo for c in '\r\n'):
+              raise ValueError('the selected Cargo launcher must resolve to an absolute executable')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write('VERYSYNC_CARGO=' + cargo + chr(10))
+          PYCARGO
       - name: Register only the selected architecture on this disposable runner
         if: matrix.manual_registration != true
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
@@ -474,19 +484,58 @@ jobs:
           MANUAL_ELF32: ${{ matrix.manual_registration }}
         run: |
           python - <<'PY'
-          import hashlib, json, os, pathlib, subprocess
+          import hashlib, json, os, pathlib, subprocess, urllib.request
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-linux-emulator'
           root.mkdir(mode=0o700)
           name = os.environ['QEMU_BINARY']
           binary = root / name
-          image = os.environ['QEMU_IMAGE']
-          container = subprocess.check_output(['docker', 'create', image], text=True).strip()
-          try:
-              subprocess.run(['docker', 'cp', container + ':/usr/bin/' + name, str(binary)], check=True)
-          finally:
-              subprocess.run(['docker', 'rm', container], check=True)
-          binary.chmod(0o700)
           target = os.environ['CARGO_BUILD_TARGET']
+          package_identity = None
+          if os.environ.get('MANUAL_ELF32') == 'true':
+              candidates = {
+                  ('qemu-mips-binfmt-P', 'mips-unknown-linux-gnu'):
+                      ('qemu-mips-static', 'a1c06a3edac935484b80d9d7a592cf88d668961fa773dbb27f1da32a2c03b75d'),
+                  ('qemu-mipsel-binfmt-P', 'mipsel-unknown-linux-gnu'):
+                      ('qemu-mipsel-static', 'b3f09315b4d5f35e17416d52f0bd7c10078babaea69c3816b99a78ad6f64e4b8'),
+              }
+              if (name, target) not in candidates or os.environ['RUNNER_ARCH'] != 'X64':
+                  raise ValueError('undeclared MIPS32 interpreter or host architecture')
+              source_name, source_sha = candidates[(name, target)]
+              url = 'https://security.ubuntu.com/ubuntu/pool/universe/q/qemu/qemu-user-static_8.2.2+ds-0ubuntu1.16_amd64.deb'
+              package_sha = 'a8f4e6121b7d1710885ba00fdb1e5a8256fb396f12ade2da9ed8a3693ad6d1bd'
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  if response.geturl() != url:
+                      raise ValueError('the fixed Ubuntu package must not redirect')
+                  data = response.read(14628452 + 1)
+              if len(data) != 14628452 or hashlib.sha256(data).hexdigest() != package_sha:
+                  raise ValueError('the fixed Ubuntu package did not match its size and SHA-256')
+              package = root / 'qemu-user-static.deb'
+              package.write_bytes(data)
+              extracted = root / 'ubuntu-qemu'
+              subprocess.run(['dpkg-deb', '--extract', str(package), str(extracted)], check=True)
+              version_binary = extracted / 'usr/bin' / source_name
+              if version_binary.is_symlink() or not version_binary.is_file():
+                  raise ValueError('the selected package interpreter must be a regular file')
+              contents = version_binary.read_bytes()
+              if hashlib.sha256(contents).hexdigest() != source_sha:
+                  raise ValueError('the selected Ubuntu interpreter SHA-256 did not match')
+              # The package's reviewed Debian patch selects preserved argv0 by
+              # this suffix, for both registered and padded explicit execution.
+              binary.write_bytes(contents)
+              image = None
+              package_identity = {'url': url, 'sha256': package_sha,
+                                  'version': '1:8.2.2+ds-0ubuntu1.16',
+                                  'interpreter_source_name': source_name,
+                                  'installed_globally': False}
+          else:
+              image = os.environ['QEMU_IMAGE']
+              container = subprocess.check_output(['docker', 'create', image], text=True).strip()
+              try:
+                  subprocess.run(['docker', 'cp', container + ':/usr/bin/' + name, str(binary)], check=True)
+              finally:
+                  subprocess.run(['docker', 'rm', container], check=True)
+              version_binary = binary
+          binary.chmod(0o700)
           suffix = target.replace('-', '_')
           emulator_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
@@ -499,12 +548,11 @@ jobs:
               }.items():
                   output.write(key + '=' + value + '\n')
           if os.environ.get('MANUAL_ELF32') == 'true':
-              # The fixed image builds the interpreters; its installer only
-              # declares MIPS64. Register exactly the selected ELF32 format on
-              # this disposable VM, without replacing any existing entry.
+              # Register only the selected verified package interpreter and
+              # ELF32 format; do not install the package's other registrations.
               if (name, target) not in {
-                  ('qemu-mips', 'mips-unknown-linux-gnu'),
-                  ('qemu-mipsel', 'mipsel-unknown-linux-gnu'),
+                  ('qemu-mips-binfmt-P', 'mips-unknown-linux-gnu'),
+                  ('qemu-mipsel-binfmt-P', 'mipsel-unknown-linux-gnu'),
               } or any(char in str(binary) for char in ':\r\n'):
                   raise ValueError('undeclared manual MIPS32 interpreter')
               control = pathlib.Path('/proc/sys/fs/binfmt_misc/register')
@@ -514,7 +562,7 @@ jobs:
               registration_path = control.parent / name
               if registration_path.exists():
                   raise RuntimeError('refusing to replace an existing MIPS32 registration')
-              little = name == 'qemu-mipsel'
+              little = name == 'qemu-mipsel-binfmt-P'
               magic = bytes.fromhex('7f454c4601010100000000000000000002000800' if little
                                     else '7f454c4601020100000000000000000000020008')
               mask = bytes.fromhex('ffffffffffffff0000fffffffffffffffeffffff' if little
@@ -532,6 +580,7 @@ jobs:
                   'profile': os.environ['VERYSYNC_TEST_EMULATION_PROFILE'], 'rust_target': target,
                   'cpu': os.environ['QEMU_CPU'], 'compiler': os.environ['TARGET_CC'],
                   'controller_sysroot': os.environ['QEMU_LD_PREFIX'], 'image': image,
+                  'package_identity': package_identity,
                   'qemu_sha256': emulator_sha, 'registration_flags': flags,
                   'controller_dev_opt_level': os.environ['CARGO_PROFILE_DEV_OPT_LEVEL'],
                   'controller_test_opt_level': os.environ['CARGO_PROFILE_TEST_OPT_LEVEL'],
@@ -541,7 +590,9 @@ jobs:
           (root / 'identity.json').write_text(json.dumps(info, indent=2) + '\n')
           print(json.dumps(info))
           print(registration)
-          subprocess.run([str(binary), '--version'], check=True)
+          # Debian's binfmt-P alias deliberately rejects standalone --version;
+          # inspect the same verified bytes under their original package name.
+          subprocess.run([str(version_binary), '--version'], check=True)
           PY
       - name: Install the fixed compiler and selected Rust standard library
         if: matrix.custom_std != true

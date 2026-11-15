@@ -25,6 +25,11 @@ SHA-256. The fixture checks this digest before running anything, generates fresh
 state and GUI credentials, authenticates a private management address, and
 compares the generated identity before any mutation.
 
+File-history failure traces retain the original deadline and error, reporting
+elapsed time, the bounded SDK error chain, HTTP status/size and boolean checks
+of synthetic data. They omit bodies and private values and issue no extra
+native requests. A later pass alone does not establish an intermittent cause.
+
 The core version assertions use the observed Go architecture names (`amd64`,
 `arm64`, `386` and `arm`) for their corresponding Rust controller targets. Unknown
 mappings fail explicitly. Additional-architecture execution does not promote the
@@ -103,10 +108,20 @@ This is an experimental custom-toolchain route. Cargo's supported `build-std`
 workflow requires nightly; these checks are not stock distributed Rust 1.85
 standard-library support. The source-lock hash is verified independently.
 Arguments, unwind/Drop, default-TLS linking and actual SDK lifecycle effects
-remain separate required checks. The fixed image's ELF32 MIPS registrations are
-created only on disposable CI VMs, with exact endian/class/machine selectors,
-the copied pinned interpreter and PF flags; existing entries are never replaced.
+remain separate required checks. The fixed container image lacks ELF32 MIPS
+interpreters. Those two profiles explicitly extract Ubuntu's fixed
+`qemu-user-static` 1:8.2.2+ds-0ubuntu1.16 amd64 package without installing it;
+the workflow pins both the package and each selected interpreter by SHA-256.
+The reviewed Debian `-binfmt-P` naming convention preserves argv0 through both
+registered and padded explicit execution. MIPS64 keeps the existing pinned
+9.2.2 image. ELF32 registrations are created only on disposable CI VMs with
+exact endian/class/machine selectors and PF flags; existing entries are never
+replaced. This is an explicit change of emulation profile, not a CPU fallback.
 No registration or custom compiler configuration is applied by the library.
+The [Ubuntu package record](https://packages.ubuntu.com/noble/qemu-user-static)
+and [file list](https://packages.ubuntu.com/noble/amd64/qemu-user-static/filelist)
+identify the two ELF32 interpreters. The matching fixed Debian source archive
+contains `linux-user-binfmt-P.diff`, which defines the selected argv0 convention.
 
 ```sh
 cargo +1.85.0 fetch --locked

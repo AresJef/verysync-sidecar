@@ -7,6 +7,39 @@ use verysync_sidecar::{
     CreateDeviceOptions, DevicePatch, DeviceTransport, FileVersionRestore, FolderVersioningPolicy,
     JoinFolderOptions, ManagedInstance, TargetPath,
 };
+
+fn history_result<T>(
+    stage: &'static str,
+    started: std::time::Instant,
+    result: verysync_sidecar::Result<T>,
+) -> verysync_sidecar::Result<T> {
+    if let Err(error) = &result {
+        let mut cause = error;
+        for depth in 0..4 {
+            eprintln!(
+                "private history failure: stage={stage} elapsed_ms={} depth={depth} error={cause:?}",
+                started.elapsed().as_millis()
+            );
+            match cause {
+                verysync_sidecar::Error::MutationOutcomeUnknown { source, .. } => cause = source,
+                verysync_sidecar::Error::Http { response }
+                | verysync_sidecar::Error::Api { response, .. }
+                | verysync_sidecar::Error::AccessDenied { response }
+                | verysync_sidecar::Error::InvalidResponse { response, .. } => {
+                    eprintln!(
+                        "private history response: status={} bytes={} body_omitted=true",
+                        response.status(),
+                        response.body_bytes().len()
+                    );
+                    break;
+                }
+                _ => break,
+            }
+        }
+    }
+    result
+}
+
 async fn past_archive_generation(core: &ManagedInstance, stamp: &str) -> TestResult {
     let selected = chrono::DateTime::parse_from_rfc3339(stamp)?.timestamp();
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -474,7 +507,12 @@ async fn public_free_audit_settings_report_unretained_enable_and_empty_pages() -
         assert_eq!(result.total, 0);
         assert!(result.records.is_none() && result.error.is_none());
     }
-    core.client().reset_audit_history().await?;
+    let started = std::time::Instant::now();
+    history_result(
+        "empty-audit-reset",
+        started,
+        core.client().reset_audit_history().await,
+    )?;
     assert_eq!(core.client().audit_history(1, 10).await?.total, 0);
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
@@ -793,7 +831,21 @@ shutil.move(str(source),str(destination/'kept.bin'))
     a.client().request_scan(&af.id).await?;
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let status = b.client().folder_status(&bf.id).await?;
+            let started = std::time::Instant::now();
+            let status = b.client().folder_status(&bf.id).await;
+            if status.is_err() {
+                eprintln!(
+                    "private failed-archiver state: {}",
+                    serde_json::json!({
+                        "callback_marker_present":external.join("failed-invocation.json").is_file(),
+                        "receiver_previous_bytes_retained":std::fs::read(receive.join(name)).is_ok_and(|bytes|bytes==final_bytes),
+                        "source_refused_bytes_retained":std::fs::read(source.join(name)).is_ok_and(|bytes|bytes==refused),
+                        "external_archive_bytes_retained":std::fs::read(external.join("kept.bin")).is_ok_and(|bytes|bytes==new),
+                        "no_extra_native_request":true
+                    })
+                );
+            }
+            let status = history_result("failed-archiver-folder-status", started, status)?;
             if status.pull_errors.is_some_and(|n| n > 0)
                 && external.join("failed-invocation.json").is_file()
             {
