@@ -368,6 +368,15 @@ async fn actual_peer_defaults_creation_patch_conflicts_and_self_protection() -> 
 #[tokio::test]
 async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves_files(
 ) -> TestResult {
+    device_control_effects(false).await
+}
+
+#[tokio::test]
+async fn actual_explicit_disconnect_and_remove_preserves_files() -> TestResult {
+    device_control_effects(true).await
+}
+
+async fn device_control_effects(explicit_disconnect: bool) -> TestResult {
     let root = tempfile::Builder::new().prefix("vsdp-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
@@ -468,7 +477,13 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
     let b_before = connected(b.client(), &a_id, true).await?;
     println!("synthetic device effect stage: remove registration and observe remote disconnect");
     let removal_started = std::time::SystemTime::now();
-    let removed = a.client().remove_device(&b_id).await?;
+    let removed = if explicit_disconnect {
+        a.client()
+            .disconnect_and_remove_device(&b_id, Duration::from_secs(20))
+            .await?
+    } else {
+        a.client().remove_device(&b_id).await?
+    };
     assert!(removed.configuration_absent && removed.remaining_folder_associations.is_empty());
     let disconnect = removal_disconnect(b.client(), &a_id, b_since, removal_started).await;
     // Diagnose native lifecycle state without extending the original 20s
@@ -529,7 +544,11 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
         "synthetic original removal disconnect condition passed={}",
         disconnect.is_ok()
     );
-    println!("synthetic removal disconnect evidence: {}", disconnect?);
+    println!(
+        "synthetic removal disconnect evidence: {}",
+        disconnect.as_ref().copied().unwrap_or("not_observed")
+    );
+    let disconnect_observed = disconnect.is_ok();
     assert_eq!(std::fs::read(a_path.join("sample.bin"))?, sample);
     assert_eq!(std::fs::read(b_path.join("sample.bin"))?, sample);
     assert_eq!(a.client().folder(&af.id).await?.id, af.id);
@@ -542,7 +561,8 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
     std::fs::remove_dir_all(root)?;
     println!(
         "public device live effect evidence: {}",
-        json!({"both_real_private_peers_connected":true,"actual_synthetic_file_transferred":true,"device_pause_disconnected_both_sides":true,"folder_pause_layer_unchanged":true,"device_resume_reconnected_both_sides":true,"device_removal_observed_absent":true,"actual_folder_association_detached":true,"removal_disconnected_remote":true,"source_bytes_preserved":true,"received_bytes_preserved":true,"folder_registrations_preserved":true,"remote_device_configuration_preserved":true,"both_actual_normal_tree_exits":true})
+        json!({"both_real_private_peers_connected":true,"actual_synthetic_file_transferred":true,"device_pause_disconnected_both_sides":true,"folder_pause_layer_unchanged":true,"device_resume_reconnected_both_sides":true,"device_removal_observed_absent":true,"actual_folder_association_detached":true,"removal_disconnected_remote":disconnect_observed,"source_bytes_preserved":true,"received_bytes_preserved":true,"folder_registrations_preserved":true,"remote_device_configuration_preserved":true,"both_actual_normal_tree_exits":true})
     );
+    disconnect?;
     Ok(())
 }
