@@ -181,5 +181,38 @@ class ExtractionContracts(unittest.TestCase):
         self.assertEqual(existing.read_bytes(), b"keep existing bytes")
 
 
+class CatalogSelectionContracts(unittest.TestCase):
+    def test_non_alpha_in_scope_package_uses_only_its_fixed_download_and_cleans_failure(self):
+        class StopBeforeDownload(Exception):
+            pass
+        for package in ["linux-386-standard", "windows-386-standard"]:
+            with self.subTest(package=package), tempfile.TemporaryDirectory() as parent:
+                args = SimpleNamespace(package=package, parent=parent, archive=None,
+                                       github_env=None, upgrade_source=False)
+                with patch.object(HELPER, "download", side_effect=StopBeforeDownload) as fetch:
+                    with self.assertRaises(StopBeforeDownload):
+                        HELPER.prepare(args)
+                selected, destination = fetch.call_args.args
+                self.assertEqual(selected["id"], package)
+                self.assertTrue(selected["in_scope"])
+                self.assertFalse(selected["alpha_target"])
+                self.assertIn("/v2.33.2/", selected["url"])
+                self.assertEqual(destination.name, selected["filename"])
+                self.assertEqual(list(Path(parent).iterdir()), [])
+
+    def test_out_of_scope_unknown_and_unavailable_older_targets_never_download(self):
+        for package, older in [("freebsd-amd64-standard", False),
+                               ("unknown-synthetic-target", False),
+                               ("linux-386-standard", True)]:
+            with self.subTest(package=package, older=older), tempfile.TemporaryDirectory() as parent:
+                args = SimpleNamespace(package=package, parent=parent, archive=None,
+                                       github_env=None, upgrade_source=older)
+                with patch.object(HELPER, "download") as fetch:
+                    with self.assertRaises(ValueError):
+                        HELPER.prepare(args)
+                fetch.assert_not_called()
+                self.assertEqual(list(Path(parent).iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

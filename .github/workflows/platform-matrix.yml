@@ -1,0 +1,119 @@
+name: Additional platform acceptance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: additional-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  x86-compatibility:
+    name: ${{ matrix.package }} (${{ matrix.execution }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: linux-386-standard
+            runner: ubuntu-24.04
+            rust: i686-unknown-linux-gnu
+            execution: x86 on x64 Linux
+          - package: windows-386-standard
+            runner: windows-2022
+            rust: i686-pc-windows-msvc
+            execution: WOW64
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install the explicit 32-bit Linux compiler and loader
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes gcc-multilib libc6-dev-i386
+      - name: Record compatibility host and install the 32-bit Rust host toolchain
+        run: |
+          python -c 'import os, platform, struct; print({"runner_arch": os.environ["RUNNER_ARCH"], "python_machine": platform.machine(), "python_bits": struct.calcsize("P") * 8})'
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          rustc +"$TEST_TOOLCHAIN" --print cfg
+      - name: Check exact extraction, selection and isolated-runner contracts
+        run: |
+          python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+          python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+      - name: Fetch locked dependencies before isolated execution
+        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed 32-bit official core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Compile all public targets and execute synthetic contracts in 32-bit Rust
+        run: |
+          cargo +"$TEST_TOOLCHAIN" check --all-targets --all-features --locked
+          cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test devices_contract --test invitations_contract --test network_contract --test sync_observation_contract --test releases --locked
+      - name: Verify real management and synthetic file effects
+        id: native_engine_control
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-x86-control"
+      - name: Verify actual startup, cancellation, shutdown and state reuse
+        id: native_managed_instance
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-x86-managed"
+      - name: Verify real owned-host exit and exact process containment
+        id: native_managed_lifetime
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_lifetime --evidence-dir "${{ runner.temp }}/vs-x86-lifetime"
+      - name: Verify actual peer pause, resume and removal effects
+        id: native_devices
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --evidence-dir "${{ runner.temp }}/vs-x86-devices"
+      - name: Verify actual synthetic key-based sharing
+        id: native_sharing
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target sharing --evidence-dir "${{ runner.temp }}/vs-x86-sharing"
+      - name: Require exact owned-executable cleanup
+        id: native_cleanup
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require every compatibility execution outcome
+        if: always()
+        env:
+          PLATFORM_STEP_RESULTS: ${{ toJson(steps) }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          steps = json.loads(os.environ['PLATFORM_STEP_RESULTS'])
+          required = ['native_engine_control', 'native_managed_instance', 'native_managed_lifetime', 'native_devices', 'native_sharing', 'native_cleanup']
+          failed = [name for name in required if steps.get(name, {}).get('outcome') != 'success']
+          if failed:
+              print('Required compatibility outcomes did not pass: ' + ', '.join(failed), file=sys.stderr)
+              sys.exit(1)
+          print('All selected 32-bit compatibility effects and exact cleanup passed; minimum OS and other feature suites remain separate gates.')
+          PY

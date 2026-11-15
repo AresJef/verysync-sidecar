@@ -141,8 +141,13 @@ def prepare(args):
     if manifest["version"] != version:
         raise ValueError("test setup differs from the explicitly selected fixed version")
     packages = [p for p in manifest["packages"] if p["id"] == args.package]
-    if len(packages) != 1 or not packages[0]["alpha_target"]:
-        raise ValueError("this fixture setup currently covers the six alpha package mappings only")
+    if len(packages) != 1:
+        raise ValueError("test package must have one exact fixed catalog entry")
+    # Preparing an explicitly selected non-alpha architecture is separate from
+    # claiming it can run here. Keep the older upgrade fixture's narrower scope.
+    scope_field = "alpha_target" if older else "in_scope"
+    if packages[0].get(scope_field) is not True:
+        raise ValueError("test package is outside the selected fixed catalog scope")
     package = packages[0]
     root = "-".join(["verysync", package["os"], package["upstream_arch"], manifest["version"]])
     parent = Path(args.parent).resolve(strict=True)
