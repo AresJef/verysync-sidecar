@@ -152,7 +152,9 @@ impl fmt::Debug for GuiSocketPermissions {
 /// socket mode, reachable endpoint or a running process. Credentials are excluded.
 #[derive(Clone)]
 pub struct GuiListenerConfig {
-    /// Native management GUI server enabled selection, separate from desktop UI.
+    /// Stored native server-enable flag, separate from desktop UI. `false` does
+    /// not establish listener absence: the fixed native core has been observed
+    /// to restart its listener after accepting a live disable request.
     pub enabled: bool,
     /// Actual native bind selection; not an automatically chosen connection URL.
     pub address: GuiListenAddress,
@@ -217,8 +219,10 @@ pub struct GuiListenerPatch {
     permissions: Option<GuiSocketPermissions>,
 }
 impl GuiListenerPatch {
-    /// Enable or disable the native server. Disabling can remove management
-    /// access while synchronization and the process remain active.
+    /// Request the native stored server-enable flag. Acknowledgement/readback
+    /// does not prove live listener removal; v2.33.2 has been observed to restart
+    /// its listener while this flag remains false. Observe the actual endpoint
+    /// separately before treating management access as removed.
     pub fn enabled(mut self, value: bool) -> Self {
         self.enabled = Some(value);
         self

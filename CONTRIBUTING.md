@@ -82,6 +82,15 @@ emulated execution candidates; native hardware, minimum kernel/libc and the
 remaining feature suites require separate evidence. The Rust 1.85 LoongArch
 target enables LSX; selecting LA464 does not establish a native minimum ISA.
 
+PPC64LE also runs a standalone Rust catch-unwind/drop canary before any SDK
+panic case. POWER8 is the selected profile; bounded POWER9/POWER10 observations
+cannot replace its result. A failed standalone unwind prevents starting a native
+core for those SDK cases. This separates runtime prerequisites from SDK cleanup.
+
+S390x zero-CPU failures record bounded guest procfs shape and the fixed core's
+ghw dependency record without printing hardware attributes or changing the
+positive CPU-data assertion. Native inventory effects remain a separate gate.
+
 ```sh
 cargo +1.85.0 fetch --locked
 python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \

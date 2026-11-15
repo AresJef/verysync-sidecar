@@ -8,9 +8,9 @@ ordinary Debug omits their values and the address. Unknown address or permission
 selectors are retained on reads and refused by typed writes.
 
 `update_gui_listener()` issues one explicit PATCH and returns the previous
-listener snapshot and private native acknowledgement. This write can close the
-current endpoint, change its protocol or disable management while synchronization
-continues. Prepare a new explicit connection and trust policy before writing.
+listener snapshot and private native acknowledgement. Address/protocol changes
+can interrupt the current endpoint while synchronization continues. Prepare a
+new explicit connection and trust policy before writing.
 The method does not discover an address, reconnect, install certificates, restart
 or stop a process, roll back a change or retry a write. A lost response can mean
 an applied change; reconcile through the intended endpoint before choosing a
@@ -62,7 +62,16 @@ certificate material through their controlled environment. The native test
 explicitly prepares test certificate material only while its isolated core is
 stopped, then verifies direct native HTTPS without a proxy frontend.
 
-Disabling the native GUI server does not prove the core stopped. A borrowed
+The stored `enabled` flag is not proof that management access has been removed.
+An isolated macOS arm64 v2.33.2 experiment issued exactly one `enabled=false` PATCH, received
+an acknowledgement, independently verified the persisted false flag, and
+observed the native program log a new GUI/API listener followed by continued
+exact-process listening. No post-disable bind, connection or request interfered
+with that observation. Live server disable remains an unresolved native effect;
+the typed setter reports the configuration request without promising endpoint
+closure. A transient listener gap does not establish successful disable.
+
+Neither the stored flag nor listener absence proves the core stopped. A borrowed
 connection owns no process. An owned instance can still be observed with
 `wait_for_exit()` or explicitly terminated with `force_stop()`; neither action
 is selected implicitly by the listener write. Existing owner and Client values
@@ -74,9 +83,13 @@ this is separate from the stored disabled-server state. Managed HTTPS startup an
 acceptance conditions and are not inferred from borrowed Client operations.
 
 The controlled native cases verify direct TLS enable/revert, explicit address
-migration, actual GUI disable with separately chosen process cleanup, retained
-identity and synthetic bytes, and actual Unix socket permission changes. Full
-same-source native platform acceptance remains pending. HTTP acknowledgement,
+migration, retained identity and synthetic bytes, and actual Unix socket
+permission changes. The original GUI-disable closure condition remains failing;
+its earlier successful bind could reserve a transiently released port and
+interfere with native rebind. The corrected observation releases that probe
+immediately and also requires passive listener absence without holding the port.
+Explicit process cleanup is separate. Full same-source native platform
+acceptance remains pending. HTTP acknowledgement,
 stored readback, successful TLS authentication and process-tree exit are separate
 observations throughout.
 
