@@ -277,7 +277,11 @@ class NativeOpenerContracts(unittest.TestCase):
                 receipt=HELPER.prepare_native_opener("explicit-cargo","1.85.0",evidence,env)
             executable=Path(env["VERYSYNC_TEST_OPENER_EXECUTABLE"])
             self.assertEqual(executable.read_bytes(),source.read_bytes())
-            self.assertEqual(Path(env["VERYSYNC_TEST_OPENER_CAPTURE_DIR"]).parent,executable.parent)
+            owned=Path(env["VERYSYNC_TEST_OPENER_CAPTURE_DIR"]).parent
+            self.assertTrue(executable.is_relative_to(owned))
+            if HELPER.os.name == "nt":
+                self.assertEqual(executable,Path(env["VERYSYNC_TEST_OPENER_SYSTEM_ROOT"])/"System32"/"rundll32.exe")
+                self.assertNotIn("SYSTEMROOT",env)
             self.assertEqual(env["PATH"],str(executable.parent)+HELPER.os.pathsep+"original-child-path")
             self.assertEqual(HELPER.os.environ.copy(),original)
             self.assertTrue(receipt["fixture_only"])
