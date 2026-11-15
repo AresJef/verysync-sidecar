@@ -54,9 +54,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if native_pid <= 1 {
                     return Err("exact native parent required".into());
                 }
+                #[cfg(not(target_os = "linux"))]
+                let actor_journal = root.join(format!("{}.must-exit", child.id()));
+                #[cfg(target_os = "linux")]
+                let actor_journal = root.join(format!("{}.detached", child.id()));
+                std::fs::write(actor_journal, b"exact owned cancellation actor")?;
+                #[cfg(target_os = "linux")]
                 std::fs::write(
-                    root.join(format!("{}.must-exit", child.id())),
-                    b"library cancellation must stop actor before outer cleanup",
+                    root.join(format!("{}.detached-opener", std::process::id())),
+                    b"exact owned native opener, potentially in a separate process group",
                 )?;
                 std::fs::write(
                     root.join(format!("{native_pid}.native-root")),

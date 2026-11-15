@@ -156,7 +156,9 @@ impl StorageEndpoint {
     /// trust stores. Its effects need separate per-protocol acceptance. False
     /// alone does not prove verified server identity. The fixed macOS ARM core
     /// accepted a probe despite a conflicting entry in its private-profile
-    /// known_hosts; that profile trust mechanism is not verified.
+    /// known_hosts. Static inspection of that exact core also finds an
+    /// unconditional accept callback in its SFTP limits probe. This option
+    /// must not be treated as a verified SSH host-key policy.
     pub fn insecure_tls(mut self, allow: bool) -> Result<Self> {
         if !matches!(self.fs_type.as_str(), "sftp" | "webdav") {
             return Err(invalid(
@@ -170,7 +172,10 @@ impl StorageEndpoint {
     /// key file or SSH configuration on the controller. This selects the bundled
     /// GUI's native path field, not proof of key authentication. The fixed
     /// v2.33.2 macOS ARM core rejected a valid synthetic RSA path before
-    /// authentication; positive key/host-identity acceptance remains pending.
+    /// authentication. Its Local Sync backend passes this field to an inline
+    /// PEM consumer, while its limits probe parses the unescaped field directly.
+    /// These conflicting native consumers have no verified common encoding;
+    /// positive key/host-identity acceptance remains pending.
     pub fn private_key_file(mut self, path: TargetPath) -> Result<Self> {
         if self.fs_type != "sftp" {
             return Err(invalid("private key files require an SFTP endpoint"));

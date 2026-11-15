@@ -85,7 +85,9 @@ impl Drop for Capture {
     fn drop(&mut self) {
         if let Ok(calls) = self.calls() {
             for call in calls {
-                if !call.with_extension("must-exit").exists() {
+                if !call.with_extension("must-exit").exists()
+                    && !call.with_extension("detached").exists()
+                {
                     let _ = fs::write(call.with_extension("stop"), b"test scope cleanup");
                 }
             }
@@ -286,7 +288,6 @@ async fn actual_native_browser_preserves_primary_and_releases_only_successful_la
     assert_eq!(capture.calls()?.len(), 2);
     assert_eq!(snapshot(&state)?, before);
     assert_eq!(snapshot(&helper)?, helper_before);
-    #[cfg(target_os = "macos")]
     {
         fs::write(
             capture.0.join("hold-native-root"),
@@ -340,11 +341,11 @@ async fn actual_native_browser_preserves_primary_and_releases_only_successful_la
         assert_eq!(fs::read(&sentinel)?, b"primary caller data preserved");
         assert_eq!(capture.calls()?.len(), 3);
         // The outer wrapper must independently observe the exact native CLI PID
-        // and cancellation actor dead before it sends any cleanup stop markers.
+        // dead before any cleanup markers. macOS additionally requires the
+        // cancellation actor dead; Linux records whether its native detached
+        // opener and actor outlive that root, then explicitly stops the fixture.
         drop(fence);
-        eprintln!("native browser evidence: exact_owned_url_calls=3 successful_root_receipts=2 native_failed_opener_code=1 failure_never_releases_descendants=true cancellation_after_native_root_and_actor_started=true cancellation_lease_released=true cancelled_helper_bytes_preserved=true verify_live_identity=true verify_false_after_normal_stop=true desktop_actor_executed_after_each_success_result=true cancellation_native_exit_before_outer_cleanup_required=true independent_helper_keys=true primary_config_keys_data_preserved=true helper_reused=true overlap_refused=true program_drift_refused=true real_desktop_opened=false");
+        eprintln!("native browser evidence: exact_owned_url_calls=3 successful_root_receipts=2 native_failed_opener_code=1 failure_never_releases_descendants=true cancellation_after_native_root_and_actor_started=true cancellation_lease_released=true cancelled_helper_bytes_preserved=true verify_live_identity=true verify_false_after_normal_stop=true desktop_actor_executed_after_each_success_result=true cancellation_native_root_exit_before_outer_cleanup_required=true cancellation_desktop_exit_is_platform_specific=true independent_helper_keys=true primary_config_keys_data_preserved=true helper_reused=true overlap_refused=true program_drift_refused=true real_desktop_opened=false");
     }
-    #[cfg(not(target_os = "macos"))]
-    eprintln!("native browser Linux evidence: exact_owned_url_calls=2 normal_root_receipts=2 native_failed_opener_code=1 independent_helper_keys=true primary_state_preserved=true cancellation_integration_pending=true actual_actor_exit_requires_outer_wrapper=true");
     Ok(())
 }

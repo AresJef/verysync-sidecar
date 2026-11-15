@@ -341,6 +341,18 @@ Password data effects remain separate. Positive key and verified host identity
 conditions remain pending, with no implicit agent/password fallback or key-file
 upload added by the SDK.
 
+Static inspection of that exact macOS ARM core identifies conflicting native
+consumers. The Local Sync backend forwards the field as rclone's `key_pem`,
+whose inline-key branch first applies Go string unquoting. The native SFTP limits
+probe instead converts its input directly to bytes for `ssh.ParsePrivateKey`
+(or the passphrase variant), without reading a key file or unescaping the input.
+The separate native SFTP filesystem has a file-reading key parser. This explains
+why a valid key path or an encoding supported by one consumer does not establish
+support through the complete Local Sync path. No common encoding has passed the
+required actual registration, authentication and transfer conditions. This is
+evidence about the inspected build, not a claim that every platform or later
+VerySync version has the same behavior.
+
 ## Per-protocol directional and selection evidence
 
 The dedicated advanced native cases separately exercise FTP, SFTP, SMB and
@@ -405,7 +417,12 @@ accepted a probe despite a conflicting synthetic host key in its private-profile
 `known_hosts`. That attempted profile trust mechanism is unverified. The test
 failed before positive identity/copy acceptance, and no system or controller SSH
 configuration was changed. Do not infer verified host identity from a successful
-probe or this flag alone; the native trust mechanism still needs separate proof.
+probe or this flag alone. Static inspection of the same fixed core confirms that
+its SFTP limits probe installs an unconditional accept host-key callback. The
+Local Sync backend does not supply a `known_hosts_file` setting to its SFTP
+constructor. These observations do not establish a supported way to configure
+verified SSH host identity through this API. Verified identity remains pending;
+the SDK adds no trust-policy bypass, SSH tunnel or controller trust-store edits.
 
 ## HTTPS WebDAV certificate boundary
 

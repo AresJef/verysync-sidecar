@@ -441,10 +441,18 @@ cleanup stop markers. Primary and both helper profiles retain their bytes.
 These tests prove
 native request/lifetime behavior through that fallback; they do not establish a
 visible application window, Chrome-mode runtime behavior or other platforms.
-The library installs no execution policy or desktop hook. A Linux CI fixture
-is prepared to mask the five fixed Chrome candidates inside a private mount
-namespace and exercise the owned `xdg-open` fallback as the original runner
-user. Its native execution and separate cancellation gate remain pending.
+The library installs no execution policy or desktop hook. The Linux CI fixture
+masks the five fixed Chrome candidates inside a private mount namespace and
+exercises the owned `xdg-open` fallback as the original runner user. Focused
+AMD64 and ARM64 runs have exercised successful dispatch and native opener
+failure. The cancellation case additionally requires actual native-root exit
+before any outer cleanup. Because the native Linux opener can create a separate
+process group, the outer observer separately records whether its exact owned
+opener and actor survive that root, then explicitly stops those test fixtures.
+Survival is not reported as library cleanup or graphical rollback. A run with
+no cancellation journals reports unknown cancellation observations. Native
+execution of the new Linux cancellation case and the complete current-source
+platform gate remain pending.
 Windows native browser integration remains pending; its fallback uses
 `ShellExecute`, which the directory-opener fixture does not intercept.
 

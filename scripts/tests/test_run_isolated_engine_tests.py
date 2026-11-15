@@ -332,6 +332,38 @@ class NativeOpenerContracts(unittest.TestCase):
             self.assertTrue(receipt["every_actor_native_exit_observed"])
             self.assertEqual(receipt["captured_actor_count"], 1)
             self.assertEqual(receipt["journaled_actor_count"], 2)
+            self.assertIsNone(receipt["cancellation_native_exit_before_outer_cleanup"])
+            self.assertIsNone(receipt["cancellation_native_root_exit_before_outer_cleanup"])
+
+    def test_detached_linux_cancellation_is_observed_before_explicit_fixture_cleanup(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            captured = directory / "captured"
+            captured.mkdir()
+            for name in ["12345.owned", "12345.argv", "12345.detached", "67890.native-root",
+                         "23456.detached-opener"]:
+                (captured / name).write_bytes(b"synthetic exact owned cancellation journal")
+            observations = []
+            def observe(command, **kwargs):
+                pid = command[2]
+                cleanup = (captured / "release-native-root").exists()
+                observations.append((pid, cleanup))
+                if pid == "67890" or cleanup:
+                    return SimpleNamespace(returncode=1, stdout="")
+                self.assertFalse((captured / "12345.stop").exists())
+                return SimpleNamespace(returncode=0, stdout="S")
+            with patch.object(HELPER.subprocess, "run", side_effect=observe):
+                receipt = HELPER.finish_browser_actors(directory)
+            self.assertTrue(receipt["cancellation_native_root_exit_before_outer_cleanup"])
+            self.assertFalse(receipt["cancellation_native_exit_before_outer_cleanup"])
+            self.assertTrue(receipt["cancellation_desktop_outlived_native_root"])
+            self.assertEqual(receipt["cancellation_detached_actor_count"], 1)
+            self.assertEqual(receipt["cancellation_detached_opener_count"], 1)
+            self.assertEqual(observations[0], ("67890", False))
+            self.assertIn(("12345", False), observations)
+            self.assertIn(("23456", False), observations)
+            self.assertTrue((captured / "12345.stop").exists())
 
     def test_cancelled_native_root_and_actor_must_exit_before_outer_cleanup(self):
         from types import SimpleNamespace
@@ -357,7 +389,7 @@ class NativeOpenerContracts(unittest.TestCase):
             directory = Path(temporary)
             captured = directory / "captured"
             captured.mkdir()
-            for name in ["12345.owned", "12345.argv", "12345.must-exit"]:
+            for name in ["12345.owned", "12345.argv", "12345.must-exit", "67890.native-root"]:
                 (captured / name).write_bytes(b"synthetic live actor journal")
             with patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="S")), \
                  patch.object(HELPER.time, "monotonic", side_effect=[0, 0, 4]), \
