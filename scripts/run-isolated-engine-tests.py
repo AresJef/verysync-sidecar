@@ -49,11 +49,19 @@ def prepare_native_opener(cargo, toolchain, evidence_dir, env):
     # The pinned Windows core's actual process-start trace dispatches rundll32,
     # rather than Explorer. Keep the owned capture ahead of the system command.
     name = "rundll32.exe" if os.name == "nt" else ("open" if sys.platform == "darwin" else "xdg-open")
-    executable = directory / name
+    if os.name == "nt":
+        system_root = directory / "windows-root"
+        executable = system_root / "System32" / name
+        executable.parent.mkdir(parents=True)
+        # Only the exact dispatch test's separate child adopts this value.
+        # Do not change SystemRoot for Cargo, the suite, or the caller.
+        env["VERYSYNC_TEST_OPENER_SYSTEM_ROOT"] = str(system_root)
+    else:
+        executable = directory / name
     shutil.copy2(source, executable)
     if hashlib.sha256(executable.read_bytes()).digest() != hashlib.sha256(source.read_bytes()).digest():
         raise ValueError("owned native opener copy differs")
-    env["PATH"] = str(directory) + os.pathsep + env.get("PATH", "")
+    env["PATH"] = str(executable.parent) + os.pathsep + env.get("PATH", "")
     env["VERYSYNC_TEST_OPENER_CAPTURE_DIR"] = str(capture)
     env["VERYSYNC_TEST_OPENER_EXECUTABLE"] = str(executable)
     return {"fixture_only": True, "name": name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
@@ -353,7 +361,7 @@ def main():
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TARGET_FILE"] = str(discovery_file)
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TOKEN"] = discovery_token
         opener = None
-        for name in ("VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE"):
+        for name in ("VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE", "VERYSYNC_TEST_OPENER_SYSTEM_ROOT", "VERYSYNC_TEST_OPENER_OWNED_CHILD"):
             env.pop(name, None)
         if args.test_target == "engine_control":
             opener = prepare_native_opener(args.cargo, args.toolchain, args.evidence_dir, env)

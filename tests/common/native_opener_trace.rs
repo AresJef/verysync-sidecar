@@ -5,6 +5,64 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Give only this exact test's child the owned SystemRoot used by native gopen.
+pub(super) async fn run_owned_capture_child() -> super::TestResult<bool> {
+    if std::env::var("VERYSYNC_TEST_OPENER_OWNED_CHILD").as_deref() == Ok("1") {
+        return Ok(false);
+    }
+    let root = PathBuf::from(
+        std::env::var_os("VERYSYNC_TEST_OPENER_SYSTEM_ROOT")
+            .ok_or("explicit owned Windows opener root required")?,
+    );
+    let expected = root.join("System32").join("rundll32.exe");
+    let executable = PathBuf::from(
+        std::env::var_os("VERYSYNC_TEST_OPENER_EXECUTABLE")
+            .ok_or("explicit owned opener executable required")?,
+    );
+    if !root.is_absolute() || expected != executable || !expected.symlink_metadata()?.is_file() {
+        return Err("owned absolute Windows opener fixture required".into());
+    }
+    struct CaptureChild(Child);
+    impl Drop for CaptureChild {
+        fn drop(&mut self) {
+            if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+    let mut child = CaptureChild(
+        Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "native_helper_effects::actual_native_folder_open_requests_capture_exact_owned_target_dispatch",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("SYSTEMROOT", &root)
+            .env("VERYSYNC_TEST_OPENER_OWNED_CHILD", "1")
+            // PowerShell needs the real Windows environment. Exact owned
+            // argv capture replaces optional system-wide name observation.
+            .env("VERYSYNC_TEST_OPENER_TRACE", "0")
+            .stdin(Stdio::null())
+            .spawn()?,
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(status) = child.0.try_wait()? {
+            if !status.success() {
+                return Err("owned Windows native dispatch child failed".into());
+            }
+            eprintln!("native opener owned SystemRoot child=true exact_child_reaped=true original_dispatch_deadline_s=3 caller_environment_unchanged=true");
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Err("owned Windows dispatch child exceeded cleanup bound".into());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 pub(super) struct Trace {
     child: Child,
     directory: PathBuf,

@@ -325,6 +325,13 @@ The owned fixture therefore captures that executable and requires the entire
 and Linux `xdg-open` require the exact single target argument. Both normal and
 trash requests retain the same three-second bound and zero automatic retries;
 capturing dispatch does not establish that a desktop window opened.
+The Windows core initializes that command from `SYSTEMROOT/System32`, so PATH
+alone cannot intercept it. Only the exact dispatch test respawns its own test
+binary with an owned SystemRoot containing the verified helper. Other tests,
+Cargo, the caller and the actual Windows directory retain their environments.
+That child keeps the original effects and three-second assertion, and is reaped
+or terminated through an exact child guard. Optional PowerShell name tracing is
+disabled inside this owned environment; complete captured argv is required.
 
 The dedicated wallpaper suite is run twice: ordinary blocked egress must
 produce a typed source error, and the explicit --allow-wallpaper-source run

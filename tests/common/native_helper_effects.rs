@@ -1287,6 +1287,10 @@ fn native_opener_shape_diagnostics_keep_argument_values_private_and_reads_bounde
 
 #[tokio::test]
 async fn actual_native_folder_open_requests_capture_exact_owned_target_dispatch() -> TestResult {
+    #[cfg(windows)]
+    if native_opener_trace::run_owned_capture_child().await? {
+        return Ok(());
+    }
     use verysync_sidecar::{CreateFolderOptions, FolderId, NativeFolderOpenLocation, TargetPath};
     let root = tempfile::Builder::new()
         .prefix("vs-open-")
