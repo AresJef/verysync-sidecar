@@ -62,6 +62,30 @@ async fn actual_native_helpers_normalize_ids_collect_reports_and_preserve_explic
     assert_eq!(native_health.status(), 200);
     let raw_health: serde_json::Value = serde_json::from_slice(native_health.body_bytes())?;
     assert_eq!(raw_health["status"], health.status.native_value());
+    let migration = owner.client().native_migration_progress().await?;
+    assert!(migration.finished && migration.error_message.is_empty());
+    let native_migration = owner
+        .client()
+        .raw_request(&verysync_sidecar::RawRequest::new(
+            verysync_sidecar::RawMethod::Get,
+            ["rest", "migrate", "progress"],
+            verysync_sidecar::RequestEffect::ReadOnly,
+        )?)
+        .await?;
+    assert_eq!(native_migration.status(), 200);
+    let raw_migration: serde_json::Value = serde_json::from_slice(native_migration.body_bytes())?;
+    assert!(raw_migration["name"].as_str() == Some(migration.name.as_str()));
+    assert_eq!(raw_migration["total"].as_i64(), Some(migration.total));
+    assert_eq!(
+        raw_migration["completed"].as_i64(),
+        Some(migration.completed)
+    );
+    assert_eq!(raw_migration["percent"].as_f64(), Some(migration.percent));
+    assert_eq!(
+        raw_migration["finished"].as_bool(),
+        Some(migration.finished)
+    );
+    assert!(raw_migration["error"].as_str() == Some(migration.error_message.as_str()));
     #[cfg(unix)]
     {
         let control = reqwest::Client::builder()
@@ -105,6 +129,6 @@ async fn actual_native_helpers_normalize_ids_collect_reports_and_preserve_explic
     let exit = owner.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
-    println!("native_helper_observations native_health_ok=true health_matches_independent_native_response=true native_id_normalization_and_checksum_rejection=true explicit_loopback_lookup=true report_collection_without_consent_change=true random_quality_not_asserted=true empty_link_only_native_effect=true");
+    println!("native_helper_observations native_health_ok=true health_matches_independent_native_response=true migration_completed_baseline_matches_independent_native_response=true migration_not_started=true migration_active_effect_not_observed=true native_id_normalization_and_checksum_rejection=true explicit_loopback_lookup=true report_collection_without_consent_change=true random_quality_not_asserted=true empty_link_only_native_effect=true");
     Ok(())
 }
