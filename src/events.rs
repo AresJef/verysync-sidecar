@@ -1,6 +1,6 @@
 //! Bounded, caller-owned event subscriptions for the fixed baseline.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::time::Duration;
 
@@ -13,13 +13,104 @@ use crate::{Client, DeviceId, Error, ResponseDiagnostic, Result, BASELINE_ENGINE
 /// A fixed native event buffer. Sequence IDs belong only to their source.
 ///
 /// Disk changes use a separate native subscription from ordinary engine events.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum EventSource {
     /// Ordinary engine events from `GET /rest/events` with the native default mask.
     Standard,
     /// Local and remote disk changes from `GET /rest/events/disk`.
     Disk,
+    /// A canonical explicit name selection on `GET /rest/events`.
+    Filtered(EventFilter),
+}
+
+/// A bounded, canonical selection of native event names.
+///
+/// Names are sorted and deduplicated, so input order does not change a cursor's
+/// source. Unknown names remain explicit; validation does not prove that the
+/// fixed native engine recognizes them. Ordinary Debug excludes all names.
+#[derive(Clone, Eq, PartialEq)]
+pub struct EventFilter {
+    names: String,
+}
+impl EventFilter {
+    /// Select 1..=64 event kinds, each name at most 128 UTF-8 bytes.
+    ///
+    /// Empty names, commas, controls and whitespace are rejected. Unknown names
+    /// can be supplied through [`EventKind::Unknown`] without losing spelling.
+    ///
+    /// ```
+    /// use verysync_sidecar::{EventFilter, EventKind};
+    /// let filter = EventFilter::new([
+    ///     EventKind::StateChanged,
+    ///     EventKind::ConfigurationSaved,
+    ///     EventKind::StateChanged,
+    /// ])?;
+    /// assert_eq!(filter.names().collect::<Vec<_>>(), ["ConfigSaved", "StateChanged"]);
+    /// # Ok::<(), verysync_sidecar::Error>(())
+    /// ```
+    pub fn new(kinds: impl IntoIterator<Item = EventKind>) -> Result<Self> {
+        Self::from_names(kinds.into_iter().map(|kind| match kind {
+            EventKind::ConfigurationSaved => "ConfigSaved".to_owned(),
+            EventKind::FolderPaused => "FolderPaused".to_owned(),
+            EventKind::FolderResumed => "FolderResumed".to_owned(),
+            EventKind::StateChanged => "StateChanged".to_owned(),
+            EventKind::LocalChangeDetected => "LocalChangeDetected".to_owned(),
+            EventKind::RemoteChangeDetected => "RemoteChangeDetected".to_owned(),
+            EventKind::Unknown(name) => name,
+        }))
+    }
+    fn from_names(names: impl IntoIterator<Item = String>) -> Result<Self> {
+        let mut selected = BTreeSet::new();
+        for (index, name) in names.into_iter().enumerate() {
+            if index >= 64
+                || name.is_empty()
+                || name.len() > 128
+                || name
+                    .chars()
+                    .any(|c| c == ',' || c.is_control() || c.is_whitespace())
+            {
+                return Err(invalid_options());
+            }
+            selected.insert(name);
+        }
+        if selected.is_empty() {
+            return Err(invalid_options());
+        }
+        Ok(Self {
+            names: selected.into_iter().collect::<Vec<_>>().join(","),
+        })
+    }
+    /// Inspect the selected names in canonical order; these can be sensitive.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.names.split(',')
+    }
+    pub(crate) fn query_value(&self) -> &str {
+        &self.names
+    }
+}
+impl fmt::Debug for EventFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventFilter")
+            .field("name_count", &self.names().count())
+            .finish()
+    }
+}
+impl Serialize for EventFilter {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        self.names.serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for EventFilter {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let names = String::deserialize(deserializer)?;
+        Self::from_names(names.split(',').map(str::to_owned)).map_err(serde::de::Error::custom)
+    }
 }
 
 /// A consumed position in the upstream event sequence, bound to engine identity.
@@ -350,7 +441,7 @@ pub(crate) fn validate_wire(events: &[WireEvent], limit: usize) -> bool {
         && events.windows(2).all(|pair| pair[0].id < pair[1].id)
 }
 
-async fn head(client: &Client, source: EventSource) -> Result<EventCursor> {
+async fn head(client: &Client, source: &EventSource) -> Result<EventCursor> {
     let status = client.system_status().await?;
     let latest = client.event_wire(source, 0, 1).await?;
     let after = client.system_status().await?;
@@ -358,7 +449,7 @@ async fn head(client: &Client, source: EventSource) -> Result<EventCursor> {
         return Err(Error::EventGenerationChanged);
     }
     Ok(EventCursor {
-        source,
+        source: source.clone(),
         device_id: status.device_id,
         engine_started_at: status.start_time,
         last_id: latest.last().map_or(0, |e| e.id),
@@ -395,6 +486,23 @@ impl Client {
             .await
     }
 
+    /// Observe an explicit native name selection using its own source-bound cursor.
+    ///
+    /// Names are sent as one `events` query value per `GET /rest/events`. The native
+    /// engine maintains buffers by their resolved mask; a new selection begins
+    /// observing only after registration and can have the same empty-buffer
+    /// interruption described in [`Self::subscribe_disk_events`]. No event is
+    /// manufactured, no initial read is retried and history is not reconstructed.
+    /// Unknown names are passed explicitly, without claiming native recognition.
+    pub async fn subscribe_filtered_events(
+        &self,
+        filter: EventFilter,
+        options: EventOptions,
+    ) -> Result<EventSubscription> {
+        self.subscribe_event_source(EventSource::Filtered(filter), options)
+            .await
+    }
+
     async fn subscribe_event_source(
         &self,
         source: EventSource,
@@ -417,7 +525,7 @@ impl Client {
             }
         }
         verify_version(self).await?;
-        let latest = head(self, source).await?;
+        let latest = head(self, &source).await?;
         let cursor = options.cursor.clone().unwrap_or_else(|| latest.clone());
         let (sender, receiver) = mpsc::channel(options.queue_capacity);
         let worker_cursor = cursor.clone();
@@ -482,7 +590,7 @@ async fn batch(
         *cursor = latest;
     } else if latest.last_id > cursor.last_id {
         let events = client
-            .event_wire(cursor.source, cursor.last_id, options.batch_limit)
+            .event_wire(&cursor.source, cursor.last_id, options.batch_limit)
             .await?;
         if client.system_status().await?.start_time != cursor.engine_started_at {
             return Err(Error::EventGenerationChanged);
@@ -549,7 +657,7 @@ async fn run(
             }
             let latest = match snapshot.take() {
                 Some(latest) => latest,
-                None => head(&client, cursor.source).await?,
+                None => head(&client, &cursor.source).await?,
             };
             if recovering
                 && !send(
