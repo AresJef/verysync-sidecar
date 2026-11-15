@@ -261,6 +261,49 @@ class ProxyContracts(unittest.TestCase):
 
 
 class NativeOpenerContracts(unittest.TestCase):
+    def test_browser_command_requires_verified_native_selector_isolation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary)
+            env = {"PATH": "owned-fixture-first"}
+            original = HELPER.os.environ.copy()
+            with patch.object(HELPER.sys, "platform", "darwin"):
+                command = HELPER.isolate_browser_command(["explicit-cargo", "test"], evidence, env)
+            self.assertEqual(command[:2], ["/usr/bin/sandbox-exec", "-f"])
+            self.assertEqual(command[3:], ["explicit-cargo", "test"])
+            self.assertEqual(env["VERYSYNC_TEST_BROWSER_ISOLATION"], "macos-seatbelt-fallback-v1")
+            policy = Path(command[2]).read_text()
+            self.assertIn('(deny process-exec (subpath "/Applications")', policy)
+            for candidate in ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"]:
+                self.assertIn(f'(literal "/usr/bin/{candidate}")', policy)
+            self.assertEqual(HELPER.os.environ.copy(), original)
+            for platform in ["linux", "win32"]:
+                with patch.object(HELPER.sys, "platform", platform):
+                    with self.assertRaises(ValueError):
+                        HELPER.isolate_browser_command(["must-not-run"], evidence, {})
+
+    def test_browser_actor_exit_is_observed_before_owned_capture_cleanup(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            captured = directory / "captured"
+            captured.mkdir()
+            call = captured / "12345.argv"
+            call.write_bytes(b"synthetic-owned-url\0")
+            call.with_suffix(".owned").write_bytes(b"synthetic exact spawn PID journal")
+            unpublished = captured / "67890.owned"
+            unpublished.write_bytes(b"synthetic actor not yet publishing argv")
+            with patch.object(HELPER.os, "name", "posix"), patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="")) as observe:
+                receipt = HELPER.finish_browser_actors(directory)
+            self.assertEqual(sorted(c.args[0] for c in observe.call_args_list),
+                             [["/bin/ps", "-p", "12345", "-o", "stat="],
+                              ["/bin/ps", "-p", "67890", "-o", "stat="]])
+            self.assertTrue(call.with_suffix(".stop").is_file())
+            self.assertTrue(unpublished.with_suffix(".stop").is_file())
+            self.assertTrue(call.is_file())
+            self.assertTrue(receipt["every_actor_native_exit_observed"])
+            self.assertEqual(receipt["captured_actor_count"], 1)
+            self.assertEqual(receipt["journaled_actor_count"], 2)
+
     def test_exact_artifact_is_copied_into_owned_child_path_without_parent_environment_changes(self):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as temporary:

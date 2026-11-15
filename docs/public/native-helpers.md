@@ -389,8 +389,10 @@ if receipt.outcome == NativeWatchLimitOutcome::MinimumObserved {
 
 `ManagedInstance::request_native_browser(helper_state, verify, timeout)` invokes
 the exact last-ready local program's `browser` command for its explicitly
-configured HTTP(S) management URL. This unreleased API requires its own native
-integration acceptance; successful compilation is not evidence of GUI effects.
+configured HTTP(S) management URL. The pinned CLI first tries its Chrome-style
+application mode with a profile under the helper state, then its platform opener
+fallback. `BROWSER` does not override that first mode on macOS. The SDK preserves
+the native choice; it does not choose or install a browser for the caller.
 Unix-socket-only owners have no browser URL and are rejected.
 
 Provide a separate persistent helper directory. It must be new/empty or already
@@ -422,6 +424,19 @@ failure, timeout or caller cancellation; the SDK does not promise graphical
 rollback. Cancellation retains worker ownership until root cleanup finishes,
 and an immediate reuse can still encounter the helper-state lease. No request
 retry, core stop/restart or change to ordinary owned-core cleanup is implicit.
+
+The macOS native integration case denies every pinned Chrome executable
+candidate in a temporary test-only execution policy and captures the native
+fallback through an owned opener. It verifies two exact owned URL requests,
+live authenticated verification, dispatch after normal shutdown with verification
+disabled, independent helper identities, unchanged primary configuration/keys/data,
+and an actor that continues executing after each root result. The outer wrapper
+must observe every actor's actual exit before deleting its capture. This proves
+native request/lifetime behavior through that fallback; it does not establish a
+visible application window, Chrome-mode runtime behavior, other platforms, or
+the remaining cancellation/failure integration gates. The library installs no
+execution policy or desktop hook. The browser integration wrapper currently
+refuses platforms without a verified selector isolation setup.
 
 ```no_run
 # async fn example(core: &verysync_sidecar::ManagedInstance, helper: std::path::PathBuf) -> verysync_sidecar::Result<()> {

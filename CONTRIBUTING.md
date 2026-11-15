@@ -406,3 +406,15 @@ These are native lifetime tests; actual VerySync/browser API effects require
 their own integration evidence. Ordinary managed core/CLI cleanup continues
 through its existing owner type. A dispatched desktop request cannot
 promise graphical rollback after native failure or caller cancellation.
+
+`browser_engine` executes the pinned native CLI through a separate helper state.
+Run it through `run-isolated-engine-tests.py`, which currently requires macOS
+and applies a temporary policy denying all eight pinned Chrome candidates.
+Native application mode ignores `BROWSER`; the test captures its `open` fallback
+using the exact owned fixture. The actor continues after the native root result,
+then explicitly stops. The outer wrapper checks each exact actor PID for actual
+exit before removing captures, because macOS refuses to execute its restricted
+`ps` inside even an allow-all Seatbelt sandbox. Direct Cargo execution without
+the explicit isolation marker is refused. This test does not establish Chrome
+UI behavior or acceptance on other systems. Production library code installs
+no sandbox, browser replacement or helper service.
