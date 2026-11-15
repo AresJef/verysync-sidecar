@@ -62,6 +62,12 @@ checks exact exit and lease release, retains identity files, explicitly restarts
 the same state and requires normal shutdown. These distinguish test-fixture
 cleanup from the library's ready-owner cleanup.
 
+The independent Linux fixture explicitly selects the official direct-core
+environment mode (`VSMONITORED=yes`), matching the SDK's Linux launch mode.
+Unix group creation uses a child-only pre-exec `setpgid` call, including under
+emulation. Exact-image absence remains required
+alongside group absence, so a detached descendant cannot make cleanup pass.
+
 ```sh
 cargo +1.85.0 fetch --locked
 python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \
