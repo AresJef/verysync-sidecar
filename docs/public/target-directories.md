@@ -58,7 +58,7 @@ serializes it, and sends it once. Paused/nonrunning native runners can refuse
 the request even while the folder remains configured.
 
 ```no_run
-# async fn maintenance(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+# async fn cleanup_temporary_files(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
 let locations = client.native_system_paths().await?;
 let receipt = client.request_folder_temporary_cleanup(folder).await?;
 assert_eq!(&receipt.folder, folder);
