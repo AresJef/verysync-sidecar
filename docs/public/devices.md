@@ -55,11 +55,13 @@ and actual disconnect behavior require independent native validation; another
 writer can subsequently change configuration. Removing a peer does not send a
 configuration change to the other instance.
 
-The selected kernel has also been observed presenting the peer and its folder
-association again after an initially absent readback. The origin of that later
-update remains under investigation. An absence snapshot therefore does not
-establish a durable peer-rejection policy. Runtime validation keeps the actual
-disconnect condition separate from the configuration acknowledgment.
+A controlled v2.33.2 native run removed the peer once and observed its
+disconnect, then observed the kernel registering it again and delivering a new
+synthetic file after an explicit scan with the existing folder keys. Removing
+a device record does not revoke those shared keys. Treat the returned absence
+as a configuration snapshot. A durable peer-rejection policy needs separate
+native capabilities and validation; the library does not add that policy to
+this DELETE. The original disconnect regression remains under investigation.
 
 No modifying request is automatically retried. Cancellation, a lost response,
 or failed readback can leave an applied change: inspect the exact identity and

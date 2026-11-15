@@ -145,7 +145,9 @@ impl Client {
     ///
     /// The engine owns association changes. The result observes absence and any
     /// remaining folder references; the library never visits local data paths.
-    /// Another writer can change these snapshots. No modifying request is retried.
+    /// Native key holders have been observed registering again after removal;
+    /// this does not revoke folder keys or establish a durable rejection policy.
+    /// Other writers can also change these snapshots. No modifying request is retried.
     pub async fn remove_device(&self, id: &DeviceId) -> Result<DeviceRemoval> {
         self.require_remote_device(id)?;
         let url = self.device_url(id)?;
