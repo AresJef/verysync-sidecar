@@ -91,6 +91,19 @@ S390x zero-CPU failures record bounded guest procfs shape and the fixed core's
 ghw dependency record without printing hardware attributes or changing the
 positive CPU-data assertion. Native inventory effects remain a separate gate.
 
+The four MIPS candidates explicitly build the Rust 1.85 standard library from
+its matching `rust-src` component. `cargo-mips-std.py` requires a declared MIPS
+target, the frozen compiler, an explicit custom-std marker and a pre-existing
+per-job `RUSTC_BOOTSTRAP=1`; it does not set bootstrap or edit Cargo configuration.
+This is an experimental custom-toolchain route. Cargo's supported `build-std`
+workflow requires nightly; these checks are not stock distributed Rust 1.85
+standard-library support. The source-lock hash is verified independently.
+Arguments, unwind/Drop, default-TLS linking and actual SDK lifecycle effects
+remain separate required checks. The fixed image's ELF32 MIPS registrations are
+created only on disposable CI VMs, with exact endian/class/machine selectors,
+the copied pinned interpreter and PF flags; existing entries are never replaced.
+No registration or custom compiler configuration is applied by the library.
+
 ```sh
 cargo +1.85.0 fetch --locked
 python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \
