@@ -353,3 +353,12 @@ and arguments are omitted. The original three-second deadline, zero automatic
 request retries, strict predicate and complete native gate remain unchanged.
 The wrapper removes the owned capture/executable before printing a safe cleanup
 summary. A focused diagnostic result alone does not establish platform acceptance.
+
+Host watch-limit tests separate ordinary no-op/unprivileged-denial observations
+from an explicit isolated Linux VM action. Only the dedicated CI job may set
+VERYSYNC_TEST_ALLOW_HOST_CONFIGURATION=github-actions-isolated-linux-vm. Cargo
+compiles as the ordinary runner; a bounded adapter verifies the exact prebuilt
+test hash and elevates only that one case with a small environment allowlist.
+The case raises the real kernel value by one, independently reads it, then
+restores and verifies the exact original value; a drop guard attempts restoration
+on failure too. It installs no service or persistent host configuration.
