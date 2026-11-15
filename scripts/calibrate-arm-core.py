@@ -16,8 +16,8 @@ OTHER_PROFILES = {
     "linux-ppc64le-standard": ("qemu-ppc64le", "power9"),
     "linux-riscv64-standard": ("qemu-riscv64", "rv64"),
     "linux-s390x-standard": ("qemu-s390x", "max"),
-    "linux-mips-standard": ("qemu-mips", "24Kf"),
-    "linux-mipsle-standard": ("qemu-mipsel", "24Kf"),
+    "linux-mips-standard": ("qemu-mips-binfmt-P", "24Kf"),
+    "linux-mipsle-standard": ("qemu-mipsel-binfmt-P", "24Kf"),
     "linux-mips64-standard": ("qemu-mips64", "MIPS64R2-generic"),
     "linux-mips64le-standard": ("qemu-mips64el", "MIPS64R2-generic"),
 }
@@ -112,8 +112,8 @@ def _calibrate(root, core, requested, emulator_name, cpu_models):
     core = core.resolve(strict=True)
     results = []
     launches = (("sdk_registered_exec", [str(core)]),
-                # The pinned binfmt image defaults to preserve-argv0, including
-                # direct invocations whose AT_FLAGS are zero. Supply argv[0].
+                # The declared image or Debian binfmt-P alias preserves argv0
+                # in explicit calls too. Supply that distinct argv[0] slot.
                 ("explicit_emulator_exec", [str(emulator), str(core), str(core)]))
     for cpu in cpu_models:
         for execution_path, prefix in launches:
