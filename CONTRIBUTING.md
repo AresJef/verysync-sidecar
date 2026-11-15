@@ -208,6 +208,13 @@ the request. It never reserves the address or probes a released endpoint. Missin
 observations fail; continued listening is recorded as unsupported live
 hot-disable. The earlier closure failure and bind-reservation false positive
 remain historical evidence; a duplicate diagnosis-only job is no longer needed.
+The active-need fixture explicitly selects and reads back a five-second native
+redial interval on both private instances before creating its peer observations.
+This is an owned test condition, not an SDK retry or production default. An
+initial connection can close while peer/folder configuration is being established;
+a default twenty-second redial gap can consume the complete preparation window.
+The original CI failure remains evidence, and a local passing baseline alone
+does not establish that intermittent cause or validate the new platform condition.
 The active-need fixture first receives a small readiness file at normal speed,
 then applies the explicit 1 KiB/s receive limit and creates the original 1 MiB
 payload. Resuming, readiness, rate selection and nonempty-need observation share
