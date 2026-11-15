@@ -19,6 +19,7 @@ include = [
     "/examples/**/*.rs",
     "/tests/**/*.rs",
     "/scripts/**/*.py",
+    "/scripts/trace-native-folder-opener.ps1",
     "/scripts/storage-test-requirements.txt",
     "/docs/public/**/*.md",
     "/docs/capabilities.csv",

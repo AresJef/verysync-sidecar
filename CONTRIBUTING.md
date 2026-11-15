@@ -362,3 +362,12 @@ test hash and elevates only that one case with a small environment allowlist.
 The case raises the real kernel value by one, independently reads it, then
 restores and verifies the exact original value; a drop guard attempts restoration
 on failure too. It installs no service or persistent host configuration.
+
+Focused Windows opener diagnostics additionally opt into a short-lived CIM
+process-start subscription around the original request. It records only bounded
+process names/IDs/parent relationships and allowlisted system-name counts, with
+no command lines, titles or SID output. The observer has a readiness handshake,
+15-second limit, exact owned-child cleanup and subscription teardown. A missing
+observer is reported separately and does not replace or relax the original
+request, three-second capture predicate or failure. One bounded native text-log
+read reports only whether the known locality-denial marker was present.
