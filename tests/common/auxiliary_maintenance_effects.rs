@@ -78,7 +78,12 @@ async fn actual_native_temporary_cleanup_and_paths_preserve_other_data_and_resta
             .get("logFile")
             .ok_or("native log location missing")?;
         let expected = root.join("core").join("verysync.log");
-        assert_eq!(std::path::Path::new(reported), expected);
+        let reported = std::path::Path::new(reported);
+        assert_eq!(reported.file_name(), expected.file_name());
+        assert_eq!(
+            std::fs::canonicalize(reported.parent().ok_or("native log parent missing")?)?,
+            std::fs::canonicalize(expected.parent().ok_or("expected log parent missing")?)?
+        );
     }
     let data = root.join("synthetic & + % 测试");
     std::fs::create_dir(&data)?;
