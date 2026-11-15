@@ -11,6 +11,7 @@ impl Client {
     /// Native null records and private unknown fields are retained.
     pub async fn native_cpu_hardware(&self) -> Result<NativeCpuHardware> {
         self.read_native_hardware(
+            "read native CPU hardware",
             "rest/hardware/cpu",
             &["total_cores", "total_threads", "processors"],
         )
@@ -20,6 +21,7 @@ impl Client {
     /// error, including HTTP 200 error envelopes; it is never an empty success.
     pub async fn native_memory_hardware(&self) -> Result<NativeMemoryHardware> {
         self.read_native_hardware(
+            "read native memory hardware",
             "rest/hardware/memory",
             &[
                 "total_physical_bytes",
@@ -34,7 +36,11 @@ impl Client {
     /// physical capacity. Mount text uses the connected target's path rules.
     pub async fn native_block_hardware(&self) -> Result<NativeBlockHardware> {
         let mut result: NativeBlockHardware = self
-            .read_native_hardware("rest/hardware/blockstorage", &["total_size_bytes", "disks"])
+            .read_native_hardware(
+                "read native block hardware",
+                "rest/hardware/blockstorage",
+                &["total_size_bytes", "disks"],
+            )
             .await?;
         let style = self.folder_path_style()?;
         for disk in result.disks.iter_mut().flatten().flatten() {
@@ -47,15 +53,19 @@ impl Client {
     /// Read native NIC inventory/capabilities. This changes no network setting,
     /// contacts no peer, and does not interpret link labels as measured throughput.
     pub async fn native_network_hardware(&self) -> Result<NativeNetworkHardware> {
-        self.read_native_hardware("rest/hardware/network", &["nics"])
-            .await
+        self.read_native_hardware(
+            "read native network hardware",
+            "rest/hardware/network",
+            &["nics"],
+        )
+        .await
     }
     async fn read_native_hardware<T: DeserializeOwned>(
         &self,
+        operation: &'static str,
         route: &str,
         required: &[&str],
     ) -> Result<T> {
-        let operation = "read native hardware inventory";
         self.system_status().await?;
         let (status, bytes) = self
             .connection

@@ -424,3 +424,59 @@ jobs:
           SECOND_OUTCOME: ${{ steps.device_second.outcome }}
         run: >-
           python -c "import os,sys; sys.exit(0 if all(os.environ[k]=='success' for k in ['FIRST_OUTCOME','SECOND_OUTCOME']) else 1)"
+
+
+  hardware-diagnostic:
+    name: Native hardware diagnosis only (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install native Rust and fetch dependencies before runtime isolation
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed private Mac core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require original hardware data and backend-refusal assertions with safe component diagnostics
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target engine_control --test-filter hardware_effects
+          --evidence-dir "${{ runner.temp }}/vs-hardware-component-diagnosis"
+      - name: Observe the upstream Darwin CPU prerequisite after the original result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, shutil, subprocess
+          binary = shutil.which('sysctl')
+          if binary is None:
+              raise ValueError('the native sysctl prerequisite is absent')
+          result = subprocess.run([binary, '-a'], capture_output=True, timeout=15)
+          print(json.dumps({'prerequisite': 'ghw v0.13.0 CPU sysctl -a',
+                            'exit_code': result.returncode,
+                            'stdout_bytes': len(result.stdout), 'stderr_bytes': len(result.stderr),
+                            'permission_error_marker': any(marker in result.stderr.lower() for marker in [b'operation not permitted', b'permission denied']),
+                            'native_output_logged': False, 'sdk_runtime_acceptance': False}))
+          PY
+      - name: Require exact owned-executable cleanup after the original result
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup

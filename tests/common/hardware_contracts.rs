@@ -100,7 +100,13 @@ async fn hardware_native_errors_and_missing_schemas_are_not_empty_successes() ->
                 _ => client.native_network_hardware().await.unwrap_err(),
             };
             if body.get("error").is_some_and(|v| v.is_string()) {
-                assert!(matches!(error, Error::Api { .. }));
+                let expected = [
+                    "read native CPU hardware",
+                    "read native memory hardware",
+                    "read native block hardware",
+                    "read native network hardware",
+                ][kind];
+                assert!(matches!(error, Error::Api { operation, .. } if operation == expected));
             } else {
                 assert!(matches!(error, Error::InvalidResponse { .. }));
             }

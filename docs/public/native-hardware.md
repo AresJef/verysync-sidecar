@@ -39,6 +39,8 @@ private text. Direct deserialization outside a `Client` does not supply target
 context, so converting nonempty mount text then returns an error.
 
 Native backend/permission errors remain errors even when HTTP status is 200.
+The API error operation identifies the CPU, memory, block or network read;
+its explicit response diagnostic retains the native error without logging it.
 The fixed macOS core has produced CPU and block inventories, but returns native
 not-implemented errors for memory and network inventory. Those refusals are not
 positive support evidence. Other platforms, fields and permissions retain their
