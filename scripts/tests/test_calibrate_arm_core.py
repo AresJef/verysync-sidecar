@@ -122,7 +122,7 @@ class OtherVersionProfileContracts(unittest.TestCase):
     def test_each_profile_uses_its_exact_interpreter_cpu_and_private_state(self):
         profiles = {
             "linux-loong64-standard": ("qemu-loongarch64", "la464"),
-            "linux-ppc64le-standard": ("qemu-ppc64le", "power8"),
+            "linux-ppc64le-standard": ("qemu-ppc64le", "power9"),
             "linux-riscv64-standard": ("qemu-riscv64", "rv64"),
             "linux-s390x-standard": ("qemu-s390x", "max"),
             "linux-mips-standard": ("qemu-mips", "24Kf"),

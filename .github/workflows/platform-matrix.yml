@@ -355,7 +355,7 @@ jobs:
             cc: powerpc64le-linux-gnu-gcc
             cxx: powerpc64le-linux-gnu-g++
             apt: g++-powerpc64le-linux-gnu
-            cpu: power8
+            cpu: power9
           - package: linux-riscv64-standard
             rust: riscv64gc-unknown-linux-gnu
             platform: riscv64

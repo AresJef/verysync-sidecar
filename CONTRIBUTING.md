@@ -69,7 +69,7 @@ emulation. Exact-image absence remains required alongside group absence, so a
 detached descendant cannot make cleanup pass.
 
 The additional Linux matrix prepares four separate emulated profiles:
-LoongArch64/LA464 with the LP64D GNU sysroot and GCC 14, PPC64LE/POWER8,
+LoongArch64/LA464 with the LP64D GNU sysroot and GCC 14, PPC64LE/POWER9,
 RISC-V64/rv64 and S390x/max. Each records its exact compiler, target, sysroot,
 fixed QEMU image and emulator SHA, registration flags, and official ELF headers.
 An independent Rust canary must preserve arguments through registered and
@@ -83,8 +83,10 @@ remaining feature suites require separate evidence. The Rust 1.85 LoongArch
 target enables LSX; selecting LA464 does not establish a native minimum ISA.
 
 PPC64LE also runs a standalone Rust catch-unwind/drop canary before any SDK
-panic case. POWER8 is the selected profile; bounded POWER9/POWER10 observations
-cannot replace its result. A failed standalone unwind prevents starting a native
+panic case. POWER8 failed both standalone unwind paths; POWER9 and POWER10
+passed both paths. POWER9 is now the explicit candidate, while POWER8 failures
+remain recorded and no minimum native ISA is inferred. Another model cannot
+replace the selected profile's result. A failed standalone unwind prevents starting a native
 core for those SDK cases. This separates runtime prerequisites from SDK cleanup.
 
 S390x zero-CPU failures record bounded guest procfs shape and the fixed core's
