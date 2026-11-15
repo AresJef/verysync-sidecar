@@ -204,7 +204,7 @@ pub use local_sync_events::{
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
-    CoreLogSnapshot, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest,
+    CoreLogSnapshot, CoreLogText, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest,
     IndexResetAcknowledgement, IndexResetScope,
 };
 #[cfg(feature = "download")]

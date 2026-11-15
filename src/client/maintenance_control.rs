@@ -2,11 +2,20 @@
 use super::{mutation_error, Client};
 use crate::{
     CoreDiagnostics, CoreErrorLog, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
-    CoreLogSnapshot, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest, Error,
+    CoreLogSnapshot, CoreLogText, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest, Error,
     ResponseDiagnostic, Result, TargetPath,
 };
 use crate::{IndexResetAcknowledgement, IndexResetScope};
 use std::collections::BTreeMap;
+
+fn validate_log_since(since: Option<&str>) -> Result<()> {
+    if since.is_some_and(|s| s.is_empty() || s.len() > 128 || s.chars().any(char::is_control)) {
+        return Err(invalid(
+            "native log timestamp must be nonempty, bounded and control-free",
+        ));
+    }
+    Ok(())
+}
 
 impl Client {
     /// Explicitly request a native synchronization-index reset for one configured
@@ -221,16 +230,40 @@ impl Client {
     /// timestamp from an earlier entry. No timezone conversion, retry, polling,
     /// deduplication or controller logging is performed.
     pub async fn core_log(&self, since: Option<&str>) -> Result<CoreLogSnapshot> {
-        if since.is_some_and(|s| s.is_empty() || s.len() > 128 || s.chars().any(char::is_control)) {
-            return Err(invalid(
-                "native log timestamp must be nonempty, bounded and control-free",
-            ));
-        }
+        validate_log_since(since)?;
         self.system_status().await?;
         let query = since.map(|s| vec![("since", s)]).unwrap_or_default();
         self.connection
             .get_json_with_query("read core log", "rest/system/log", &query)
             .await
+    }
+    /// Read the native plain-text log once, optionally preserving an exact
+    /// native timestamp's offset and precision. Text and line endings remain
+    /// unchanged; an empty filtered snapshot is valid. Identity checks,
+    /// response bounds and deadlines apply. Invalid UTF-8 retains bounded
+    /// diagnostics as an error; no lossy replacement or automatic retry occurs.
+    /// The SDK does not drain logs, parse lines or install a controller logger.
+    pub async fn core_log_text(&self, since: Option<&str>) -> Result<CoreLogText> {
+        validate_log_since(since)?;
+        self.system_status().await?;
+        let operation = "read native text log";
+        let query = since.map(|s| vec![("since", s)]).unwrap_or_default();
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                operation,
+                reqwest::Method::GET,
+                self.connection
+                    .management_url("rest/system/log.txt", &query)?,
+                None,
+                false,
+            )
+            .await?;
+        let text = String::from_utf8(bytes).map_err(|error| Error::InvalidResponse {
+            operation,
+            response: ResponseDiagnostic::new(status, error.into_bytes()),
+        })?;
+        Ok(CoreLogText { text })
     }
     /// Read active core-side package levels. This neither installs a logger nor
     /// changes the calling application's logging configuration.
