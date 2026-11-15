@@ -73,6 +73,7 @@ jobs:
         run: |
           python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
           python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+          python -m unittest discover -s scripts/tests -p test_ldap_tls_fixture.py
       - name: Install native Rust toolchain
         run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
       - name: Record compiler identity
@@ -373,31 +374,15 @@ jobs:
           NATIVE_MATRIX_PACKAGE: ${{ matrix.package }}
         run: python scripts/check-native-step-results.py
 
-  ldap-trust-diagnostic:
-    name: LDAP trust diagnosis only (${{ matrix.package }})
-    runs-on: ${{ matrix.runner }}
+  device-removal-diagnostic:
+    name: Device removal diagnosis only (linux-amd64-standard)
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - package: macos-amd64-standard
-            runner: macos-15-intel
-            rust: x86_64-apple-darwin
-          - package: macos-arm64-standard
-            runner: macos-15
-            rust: aarch64-apple-darwin
-          - package: windows-amd64-standard
-            runner: windows-2022
-            rust: x86_64-pc-windows-msvc
-          - package: windows-arm64-standard
-            runner: windows-11-arm
-            rust: aarch64-pc-windows-msvc
     defaults:
       run:
         shell: bash
     env:
-      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      TEST_TOOLCHAIN: 1.85.0-x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -405,101 +390,37 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
-      - name: Verify private TLS fixture scope and DNS failure contracts
-        run: python -m unittest discover -s scripts/tests -p test_ldap_tls_fixture.py
-      - name: Select separate x64 peer interpreter on Windows ARM
-        if: matrix.package == 'windows-arm64-standard'
-        id: storage_tools_python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-          architecture: x64
-          update-environment: false
-      - name: Prepare explicit private protocol peers
-        env:
-          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
-        run: python scripts/prepare-storage-test-environment.py --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
       - name: Install the native Rust toolchain
         run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
       - name: Fetch fixed dependencies explicitly
         run: cargo +"$TEST_TOOLCHAIN" fetch --locked
       - name: Prepare the fixed isolated core explicitly
         run: >-
-          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Explicitly prepare the pinned private public-CA loopback TLS fixture
-        run: >-
-          python scripts/prepare-ldap-tls-fixture.py prepare
-          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Diagnose strict native public-CA LDAP only; not full acceptance
-        timeout-minutes: 4
+      - name: Observe the original device-removal condition with bounded role diagnostics
+        id: device_first
+        continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target ldap_trusted_ca_engine
-          --evidence-dir "${{ runner.temp }}/vs-ldap-trust-diagnostic-proxy"
-      - name: Verify exact owned-core cleanup
-        if: always()
+          --test-target devices --test-filter actual_device_pause_disconnects
+          --evidence-dir "${{ runner.temp }}/vs-device-removal-first"
+      - name: Require exact owned-core cleanup before the independent repetition
         run: python scripts/prepare-test-engine.py check-cleanup
-      - name: Remove only this job's private public-CA fixture
+      - name: Repeat independently without overriding the first outcome
+        id: device_second
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --test-filter actual_device_pause_disconnects
+          --evidence-dir "${{ runner.temp }}/vs-device-removal-second"
+      - name: Verify exact owned-core cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require both original device conditions; this is not full acceptance
         if: always()
-        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "${{ runner.temp }}"
-
-  smb-diagnostic:
-    name: SMB diagnosis only (${{ matrix.package }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - package: windows-amd64-standard
-            runner: windows-2022
-            rust: x86_64-pc-windows-msvc
-          - package: windows-arm64-standard
-            runner: windows-11-arm
-            rust: aarch64-pc-windows-msvc
-    defaults:
-      run:
-        shell: bash
-    env:
-      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-      - name: Select separate x64 peer interpreter on Windows ARM
-        if: matrix.package == 'windows-arm64-standard'
-        id: storage_tools_python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-          architecture: x64
-          update-environment: false
-      - name: Prepare explicit private protocol peers
         env:
-          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
-        run: python scripts/prepare-storage-test-environment.py --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Install the native Rust toolchain
-        run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
-      - name: Fetch fixed dependencies explicitly
-        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
-      - name: Prepare the fixed isolated core explicitly
+          FIRST_OUTCOME: ${{ steps.device_first.outcome }}
+          SECOND_OUTCOME: ${{ steps.device_second.outcome }}
         run: >-
-          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
-          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Diagnose only the actual SMB case; this is not full acceptance
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target local_sync_protocol_engine --test-filter public_smb_
-          --evidence-dir "${{ runner.temp }}/vs-smb-diagnostic-proxy"
-      - name: Diagnose actual SMB reverse, two-way conflicts and selected effects only
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target local_sync_protocol_advanced_engine --test-filter public_smb_
-          --evidence-dir "${{ runner.temp }}/vs-smb-advanced-diagnostic-proxy"
-      - name: Verify exact owned-core cleanup
-        if: always()
-        run: python scripts/prepare-test-engine.py check-cleanup
+          python -c "import os,sys; sys.exit(0 if all(os.environ[k]=='success' for k in ['FIRST_OUTCOME','SECOND_OUTCOME']) else 1)"
