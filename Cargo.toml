@@ -60,6 +60,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 default = ["tls"]
 tls = ["reqwest/rustls"]
 engine-tests = []
+host-configuration-tests = ["engine-tests"]
 download = ["tls", "dep:flate2", "dep:tar", "dep:rawzip"]
 
 [dev-dependencies]
@@ -271,4 +272,9 @@ required-features = ["engine-tests"]
 [[test]]
 name = "wallpaper_engine"
 path = "tests/wallpaper_engine.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "host_control_engine"
+path = "tests/host_control_engine.rs"
 required-features = ["engine-tests"]
