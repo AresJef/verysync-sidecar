@@ -96,3 +96,21 @@ Mutating helpers serialize with other mutations through cloned clients. Response
 size limits, deadlines and transport authentication remain in force. Ordinary
 Debug output omits private report, location and link values; inspect fields
 explicitly when needed and redact them before logging.
+
+## Interpreting the surface index
+
+The capability CSV also records internal native symbols found during surface
+research. Rows classified as `internal` identify verified listener/bootstrap or
+route-construction implementation, without a separate HTTP or CLI call. They
+are not extra SDK methods, aliases of an entire module, support claims or
+completion credit. Registered operations keep their individual implementation
+and acceptance records even when one constructor wires many routes.
+
+In particular, the native `getListener` constructor builds the GUI socket/TLS
+listener during startup; public listener settings and managed lifecycle remain
+separate controls. `patchVerysyncHandler` constructs the custom router and
+file-resource dispatcher; its name does not describe a PATCH request. The
+independent native `/rest/folder/downloadprogress` and `/rest/fs/path/writeable`
+endpoints retain separate pending implementation/effect records until their
+actual contracts are verified. The latter's native `attempt` input is not
+silently treated as a filesystem-selector parameter.
