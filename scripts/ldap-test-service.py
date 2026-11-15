@@ -24,13 +24,10 @@ lock = threading.Lock()
 transport = config.get("transport", "plain")
 if transport not in ("plain", "tls", "starttls"):
     raise ValueError("explicit supported test transport required")
-trusted_ca = config.get("trusted_ca", False)
-if type(trusted_ca) is not bool or trusted_ca and transport != "tls":
-    raise ValueError("CA-issued peer is an explicit TLS-only test selection")
 tls_context = None
 public_manifest = config.get("public_tls_manifest")
 if public_manifest is not None:
-    if transport != "tls" or not trusted_ca:
+    if transport != "tls":
         raise ValueError("public CA fixture requires explicit strict TLS selection")
     import ldap_tls_fixture
     ldap_tls_fixture.check_dns()
@@ -51,39 +48,14 @@ elif transport != "plain":
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "synthetic LDAP peer")])
     now = datetime.now(timezone.utc)
-    issuer_name, signing_key = name, key
-    if trusted_ca:
-        ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,
-            "verysync-sidecar-ephemeral-ci-" + format(x509.random_serial_number(), "x")[:32])])
-        ca = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name)
-              .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
-              .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(days=1))
-              .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-              .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
-              .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
-              .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False,
-                  key_encipherment=False, data_encipherment=False, key_agreement=False,
-                  key_cert_sign=True, crl_sign=True, encipher_only=None, decipher_only=None), critical=True)
-              .sign(ca_key, hashes.SHA256()))
-        ca_path = root / "synthetic-ldap-ca.pem"
-        with ca_path.open("xb") as output:
-            output.write(ca.public_bytes(serialization.Encoding.PEM))
-        os.chmod(ca_path, 0o600)
-        issuer_name, signing_key = ca_name, ca_key
-    cert_builder = (x509.CertificateBuilder().subject_name(name).issuer_name(issuer_name)
+    cert_builder = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
             .public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(minutes=1))
             .not_valid_after(now + timedelta(days=1))
             .add_extension(x509.SubjectAlternativeName(
-                [x509.DNSName("localhost")] if trusted_ca else
                 [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
             .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False))
-    if trusted_ca:
-        cert_builder = (cert_builder.add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-            .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
-            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(signing_key.public_key()), critical=False))
-    cert = cert_builder.sign(signing_key, hashes.SHA256())
+    cert = cert_builder.sign(key, hashes.SHA256())
     cert_path, key_path = root / "synthetic-ldap-cert.pem", root / "synthetic-ldap-key.pem"
     cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
@@ -207,7 +179,6 @@ with Server(("127.0.0.1", 0), Handler) as server:
         raise ValueError("reserved live-instance port refused")
     print(json.dumps({"ready": True, "loopback_only": True,
                       "port": server.server_address[1], "protocol": "ldap", "transport": transport,
-                      "trusted_ca": trusted_ca,
                       "public_ca": public_manifest is not None,
                       "python_platform": sysconfig.get_platform()}), flush=True)
     server.serve_forever(poll_interval=0.1)
