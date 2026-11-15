@@ -6,6 +6,13 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn own_native_parent() -> libc::pid_t {
+    // SAFETY: Read only the calling fixture's direct parent PID. No pointers,
+    // mutable native state, process enumeration or signalling are involved.
+    unsafe { libc::getppid() }
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = PathBuf::from(
         env::var_os("VERYSYNC_TEST_OPENER_CAPTURE_DIR")
@@ -39,6 +46,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = child.kill();
             let _ = child.wait();
             return Err(error.into());
+        }
+        if root.join("hold-native-root").exists() {
+            #[cfg(unix)]
+            {
+                let native_pid = own_native_parent();
+                if native_pid <= 1 {
+                    return Err("exact native parent required".into());
+                }
+                std::fs::write(
+                    root.join(format!("{}.must-exit", child.id())),
+                    b"library cancellation must stop actor before outer cleanup",
+                )?;
+                std::fs::write(
+                    root.join(format!("{native_pid}.native-root")),
+                    b"exact direct parent of the owned opener",
+                )?;
+                std::fs::write(
+                    root.join("native-root-held"),
+                    b"native CLI is awaiting this owned opener",
+                )?;
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while !root.join("release-native-root").exists() {
+                    if Instant::now() >= deadline {
+                        return Err("owned native root hold exceeded bound".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            #[cfg(not(unix))]
+            return Err("native cancellation parent journal not verified on this platform".into());
         }
         return Ok(());
     }

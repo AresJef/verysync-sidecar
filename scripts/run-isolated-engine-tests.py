@@ -90,7 +90,10 @@ def isolate_browser_command(command, evidence_dir, env):
     profile = evidence_dir / "browser-exec.sb"
     profile.write_text('''(version 1)
 (allow default)
-(deny process-exec (subpath "/Applications")
+(deny process-exec (subpath "/Applications/Google Chrome.app")
+ (subpath "/Applications/Google Chrome Canary.app")
+ (subpath "/Applications/Chromium.app")
+ (subpath "/Applications/Microsoft Edge.app")
  (literal "/usr/bin/google-chrome-stable")
  (literal "/usr/bin/google-chrome")
  (literal "/usr/bin/chromium")
@@ -106,26 +109,41 @@ def finish_browser_actors(directory):
     owned = {call.stem: call for call in calls + actors}
     if len(owned) > 16 or any(not pid.isdecimal() or not 1 < int(pid) <= 0xffffffff for pid in owned):
         raise ValueError("bounded exact owned actor PIDs required")
-    for call in owned.values():
-        call.with_suffix(".stop").write_bytes(b"outer test-owned cleanup")
-    pending = {int(pid) for pid in owned}
-    deadline = time.monotonic() + 3
-    while pending and time.monotonic() < deadline:
-        for pid in list(pending):
-            result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "stat="],
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, timeout=2)
-            if result.returncode not in (0, 1):
-                raise OSError("owned browser exit observation unavailable")
-            state = result.stdout.strip()
-            if not state or state.startswith("Z"):
-                pending.remove(pid)
+    must_exit = list((directory / "captured").glob("*.must-exit"))
+    native_roots = list((directory / "captured").glob("*.native-root"))
+    required = {call.stem for call in must_exit + native_roots}
+    if any(not pid.isdecimal() or not 1 < int(pid) <= 0xffffffff for pid in required):
+        raise ValueError("exact native cancellation PIDs required")
+
+    def observe_ended(pids):
+        pending = {int(pid) for pid in pids}
+        deadline = time.monotonic() + 3
+        while pending and time.monotonic() < deadline:
+            for pid in list(pending):
+                result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "stat="],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True, timeout=2)
+                if result.returncode not in (0, 1):
+                    raise OSError("owned browser exit observation unavailable")
+                state = result.stdout.strip()
+                if not state or state.startswith("Z"):
+                    pending.remove(pid)
+            if pending:
+                time.sleep(0.01)
         if pending:
-            time.sleep(0.01)
-    if pending:
-        raise RuntimeError("owned browser actor still alive; preserve fixture")
-    return {"captured_actor_count": len(calls), "journaled_actor_count": len(actors), "every_actor_native_exit_observed": True,
-            "observer_outside_browser_sandbox": True}
+            raise RuntimeError("owned browser process still alive; preserve fixture")
+
+    # Cancellation must already have ended these processes. Never turn a
+    # missing SDK cleanup into a pass by sending our actor's normal stop first.
+    observe_ended(required)
+    for call in owned.values():
+        if call.stem not in required:
+            call.with_suffix(".stop").write_bytes(b"outer test-owned cleanup")
+    observe_ended(owned)
+    return {"captured_actor_count": len(calls), "journaled_actor_count": len(actors),
+            "cancellation_actor_count": len(must_exit), "native_cancelled_root_count": len(native_roots),
+            "cancellation_native_exit_before_outer_cleanup": True,
+            "every_actor_native_exit_observed": True, "observer_outside_browser_sandbox": True}
 
 class BlockedProxy(socketserver.ThreadingTCPServer):
     daemon_threads = True

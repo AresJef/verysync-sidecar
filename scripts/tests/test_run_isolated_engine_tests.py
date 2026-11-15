@@ -272,7 +272,9 @@ class NativeOpenerContracts(unittest.TestCase):
             self.assertEqual(command[3:], ["explicit-cargo", "test"])
             self.assertEqual(env["VERYSYNC_TEST_BROWSER_ISOLATION"], "macos-seatbelt-fallback-v1")
             policy = Path(command[2]).read_text()
-            self.assertIn('(deny process-exec (subpath "/Applications")', policy)
+            self.assertNotIn('(subpath "/Applications")', policy)
+            for bundle in ["Google Chrome", "Google Chrome Canary", "Chromium", "Microsoft Edge"]:
+                self.assertIn(f'(subpath "/Applications/{bundle}.app")', policy)
             for candidate in ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"]:
                 self.assertIn(f'(literal "/usr/bin/{candidate}")', policy)
             self.assertEqual(HELPER.os.environ.copy(), original)
@@ -303,6 +305,40 @@ class NativeOpenerContracts(unittest.TestCase):
             self.assertTrue(receipt["every_actor_native_exit_observed"])
             self.assertEqual(receipt["captured_actor_count"], 1)
             self.assertEqual(receipt["journaled_actor_count"], 2)
+
+    def test_cancelled_native_root_and_actor_must_exit_before_outer_cleanup(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            captured = directory / "captured"
+            captured.mkdir()
+            for name in ["12345.owned", "12345.argv", "12345.must-exit", "67890.native-root"]:
+                (captured / name).write_bytes(b"synthetic owned cancellation journal")
+            def ended(command, **kwargs):
+                self.assertEqual(list(captured.glob("*.stop")), [])
+                return SimpleNamespace(returncode=1, stdout="")
+            with patch.object(HELPER.subprocess, "run", side_effect=ended):
+                receipt = HELPER.finish_browser_actors(directory)
+            self.assertTrue(receipt["cancellation_native_exit_before_outer_cleanup"])
+            self.assertEqual(receipt["native_cancelled_root_count"], 1)
+            self.assertEqual(receipt["cancellation_actor_count"], 1)
+            self.assertEqual(list(captured.glob("*.stop")), [])
+
+    def test_live_cancelled_actor_cannot_be_fixed_by_outer_stop_and_counted_passed(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            captured = directory / "captured"
+            captured.mkdir()
+            for name in ["12345.owned", "12345.argv", "12345.must-exit"]:
+                (captured / name).write_bytes(b"synthetic live actor journal")
+            with patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="S")), \
+                 patch.object(HELPER.time, "monotonic", side_effect=[0, 0, 4]), \
+                 patch.object(HELPER.time, "sleep"):
+                with self.assertRaises(RuntimeError):
+                    HELPER.finish_browser_actors(directory)
+            self.assertEqual(list(captured.glob("*.stop")), [])
+            self.assertTrue((captured / "12345.argv").is_file())
 
     def test_exact_artifact_is_copied_into_owned_child_path_without_parent_environment_changes(self):
         from types import SimpleNamespace
