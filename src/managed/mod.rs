@@ -5,6 +5,8 @@ mod archive;
 mod backup;
 mod bootstrap;
 mod command;
+mod completions;
+pub use completions::{NativeCompletionAction, NativeCompletionExit, NativeCompletionOutcome};
 mod database;
 mod paths;
 pub use backup::{StateBackup, StateBackupInfo, StateBackupOptions};

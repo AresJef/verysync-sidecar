@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Request native shell-completion instructions with private exact text, explicit
+  action/exit outcomes and stopped-state alias checks; never evaluate shell code.
+
 - Inspect native CLI storage locations on stopped owned instances with typed
   local paths, private output and explicit exit/schema outcomes.
 
