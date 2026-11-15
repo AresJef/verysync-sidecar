@@ -33,6 +33,13 @@ emulation can change process observation and signal behavior; those are tested
 conditions, not automatic exceptions to the original deadlines or exit gates.
 Other feature suites, native ARM hosts and minimum systems retain separate gates.
 
+Emulated process observation explicitly binds the selected core's argument and
+mapped file identity to the declared emulator or original executable image,
+with stable process-birth checks. An unverified empty snapshot is insufficient
+for cleanup acceptance. Bounded version probes record each explicit CPU model;
+a different model's success cannot validate the requested model. A successful
+version probe is neither Rust runtime acceptance nor minimum-native-ISA proof.
+
 MIPS, LoongArch64, PPC64LE, RISC-V64, S390x and the two Windows legacy
 packages retain separate execution requirements. Cross compilation, user-mode
 emulation, compatibility execution and native execution are different evidence

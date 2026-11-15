@@ -57,6 +57,7 @@ jobs:
       - name: Check exact extraction, selection and isolated-runner contracts
         run: |
           python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+          python -m unittest discover -s scripts/tests -p test_prepare_test_examples.py
           python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
       - name: Fetch locked dependencies before isolated execution
         run: cargo +"$TEST_TOOLCHAIN" fetch --locked
@@ -68,7 +69,12 @@ jobs:
         run: |
           cargo +"$TEST_TOOLCHAIN" check --all-targets --all-features --locked
           cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test devices_contract --test invitations_contract --test network_contract --test sync_observation_contract --test releases --locked
+      - name: Explicitly build every required controller example
+        run: >-
+          python scripts/prepare-test-examples.py --toolchain "$TEST_TOOLCHAIN"
+          --github-env "$GITHUB_ENV"
       - name: Verify real management and synthetic file effects
+        # The following suites also execute manage_owned, not just library tests.
         id: native_engine_control
         continue-on-error: true
         run: >-
@@ -187,16 +193,18 @@ jobs:
           target = os.environ['CARGO_BUILD_TARGET']
           suffix = target.replace('-', '_')
           compiler = os.environ['CROSS_COMPILER']
+          emulator_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
               output.write('CARGO_TARGET_' + suffix.upper() + '_LINKER=' + compiler + '-gcc\n')
               output.write('CARGO_TARGET_' + suffix.upper() + '_RUNNER=' + str(binary) + '\n')
               output.write('CC_' + suffix + '=' + compiler + '-gcc\n')
               output.write('CXX_' + suffix + '=' + compiler + '-g++\n')
               output.write('AR_' + suffix + '=' + compiler + '-ar\n')
+              output.write('VERYSYNC_TEST_EMULATOR_SHA256=' + emulator_sha + '\n')
           info = {'execution': 'QEMU user emulation', 'runner_arch': os.environ['RUNNER_ARCH'],
                   'rust_target': target, 'cpu': os.environ['QEMU_CPU'],
                   'controller_sysroot': os.environ['QEMU_LD_PREFIX'], 'image': image,
-                  'qemu_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                  'qemu_sha256': emulator_sha,
                   'native_arm_host': False, 'minimum_kernel_verified': False}
           (root / 'identity.json').write_text(json.dumps(info, indent=2) + '\n')
           print(json.dumps(info))
@@ -216,11 +224,53 @@ jobs:
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Calibrate the fixed core on bounded explicit CPU models before SDK tests
+        run: |
+          python - <<'PYCODE'
+          import json, os, pathlib, re, resource, subprocess, tempfile
+          resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-arm-emulator'
+          emulator = root / 'qemu-arm'
+          core = pathlib.Path(os.environ['VERYSYNC_TEST_BINARY'])
+          requested = os.environ['QEMU_CPU']
+          results = []
+          for cpu in ['arm926', 'arm1176', 'cortex-a7']:
+              with tempfile.TemporaryDirectory(prefix='vs-arm-version-', dir=os.environ['RUNNER_TEMP']) as state_text:
+                  state = pathlib.Path(state_text)
+                  child_env = dict(os.environ, QEMU_CPU=cpu, VSMONITORED='yes')
+                  child_env.update({'HOME': str(state / 'profile'), 'TMPDIR': str(state),
+                                    'XDG_CONFIG_HOME': str(state / 'roaming'),
+                                    'XDG_CACHE_HOME': str(state / 'local'),
+                                    'XDG_DATA_HOME': str(state / 'data')})
+                  try:
+                      result = subprocess.run([str(emulator), str(core), 'version', '--home', str(state)],
+                                              env=child_env, cwd=state, capture_output=True, timeout=12)
+                      versions = re.findall(rb'(?m)^verysync (v[0-9]+\.[0-9]+\.[0-9]+)(?:[ \t]|$)', result.stdout)
+                      matches = versions == [b'v2.33.2']
+                      row = {'cpu': cpu, 'exit_code': result.returncode,
+                             'termination_signal': -result.returncode if result.returncode < 0 else None,
+                             'version_matches': matches, 'timed_out': False,
+                             'version_probe_passed': result.returncode == 0 and matches}
+                  except subprocess.TimeoutExpired:
+                      row = {'cpu': cpu, 'exit_code': None, 'termination_signal': None,
+                             'version_matches': False, 'timed_out': True, 'version_probe_passed': False}
+                  row.update({'requested_cpu': cpu == requested, 'sdk_runtime_acceptance': False,
+                              'minimum_native_isa_verified': False, 'core_dumps_enabled': False})
+                  results.append(row)
+                  print(json.dumps(row), flush=True)
+          (root / 'cpu-version-calibration.json').write_text(json.dumps(results, indent=2) + '\n')
+          if not next(row['version_probe_passed'] for row in results if row['cpu'] == requested):
+              raise RuntimeError('The fixed core did not pass the requested CPU version probe; preserve this unverified target condition')
+          PYCODE
       - name: Compile the actual ARM test executables with default TLS enabled
         run: >-
           cargo +"$TEST_TOOLCHAIN" test --features engine-tests
           --test engine_control --test managed_instance --test managed_lifetime
           --no-run --locked
+      - name: Explicitly build every required example for the actual ARM target
+        run: >-
+          python scripts/prepare-test-examples.py --toolchain "$TEST_TOOLCHAIN"
+          --github-env "$GITHUB_ENV"
       - name: Verify real public Rust management and synthetic file effects under emulation
         id: emulated_engine_control
         continue-on-error: true
