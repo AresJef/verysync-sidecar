@@ -26,12 +26,11 @@ pub use cache::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
 pub use download::{DownloadOptions, PreparedProgram};
 mod instance;
 pub use instance::{ManagedExit, ManagedInstance};
+mod browser;
+mod launcher;
 mod native;
 mod process;
-// Promote this separately verified launcher boundary when the browser API is
-// connected; ordinary core/CLI ownership does not use it.
-#[cfg(test)]
-mod launcher;
+pub use browser::{NativeBrowserExit, NativeBrowserOutcome};
 mod restart;
 pub use restart::ProgramTransition;
 mod shutdown;

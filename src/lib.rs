@@ -214,10 +214,11 @@ pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
 pub use managed::{
     DatabaseCommand, DatabaseCommandExit, DatabaseCommandOutcome, DatabaseCountRow,
     KernelUpgradeCommand, KernelUpgradeExit, ManagedExit, ManagedInstance, ManagedLifetime,
-    ManagedOptions, ManagedUpgradeChecks, NativeCompletionAction, NativeCompletionExit,
-    NativeCompletionOutcome, NativeStoragePaths, NativeStoragePathsExit, NativeStoragePathsOutcome,
-    NativeWatchLimitExit, NativeWatchLimitObservation, NativeWatchLimitOutcome, ProgramTransition,
-    StateBackup, StateBackupInfo, StateBackupOptions,
+    ManagedOptions, ManagedUpgradeChecks, NativeBrowserExit, NativeBrowserOutcome,
+    NativeCompletionAction, NativeCompletionExit, NativeCompletionOutcome, NativeStoragePaths,
+    NativeStoragePathsExit, NativeStoragePathsOutcome, NativeWatchLimitExit,
+    NativeWatchLimitObservation, NativeWatchLimitOutcome, ProgramTransition, StateBackup,
+    StateBackupInfo, StateBackupOptions,
 };
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
