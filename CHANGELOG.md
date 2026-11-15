@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit target-native folder/trash open requests with private receipts,
+  mutation uncertainty and no inferred graphical window success.
+
 - Read independent native per-file download-progress maps with exact block
   counters, byte estimates, private results and preserved missing-state errors.
 

@@ -310,6 +310,16 @@ read-only status/run observations. It then returns the original Stop error;
 observations never rescue the test or automatically repeat a control request.
 A later passing run does not establish the cause of an earlier native failure.
 
+The engine-control runner explicitly builds the engine-tests-only
+`native_folder_opener` example and identifies its executable through Cargo JSON.
+It verifies an owned copy, prepends its directory only to the test child PATH
+and provides an owned capture directory. The short-lived helper records bounded
+UTF-8 argument bytes and never opens a desktop application. Required capture
+assertions distinguish the actual native dispatch from an empty HTTP receipt.
+Captured argument bytes and the owned executable are removed after the suite;
+only sanitized identity/count/removal metadata remains in shared evidence.
+The library neither installs this helper nor changes caller/global environments.
+
 ## Public content
 
 The repository tracks source, tests, English user documentation, CI and sanitized
