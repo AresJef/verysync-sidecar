@@ -441,9 +441,12 @@ cleanup stop markers. Primary and both helper profiles retain their bytes.
 These tests prove
 native request/lifetime behavior through that fallback; they do not establish a
 visible application window, Chrome-mode runtime behavior or other platforms.
-The library installs no
-execution policy or desktop hook. The browser integration wrapper currently
-refuses platforms without a verified selector isolation setup.
+The library installs no execution policy or desktop hook. A Linux CI fixture
+is prepared to mask the five fixed Chrome candidates inside a private mount
+namespace and exercise the owned `xdg-open` fallback as the original runner
+user. Its native execution and separate cancellation gate remain pending.
+Windows native browser integration remains pending; its fallback uses
+`ShellExecute`, which the directory-opener fixture does not intercept.
 
 ```no_run
 # async fn example(core: &verysync_sidecar::ManagedInstance, helper: std::path::PathBuf) -> verysync_sidecar::Result<()> {
