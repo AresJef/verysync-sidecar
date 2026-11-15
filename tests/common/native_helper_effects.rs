@@ -7,6 +7,113 @@ use std::{
 use verysync_sidecar::{Error, ManagedInstance};
 
 #[tokio::test]
+async fn actual_native_target_path_completions_preserve_prefixes_selectors_and_owned_data(
+) -> TestResult {
+    use verysync_sidecar::{TargetPath, TargetPathBrowseOptions};
+    let root = tempfile::Builder::new()
+        .prefix("vs-path-completion-")
+        .tempdir()?
+        .keep();
+    let paths = root.join("synthetic paths");
+    let alpha = paths.join("alpha \u{4e8c} % +");
+    let alpine = paths.join("alpine");
+    std::fs::create_dir_all(alpha.join("deep"))?;
+    std::fs::create_dir(&alpine)?;
+    std::fs::create_dir(paths.join("beta"))?;
+    std::fs::write(paths.join("alpha.txt"), b"retained native completion bytes")?;
+    let mut owner = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let id = owner.client().instance().device_id.clone();
+    let config = std::fs::read(root.join("core").join("setting.dat"))?;
+    let prefix = TargetPath::local(paths.join("al"));
+    let options = TargetPathBrowseOptions::default().current(prefix);
+    let observed = owner.client().browse_target_paths(&options).await?;
+    assert_eq!(observed.paths.len(), 2);
+    let actual: std::collections::BTreeSet<_> = observed
+        .paths
+        .iter()
+        .map(|p| {
+            assert!(p.local_path().is_none());
+            assert_eq!(p.style(), TargetPath::local(&paths).style());
+            p.to_protocol().map(std::path::PathBuf::from)
+        })
+        .collect::<verysync_sidecar::Result<_>>()?;
+    assert_eq!(
+        actual,
+        std::collections::BTreeSet::from([alpha.clone(), alpine])
+    );
+    assert!(!format!("{options:?} {observed:?}").contains("synthetic paths"));
+    let explicit = owner
+        .client()
+        .browse_target_paths(&options.clone().filesystem("basic"))
+        .await?;
+    assert_eq!(
+        explicit
+            .paths
+            .iter()
+            .map(|p| p.to_protocol().map(str::to_owned))
+            .collect::<verysync_sidecar::Result<Vec<_>>>()?,
+        observed
+            .paths
+            .iter()
+            .map(|p| p.to_protocol().map(str::to_owned))
+            .collect::<verysync_sidecar::Result<Vec<_>>>()?
+    );
+    let mut trailing = alpha.clone();
+    trailing.push("");
+    let children = owner
+        .client()
+        .browse_target_paths(
+            &TargetPathBrowseOptions::default().current(TargetPath::local(trailing)),
+        )
+        .await?;
+    assert_eq!(children.paths.len(), 1);
+    assert_eq!(
+        std::path::Path::new(children.paths[0].to_protocol()?),
+        alpha.join("deep")
+    );
+    for current in [paths.join("absent"), paths.join("alpha.txt")] {
+        assert!(owner
+            .client()
+            .browse_target_paths(
+                &TargetPathBrowseOptions::default().current(TargetPath::local(current))
+            )
+            .await?
+            .paths
+            .is_empty());
+    }
+    assert!(owner
+        .client()
+        .browse_target_paths(
+            &options
+                .clone()
+                .filesystem("synthetic-unavailable-filesystem")
+        )
+        .await?
+        .paths
+        .is_empty());
+    let roots = owner
+        .client()
+        .browse_target_paths(&TargetPathBrowseOptions::default())
+        .await?;
+    assert!(!roots.paths.is_empty());
+    assert_eq!(owner.client().system_status().await?.device_id, id);
+    assert_eq!(
+        std::fs::read(root.join("core").join("setting.dat"))?,
+        config
+    );
+    assert_eq!(
+        std::fs::read(paths.join("alpha.txt"))?,
+        b"retained native completion bytes"
+    );
+    assert!(alpha.join("deep").is_dir());
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("native_target_path_browse_snapshots=7 actual_directory_prefix_and_children=true files_excluded=true explicit_basic_selector_matches=true unknown_selector_empty_not_support=true roots_observed=true target_paths_private_no_controller_lookup=true identity_configuration_and_synthetic_data_retained=true normal_owned_tree_exit=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn actual_native_index_file_metadata_preserves_native_records_and_missing_objects(
 ) -> TestResult {
     use verysync_sidecar::{

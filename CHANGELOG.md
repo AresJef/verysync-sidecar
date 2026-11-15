@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Require actual JSON objects for native error envelopes so legitimate data
+  arrays cannot be mistaken for API or license failures.
+
+- Add explicit target-native path completions and filesystem selector requests,
+  preserving private returned paths and native empty-result ambiguity.
+
 - Add full native indexed-file metadata, advertised sources and encoded signature
   records, preserving native empty local state without inferring file presence,
   completed downloads or signature trust.

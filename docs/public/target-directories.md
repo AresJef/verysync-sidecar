@@ -74,3 +74,47 @@ after sending remain `MutationOutcomeUnknown`; the SDK performs no retry,
 rollback, automatic scan or implicit restart. Other controllers can change the
 registration after the preflight read. Coordinate maintenance with the caller's
 data and transfer policy, and verify the effects the application requires.
+
+## Native path completions
+
+`browse_target_paths(options)` reads the distinct `/rest/system/browse` route.
+`TargetPathBrowseOptions::default()` requests native roots with the native basic
+filesystem. `current(TargetPath)` sends an exact complete or partial target path;
+construct local values with Path/PathBuf operations, and select the actual target
+syntax for remote values. The SDK checks the target style, verifies identity,
+encodes the query once and reads one bounded response. It does not expand paths,
+join filesystem path strings, look up controller files, retry or follow results.
+
+`filesystem(name)` explicitly sends the native selector. Nonempty selectors up
+to 128 bytes without controls are accepted; omission leaves the native basic
+default. Native results preserve order and target path spelling. They are
+untrusted remote TargetPath values even when the controller happens to be on
+the same computer. Ordinary Debug omits both paths and selector values.
+
+The fixed basic backend returns directory prefix completions and children for a
+trailing-separator prefix, excluding matching files. Its empty array can also
+mean no matching directory, an unavailable path or an unsupported backend.
+An empty snapshot does not prove existence, access or backend support, and the
+SDK does not invent a more specific native error. HTTP/body/schema failures,
+null/non-string roots and invalid returned paths remain errors with bounded
+private diagnostics. This differs from the native directory picker's status
+object and explicit error semantics; neither route substitutes for the other.
+
+```no_run
+# async fn path_completions(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+use verysync_sidecar::{TargetPath, TargetPathBrowseOptions};
+let prefix = std::path::Path::new("/explicit").join("directory-prefix");
+let snapshot = client.browse_target_paths(
+    &TargetPathBrowseOptions::default()
+        .current(TargetPath::local(prefix))
+        .filesystem("basic"),
+).await?;
+# let _ = snapshot.paths;
+# Ok(()) }
+```
+
+The controlled native case observes seven roots/prefix/child/no-match/selector
+snapshots, unchanged identity/configuration and retained synthetic bytes with
+normal owned-tree exit. Full same-source native platform acceptance remains
+pending. An unsupported-selector empty result is refusal/ambiguity evidence,
+not a successful backend capability test.
