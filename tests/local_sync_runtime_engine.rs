@@ -424,9 +424,86 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
     let saved_results;
     let observed_old_cancellation;
     let recovered_by_force = if protocol == StorageProtocol::Ftp {
-        core.client()
+        let stop_started = std::time::Instant::now();
+        eprintln!(
+            "ftp-disconnect-stop-begin management_retry_count=0 pre_state_running={} pre_state_idle={} pre_state_canceling={}",
+            interrupted.state == "running", interrupted.state == "idle", interrupted.state == "canceling"
+        );
+        let stopped = core
+            .client()
             .control_local_sync_operation(&job.job_id, &operation, LocalSyncOperationControl::Stop)
-            .await?;
+            .await;
+        match stopped {
+            Ok(observed) => {
+                eprintln!(
+                    "ftp-disconnect-stop-end elapsed_ms={} outcome=receipt operation_matches={} post_state_running={} post_state_idle={} post_state_canceling={}",
+                    stop_started.elapsed().as_millis(),
+                    observed.observed.operation_id.as_ref() == Some(&operation),
+                    observed.observed.state == "running",
+                    observed.observed.state == "idle",
+                    observed.observed.state == "canceling",
+                );
+            }
+            Err(error) => {
+                // Error Debug is credential-safe. Unwrap only the SDK's typed
+                // uncertainty, never arbitrary transport source strings/URLs.
+                let mut cause = &error;
+                for _ in 0..4 {
+                    match cause {
+                        Error::MutationOutcomeUnknown { source, .. } => cause = source.as_ref(),
+                        _ => break,
+                    }
+                }
+                eprintln!(
+                    "ftp-disconnect-stop-end elapsed_ms={} outcome=error safe_cause={cause:?}",
+                    stop_started.elapsed().as_millis()
+                );
+                match cause {
+                    Error::Http { response }
+                    | Error::Api { response, .. }
+                    | Error::InvalidResponse { response, .. } => {
+                        eprintln!("ftp-disconnect-stop-failure safe_response={response:?}");
+                    }
+                    _ => {}
+                }
+                let diagnostic = tokio::time::timeout(Duration::from_secs(2), async {
+                    tokio::join!(
+                        core.client().local_sync_status(&job.job_id),
+                        core.client().local_sync_run(&job.job_id),
+                    )
+                })
+                .await;
+                match diagnostic {
+                    Ok((status, run)) => {
+                        if let Ok(status) = status {
+                            eprintln!(
+                                "ftp-disconnect-stop-failure-status operation_present={} operation_matches={} state_running={} state_idle={} state_canceling={} error_present={}",
+                                status.operation_id.is_some(),
+                                status.operation_id.as_ref() == Some(&operation),
+                                status.state == "running", status.state == "idle", status.state == "canceling",
+                                status.last_error.as_deref().is_some_and(|e| !e.is_empty())
+                            );
+                        } else {
+                            eprintln!("ftp-disconnect-stop-failure-status read_failed=true");
+                        }
+                        if let Ok(run) = run {
+                            eprintln!(
+                                "ftp-disconnect-stop-failure-run exact_run={} exact_job={} finished={} completed={} failed={} cancelled={:?} error_present={}",
+                                run.id == receipt.id, run.job_id == job.job_id,
+                                !run.finished.starts_with("0001-"),
+                                run.summary.completed, run.summary.failed, run.cancelled,
+                                run.error.as_deref().is_some_and(|e| !e.is_empty())
+                            );
+                        } else {
+                            eprintln!("ftp-disconnect-stop-failure-run read_failed=true");
+                        }
+                    }
+                    Err(_) => eprintln!("ftp-disconnect-stop-failure-observation deadline_s=2"),
+                }
+                // Observations never rescue the failed Stop or retry it.
+                return Err(error.into());
+            }
+        }
         let failed = finished_run(&core, &job.job_id, &receipt.id).await?;
         assert!(failed.summary.completed > 0 && failed.summary.failed > 0);
         // A disconnect can finish with native errors before the separate stop
