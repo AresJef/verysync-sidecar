@@ -9,8 +9,10 @@ impl Client {
         GuiListenerConfig::from_auth(self.gui_authentication().await?, self.folder_path_style()?)
     }
     /// Submit one explicit GUI listener PATCH and retain the prior configuration.
-    /// This can close this endpoint or disable management while the core keeps
-    /// running. Prepare a new explicit connection and trust policy separately.
+    /// Address/protocol changes can interrupt this endpoint while the core keeps
+    /// running. The stored enabled flag does not establish listener absence;
+    /// the fixed core can restart its listener after accepting `enabled=false`.
+    /// Prepare a new explicit connection and trust policy separately.
     /// No reconnect, rollback, write retry, certificate install or process stop
     /// follows. Transport uncertainty remains MutationOutcomeUnknown; reconcile
     /// through the intended endpoint rather than repeating the write blindly.
