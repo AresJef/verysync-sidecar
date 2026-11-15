@@ -71,8 +71,12 @@ async fn address(client: &Client) -> TestResult<String> {
     })
     .await??)
 }
-async fn connected(client: &Client, id: &DeviceId, expected: bool) -> TestResult {
-    tokio::time::timeout(Duration::from_secs(20), async {
+async fn connected(
+    client: &Client,
+    id: &DeviceId,
+    expected: bool,
+) -> TestResult<serde_json::Value> {
+    let observed = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let snapshot = raw(
                 client,
@@ -91,13 +95,13 @@ async fn connected(client: &Client, id: &DeviceId, expected: bool) -> TestResult
                     .ok_or("peer connection state missing")?,
             };
             if actual == expected {
-                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(());
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(snapshot);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await??;
-    Ok(())
+    Ok(observed)
 }
 
 async fn removal_events(client: &Client, since: u64) -> TestResult<Vec<serde_json::Value>> {
@@ -172,7 +176,7 @@ async fn removal_state_diagnostic(
     let events = removal_events(client, since).await?;
     let count = |kind| events.iter().filter(|event| event["type"] == kind).count();
     Ok(
-        json!({"role":role,"device_configured":configured,"folder_reference_count":references,"peer_row_present":row.is_some(),"connected":connected,"connection_start_changed":started_changed,"events_returned":events.len(),"device_connected_events":count("DeviceConnected"),"device_disconnected_events":count("DeviceDisconnected"),"device_rejected_events":count("DeviceRejected"),"event_tail_gap":events.first().and_then(|event|event["id"].as_u64()).map(|first|first>since.saturating_add(1))}),
+        json!({"role":role,"event_scope":"since_fixture_initialization","device_configured":configured,"folder_reference_count":references,"peer_row_present":row.is_some(),"connected":connected,"connection_start_changed":started_changed,"events_returned":events.len(),"device_connected_events":count("DeviceConnected"),"device_disconnected_events":count("DeviceDisconnected"),"device_rejected_events":count("DeviceRejected"),"event_tail_gap":events.first().and_then(|event|event["id"].as_u64()).map(|first|first>since.saturating_add(1))}),
     )
 }
 
@@ -325,6 +329,18 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
     private_redial::configure(b.client()).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
+    // Establish diagnostics before the original lifecycle sequence, so no
+    // additional read is inserted between reconnect observation and DELETE.
+    let a_events = removal_events(a.client(), 0).await?;
+    let b_events = removal_events(b.client(), 0).await?;
+    let a_since = a_events
+        .last()
+        .and_then(|event| event["id"].as_u64())
+        .unwrap_or(0);
+    let b_since = b_events
+        .last()
+        .and_then(|event| event["id"].as_u64())
+        .unwrap_or(0);
     let a_path = root.join("source files");
     let b_path = root.join("received files");
     std::fs::create_dir(&a_path)?;
@@ -400,21 +416,9 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
             .await?
             .requested_fields_match
     );
-    connected(a.client(), &b_id, true).await?;
-    connected(b.client(), &a_id, true).await?;
+    let a_before = connected(a.client(), &b_id, true).await?;
+    let b_before = connected(b.client(), &a_id, true).await?;
     println!("synthetic device effect stage: remove registration and observe remote disconnect");
-    let a_before = a.client().connections().await?;
-    let b_before = b.client().connections().await?;
-    let a_events = removal_events(a.client(), 0).await?;
-    let b_events = removal_events(b.client(), 0).await?;
-    let a_since = a_events
-        .last()
-        .and_then(|event| event["id"].as_u64())
-        .unwrap_or(0);
-    let b_since = b_events
-        .last()
-        .and_then(|event| event["id"].as_u64())
-        .unwrap_or(0);
     let removed = a.client().remove_device(&b_id).await?;
     assert!(removed.configuration_absent && removed.remaining_folder_associations.is_empty());
     let disconnect = connected(b.client(), &a_id, false).await;
@@ -427,10 +431,9 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
                 "source",
                 a.client(),
                 &b_id,
-                a_before
-                    .connections
-                    .get(&b_id)
-                    .and_then(|value| value.started_at.as_deref()),
+                a_before["connections"]
+                    .get(b_id.as_str())
+                    .and_then(|value| value["startedAt"].as_str()),
                 a_since,
             ),
         )
@@ -452,10 +455,9 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
                 "receiver",
                 b.client(),
                 &a_id,
-                b_before
-                    .connections
-                    .get(&a_id)
-                    .and_then(|value| value.started_at.as_deref()),
+                b_before["connections"]
+                    .get(a_id.as_str())
+                    .and_then(|value| value["startedAt"].as_str()),
                 b_since,
             ),
         )
