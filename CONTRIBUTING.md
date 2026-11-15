@@ -47,6 +47,14 @@ A negative check grants an extra reader to an empty test directory and verifies
 that the permission check rejects it. These are test-harness controls, not public
 library lifecycle guarantees.
 
+Unix fixture commands start in a private process group. Panic cleanup signals
+that group only while its retained, unreaped root still reserves the group ID
+and the ownership check matches. A previously reaped root is never used to
+signal a possibly reused group. Synthetic process tests require a positive
+descendant inventory and verify panic cleanup; exact official-core inventory
+remains a separate gate. This test-fixture behavior does not replace the public
+managed-runtime lifecycle tests.
+
 ```sh
 cargo +1.85.0 fetch --locked
 python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \
