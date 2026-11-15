@@ -228,7 +228,7 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
             use std::io::Read;
             assert!(matches!(
                 owner.client().instance().version.arch.as_str(),
-                "386" | "arm"
+                "386" | "arm" | "mips" | "mipsle"
             ));
             assert!(
                 native_error_message(&response)?

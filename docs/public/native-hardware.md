@@ -65,6 +65,12 @@ disk inventory or capacity on those hosts. The SDK does not synthesize disks,
 substitute controller hardware, or bypass the native backend. Positive block
 inventory on the local Mac and the Windows/Linux runners is separate evidence.
 
+The ELF32 MIPS candidate has returned the same fixed native total-usable-memory
+refusal observed on other Linux 32-bit profiles. Validation still requires the
+exact refusal and bounded guest meminfo arithmetic prerequisite; an unrelated
+error or a positive arithmetic result cannot pass this classification. The SDK
+preserves the error and does not substitute a memory count.
+
 The S390x emulation candidate has returned zero CPU totals and an explicitly
 empty processor list. Its bounded guest CPU records use `processor N:` keys;
 the exact ghw v0.13 dependency embedded in the fixed core only recognizes a
