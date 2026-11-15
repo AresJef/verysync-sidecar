@@ -87,25 +87,39 @@ def calibrate(root, core, requested):
     emulator = (root / "qemu-arm").resolve(strict=True)
     core = core.resolve(strict=True)
     results = []
+    launches = (("sdk_registered_exec", [str(core)]),
+                ("explicit_emulator_exec", [str(emulator), str(core)]))
     for cpu in CPU_MODELS:
-        with tempfile.TemporaryDirectory(prefix="vs-arm-version-", dir=root) as state_text:
-            state = Path(state_text)
-            for relative in ("tmp", "profile/data", "roaming", "local"):
-                (state / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
-            child_env = dict(os.environ, QEMU_CPU=cpu, VSMONITORED="yes")
-            child_env.update({"HOME": str(state / "profile"), "TMPDIR": str(state / "tmp"),
-                              "XDG_CONFIG_HOME": str(state / "roaming"),
-                              "XDG_CACHE_HOME": str(state / "local"),
-                              "XDG_DATA_HOME": str(state / "profile" / "data")})
-            row = capture_version([str(emulator), str(core), "version", "--home", str(state)],
-                                  child_env, state)
-            row.update({"cpu": cpu, "requested_cpu": cpu == requested,
-                        "sdk_runtime_acceptance": False, "minimum_native_isa_verified": False,
-                        "core_dumps_enabled": False, "launch_profile": "private_stderr_controlling_pty"})
-            results.append(row)
-            print(json.dumps(row), flush=True)
+        for execution_path, prefix in launches:
+            with tempfile.TemporaryDirectory(prefix="vs-arm-version-", dir=root) as state_text:
+                state = Path(state_text)
+                for relative in ("tmp", "profile/data", "roaming", "local"):
+                    (state / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
+                # The SDK writes this before inspecting the selected program.
+                descriptor = os.open(state / "appconf.yaml", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as config:
+                    config.write("auto_startup: false\n")
+                child_env = dict(os.environ, QEMU_CPU=cpu, VSMONITORED="yes")
+                child_env.update({"HOME": str(state / "profile"), "TMPDIR": str(state / "tmp"),
+                                  "XDG_CONFIG_HOME": str(state / "roaming"),
+                                  "XDG_CACHE_HOME": str(state / "local"),
+                                  "XDG_DATA_HOME": str(state / "profile" / "data")})
+                try:
+                    row = capture_version([*prefix, "version", "--home", str(state)], child_env, state)
+                except OSError as error:
+                    row = {"exit_code": None, "termination_signal": None,
+                           "version_matches": False, "timed_out": False,
+                           "output_exceeded_bound": False, "version_probe_passed": False,
+                           "launch_os_error": error.errno}
+                row.update({"cpu": cpu, "requested_cpu": cpu == requested,
+                            "execution_path": execution_path, "private_startup_disabled": True,
+                            "sdk_runtime_acceptance": False, "minimum_native_isa_verified": False,
+                            "core_dumps_enabled": False, "launch_profile": "private_stderr_controlling_pty"})
+                results.append(row)
+                print(json.dumps(row), flush=True)
     (root / "cpu-version-calibration.json").write_text(json.dumps(results, indent=2) + "\n")
-    if not next(row["version_probe_passed"] for row in results if row["cpu"] == requested):
+    if not next(row["version_probe_passed"] for row in results
+                if row["cpu"] == requested and row["execution_path"] == "sdk_registered_exec"):
         raise RuntimeError("The fixed core did not pass the requested CPU version probe; preserve this unverified target condition")
 
 

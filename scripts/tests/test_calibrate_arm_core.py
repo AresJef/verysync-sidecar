@@ -2,6 +2,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import signal
@@ -65,12 +66,55 @@ print('verysync v2.33.2 synthetic')
             core = root / "verysync"
             core.write_bytes(b"synthetic; never executed")
             rows = [dict(exit_code=-4, version_probe_passed=False),
-                    dict(exit_code=0, version_probe_passed=True),
-                    dict(exit_code=0, version_probe_passed=True)]
+                    *[dict(exit_code=0, version_probe_passed=True) for _ in range(5)]]
             with patch.object(HELPER, "capture_version", side_effect=rows), contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(RuntimeError, "requested CPU"):
                     HELPER.calibrate(root, core, "arm926")
             self.assertTrue((root / "cpu-version-calibration.json").is_file())
+
+    def test_each_launch_has_private_startup_disabled_state_and_registered_gate(self):
+        with tempfile.TemporaryDirectory(prefix="vs-calibration-state-") as directory:
+            root = Path(directory)
+            emulator = root / "qemu-arm"
+            emulator.write_bytes(b"synthetic; never executed")
+            core = root / "verysync"
+            core.write_bytes(b"synthetic; never executed")
+            commands = []
+
+            def inspect(command, child_env, state):
+                config = state / "appconf.yaml"
+                self.assertEqual(config.read_text(), "auto_startup: false\n")
+                self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(child_env["VSMONITORED"], "yes")
+                commands.append(command)
+                return {"exit_code": 0, "version_probe_passed": True}
+
+            with patch.object(HELPER, "capture_version", side_effect=inspect), contextlib.redirect_stdout(io.StringIO()):
+                HELPER.calibrate(root, core, "arm926")
+            self.assertEqual(len(commands), 6)
+            self.assertTrue(all(command[0] == str(core.resolve()) for command in commands[::2]))
+            self.assertTrue(all(command[:2] == [str(emulator.resolve()), str(core.resolve())] for command in commands[1::2]))
+            rows = json.loads((root / "cpu-version-calibration.json").read_text())
+            self.assertEqual([row["execution_path"] for row in rows[:2]],
+                             ["sdk_registered_exec", "explicit_emulator_exec"])
+
+    def test_registered_launch_error_is_recorded_and_cannot_use_explicit_success(self):
+        with tempfile.TemporaryDirectory(prefix="vs-calibration-exec-error-") as directory:
+            root = Path(directory)
+            (root / "qemu-arm").write_bytes(b"synthetic; never executed")
+            core = root / "verysync"
+            core.write_bytes(b"synthetic; never executed")
+            results = [OSError(8, "private-canary"),
+                       *[{"exit_code": 0, "version_probe_passed": True} for _ in range(5)]]
+            with patch.object(HELPER, "capture_version", side_effect=results), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "requested CPU"):
+                    HELPER.calibrate(root, core, "arm926")
+            text = (root / "cpu-version-calibration.json").read_text()
+            rows = json.loads(text)
+            self.assertEqual(len(rows), 6)
+            self.assertEqual(rows[0]["launch_os_error"], 8)
+            self.assertFalse(rows[0]["version_probe_passed"])
+            self.assertNotIn("private-canary", text)
 
 
 if __name__ == "__main__":
