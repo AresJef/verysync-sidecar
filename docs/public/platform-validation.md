@@ -52,6 +52,17 @@ emulation can change process observation and signal behavior; those are tested
 conditions, not automatic exceptions to the original deadlines or exit gates.
 Other feature suites, native ARM hosts and minimum systems retain separate gates.
 
+ARM emulation uses explicit optimization level 3 for the Rust development and
+test profiles, retaining their debug assertions and overflow checks. This build
+condition applies to both controller tests and their examples. Startup deadlines
+include the controller's complete executable hash and native metadata helpers;
+an unoptimized emulated controller can consume that budget before a serving
+process exists. The original 12-second SDK-deadline test, 25-second normal startup
+budget, positive process observation and cleanup requirements remain unchanged.
+An early timeout records only private-stage existence flags and remains a failed
+serving-process test. This profile change is not a throughput or native-CPU
+performance claim, and no execution time is excluded as CPU noise.
+
 Emulated process observation explicitly binds the selected core's argument and
 mapped file identity to the declared emulator or original executable image,
 with stable process-birth checks. An unverified empty snapshot is insufficient

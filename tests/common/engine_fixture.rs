@@ -733,6 +733,34 @@ fn device_id_output(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod fixture_unit_tests {
     #[cfg(unix)]
+    fn exact_program_inventory() -> super::TestResult<Vec<u32>> {
+        let python = std::env::var_os("VERYSYNC_TEST_PYTHON").unwrap_or_else(|| "python3".into());
+        let output = std::process::Command::new(python)
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("scripts")
+                    .join("prepare-test-engine.py"),
+            )
+            .arg("list-owned-processes")
+            .output()?;
+        if !output.status.success() {
+            return Err("exact fixture-program inventory failed".into());
+        }
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        value["pids"]
+            .as_array()
+            .ok_or("exact program inventory has no PID list")?
+            .iter()
+            .map(|pid| {
+                pid.as_u64()
+                    .and_then(|pid| u32::try_from(pid).ok())
+                    .filter(|pid| *pid > 0)
+                    .ok_or_else(|| "exact program inventory has an invalid PID".into())
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
     #[allow(unsafe_code)]
     #[test]
     fn unix_owned_child_starts_in_its_own_process_group() -> super::TestResult {
@@ -836,8 +864,26 @@ mod fixture_unit_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn unix_native_fixture_panic_releases_its_owned_core() -> super::TestResult {
+        let before = exact_program_inventory()?;
+        println!(
+            "native fixture panic inventory: stage=before_start owned_count={}",
+            before.len()
+        );
+        assert!(
+            before.is_empty(),
+            "a previous case left an exact program alive before this fixture"
+        );
         let fixture = super::EngineFixture::start().await?;
         let group = fixture.pid();
+        let during = exact_program_inventory()?;
+        assert!(
+            during.contains(&group),
+            "positive exact native-image inventory is required"
+        );
+        println!(
+            "native fixture panic inventory: stage=before_panic owned_count={}",
+            during.len()
+        );
         assert!(
             group_live_members(group)?.contains(&group),
             "positive owned-root inventory is required"
@@ -854,6 +900,20 @@ mod fixture_unit_tests {
         assert!(
             group_live_members(group)?.is_empty(),
             "owned native group survived fixture panic"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut remaining = exact_program_inventory()?;
+        while !remaining.is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            remaining = exact_program_inventory()?;
+        }
+        println!(
+            "native fixture panic inventory: stage=after_panic owned_count={}",
+            remaining.len()
+        );
+        assert!(
+            remaining.is_empty(),
+            "an exact native image survived outside the original group"
         );
         Ok(())
     }

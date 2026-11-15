@@ -26,7 +26,7 @@ fn trace_hardware<T>(component: &'static str, result: &verysync_sidecar::Result<
                 .as_str()
                 .unwrap_or_default()
                 .to_ascii_lowercase();
-            let category = if text == "ghw: could not determine total usable bytes of memory" {
+            let category = if text == "could not determine total usable bytes of memory" {
                 "ghw_total_usable_unavailable"
             } else if text.contains("unable to populate sysctl map") {
                 "sysctl_map_population"
@@ -165,9 +165,10 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
                 owner.client().instance().version.arch.as_str(),
                 "386" | "arm"
             ));
-            assert_eq!(
-                native_error_message(&response)?,
-                "ghw: Could not determine total usable bytes of memory"
+            assert!(
+                native_error_message(&response)?
+                    == "Could not determine total usable bytes of memory",
+                "unverified native total-usable-memory refusal"
             );
             // Explicit test-only prerequisite observation, never an SDK fallback
             // or an attempt to correct the target's native hardware data.
