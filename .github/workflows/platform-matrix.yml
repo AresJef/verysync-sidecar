@@ -454,6 +454,16 @@ jobs:
                                  'VERYSYNC_CARGO': str(adapter)}.items():
                   output.write(key + '=' + value + chr(10))
           PYSTD
+      - name: Resolve the explicit Cargo launcher without dereferencing rustup shims
+        run: |
+          python - <<'PYCARGO'
+          import os, pathlib, shutil
+          cargo = shutil.which(os.environ['VERYSYNC_CARGO'])
+          if not cargo or not pathlib.Path(cargo).is_absolute() or any(c in cargo for c in '\r\n'):
+              raise ValueError('the selected Cargo launcher must resolve to an absolute executable')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write('VERYSYNC_CARGO=' + cargo + chr(10))
+          PYCARGO
       - name: Register only the selected architecture on this disposable runner
         if: matrix.manual_registration != true
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
