@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add a distinct whole-folder native version inventory using existing typed
+  archive records, preserving paused/error and empty-map semantics.
+
 - Require actual JSON objects for native error envelopes so legitimate data
   arrays cannot be mistaken for API or license failures.
 
