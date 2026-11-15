@@ -3,11 +3,14 @@
 import argparse
 import base64
 import ctypes
+import copy
 import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
+import secrets
 import subprocess
 import sys
 
@@ -121,7 +124,9 @@ def run(arguments, path, extra=None):
 
 def record_command_result(arguments, path, code):
     operations = {"find-certificate", "add-trusted-cert", "remove-trusted-cert",
-                  "delete-certificate", "probe-admin-trust", "install", "rm", "update-ca-certificates"}
+                  "delete-certificate", "probe-admin-trust", "export-admin-trust",
+                  "copy-admin-trust-representation", "compare-admin-trust-preserved",
+                  "trust-settings-import", "install", "rm", "update-ca-certificates"}
     operation = next((value for value in arguments if value in operations), "windows-root-store")
     if operation == "delete-certificate" and "-t" in arguments:
         operation = "delete-certificate-and-trust"
@@ -185,6 +190,87 @@ def probe_macos_admin_trust(path):
                 "--certificate", str(path), "--allow-ephemeral-runner-system-trust"], path)
 
 
+def macos_admin_trust_representation(path):
+    """Read Apple's portable representation. This never imports or mutates it."""
+    cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    security = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
+    pointer = ctypes.c_void_p
+    cf.CFDataGetLength.argtypes = [pointer]
+    cf.CFDataGetLength.restype = ctypes.c_long
+    cf.CFDataGetBytePtr.argtypes = [pointer]
+    cf.CFDataGetBytePtr.restype = ctypes.POINTER(ctypes.c_ubyte)
+    cf.CFRelease.argtypes = [pointer]
+    cf.CFRelease.restype = None
+    security.SecTrustSettingsCreateExternalRepresentation.argtypes = [ctypes.c_uint32, ctypes.POINTER(pointer)]
+    security.SecTrustSettingsCreateExternalRepresentation.restype = ctypes.c_int32
+    data = pointer()
+    try:
+        status = security.SecTrustSettingsCreateExternalRepresentation(1, ctypes.byref(data))
+        record_command_result(["copy-admin-trust-representation"], path, status)
+        if status == -25263:  # Documented errSecNoTrustSettings for the domain.
+            return plistlib.dumps({"trustVersion": 1, "trustList": {}})
+        if status != 0 or not data.value:
+            raise RuntimeError(f"administrative trust snapshot failed with status {status}")
+        size = cf.CFDataGetLength(data)
+        if not 0 < size <= 4 * 1024 * 1024:
+            raise ValueError("administrative trust snapshot exceeds its private bound")
+        return ctypes.string_at(cf.CFDataGetBytePtr(data), size)
+    finally:
+        if data.value:
+            cf.CFRelease(data)
+
+
+def private_snapshot_path(path):
+    return path.parent / (".private-admin-trust-" + secrets.token_hex(12) + ".plist")
+
+
+def read_macos_admin_trust(path):
+    snapshot = private_snapshot_path(path)
+    if run([sys.executable, str(Path(__file__).resolve()), "export-admin-trust",
+            "--certificate", str(path), "--export-file", str(snapshot),
+            "--allow-ephemeral-runner-system-trust"], path) != 0:
+        raise RuntimeError("private administrative trust snapshot failed")
+    if snapshot.is_symlink() or not 0 < snapshot.stat().st_size <= 4 * 1024 * 1024:
+        raise ValueError("bounded private administrative trust snapshot required")
+    value = plistlib.loads(snapshot.read_bytes())
+    if (not isinstance(value, dict) or type(value.get("trustVersion")) is not int
+            or value["trustVersion"] != 1 or not isinstance(value.get("trustList"), dict)):
+        raise ValueError("native administrative trust representation differs")
+    return value
+
+
+def without_generated_ca_trust(before, identity):
+    """Delete one exact native SHA-1 index; preserve every other value intact."""
+    target = identity["sha1"]
+    if len(target) != 40 or any(c not in "0123456789abcdefABCDEF" for c in target):
+        raise ValueError("verified generated CA trust index required")
+    keys = [key for key in before["trustList"] if isinstance(key, str) and key.lower() == target.lower()]
+    if len(keys) != 1:
+        raise ValueError("exact generated CA trust record is absent or ambiguous")
+    after = copy.deepcopy(before)
+    del after["trustList"][keys[0]]
+    return after
+
+
+def remove_macos_admin_trust(path, identity):
+    before = read_macos_admin_trust(path)
+    after = without_generated_ca_trust(before, identity)
+    # The disposable test VM has one trust writer. Still refuse observed drift
+    # immediately before import, and check every unrelated value afterwards.
+    if read_macos_admin_trust(path) != before:
+        raise RuntimeError("administrative trust changed before exact removal")
+    edited = private_snapshot_path(path)
+    with edited.open("xb") as output:
+        os.chmod(edited, 0o600)
+        output.write(plistlib.dumps(after, fmt=plistlib.FMT_XML, sort_keys=True))
+    if run(["sudo", "-n", "security", "trust-settings-import", "-d", str(edited)], path) != 0:
+        raise RuntimeError("exact administrative trust import failed; private lease retained")
+    preserved = read_macos_admin_trust(path) == after
+    record_command_result(["compare-admin-trust-preserved"], path, 0 if preserved else 1)
+    if not preserved or probe_macos_admin_trust(path) != 0:
+        raise RuntimeError("administrative trust removal or unrelated-state preservation failed")
+
+
 def macos_certificate_absent(path, identity):
     code = run(["security", "find-certificate", "-c", identity["common_name"], "-Z",
                 "/Library/Keychains/System.keychain"], path)
@@ -218,13 +304,16 @@ def mutate(action, path, identity):
             commands = [["sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot",
                          "-k", "/Library/Keychains/System.keychain", str(path)]]
         else:
-            # The standalone removal command constructs a certificate from a
-            # file and hangs on hosted macOS. Apple SecurityTool's combined -t
-            # path instead gets the persistent keychain certificate, removes
-            # its user/admin settings when root, then deletes that exact item.
-            # Preserve independent absence checks; this is not a timeout waiver.
+            # Both standalone and persistent-context per-cert removal hang on
+            # hosted macOS. Use Apple's different external-representation API
+            # for one exact record, with unrelated-state preservation checks.
+            trust = probe_macos_admin_trust(path)
+            if trust == 3:
+                remove_macos_admin_trust(path, identity)
+            elif trust != 0:
+                raise RuntimeError("administrative trust is unobservable; private lease retained")
             if not macos_certificate_absent(path, identity):
-                code = run(["sudo", "-n", "security", "delete-certificate", "-t", "-Z", identity["sha256"],
+                code = run(["sudo", "-n", "security", "delete-certificate", "-Z", identity["sha256"],
                             "/Library/Keychains/System.keychain"], path)
                 if code != 0:
                     raise RuntimeError("exact generated CA deletion failed; private lease retained")
@@ -249,12 +338,26 @@ def mutate(action, path, identity):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["install", "remove", "probe-admin-trust"])
+    parser.add_argument("action", choices=["install", "remove", "probe-admin-trust", "export-admin-trust"])
     parser.add_argument("--certificate", required=True, type=Path)
+    parser.add_argument("--export-file", type=Path)
     parser.add_argument("--allow-ephemeral-runner-system-trust", action="store_true")
     arguments = parser.parse_args(argv)
     path = require_scope(arguments.certificate, arguments.allow_ephemeral_runner_system_trust)
     identity = certificate_identity(path)
+    if arguments.action == "export-admin-trust":
+        destination = arguments.export_file
+        if (sys.platform != "darwin" or destination is None
+                or not destination.parent.samefile(path.parent)
+                or not destination.name.startswith(".private-admin-trust-")
+                or destination.suffix != ".plist"
+                or destination.exists() or destination.is_symlink()):
+            raise ValueError("owned private macOS trust snapshot path required")
+        data = macos_admin_trust_representation(path)
+        with destination.open("xb") as output:
+            os.chmod(destination, 0o600)
+            output.write(data)
+        return 0
     if arguments.action == "probe-admin-trust":
         if sys.platform != "darwin":
             raise ValueError("administrative trust probe requires macOS")

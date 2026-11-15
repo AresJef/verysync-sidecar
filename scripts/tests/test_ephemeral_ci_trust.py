@@ -20,13 +20,15 @@ class EphemeralTrustScopeTests(unittest.TestCase):
         with mock.patch.object(TRUST.sys, "platform", "darwin"):
             with mock.patch.object(TRUST, "macos_certificate_absent", return_value=False):
                 with mock.patch.object(TRUST, "run", return_value=0) as run:
-                    with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=0) as probe:
-                        TRUST.mutate("remove", path, identity)
+                    with mock.patch.object(TRUST, "probe_macos_admin_trust", side_effect=[3, 0]) as probe:
+                        with mock.patch.object(TRUST, "remove_macos_admin_trust") as remove:
+                            TRUST.mutate("remove", path, identity)
             self.assertEqual(run.call_args_list, [
-                mock.call(["sudo", "-n", "security", "delete-certificate", "-t", "-Z", "a" * 64,
+                mock.call(["sudo", "-n", "security", "delete-certificate", "-Z", "a" * 64,
                            "/Library/Keychains/System.keychain"], path),
             ])
-            self.assertEqual(probe.call_count, 1)
+            self.assertEqual(probe.call_count, 2)
+            remove.assert_called_once_with(path, identity)
 
     def test_macos_already_absent_keychain_and_trust_need_no_mutating_command(self):
         with mock.patch.object(TRUST.sys, "platform", "darwin"):
@@ -41,8 +43,56 @@ class EphemeralTrustScopeTests(unittest.TestCase):
                 with self.subTest(status=status), mock.patch.object(TRUST, "run", return_value=0):
                     with mock.patch.object(TRUST, "macos_certificate_absent", return_value=True):
                         with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=status):
-                            with self.assertRaises(RuntimeError):
-                                TRUST.mutate("remove", Path("/synthetic"), {"sha256": "a" * 64})
+                            with mock.patch.object(TRUST, "remove_macos_admin_trust"):
+                                with self.assertRaises(RuntimeError):
+                                    TRUST.mutate("remove", Path("/synthetic"), {"sha256": "a" * 64})
+
+    def test_portable_removal_preserves_every_other_entry_and_metadata(self):
+        target = "a" * 40
+        unrelated = {"issuerName": b"synthetic", "trustSettings": [{"future": b"private"}]}
+        before = {"trustVersion": 1, "trustList": {target.upper(): {"owned": True}, "b" * 40: unrelated}, "future": [1, b"value"]}
+        after = TRUST.without_generated_ca_trust(before, {"sha1": target})
+        self.assertEqual(after, {"trustVersion": 1, "trustList": {"b" * 40: unrelated}, "future": [1, b"value"]})
+        self.assertIn(target.upper(), before["trustList"])
+        for identity in ["c" * 40, "invalid"]:
+            with self.assertRaises(ValueError):
+                TRUST.without_generated_ca_trust(before, {"sha1": identity})
+
+    def test_private_export_refuses_existing_or_outside_output_before_native_read(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
+            root = Path(directory)
+            certificate = root / "synthetic-ldap-ca.pem"
+            existing = root / ".private-admin-trust-existing.plist"
+            existing.write_bytes(b"must remain")
+            for output in [existing, Path(outside) / ".private-admin-trust-outside.plist", root / "wrong-name.plist"]:
+                with self.subTest(output=output), mock.patch.object(TRUST.sys, "platform", "darwin"):
+                    with mock.patch.object(TRUST, "require_scope", return_value=certificate):
+                        with mock.patch.object(TRUST, "certificate_identity", return_value={}):
+                            with mock.patch.object(TRUST, "macos_admin_trust_representation", side_effect=AssertionError("invalid export read native state")):
+                                with self.assertRaises(ValueError):
+                                    TRUST.main(["export-admin-trust", "--certificate", str(certificate),
+                                                "--export-file", str(output), "--allow-ephemeral-runner-system-trust"])
+            self.assertEqual(existing.read_bytes(), b"must remain")
+
+    def test_changed_snapshot_refuses_import_and_post_import_changes_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic-ldap-ca.pem"
+            before = {"trustVersion": 1, "trustList": {"a" * 40: {}, "b" * 40: {"keep": True}}}
+            changed = {"trustVersion": 1, "trustList": {"a" * 40: {}, "b" * 40: {"keep": False}}}
+            after = {"trustVersion": 1, "trustList": {"b" * 40: {"keep": True}}}
+            with mock.patch.object(TRUST, "read_macos_admin_trust", side_effect=[before, changed]):
+                with mock.patch.object(TRUST, "run", side_effect=AssertionError("changed snapshot imported")):
+                    with self.assertRaises(RuntimeError):
+                        TRUST.remove_macos_admin_trust(path, {"sha1": "a" * 40})
+            with mock.patch.object(TRUST, "read_macos_admin_trust", side_effect=[before, before, changed]):
+                with mock.patch.object(TRUST, "run", return_value=0):
+                    with self.assertRaises(RuntimeError):
+                        TRUST.remove_macos_admin_trust(path, {"sha1": "a" * 40})
+            with mock.patch.object(TRUST, "read_macos_admin_trust", side_effect=[before, before, after]):
+                with mock.patch.object(TRUST, "probe_macos_admin_trust", return_value=3):
+                    with mock.patch.object(TRUST, "run", return_value=0):
+                        with self.assertRaises(RuntimeError):
+                            TRUST.remove_macos_admin_trust(path, {"sha1": "a" * 40})
 
     def test_failed_cleanup_keeps_exact_owned_lease(self):
         with tempfile.TemporaryDirectory() as directory:

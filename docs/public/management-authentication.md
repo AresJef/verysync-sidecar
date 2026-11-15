@@ -236,10 +236,12 @@ requires strict chain/hostname verification, encrypted correct-password acceptan
 wrong-password and wrong-hostname refusal, persisted policy and exact CA cleanup.
 Its same-source native results remain a separate acceptance gate; fixture-only
 certificate checks do not establish that the Rust/native authentication passed.
-On hosted macOS, cleanup selects the generated certificate by SHA-256 and uses
-the system's combined certificate/trust deletion command under the disposable
-VM administrator. It independently reads administrative settings for that exact
-DER certificate through the native Security API. A remaining or unobservable trust
+On hosted macOS, cleanup removes only the generated CA's native trust-record
+index through Apple's portable administrative trust representation. It checks
+an unchanged second snapshot before import and exact preservation of every other
+entry afterwards, then deletes only the generated certificate by SHA-256. It
+independently reads settings for that exact DER certificate through the native
+Security API. A remaining or unobservable trust
 record fails cleanup and keeps the private recovery lease. No authorization
 database policy or unrelated trust record is changed. The separate macOS LDAP
 diagnosis jobs shorten feedback for this platform-specific cleanup condition;
