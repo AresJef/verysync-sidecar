@@ -8,6 +8,75 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 impl Client {
+    /// Explicitly invoke the target's native path-writeability probe once.
+    /// Checking ancestors sends attempt=true; false omits the query. Native
+    /// code can search at most ten parents after a missing-path error.
+    /// No controller filesystem I/O or path traversal occurs.
+    ///
+    /// The v2.33.2 macOS probe returns false with an empty error object even
+    /// for a writable directory. Inspect the native result; neither HTTP
+    /// success nor this flag reliably proves permissions or future writes.
+    ///
+    /// Native writable-directory code can temporarily adjust permissions.
+    /// This GET therefore uses the mutation lock, fresh identity verification
+    /// and unknown-outcome errors. No retry, SDK chmod or creation occurs.
+    pub async fn probe_target_path_writeability(
+        &self,
+        path: &TargetPath,
+        check_ancestors: bool,
+    ) -> Result<crate::NativePathWriteability> {
+        let value = self.auxiliary_path(path)?;
+        let operation = "probe native target path writeability";
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let mut query = vec![("path", value)];
+        if check_ancestors {
+            query.push(("attempt", "true"));
+        }
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                operation,
+                reqwest::Method::GET,
+                self.connection
+                    .management_url("rest/fs/path/writeable", &query)?,
+                None,
+                true,
+            )
+            .await?;
+        let invalid = || {
+            mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes.clone()),
+                },
+            )
+        };
+        #[derive(Deserialize)]
+        struct Probe {
+            path: String,
+            #[serde(rename = "lastPath")]
+            last_path: String,
+            attempt: String,
+            writeable: bool,
+            #[serde(flatten)]
+            extra: BTreeMap<String, serde_json::Value>,
+        }
+        let mut probe: Probe = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        let native_error = probe.extra.remove("error").ok_or_else(invalid)?;
+        let style = self.folder_path_style()?;
+        Ok(crate::NativePathWriteability {
+            path: TargetPath::remote(style, probe.path).map_err(|_| invalid())?,
+            last_path: TargetPath::remote(style, probe.last_path).map_err(|_| invalid())?,
+            writeable: probe.writeable,
+            attempt: probe.attempt,
+            native_error,
+            extra: probe.extra,
+        })
+    }
+
     /// Read native path completions or roots once, independently from the
     /// directory-picker list. Returned paths retain the target's syntax and
     /// native order, and are untrusted remote values. No controller filesystem

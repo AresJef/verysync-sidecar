@@ -726,3 +726,129 @@ async fn native_support_bundle_failures_keep_bounds_uncertainty_and_never_retry(
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn native_path_writeability_preserves_native_false_error_and_explicit_ancestor_flag(
+) -> TestResult {
+    use verysync_sidecar::{PathStyle, TargetPath};
+    let path = TargetPath::remote(PathStyle::Unix, format!("/target/{KEY}/\u{4e8c} %2F +"))?;
+    for (ancestors, writeable, error) in [
+        (false, false, serde_json::json!({})),
+        (true, true, serde_json::Value::Null),
+    ] {
+        let value = serde_json::json!({"path":path.to_protocol()?,"lastPath":format!("/ancestor/{KEY}"),"attempt":if ancestors{"true"}else{""},"writeable":writeable,"error":error,"future":KEY});
+        let server =
+            ScriptedServer::start(vec![version(), identity(), identity(), Reply::json(value)])
+                .await?;
+        let client = Client::connect(server.options()?).await?;
+        let result: verysync_sidecar::NativePathWriteability = client
+            .probe_target_path_writeability(&path, ancestors)
+            .await?;
+        assert_eq!(result.writeable, writeable);
+        assert_eq!(result.native_error, error);
+        assert_eq!(result.path.to_protocol()?, path.to_protocol()?);
+        assert_eq!(result.last_path.to_protocol()?, format!("/ancestor/{KEY}"));
+        assert_eq!(result.extra["future"], KEY);
+        assert!(!format!("{result:?}").contains(KEY));
+        assert!(result.path.local_path().is_none());
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 4);
+        let uri = url::Url::parse(&format!(
+            "http://fixture.invalid{}",
+            requests[3].split_whitespace().nth(1).unwrap()
+        ))?;
+        assert_eq!(uri.path(), "/prefix/rest/fs/path/writeable");
+        assert_eq!(
+            uri.query_pairs().find(|(k, _)| k == "path").unwrap().1,
+            path.to_protocol()?
+        );
+        assert_eq!(
+            uri.query_pairs().filter(|(k, _)| k == "attempt").count(),
+            usize::from(ancestors)
+        );
+        if ancestors {
+            assert!(uri
+                .query_pairs()
+                .any(|(k, v)| k == "attempt" && v == "true"));
+        }
+        assert!(requests[3].starts_with("GET "));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_path_writeability_rejects_bad_paths_and_keeps_failure_uncertainty_without_retry(
+) -> TestResult {
+    use verysync_sidecar::{PathStyle, TargetPath};
+    let path = TargetPath::remote(PathStyle::Unix, "/synthetic")?;
+    let server = ScriptedServer::start(vec![version(), identity()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client
+            .probe_target_path_writeability(
+                &TargetPath::remote(PathStyle::Windows, r"C:\fixture")?,
+                false
+            )
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    let base = serde_json::json!({"path":"/synthetic","lastPath":"/synthetic","attempt":"","writeable":false,"error":{}});
+    let mut missing = base.clone();
+    missing.as_object_mut().unwrap().remove("error");
+    let mut wrong = base.clone();
+    wrong["writeable"] = serde_json::json!("false");
+    let mut invalid = base.clone();
+    invalid["lastPath"] = serde_json::json!("");
+    for (kind, reply) in [
+        (0, Reply::json(missing)),
+        (0, Reply::json(wrong)),
+        (0, Reply::json(invalid)),
+        (
+            1,
+            Reply {
+                status: 503,
+                ..Reply::json(serde_json::json!({"private":KEY}))
+            },
+        ),
+        (2, Reply::json(serde_json::json!({"error":KEY}))),
+        (
+            3,
+            Reply {
+                body: vec![0; 1024],
+                ..Reply::json(serde_json::Value::Null)
+            },
+        ),
+        (
+            4,
+            Reply {
+                status: 403,
+                ..Reply::json(serde_json::json!({"private":KEY}))
+            },
+        ),
+    ] {
+        let server = ScriptedServer::start(vec![version(), identity(), identity(), reply]).await?;
+        let client = Client::connect(server.options()?.response_limit(256)?).await?;
+        let error = client
+            .probe_target_path_writeability(&path, false)
+            .await
+            .expect_err("bad native probe is not a usable result");
+        assert!(!format!("{error:?}").contains(KEY));
+        if kind == 4 {
+            assert!(matches!(error, Error::AccessDenied { .. }));
+        } else {
+            let Error::MutationOutcomeUnknown { source, .. } = error else {
+                return Err("probe uncertainty missing".into());
+            };
+            assert!(matches!(
+                (kind, source.as_ref()),
+                (0, Error::InvalidResponse { .. })
+                    | (1, Error::Http { .. })
+                    | (2, Error::Api { .. })
+                    | (3, Error::ResponseTooLarge { limit: 256 })
+            ));
+        }
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
