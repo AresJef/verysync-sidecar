@@ -37,6 +37,14 @@ The fixed core ELF files inspected for these three packages
 have no dynamic interpreter or dynamic program segment, despite reporting CGO
 enabled. That observation does not establish a minimum kernel or native runtime.
 
+The generic ARM package's ARM926 candidate terminated with SIGILL through both
+registered and explicit execution. That result remains in the CPU calibration
+and its original failed candidate. A separate runtime candidate explicitly selects
+ARM1176, where both version routes passed, while retaining the ARMv5TE Rust
+controller target. This is not an automatic CPU fallback, native ARM evidence,
+or a minimum-ARMv5 claim. The package's actual minimum native ISA remains
+unverified; its `GOARM=5` metadata alone does not establish that requirement.
+
 ARM jobs remain pending until their real core/controller management, file,
 startup, cancellation and host-exit effects pass. A positive exact-core process
 inventory is required before absence can mean successful cleanup. User-mode

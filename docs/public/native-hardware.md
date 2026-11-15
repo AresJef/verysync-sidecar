@@ -47,6 +47,16 @@ positive support evidence. Other platforms, fields and permissions retain their
 actual native conditions and require final candidate validation. Malformed or
 missing schemas are invalid responses rather than empty data.
 
+The fixed [upstream Linux memory parser](https://github.com/jaypipes/ghw/blob/v0.13.0/pkg/memory/memory_linux.go)
+multiplies a Go `int` value before widening it to `int64`. On a 32-bit core,
+that multiplication can wrap. The SDK preserves the target's data or explicit
+native error without correcting totals or inspecting the controller's hardware.
+The 32-bit validation candidate distinguishes the exact total-usable-memory
+refusal only when a bounded, test-only `/proc/meminfo` observation reproduces
+its nonpositive 32-bit calculation. Unknown errors or a different prerequisite
+still fail. This is a native refusal condition, not positive memory inventory;
+the additional-platform candidate still requires actual runtime validation.
+
 The observed GitHub-hosted Macs have additional block-backend limitations:
 the Intel runner reports an explicit zero total and empty disk list, while the
 ARM64 runner returns ghw's IORegistry node-shape error. Empty native data remains

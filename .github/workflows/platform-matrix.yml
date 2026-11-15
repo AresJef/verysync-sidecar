@@ -147,7 +147,7 @@ jobs:
           - package: linux-arm-standard
             rust: armv5te-unknown-linux-gnueabi
             compiler: arm-linux-gnueabi
-            cpu: arm926
+            cpu: arm1176
           - package: linux-armv6-standard
             rust: arm-unknown-linux-gnueabi
             compiler: arm-linux-gnueabi

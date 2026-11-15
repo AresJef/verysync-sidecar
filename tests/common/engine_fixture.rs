@@ -81,6 +81,11 @@ struct OwnedChild {
 
 impl OwnedChild {
     fn spawn(command: &mut Command) -> TestResult<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         #[cfg(windows)]
         let job = {
             use std::os::windows::process::CommandExt;
@@ -107,6 +112,33 @@ impl OwnedChild {
     }
 }
 
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn terminate_unreaped_fixture_group(child: &mut Child) -> io::Result<()> {
+    if child.try_wait()?.is_some() {
+        // A reaped root no longer reserves its PID. Do not signal a group that
+        // might have reused that numeric identity; exact cleanup remains a gate.
+        return Ok(());
+    }
+    let pid = i32::try_from(child.id()).map_err(io::Error::other)?;
+    // SAFETY: this uniquely retained, unreaped child reserves its PID even if it
+    // exits now. We created its private group before exec and verify ownership.
+    if unsafe { libc::getpgid(pid) } != pid {
+        return Err(io::Error::other(
+            "fixture no longer owns its private process group",
+        ));
+    }
+    // SAFETY: the unreaped group leader still reserves this private group ID.
+    // No caller, unrelated group or name-based process selection is involved.
+    if unsafe { libc::kill(-pid, libc::SIGKILL) } != 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         #[cfg(windows)]
@@ -114,6 +146,10 @@ impl Drop for OwnedChild {
             eprintln!("private fixture job cleanup failed: {error}");
         }
         if let Some(mut child) = self.child.take() {
+            #[cfg(unix)]
+            if let Err(error) = terminate_unreaped_fixture_group(&mut child) {
+                eprintln!("private fixture group cleanup failed: {error}");
+            }
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -696,6 +732,132 @@ fn device_id_output(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod fixture_unit_tests {
+    #[cfg(unix)]
+    #[allow(unsafe_code)]
+    #[test]
+    fn unix_owned_child_starts_in_its_own_process_group() -> super::TestResult {
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg("1");
+        let owned = super::OwnedChild::spawn(&mut command)?;
+        let pid = i32::try_from(owned.child.as_ref().ok_or("missing child")?.id())?;
+        // SAFETY: read-only lookup of this still-retained, unreaped child.
+        let private_group = unsafe { libc::getpgid(pid) } == pid;
+        drop(owned);
+        assert!(
+            private_group,
+            "the private fixture inherited its caller's process group"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn group_live_members(group: u32) -> super::TestResult<Vec<u32>> {
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-axo", "pid=,pgid=,stat="])
+            .output()?;
+        if !output.status.success() {
+            return Err("cannot observe the synthetic fixture's private process group".into());
+        }
+        let text = String::from_utf8(output.stdout)?;
+        let mut members = Vec::new();
+        for line in text.lines() {
+            let columns: Vec<_> = line.split_whitespace().collect();
+            let [pid, pgid, state] = columns.as_slice() else {
+                return Err("private process-group observation has an invalid row".into());
+            };
+            let pid: u32 = pid.parse()?;
+            let pgid: u32 = pgid.parse()?;
+            if pgid == group && !state.starts_with('Z') {
+                members.push(pid);
+            }
+        }
+        Ok(members)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_panic_cleanup_stops_the_private_descendant_group() -> super::TestResult {
+        use std::io::BufRead;
+        use std::os::unix::process::CommandExt;
+        use std::time::{Duration, Instant};
+        // The finite synthetic descendant exits itself even during the RED run.
+        // No global name-based cleanup or signal to a reused PID is necessary.
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", "/bin/sleep 5 & printf '%s\\n' \"$!\"; wait"])
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let mut owned = super::OwnedChild::spawn(&mut command)?;
+        let child = owned
+            .child
+            .as_mut()
+            .ok_or("missing synthetic fixture child")?;
+        let group = child.id();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("missing private readiness pipe")?;
+        let mut marker = String::new();
+        std::io::BufReader::new(stdout).read_line(&mut marker)?;
+        let descendant: u32 = marker.trim().parse()?;
+        assert_ne!(descendant, group);
+        assert!(
+            group_live_members(group)?.contains(&descendant),
+            "positive exact descendant inventory is required"
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _owned = owned;
+            panic!("synthetic fixture panic exercises private descendant cleanup");
+        }));
+        assert!(result.is_err());
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !group_live_members(group)?.is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let stopped = group_live_members(group)?.is_empty();
+        // Preserve the failure while letting the bounded RED descendant finish.
+        let safety_deadline = Instant::now() + Duration::from_secs(6);
+        while !group_live_members(group)?.is_empty() && Instant::now() < safety_deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            group_live_members(group)?.is_empty(),
+            "bounded synthetic descendant did not finish"
+        );
+        assert!(
+            stopped,
+            "the private fixture left a live descendant after panic"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_native_fixture_panic_releases_its_owned_core() -> super::TestResult {
+        let fixture = super::EngineFixture::start().await?;
+        let group = fixture.pid();
+        assert!(
+            group_live_members(group)?.contains(&group),
+            "positive owned-root inventory is required"
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _owned = fixture;
+            panic!("synthetic fixture panic exercises actual private core cleanup");
+        }));
+        assert!(result.is_err());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !group_live_members(group)?.is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            group_live_members(group)?.is_empty(),
+            "owned native group survived fixture panic"
+        );
+        Ok(())
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_acl_check_rejects_an_extra_reader() -> super::TestResult {
