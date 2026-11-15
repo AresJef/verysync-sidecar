@@ -1,13 +1,76 @@
 //! Explicit native helpers, without local UI or automatic link handling.
 use super::{mutation_error, Client};
 use crate::{
-    DeviceId, Error, NativeHealth, NativeHealthStatus, NativeMigrationProgress, NativeUsageReport,
-    PendingNativeLink, ResponseDiagnostic, Result, TargetIpLocation,
+    DeviceId, Error, NativeHealth, NativeHealthStatus, NativeMigrationProgress, NativeRandomString,
+    NativeUsageReport, PendingNativeLink, ResponseDiagnostic, Result, TargetIpLocation,
 };
 use serde::Deserialize;
 use std::{collections::BTreeMap, net::IpAddr};
 
 impl Client {
+    /// Explicitly request one native random string. `None` omits the native
+    /// length query; `Some(0)` explicitly selects its 32-character default.
+    /// Positive lengths through `u16::MAX` request that exact byte count.
+    /// The known native receipt must contain matching ASCII alphanumeric data.
+    /// No cryptographic strength, uniqueness or credential suitability is
+    /// promised; use `ApiKey::generate` for secure management credentials.
+    /// Generation serializes with mutations and is never retried. A lost or
+    /// malformed acknowledgement leaves an explicitly unknown outcome.
+    pub async fn native_random_string(&self, length: Option<u16>) -> Result<NativeRandomString> {
+        let operation = "generate native random string";
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let length_text = length.map(|n| n.to_string());
+        let query: Vec<_> = length_text
+            .as_deref()
+            .map(|n| ("length", n))
+            .into_iter()
+            .collect();
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                operation,
+                reqwest::Method::GET,
+                self.connection
+                    .management_url("rest/svc/random/string", &query)?,
+                None,
+                true,
+            )
+            .await?;
+        let invalid = || {
+            mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes.clone()),
+                },
+            )
+        };
+        let result: NativeRandomString = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        if result
+            .extra
+            .get("error")
+            .is_some_and(|e| !e.is_null() && e.as_str() != Some(""))
+        {
+            return Err(mutation_error(
+                operation,
+                true,
+                Error::Api {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                },
+            ));
+        }
+        let expected = usize::from(length.filter(|n| *n > 0).unwrap_or(32));
+        if result.value.len() != expected
+            || !result.value.bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            return Err(invalid());
+        }
+        Ok(result)
+    }
+
     /// Read global native migration progress after checking the selected target
     /// identity. This neither starts a migration nor associates the snapshot
     /// with a caller's task. `finished` and task error text are independent.

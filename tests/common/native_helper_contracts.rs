@@ -9,6 +9,97 @@ fn identity() -> Reply {
 }
 
 #[tokio::test]
+async fn native_random_strings_keep_lengths_private_values_and_explicit_queries() -> TestResult {
+    let cases = [
+        (None, 32),
+        (Some(0), 32),
+        (Some(1), 1),
+        (Some(16), 16),
+        (Some(u16::MAX), 65535),
+    ];
+    let mut replies = vec![version(), identity()];
+    for (_, length) in cases {
+        replies.extend([
+            identity(),
+            Reply::json(serde_json::json!({"random":"R".repeat(length),"future":KEY})),
+        ]);
+    }
+    let server = ScriptedServer::start(replies).await?;
+    let client = Client::connect(server.options()?).await?;
+    for (requested, expected) in cases {
+        let result: verysync_sidecar::NativeRandomString =
+            client.native_random_string(requested).await?;
+        assert_eq!(result.value, "R".repeat(expected));
+        assert_eq!(result.extra["future"], KEY);
+        assert!(!format!("{result:?}").contains(KEY));
+        if expected >= 16 {
+            assert!(!format!("{result:?}").contains(&result.value));
+        }
+    }
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 12);
+    for (index, (length, _)) in cases.iter().enumerate() {
+        let query = length.map(|n| format!("?length={n}")).unwrap_or_default();
+        assert!(requests[index * 2 + 3].starts_with(&format!(
+            "GET /prefix/rest/svc/random/string{query} HTTP/1.1"
+        )));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_random_strings_reject_malformed_or_mismatched_receipts_without_retry() -> TestResult
+{
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({"random":null}),
+        serde_json::json!({"random":16}),
+        serde_json::json!({"random":"short"}),
+        serde_json::json!({"random":"\n".repeat(16)}),
+        serde_json::json!([]),
+    ] {
+        let server =
+            ScriptedServer::start(vec![version(), identity(), identity(), Reply::json(body)])
+                .await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .native_random_string(Some(16))
+            .await
+            .expect_err("invalid native receipt must remain uncertain");
+        assert!(
+            matches!(&error,Error::MutationOutcomeUnknown{source,..} if matches!(source.as_ref(),Error::InvalidResponse{..}))
+        );
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_random_strings_preserve_native_body_errors_without_accepting_partial_values(
+) -> TestResult {
+    for body in [
+        serde_json::json!({"error":KEY}),
+        serde_json::json!({"random":"R".repeat(16),"error":KEY}),
+    ] {
+        let server =
+            ScriptedServer::start(vec![version(), identity(), identity(), Reply::json(body)])
+                .await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .native_random_string(Some(16))
+            .await
+            .expect_err("native error is not a successful string");
+        assert!(
+            matches!(&error,Error::MutationOutcomeUnknown{source,..} if matches!(source.as_ref(),Error::Api{..}))
+        );
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_migration_progress_preserves_global_snapshots_and_task_errors() -> TestResult {
     let server = ScriptedServer::start(vec![
         version(),
