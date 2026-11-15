@@ -51,7 +51,7 @@ jobs:
       - name: Record compatibility host and install the 32-bit Rust host toolchain
         run: |
           python -c 'import os, platform, struct; print({"runner_arch": os.environ["RUNNER_ARCH"], "python_machine": platform.machine(), "python_bits": struct.calcsize("P") * 8})'
-          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --force-non-host
           rustc +"$TEST_TOOLCHAIN" -vV
           rustc +"$TEST_TOOLCHAIN" --print cfg
       - name: Check exact extraction, selection and isolated-runner contracts
