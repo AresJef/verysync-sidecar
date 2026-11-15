@@ -17,6 +17,8 @@ const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAA
 mod default_versioning_contracts;
 #[path = "common/device_options_contracts.rs"]
 mod device_options_contracts;
+#[path = "common/device_removal_contracts.rs"]
+mod device_removal_contracts;
 #[path = "common/folder_options_contracts.rs"]
 mod folder_options_contracts;
 #[path = "common/folder_policy_contracts.rs"]
