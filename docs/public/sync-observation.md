@@ -56,3 +56,115 @@ need, receive-only local edits, then content/time restoration and cleared local
 changes. Explicit raw fixture rate/mode settings only create this observation
 window; they do not establish typed rate-limit/mode control or performance.
 The tests preserve source data and observe normal exit of both owned trees.
+
+## Native index tree
+
+`browse_index(folder, options)` reads the distinct `/rest/db/browse` native index
+snapshot. It is separate from selective-mode metadata and file-manager resource
+listing. The read checks the current identity and configured folder, sends one
+browse request and starts no scan or transfer. Its preflight and result are
+separate observations, not a coherent transaction.
+
+`IndexBrowseOptions::default()` requests the folder root at native level zero:
+immediate entries without descendants. `levels(Some(n))` includes up to n
+additional descendant levels; `levels(None)` explicitly selects the native
+unbounded-depth default. Existing byte, deadline and JSON decoding bounds still
+apply. The SDK never fetches another level automatically. The default omits prefix
+for the root scope; `prefix(TargetPath)` selects a nonempty strictly relative
+path in the target's syntax. Local callers build Path/PathBuf values with native
+path operations, and remote callers explicitly select the target style. No
+controller filesystem lookup, string path joining or host expansion occurs.
+
+`directories_only(false)` omits dirsonly. This matters because the fixed handler
+treats every nonempty value, including the text false, as true. True explicitly
+requests the native directory filter. A missing or file prefix can produce a
+valid empty tree; an unconfigured folder remains FolderNotFound rather than an
+empty success.
+
+`IndexTree` retains native order and recursive entries. Each `IndexTreeEntry`
+preserves the exact untrusted name, modTime offset/precision, reported size,
+known file/directory kind, unfamiliar labels, optional children and unknown
+metadata. Missing/null children stay None; an explicit empty list stays Some
+empty. Malformed/null root bodies are errors. Debug omits names, timestamps,
+unknown values and nested contents. Returned names are never implicitly joined
+to a filesystem path. Index knowledge does not establish present filesystem
+access, local existence, selection, peer connectivity or completed transfers.
+
+```no_run
+# async fn indexed(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+use verysync_sidecar::{IndexBrowseOptions, TargetPath};
+let prefix = std::path::Path::new("reports").join("annual");
+let tree = client.browse_index(folder,
+    &IndexBrowseOptions::default()
+        .prefix(TargetPath::local(prefix))
+        .levels(Some(1))
+        .directories_only(true),
+).await?;
+// Explicitly inspect tree.entries; redact private metadata before logging it.
+# let _ = tree;
+# Ok(()) }
+```
+
+The isolated native Rust case observes flat and nested depths, an explicit
+unlimited snapshot, directory-filter enable/revert, target-native relative
+prefixes, empty missing/file prefixes, missing-folder rejection and unchanged
+identity/configuration/synthetic bytes. With watching and automatic rescans
+disabled, an unscanned synthetic file stays absent from the index snapshot.
+This local effect evidence is separate from full same-source native platform
+acceptance, which remains pending.
+
+## Full native indexed-file metadata
+
+`index_file_info(folder, path)` reads the distinct `/rest/db/file` observation.
+It checks the authenticated identity and current configured folder, validates a
+strictly relative TargetPath in the target's syntax, and sends one GET with the
+exact once-encoded file name. It performs no controller filesystem lookup,
+implicit scan, download, peer contact or retry. A missing indexed object retains
+the native HTTP 404 and bounded private diagnostic; an unconfigured folder is
+refused by the configuration preflight. Concurrent changes can still produce a
+native error after that separate preflight.
+
+`IndexFileInfo` retains complete native global and local metadata records and
+advertised availability. Each `IndexFileMetadata` preserves untrusted names,
+file/directory/unknown kinds, exact modification timestamps and short modifier
+IDs, sizes, deletion/ignore/invalid flags, permission strings, local flags,
+rescan state, block counts/hashes, sequences, native version-vector strings and
+signature metadata. No host-path conversion, permission enforcement, vector
+clock merge, timestamp rewriting or implicit follow-up operation occurs.
+
+A native local record can have an empty name, empty version vector, zero size,
+zero block/sequence/signature values and a placeholder timestamp while the
+global record names a remote file. The DTO preserves that actual record; it
+does not turn it into an existing zero-byte local file or fabricate absent
+metadata. Global index knowledge does not prove filesystem access or completion.
+Native availability null stays None, while an explicit empty list stays Some
+empty. `IndexFileAvailability` preserves each full device ID and the native
+fromTemporary flag without probing a source or inferring that a transfer ended.
+
+Native encoded block-list hashes are not SDK-verified content digests.
+`IndexFileSignature` preserves the native Version tag and encoded Sign value
+without interpreting its format version, validating the signature or making a
+trust decision. Per-platform extension payloads remain explicit opaque JSON
+objects; unverified ownership, ACL and extended-attribute schemas are not
+normalized or applied. Unknown fields remain inspectable. Ordinary Debug omits
+private names, times, modifier IDs, permissions, vectors, hashes, signatures,
+peer IDs and extension values. Explicitly redact those fields before logging.
+
+```no_run
+# async fn indexed_file(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+use verysync_sidecar::TargetPath;
+let path = std::path::Path::new("reports").join("annual.bin");
+let info = client.index_file_info(folder, &TargetPath::local(path)).await?;
+// Inspect actual global/local records; availability is not a download receipt.
+# let _ = info;
+# Ok(()) }
+```
+
+Controlled native cases distinguish file/directory metadata, nested target paths,
+native missing-object errors, unscanned-file absence and a separately requested
+scan. A separate two-core private-loopback case observes a real advertised peer
+and signed global metadata while the receiver retains the native zero local
+record and has no completed file. Its explicit rate/configuration setup and
+caller-controlled polling are test fixtures, not implicit behavior of this read.
+They do not establish WAN behavior, completed downloads or signature trust.
+Full same-source native platform acceptance remains pending.
