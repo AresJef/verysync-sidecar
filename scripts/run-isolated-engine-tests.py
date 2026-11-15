@@ -388,6 +388,7 @@ def main():
                     opener["captured_calls"] = captures
                     opener["owned_capture_and_executable_removed"] = not owned_opener.exists()
                     (args.evidence_dir / "native-opener-fixture.json").write_text(json.dumps(opener), encoding="utf-8")
+                    print("Isolated native opener observations: " + json.dumps({key: opener[key] for key in ("fixture_only", "name", "sha256", "captured_calls", "owned_capture_and_executable_removed") if key in opener}, sort_keys=True), flush=True)
             finally:
                 proxy.shutdown()
                 server.join(timeout=5)

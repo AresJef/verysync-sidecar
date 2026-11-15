@@ -36,16 +36,29 @@ class ProxyContracts(unittest.TestCase):
             argv = [str(SOURCE), "--toolchain", "synthetic", "--cargo",
                     str(Path(sys.executable).resolve()), "--test-target",
                     "engine_control", "--evidence-dir", str(evidence)]
+            def prepare_opener(*args):
+                directory = evidence / "owned-native-opener"
+                (directory / "captured").mkdir(parents=True)
+                (directory / "synthetic-executable").write_bytes(b"synthetic fixture, not executed")
+                (directory / "captured" / "1.argv").write_bytes(b"private-argv-value\0")
+                return {"fixture_only": True, "name": "synthetic-executable", "sha256": "f" * 64, "private_argv": "private-argv-value"}
             with patch.object(HELPER.sys, "argv", argv), \
                     patch.object(HELPER.sys, "stdout", console), \
                     patch.dict(HELPER.os.environ, {"VERYSYNC_TEST_BINARY": str(binary),
                                                    "VERYSYNC_TEST_BINARY_SHA256": "0" * 64}), \
                     patch.object(HELPER.subprocess, "Popen", return_value=process), \
-                    patch.object(HELPER, "prepare_native_opener", return_value={"fixture_only": True}):
+                    patch.object(HELPER, "prepare_native_opener", side_effect=prepare_opener):
                 self.assertEqual(HELPER.main(), 7)
                 console.flush()
                 self.assertEqual(console_bytes.getvalue().decode("utf-8").splitlines()[0],
                                  output.rstrip("\n"))
+                forwarded = console_bytes.getvalue().decode("utf-8")
+                summary_line = next(line for line in forwarded.splitlines() if line.startswith("Isolated native opener observations: "))
+                summary = json.loads(summary_line.split(": ", 1)[1])
+                self.assertEqual(summary["captured_calls"], 1)
+                self.assertTrue(summary["owned_capture_and_executable_removed"])
+                self.assertNotIn("private-argv-value", forwarded)
+                self.assertFalse((evidence / "owned-native-opener").exists())
             self.assertEqual((evidence / "engine-control.log").read_text(encoding="utf-8"), output)
             report = json.loads((evidence / "proxy-observations.json").read_text())
             self.assertEqual(report["test_exit_code"], 7)
