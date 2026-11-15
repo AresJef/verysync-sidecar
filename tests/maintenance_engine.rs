@@ -949,6 +949,8 @@ async fn actual_native_completion_instructions_keep_private_text_and_owned_profi
         assert_eq!(std::fs::read(&sentinel)?, bytes);
         std::fs::remove_file(alias)?;
     }
+    let mut instruction_receipts = 0;
+    let mut unsupported_shell_receipts = 0;
     for action in [
         NativeCompletionAction::Install,
         NativeCompletionAction::Uninstall,
@@ -960,14 +962,30 @@ async fn actual_native_completion_instructions_keep_private_text_and_owned_profi
         if exit.outcome != NativeCompletionOutcome::InstructionText {
             eprintln!("native completion output diagnostic: action={action:?} code={:?} outcome={:?} shape={}", exit.code, exit.outcome, native_cli_output_shape(exit.diagnostic.body_bytes()));
         }
-        assert_eq!(exit.code, Some(0));
         assert!(exit.tree_stopped);
-        assert_eq!(exit.outcome, NativeCompletionOutcome::InstructionText);
-        let text = exit
-            .instruction_text()
-            .ok_or("missing native completion instructions")?;
-        assert!(text.contains(filename));
-        assert_eq!(text.as_bytes(), exit.diagnostic.body_bytes());
+        if cfg!(windows) && exit.code == Some(1) {
+            // This exact upstream dependency resolves Windows' COMSPEC, but
+            // provides templates only for bash/zsh/fish. Other failures stay red.
+            let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_owned());
+            let expected = format!(": error: unsupported shell {shell}");
+            let text = std::str::from_utf8(exit.diagnostic.body_bytes())?;
+            assert!(text
+                .lines()
+                .last()
+                .is_some_and(|line| line.ends_with(&expected)));
+            assert_eq!(exit.outcome, NativeCompletionOutcome::Failure);
+            assert!(exit.instruction_text().is_none());
+            unsupported_shell_receipts += 1;
+        } else {
+            assert_eq!(exit.code, Some(0));
+            assert_eq!(exit.outcome, NativeCompletionOutcome::InstructionText);
+            let text = exit
+                .instruction_text()
+                .ok_or("missing native completion instructions")?;
+            assert!(text.contains(filename));
+            assert_eq!(text.as_bytes(), exit.diagnostic.body_bytes());
+            instruction_receipts += 1;
+        }
         assert!(!format!("{exit:?}").contains(filename));
         assert_eq!(std::fs::read(&sentinel)?, bytes);
         for (n, expected) in protected.iter().zip(&before) {
@@ -980,6 +998,7 @@ async fn actual_native_completion_instructions_keep_private_text_and_owned_profi
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     assert_eq!(std::fs::read(&sentinel)?, bytes);
     std::fs::remove_dir_all(&root)?;
-    eprintln!("native completion evidence: {{\"actual_install_and_uninstall_text\":true,\"unicode_and_space_program_path_preserved\":true,\"no_sdk_shell_evaluation\":true,\"synthetic_shell_configuration_retained\":true,\"private_state_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"both_normal_owned_tree_exits\":true}}");
+    assert_eq!(instruction_receipts + unsupported_shell_receipts, 2);
+    eprintln!("native completion evidence: {{\"instruction_text_receipts\":{instruction_receipts},\"native_unsupported_shell_receipts\":{unsupported_shell_receipts},\"unicode_and_space_program_path_preserved\":true,\"no_sdk_shell_evaluation\":true,\"synthetic_shell_configuration_retained\":true,\"private_state_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"both_normal_owned_tree_exits\":true}}");
     Ok(())
 }

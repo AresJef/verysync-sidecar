@@ -289,6 +289,16 @@ if exit.outcome == NativeStoragePathsOutcome::Success {
 
 ## Native shell completion instructions
 
+The fixed program discovers the account's login shell rather than using a
+caller-supplied SHELL selector. Its pinned kongplete implementation prints
+templates for bash, zsh and fish. On Windows, its login-shell dependency selects
+COMSPEC (normally cmd.exe), for which no template exists. That native nonzero
+unsupported-shell response remains `NativeCompletionOutcome::Failure`, with
+private diagnostic bytes and no instruction text. It is not successful shell
+integration. The API neither selects a replacement shell nor evaluates a script.
+See the pinned [completion implementation](https://github.com/WillAbides/kongplete/blob/v0.4.0/completion_install.go)
+and [Windows shell discovery](https://github.com/riywo/loginshell/blob/7d26008be1ab/loginshell.go).
+
 `native_completion_instructions(action, timeout)` explicitly invokes the native
 `install-completions` command, optionally with `--uninstall`, on a confirmed
 stopped owned instance. `NativeCompletionAction` selects the exact native flag.
