@@ -11,7 +11,8 @@ impl Client {
     /// Submit one explicit GUI listener PATCH and retain the prior configuration.
     /// Address/protocol changes can interrupt this endpoint while the core keeps
     /// running. The stored enabled flag does not establish listener absence;
-    /// the fixed core can restart its listener after accepting `enabled=false`.
+    /// v2.33.2 does not support live hot-disable and can restart its listener
+    /// after accepting `enabled=false`. This is a stored configuration request.
     /// Prepare a new explicit connection and trust policy separately.
     /// No reconnect, rollback, write retry, certificate install or process stop
     /// follows. Transport uncertainty remains MutationOutcomeUnknown; reconcile

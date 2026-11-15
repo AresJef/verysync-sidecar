@@ -67,9 +67,11 @@ An isolated macOS arm64 v2.33.2 experiment issued exactly one `enabled=false` PA
 an acknowledgement, independently verified the persisted false flag, and
 observed the native program log a new GUI/API listener followed by continued
 exact-process listening. No post-disable bind, connection or request interfered
-with that observation. Live server disable remains an unresolved native effect;
-the typed setter reports the configuration request without promising endpoint
-closure. A transient listener gap does not establish successful disable.
+with that observation. Live GUI/API hot-disable is unsupported on this fixed baseline. The typed
+setter exposes the stored configuration request; its acknowledgement does not
+establish endpoint closure. A transient listener gap does not establish
+successful disable. No automatic restart or process stop compensates for this
+native limitation.
 
 Neither the stored flag nor listener absence proves the core stopped. A borrowed
 connection owns no process. An owned instance can still be observed with
@@ -84,12 +86,15 @@ acceptance conditions and are not inferred from borrowed Client operations.
 
 The controlled native cases verify direct TLS enable/revert, explicit address
 migration, retained identity and synthetic bytes, and actual Unix socket
-permission changes. The original GUI-disable closure condition remains failing;
-its earlier successful bind could reserve a transiently released port and
-interfere with native rebind. The corrected observation releases that probe
-immediately and also requires passive listener absence without holding the port.
-Explicit process cleanup is separate. Full same-source native platform
-acceptance remains pending. HTTP acknowledgement,
+permission changes. Stored disable acceptance requires one acknowledged request,
+a persisted false flag, passive observation of the exact owned process, retained
+identity and synthetic bytes, and separately requested process cleanup. The
+eight-second observation does not reserve an address or probe a possibly reused
+endpoint. Continued listening is recorded as the fixed program's unsupported
+live effect; listener absence in one observation window is not a support promise.
+The earlier closure test and its false-positive bind-reservation cause remain
+historical evidence. Full same-source native platform acceptance remains pending.
+HTTP acknowledgement,
 stored readback, successful TLS authentication and process-tree exit are separate
 observations throughout.
 
@@ -101,9 +106,7 @@ before recording the observed effect. The original acknowledgement stays
 unknown. Separate controlled-response cases cover both applied and unchanged
 readbacks and require exactly one PATCH followed by GET requests.
 
-On an original native listener-release timeout, the fixture may take a passive
-snapshot for the exact test executable and report only listener counts for its
-two retained addresses and whether the owner observed process exit. It does not
-connect to a possibly reused endpoint, signal a process, change the original
-eight-second verdict, or expose raw process IDs, addresses or paths. A diagnostic
-snapshot is separate from successful listener release.
+Passive listener observations report only bounded counts for the exact owned
+process and whether its owner observed exit. Raw process IDs, addresses and
+paths are omitted from ordinary output. Observation failures remain test
+failures, and missing observations do not imply successful disable.

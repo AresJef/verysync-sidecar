@@ -2,7 +2,9 @@
 
 Unreleased [native GUI listener controls](docs/public/gui-listener.md) separate
 explicit address/TLS/server-enable/socket-mode writes from caller reconnection,
-certificate trust and process ownership. Full platform acceptance is pending.
+certificate trust and process ownership. Live GUI/API hot-disable is unsupported
+on fixed v2.33.2; a stored false enable flag does not prove endpoint closure.
+Full platform acceptance is pending.
 
 Unreleased [management transport policy](docs/public/management-transport.md)
 accepts per-connection trusted certificates and explicit authenticated HTTP(S)

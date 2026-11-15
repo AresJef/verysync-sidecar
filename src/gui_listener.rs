@@ -221,8 +221,8 @@ pub struct GuiListenerPatch {
 impl GuiListenerPatch {
     /// Request the native stored server-enable flag. Acknowledgement/readback
     /// does not prove live listener removal; v2.33.2 has been observed to restart
-    /// its listener while this flag remains false. Observe the actual endpoint
-    /// separately before treating management access as removed.
+    /// its listener while this flag remains false. Live hot-disable is unsupported
+    /// on that baseline; this method exposes the stored configuration request.
     pub fn enabled(mut self, value: bool) -> Self {
         self.enabled = Some(value);
         self

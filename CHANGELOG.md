@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Classify live GUI/API hot-disable as unsupported on fixed v2.33.2. Keep the
+  explicit stored configuration request, passive owned-listener observations
+  and separate caller-selected process cleanup; never infer closure from a flag.
+
 - Add exact private native text-log snapshots with explicit timestamp filters,
   preserved line endings, valid empty output and strict UTF-8 error handling.
 
