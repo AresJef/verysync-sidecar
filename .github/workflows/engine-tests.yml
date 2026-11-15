@@ -503,7 +503,7 @@ jobs:
         run: python scripts/prepare-test-engine.py check-cleanup
 
   windows-folder-opener-diagnosis:
-    name: Folder opener diagnosis only (${{ matrix.package }})
+    name: Native helper diagnosis (${{ matrix.package }} / ${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
@@ -513,15 +513,33 @@ jobs:
           - package: windows-amd64-standard
             runner: windows-2022
             rust: x86_64-pc-windows-msvc
+            target: engine_control
+            filter: actual_native_folder_open_requests_capture_exact_owned_target_dispatch
+            trace: "1"
           - package: windows-arm64-standard
             runner: windows-11-arm
             rust: aarch64-pc-windows-msvc
+            target: engine_control
+            filter: actual_native_folder_open_requests_capture_exact_owned_target_dispatch
+            trace: "1"
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+            target: maintenance_engine
+            filter: actual_
+            trace: "0"
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+            target: maintenance_engine
+            filter: actual_
+            trace: "0"
     defaults:
       run:
         shell: bash
     env:
       TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
-      VERYSYNC_TEST_OPENER_TRACE: "1"
+      VERYSYNC_TEST_OPENER_TRACE: ${{ matrix.trace }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -537,11 +555,11 @@ jobs:
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Preserve the original strict native dispatch predicate and deadline
+      - name: Preserve original native effects, strict predicates and deadlines
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target engine_control
-          --test-filter actual_native_folder_open_requests_capture_exact_owned_target_dispatch
+          --test-target "${{ matrix.target }}"
+          --test-filter "${{ matrix.filter }}"
           --evidence-dir "${{ runner.temp }}/vs-windows-folder-opener-diagnosis"
       - name: Require exact owned-executable cleanup after the original result
         if: always()

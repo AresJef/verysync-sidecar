@@ -5,6 +5,74 @@ use managed_fixture::{options, TestResult};
 use std::{collections::BTreeMap, time::Duration};
 use verysync_sidecar::{CoreLogLevel, ManagedInstance};
 
+fn native_cli_output_shape(bytes: &[u8]) -> serde_json::Value {
+    let text = String::from_utf8_lossy(bytes);
+    let labels = [
+        "Configuration file:",
+        "Device private key & certificate files:",
+        "GUI / API HTTPS private key & certificate files:",
+        "Database location:",
+        "Log file:",
+        "GUI override directory:",
+        "Default sync folder directory:",
+    ];
+    let known_words = [
+        "configuration",
+        "file",
+        "device",
+        "private",
+        "key",
+        "certificate",
+        "files",
+        "gui",
+        "api",
+        "https",
+        "database",
+        "location",
+        "log",
+        "override",
+        "directory",
+        "default",
+        "sync",
+        "folder",
+        "error",
+        "failed",
+        "cannot",
+        "not",
+        "supported",
+        "support",
+        "windows",
+        "platform",
+        "shell",
+        "completions",
+        "completion",
+        "install",
+        "uninstall",
+        "unknown",
+        "command",
+        "powershell",
+        "bash",
+        "zsh",
+        "fish",
+        "on",
+    ];
+    let lines = text.lines().take(64).map(|line| {
+        let trimmed = line.trim();
+        serde_json::json!({
+            "bytes":line.len(),
+            "leading_ascii_whitespace":line.bytes().take_while(u8::is_ascii_whitespace).take(4).collect::<Vec<_>>(),
+            "heading":labels.iter().position(|label| *label == trimmed),
+            "absolute_path_shape":std::path::Path::new(trimmed).is_absolute(),
+            "known_words":line.split_whitespace().take(32).filter_map(|word| {
+                let word=word.trim_matches(|c:char| !c.is_ascii_alphabetic());
+                known_words.iter().find(|known| known.eq_ignore_ascii_case(word)).copied()
+            }).collect::<Vec<_>>(),
+            "carriage_returns":line.bytes().filter(|b| *b == b'\r').count(),
+        })
+    }).collect::<Vec<_>>();
+    serde_json::json!({"bytes":bytes.len(),"utf8":std::str::from_utf8(bytes).is_ok(),"nul":bytes.contains(&0),"utf8_bom":bytes.starts_with(&[239,187,191]),"line_limit":64,"lines":lines,"raw_values_logged":false})
+}
+
 #[tokio::test]
 async fn public_stopped_database_commands_capture_counts_metadata_and_reset_effects() -> TestResult
 {
@@ -742,6 +810,14 @@ async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity()
     let exit = core
         .inspect_native_storage_paths(Duration::from_secs(10))
         .await?;
+    if exit.outcome != NativeStoragePathsOutcome::Success {
+        eprintln!(
+            "native paths output diagnostic: code={:?} outcome={:?} shape={}",
+            exit.code,
+            exit.outcome,
+            native_cli_output_shape(exit.diagnostic.body_bytes())
+        );
+    }
     assert_eq!(exit.outcome, NativeStoragePathsOutcome::Success);
     assert!(exit.tree_stopped && exit.code == Some(0));
     let paths = exit.paths.as_ref().ok_or("missing native typed paths")?;
@@ -867,6 +943,9 @@ async fn actual_native_completion_instructions_keep_private_text_and_owned_profi
             .native_completion_instructions(action, Duration::from_secs(10))
             .await?;
         assert_eq!(exit.action, action);
+        if exit.outcome != NativeCompletionOutcome::InstructionText {
+            eprintln!("native completion output diagnostic: action={action:?} code={:?} outcome={:?} shape={}", exit.code, exit.outcome, native_cli_output_shape(exit.diagnostic.body_bytes()));
+        }
         assert_eq!(exit.code, Some(0));
         assert!(exit.tree_stopped);
         assert_eq!(exit.outcome, NativeCompletionOutcome::InstructionText);
