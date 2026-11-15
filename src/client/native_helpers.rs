@@ -1,13 +1,23 @@
 //! Explicit native helpers, without local UI or automatic link handling.
 use super::{mutation_error, Client};
 use crate::{
-    DeviceId, Error, NativeHealth, NativeHealthStatus, NativeUsageReport, PendingNativeLink,
-    ResponseDiagnostic, Result, TargetIpLocation,
+    DeviceId, Error, NativeHealth, NativeHealthStatus, NativeMigrationProgress, NativeUsageReport,
+    PendingNativeLink, ResponseDiagnostic, Result, TargetIpLocation,
 };
 use serde::Deserialize;
 use std::{collections::BTreeMap, net::IpAddr};
 
 impl Client {
+    /// Read global native migration progress after checking the selected target
+    /// identity. This neither starts a migration nor associates the snapshot
+    /// with a caller's task. `finished` and task error text are independent.
+    pub async fn native_migration_progress(&self) -> Result<NativeMigrationProgress> {
+        self.system_status().await?;
+        self.connection
+            .get_json("read native migration progress", "rest/migrate/progress")
+            .await
+    }
+
     /// Read the selected program's native HTTP health snapshot. The native route
     /// itself is unauthenticated; this method uses the existing authenticated
     /// connection and checks its expected identity before the read. It is not a

@@ -9,6 +9,125 @@ fn identity() -> Reply {
 }
 
 #[tokio::test]
+async fn native_migration_progress_preserves_global_snapshots_and_task_errors() -> TestResult {
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({
+            "name":KEY,"total":200,"completed":50,"percent":28.125,
+            "finished":false,"error":"","future":KEY
+        })),
+        identity(),
+        Reply::json(serde_json::json!({
+            "name":KEY,"total":-1,"completed":-2,"percent":125.5,
+            "finished":true,"error":KEY,"future":KEY
+        })),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let running: verysync_sidecar::NativeMigrationProgress =
+        client.native_migration_progress().await?;
+    assert_eq!(running.name, KEY);
+    assert_eq!((running.total, running.completed), (200, 50));
+    assert_eq!(running.percent, 28.125);
+    assert!(!running.finished);
+    assert!(running.error_message.is_empty());
+    assert_eq!(running.extra["future"], KEY);
+    let failed = client.native_migration_progress().await?;
+    assert_eq!((failed.total, failed.completed), (-1, -2));
+    assert_eq!(failed.percent, 125.5);
+    assert!(failed.finished);
+    assert_eq!(failed.error_message, KEY);
+    assert!(!format!("{running:?} {failed:?}").contains(KEY));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    for index in [3, 5] {
+        assert!(requests[index].starts_with("GET /prefix/rest/migrate/progress HTTP/1.1"));
+        assert!(requests[index]
+            .to_ascii_lowercase()
+            .contains("x-api-key: synthetic-transport-key"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_migration_progress_rejects_incomplete_or_wrongly_typed_snapshots() -> TestResult {
+    let complete = serde_json::json!({
+        "name":KEY,"total":100,"completed":100,"percent":100,
+        "finished":true,"error":"","future":KEY
+    });
+    let mut invalid = Vec::new();
+    for field in ["name", "total", "completed", "percent", "finished", "error"] {
+        let mut missing = complete.clone();
+        missing
+            .as_object_mut()
+            .ok_or("object expected")?
+            .remove(field);
+        invalid.push(missing);
+        let mut null = complete.clone();
+        null[field] = serde_json::Value::Null;
+        invalid.push(null);
+    }
+    for (field, value) in [
+        ("name", serde_json::json!(true)),
+        ("total", serde_json::json!(1.5)),
+        ("completed", serde_json::json!(u64::MAX)),
+        ("percent", serde_json::json!("100")),
+        ("finished", serde_json::json!("true")),
+        ("error", serde_json::json!({"private":KEY})),
+    ] {
+        let mut body = complete.clone();
+        body[field] = value;
+        invalid.push(body);
+    }
+    invalid.push(serde_json::json!([]));
+    for body in invalid {
+        let server =
+            ScriptedServer::start(vec![version(), identity(), identity(), Reply::json(body)])
+                .await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client.native_migration_progress().await.unwrap_err();
+        assert!(matches!(error, Error::InvalidResponse { .. }));
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_migration_progress_keeps_request_failures_and_identity_changes_separate(
+) -> TestResult {
+    for status in [200, 503] {
+        let mut reply = Reply::json(serde_json::json!({"error":KEY}));
+        reply.status = status;
+        let server = ScriptedServer::start(vec![version(), identity(), identity(), reply]).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client.native_migration_progress().await.unwrap_err();
+        assert!(match status {
+            200 => matches!(error, Error::Api { .. }),
+            _ => matches!(error, Error::Http { .. }),
+        });
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    let other = ID.replacen('A', "B", 1);
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        Reply::json(serde_json::json!({"myID":other})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.native_migration_progress().await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_health_preserves_status_and_unknown_fields_without_logging_values() -> TestResult {
     let server = ScriptedServer::start(vec![
         version(),
