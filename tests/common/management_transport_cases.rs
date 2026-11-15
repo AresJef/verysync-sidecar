@@ -306,6 +306,7 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
         Err(error) => {
             // Observe only exact fixture executable images after the original
             // failure. Never connect to an address that another owner may reuse.
+            let managed_root = u64::from(core.process_id());
             let observed = if let Some(python) = std::env::var_os("VERYSYNC_TEST_PYTHON") {
                 let output = tokio::task::spawn_blocking(move || {
                     std::process::Command::new(python)
@@ -336,6 +337,28 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
                             .count()
                     })
             };
+            let initial_root_listener_count = observed
+                .as_ref()
+                .and_then(|value| value["tcp_listeners"].as_array())
+                .map(|rows| {
+                    rows.iter()
+                        .filter(|row| {
+                            row["port"].as_u64() == Some(u64::from(initial.port()))
+                                && row["pid"].as_u64() == Some(managed_root)
+                        })
+                        .count()
+                });
+            let persisted_gui_enabled = (|| {
+                use std::io::Read;
+                let file = std::fs::File::open(core.state_directory().join("setting.dat")).ok()?;
+                let mut bytes = Vec::new();
+                file.take(1_048_577).read_to_end(&mut bytes).ok()?;
+                if bytes.len() > 1_048_576 {
+                    return None;
+                }
+                let native = rmpv::decode::read_value(&mut std::io::Cursor::new(bytes)).ok()?;
+                native["4"]["1"].as_bool()
+            })();
             let owner_exit_ready = {
                 use std::{future::Future, task::Poll};
                 let mut wait = Box::pin(core.wait_for_exit());
@@ -350,7 +373,11 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
                     "original_deadline_seconds":8,"original_failure_retained":true,
                     "passive_exact_image_snapshot_available":observed.is_some(),
                     "initial_owned_listener_count":listener_count(initial.port()),
+                    "initial_managed_root_listener_count":initial_root_listener_count,
+                    "initial_other_exact_image_listener_count":listener_count(initial.port())
+                        .zip(initial_root_listener_count).map(|(total,root)|total.saturating_sub(root)),
                     "previous_tls_owned_listener_count":listener_count(changed.port()),
+                    "persisted_gui_enabled":persisted_gui_enabled,
                     "owner_exit_report_ready":owner_exit_ready,
                     "no_endpoint_probe_or_signal":true,"raw_pids_addresses_and_paths_omitted":true
                 })
