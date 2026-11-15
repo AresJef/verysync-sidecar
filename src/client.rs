@@ -405,18 +405,26 @@ impl Client {
     }
     pub(crate) async fn event_wire(
         &self,
-        source: crate::EventSource,
+        source: &crate::EventSource,
         since: u64,
         limit: usize,
     ) -> Result<Vec<crate::events::WireEvent>> {
         let since = since.to_string();
         let limit_text = limit.to_string();
+        let mut query = vec![
+            ("since", since.as_str()),
+            ("limit", limit_text.as_str()),
+            ("timeout", "0"),
+        ];
+        if let crate::EventSource::Filtered(filter) = source {
+            query.push(("events", filter.query_value()));
+        }
         let url = self.connection.management_url(
             match source {
-                crate::EventSource::Standard => "rest/events",
+                crate::EventSource::Standard | crate::EventSource::Filtered(_) => "rest/events",
                 crate::EventSource::Disk => "rest/events/disk",
             },
-            &[("since", &since), ("limit", &limit_text), ("timeout", "0")],
+            &query,
         )?;
         let (status, bytes) = self
             .connection

@@ -230,7 +230,9 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     .await??;
     let before = core.client().folder(&id).await?;
     if !upload {
-        match core
+        let provider_started = std::time::Instant::now();
+        eprintln!("provider-check-begin management_request_deadline_s=10 initial_retry_count=0");
+        let provider_result = core
             .client()
             .check_kernel_upgrade()
             .await
@@ -240,7 +242,19 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                 {
                     report_upgrade_diagnostic("provider-check", response.body_bytes());
                 }
-            }) {
+            });
+        let outcome = match &provider_result {
+            Ok(_) => "response",
+            Err(Error::Timeout { .. }) => "management_deadline",
+            Err(Error::UpgradeReleaseUnavailable { .. }) => "no_matching_release",
+            Err(Error::Http { .. }) => "native_http_error",
+            Err(_) => "other_error",
+        };
+        eprintln!(
+            "provider-check-end elapsed_ms={} outcome={outcome}",
+            provider_started.elapsed().as_millis()
+        );
+        match provider_result {
             Ok(checked) => {
                 assert_eq!(checked.running, "v2.33.1");
                 assert_eq!(

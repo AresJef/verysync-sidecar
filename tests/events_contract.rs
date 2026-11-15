@@ -10,8 +10,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{oneshot, Notify};
 use tokio::task::{JoinHandle, JoinSet};
 use verysync_sidecar::{
-    ApiKey, Client, ConnectOptions, DeviceId, Error, EventCursor, EventGapReason, EventKind,
-    EventOptions, EventSource, EventStreamItem, EventSubscription, ManagementEndpoint,
+    ApiKey, Client, ConnectOptions, DeviceId, Error, EventCursor, EventFilter, EventGapReason,
+    EventKind, EventOptions, EventSource, EventStreamItem, EventSubscription, ManagementEndpoint,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -25,6 +25,8 @@ fn event(id: u64, name: &str) -> Value {
 struct State {
     events: Mutex<Vec<Value>>,
     disk_events: Mutex<Vec<Value>>,
+    filtered_events: Mutex<std::collections::BTreeMap<String, Vec<Value>>>,
+    filter_queries: Mutex<Vec<String>>,
     disk_reads: AtomicUsize,
     generation: Mutex<String>,
     failures_left: AtomicUsize,
@@ -72,6 +74,8 @@ impl Server {
         let state = Arc::new(State {
             events: Mutex::new(vec![event(1, "StartupCompleted")]),
             disk_events: Mutex::new(vec![]),
+            filtered_events: Mutex::new(std::collections::BTreeMap::new()),
+            filter_queries: Mutex::new(Vec::new()),
             disk_reads: AtomicUsize::new(0),
             generation: Mutex::new("generation-one".to_owned()),
             failures_left: AtomicUsize::new(0),
@@ -202,17 +206,27 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) -> TestResult {
             let query: std::collections::BTreeMap<_, _> = url.query_pairs().into_owned().collect();
             let since: u64 = query.get("since").ok_or("since missing")?.parse()?;
             let limit: usize = query.get("limit").ok_or("limit missing")?.parse()?;
-            let selected = if disk {
-                &state.disk_events
+            let events = if let Some(filter) = query.get("events") {
+                assert!(!disk, "disk route must not receive a name filter");
+                state.filter_queries.lock().unwrap().push(filter.clone());
+                state
+                    .filtered_events
+                    .lock()
+                    .unwrap()
+                    .get(filter)
+                    .cloned()
+                    .unwrap_or_default()
             } else {
-                &state.events
+                let selected = if disk {
+                    &state.disk_events
+                } else {
+                    &state.events
+                };
+                selected.lock().unwrap().clone()
             };
-            let events: Vec<_> = selected
-                .lock()
-                .unwrap()
-                .iter()
+            let events: Vec<_> = events
+                .into_iter()
                 .filter(|e| e["id"].as_u64().unwrap_or(u64::MAX) > since)
-                .cloned()
                 .collect();
             json!(&events[events.len().saturating_sub(limit)..])
         }
@@ -846,5 +860,118 @@ async fn disk_event_initial_transport_failure_returns_without_retry_or_task() ->
     assert_eq!(server.state.disk_reads.load(Ordering::SeqCst), 1);
     tokio::time::sleep(Duration::from_millis(40)).await;
     assert_eq!(server.state.disk_reads.load(Ordering::SeqCst), 1);
+    server.finish().await
+}
+
+#[test]
+fn event_name_filters_are_canonical_private_bounded_and_validate_deserialized_input() -> TestResult
+{
+    let f = EventFilter::new([
+        EventKind::StateChanged,
+        EventKind::ConfigurationSaved,
+        EventKind::StateChanged,
+    ])?;
+    let same = EventFilter::new([EventKind::ConfigurationSaved, EventKind::StateChanged])?;
+    assert_eq!(f, same);
+    assert_eq!(
+        f.names().collect::<Vec<_>>(),
+        vec!["ConfigSaved", "StateChanged"]
+    );
+    let serialized = serde_json::to_string(&f)?;
+    assert_eq!(serialized, "\"ConfigSaved,StateChanged\"");
+    assert_eq!(serde_json::from_str::<EventFilter>(&serialized)?, f);
+    for name in [
+        "",
+        "a,b",
+        "ConfigSaved StateChanged",
+        " leading",
+        "line\nfeed",
+    ] {
+        assert!(EventFilter::new([EventKind::Unknown(name.to_owned())]).is_err());
+    }
+    assert!(EventFilter::new([]).is_err());
+    assert!(EventFilter::new([EventKind::Unknown("x".repeat(129))]).is_err());
+    assert!(EventFilter::new((0..65).map(|_| EventKind::StateChanged)).is_err());
+    for serialized in ["\"\"", "\"x,,y\"", "\"x y\"", "{}", "null"] {
+        assert!(serde_json::from_str::<EventFilter>(serialized).is_err());
+    }
+    let private = EventFilter::new([EventKind::Unknown(KEY.to_owned())])?;
+    assert!(!format!("{private:?} {:?}", EventSource::Filtered(private.clone())).contains(KEY));
+    Ok(())
+}
+
+#[tokio::test]
+async fn filtered_event_sources_keep_independent_ids_and_canonical_query_masks() -> TestResult {
+    let server = Server::start().await?;
+    let client = server.client().await?;
+    let filter = EventFilter::new([
+        EventKind::StateChanged,
+        EventKind::ConfigurationSaved,
+        EventKind::ConfigurationSaved,
+    ])?;
+    let different = EventFilter::new([EventKind::FolderPaused])?;
+    server.state.filtered_events.lock().unwrap().insert(
+        "ConfigSaved,StateChanged".to_owned(),
+        vec![event(1, "ConfigSaved")],
+    );
+    let mut stream = client
+        .subscribe_filtered_events(filter.clone(), fast()?)
+        .await?;
+    assert_eq!(
+        stream.cursor().source,
+        EventSource::Filtered(filter.clone())
+    );
+    assert_eq!(stream.cursor().last_id, 1);
+    server
+        .state
+        .filtered_events
+        .lock()
+        .unwrap()
+        .get_mut("ConfigSaved,StateChanged")
+        .unwrap()
+        .push(event(2, "StateChanged"));
+    let EventStreamItem::Event(e) = next(&mut stream).await? else {
+        return Err("filtered record missing".into());
+    };
+    assert_eq!(e.kind, EventKind::StateChanged);
+    assert_eq!(e.cursor.source, EventSource::Filtered(filter.clone()));
+    assert_eq!(e.cursor.last_id, 2);
+    let cursor = stream.cursor().clone();
+    stream.close().await?;
+    let before = server.state.event_reads.load(Ordering::SeqCst);
+    assert!(matches!(
+        client
+            .subscribe_filtered_events(different, fast()?.resume_from(cursor.clone())?)
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert!(matches!(
+        client
+            .subscribe_events(fast()?.resume_from(cursor.clone())?)
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert!(matches!(
+        client
+            .subscribe_disk_events(fast()?.resume_from(cursor.clone())?)
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(server.state.event_reads.load(Ordering::SeqCst), before);
+    let equivalent = EventFilter::new([EventKind::ConfigurationSaved, EventKind::StateChanged])?;
+    let mut resumed = client
+        .subscribe_filtered_events(equivalent, fast()?.resume_from(cursor)?)
+        .await?;
+    assert!(
+        matches!(next(&mut resumed).await?,EventStreamItem::Gap(g) if g.reason==EventGapReason::ResumedContinuityUnverified&&g.resume_from.source==EventSource::Filtered(filter.clone()))
+    );
+    resumed.close().await?;
+    assert!(server
+        .state
+        .filter_queries
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|s| s == "ConfigSaved,StateChanged"));
     server.finish().await
 }

@@ -40,6 +40,9 @@ class BlockedProxy(socketserver.ThreadingTCPServer):
         self.forwarded = 0
         self.upgrade_metadata = upgrade_metadata
         self.upgrade_connections = 0
+        self.upgrade_tunnels = []
+        self.upgrade_tunnels_omitted = 0
+        self.started_at = time.monotonic()
         self.upgrade_archive = upgrade_archive
         self.upgrade_archives_served = 0
         self.guard = threading.Lock()
@@ -165,9 +168,27 @@ class BlockRequest(socketserver.StreamRequestHandler):
             # Discovery is routed only to its owned fixture. Upgrade metadata
             # is an explicit exception to one genuine TLS host; TLS stays end to
             # end and every other external host remains blocked.
+            started = time.monotonic()
+            tunnel = None
+            outcome = "relay_deadline"
+            if official:
+                with self.server.guard:
+                    if len(self.server.upgrade_tunnels) < 64:
+                        tunnel = {"started_s": round(started - self.server.started_at, 3),
+                                  "connected": False, "completed": False,
+                                  "connect_s": None, "elapsed_s": None,
+                                  "client_bytes": 0, "provider_bytes": 0,
+                                  "outcome": "pending"}
+                        self.server.upgrade_tunnels.append(tunnel)
+                    else:
+                        self.server.upgrade_tunnels_omitted += 1
             try:
                 target = official or ("127.0.0.1", port)
                 with socket.create_connection(target, timeout=10 if official else 2) as upstream:
+                    if tunnel is not None:
+                        with self.server.guard:
+                            tunnel["connected"] = True
+                            tunnel["connect_s"] = round(time.monotonic() - started, 3)
                     self.wfile.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     self.wfile.flush()
                     with self.server.guard:
@@ -181,11 +202,26 @@ class BlockRequest(socketserver.StreamRequestHandler):
                         for source in readable:
                             data = source.recv(65536)
                             if not data:
+                                outcome = "client_eof" if source is self.request else "provider_eof"
                                 return
+                            if tunnel is not None:
+                                with self.server.guard:
+                                    field = "client_bytes" if source is self.request else "provider_bytes"
+                                    tunnel[field] += len(data)
                             (upstream if source is self.request else self.request).sendall(data)
                 return
-            except (OSError, ValueError):
+            except (OSError, ValueError) as error:
+                outcome = ("socket_timeout" if isinstance(error, TimeoutError) else
+                           "connection_reset" if isinstance(error, ConnectionResetError) else
+                           "broken_pipe" if isinstance(error, BrokenPipeError) else
+                           "io_error")
                 return
+            finally:
+                if tunnel is not None:
+                    with self.server.guard:
+                        tunnel["completed"] = True
+                        tunnel["elapsed_s"] = round(time.monotonic() - started, 3)
+                        tunnel["outcome"] = outcome
         # Retain only a hostname and method, never credentials, queries or headers.
         key = (method, host if host and len(host) <= 253 else "unparsed")
         with self.server.guard:
@@ -308,12 +344,16 @@ def main():
             observed = [{"method": method, "hostname": host, "count": count}
                         for (method, host), count in sorted(proxy.observed.items())]
             errors = proxy.errors
+            upgrade_tunnels = [dict(record) for record in proxy.upgrade_tunnels]
+            upgrade_tunnels_omitted = proxy.upgrade_tunnels_omitted
         report = {"scope": "test-only HTTP proxy observations; not an OS-wide no-egress proof",
                   "loopback_only": not args.allow_upgrade_metadata, "listener_loopback_only": True,
                   "forwarding_implemented": args.allow_private_discovery or args.allow_upgrade_metadata,
                   "external_forwarding_implemented": args.allow_upgrade_metadata,
                   "official_upgrade_metadata_host": "upgrades.verysync.cn:443" if args.allow_upgrade_metadata else None,
                   "official_upgrade_metadata_connections": proxy.upgrade_connections,
+                  "official_upgrade_metadata_tunnels": upgrade_tunnels,
+                  "official_upgrade_metadata_tunnels_omitted": upgrade_tunnels_omitted,
                   "pinned_upgrade_archives_served": proxy.upgrade_archives_served,
                   "private_discovery_forwarding_enabled": args.allow_private_discovery,
                   "private_connections_forwarded": proxy.forwarded,

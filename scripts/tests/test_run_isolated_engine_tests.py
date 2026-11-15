@@ -7,6 +7,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 from http.server import BaseHTTPRequestHandler
@@ -134,6 +135,84 @@ class ProxyContracts(unittest.TestCase):
                     proxy.shutdown()
                     server.join(timeout=2)
                     self.assertFalse(server.is_alive())
+
+    def test_official_metadata_tunnel_records_only_bounded_timing_and_byte_counts(self):
+        real_connect = socket.create_connection
+        with socket.socket() as upstream, HELPER.BlockedProxy(upgrade_metadata=True) as proxy:
+            upstream.bind(("127.0.0.1", 0))
+            upstream.listen()
+            upstream.settimeout(2)
+            def connect(target, **kwargs):
+                self.assertEqual(target, ("upgrades.verysync.cn", 443))
+                self.assertEqual(kwargs, {"timeout": 10})
+                return real_connect(upstream.getsockname(), timeout=2)
+            server = threading.Thread(target=proxy.serve_forever,
+                                      kwargs={"poll_interval": 0.01}, daemon=True)
+            server.start()
+            try:
+                with patch.object(HELPER.socket, "create_connection", side_effect=connect):
+                    with real_connect(proxy.server_address, timeout=2) as client:
+                        client.sendall(b"CONNECT upgrades.verysync.cn:443 HTTP/1.1\r\n\r\n")
+                        self.assertTrue(client.recv(4096).startswith(b"HTTP/1.1 200"))
+                        peer, _ = upstream.accept()
+                        with peer:
+                            peer.settimeout(2)
+                            sent = b"synthetic-private-client-record"
+                            received = b"synthetic-private-provider-record"
+                            client.sendall(sent)
+                            self.assertEqual(peer.recv(4096), sent)
+                            peer.sendall(received)
+                            self.assertEqual(client.recv(4096), received)
+                            client.shutdown(socket.SHUT_WR)
+                            deadline = time.monotonic() + 2
+                            while time.monotonic() < deadline:
+                                with proxy.guard:
+                                    records = [dict(r) for r in proxy.upgrade_tunnels]
+                                if records and records[0]["completed"]:
+                                    break
+                                time.sleep(0.005)
+                            self.assertEqual(len(records), 1)
+                            record = records[0]
+                            self.assertTrue(record["completed"])
+                            self.assertTrue(record["connected"])
+                            self.assertEqual(record["outcome"], "client_eof")
+                            self.assertEqual(record["client_bytes"], len(sent))
+                            self.assertEqual(record["provider_bytes"], len(received))
+                            self.assertGreaterEqual(record["elapsed_s"], record["connect_s"])
+                            serialized = json.dumps(record)
+                            self.assertNotIn(sent.decode(), serialized)
+                            self.assertNotIn(received.decode(), serialized)
+                            self.assertEqual(proxy.errors, 0)
+            finally:
+                proxy.shutdown()
+                server.join(timeout=2)
+                self.assertFalse(server.is_alive())
+
+    def test_official_metadata_connect_timeout_is_visible_without_headers_or_payload(self):
+        real_connect = socket.create_connection
+        with HELPER.BlockedProxy(upgrade_metadata=True) as proxy:
+            server = threading.Thread(target=proxy.serve_forever,
+                                      kwargs={"poll_interval": 0.01}, daemon=True)
+            server.start()
+            try:
+                with patch.object(HELPER.socket, "create_connection", side_effect=TimeoutError):
+                    with real_connect(proxy.server_address, timeout=2) as client:
+                        client.sendall(b"CONNECT upgrades.verysync.cn:443 HTTP/1.1\r\nProxy-Authorization: synthetic-private-header\r\n\r\n")
+                        self.assertEqual(client.recv(4096), b"")
+                with proxy.guard:
+                    records = [dict(r) for r in proxy.upgrade_tunnels]
+                self.assertEqual(len(records), 1)
+                self.assertTrue(records[0]["completed"])
+                self.assertFalse(records[0]["connected"])
+                self.assertEqual(records[0]["outcome"], "socket_timeout")
+                self.assertEqual(records[0]["client_bytes"], 0)
+                self.assertEqual(records[0]["provider_bytes"], 0)
+                self.assertNotIn("synthetic-private-header", json.dumps(records))
+                self.assertEqual(proxy.errors, 0)
+            finally:
+                proxy.shutdown()
+                server.join(timeout=2)
+                self.assertFalse(server.is_alive())
 
     def test_http_and_connect_are_blocked_without_forwarding_or_recording_credentials(self):
         with socket.socket() as canary, HELPER.BlockedProxy() as proxy:

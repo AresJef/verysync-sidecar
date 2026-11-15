@@ -169,6 +169,17 @@ the default baseline. Its dedicated writable copies are the only executables
 modified by native upgrade tests. `check-cleanup --upgrade-source` independently
 checks the original older fixture image.
 
+The isolated upgrade proxy records at most 64 official metadata tunnel summaries:
+connection/total durations, transferred byte counts, completion and EOF/timeout
+classification. It retains no TLS contents, headers, raw error messages or
+credentials. Pending records are explicitly incomplete. The native provider
+check also reports its single-read elapsed time and selected 10-second management
+request deadline; no automatic retry or deadline extension is introduced. These
+observations distinguish test transport stages and do not prove the cause of an
+older CI failure without those fields. All existing upgrade data/identity/hash
+and exact process cleanup assertions remain required.
+
+
 Only `upgrade_engine` may select `--allow-upgrade-metadata` and
 `--serve-pinned-upgrade-archive`. This explicit test exception permits end-to-end
 TLS to `upgrades.verysync.cn:443` and serves only the exact already size/SHA-verified

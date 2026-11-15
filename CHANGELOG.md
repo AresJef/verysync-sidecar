@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add native event-name selections with bounded canonical filters and validated
+  serialized cursors. Different selections retain separate source identities.
+
 - Add source-bound disk-change subscriptions that reuse bounded event recovery,
   cancellation and gap reporting. Preserve the fixed program's empty-buffer
   interruption and require explicit caller retry; never seed events implicitly.
