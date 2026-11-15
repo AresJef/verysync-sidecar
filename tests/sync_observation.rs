@@ -580,7 +580,8 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
             random as u8
         })
         .collect();
-    std::fs::write(a_path.join("payload.bin"), &sample)?;
+    let readiness = b"synthetic normal-rate readiness canary";
+    std::fs::write(a_path.join("readiness-canary.bin"), readiness)?;
     let af = a
         .client()
         .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(a_path.clone())).paused(true))
@@ -608,12 +609,12 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     );
     fixture_options(
         b.client(),
-        json!({"maxRecvKbps":1,"limitBandwidthInLan":true}),
+        json!({"maxRecvKbps":0,"limitBandwidthInLan":false}),
     )
     .await?;
     let limit = b.client().network_configuration().await?;
-    assert_eq!(limit.extra["maxRecvKbps"], 1);
-    assert_eq!(limit.extra["limitBandwidthInLan"], true);
+    assert_eq!(limit.extra["maxRecvKbps"], 0);
+    assert_eq!(limit.extra["limitBandwidthInLan"], false);
     for (client, folder, peer, address) in [
         (a.client(), &af.configuration.id, &b_id, b_address),
         (b.client(), &bf.configuration.id, &a_id, a_address),
@@ -630,11 +631,35 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
             .await?;
         client.share_folder_with(folder, peer).await?;
     }
-    a.client().resume_folder(&af.configuration.id).await?;
-    a.client().request_scan(&af.configuration.id).await?;
-    b.client().resume_folder(&bf.configuration.id).await?;
     let page = ListPage::new(1, 5)?;
+    let mut normal_rate_readiness_received = false;
+    let mut payload_created = false;
+    // Readiness, rate selection, payload creation and nonempty need observation
+    // share the original 20s preparation window. Do not throttle the first
+    // authentication/index exchange or add a second preparation deadline.
     let needed_observation = tokio::time::timeout(Duration::from_secs(20), async {
+        a.client().resume_folder(&af.configuration.id).await?;
+        a.client().request_scan(&af.configuration.id).await?;
+        b.client().resume_folder(&bf.configuration.id).await?;
+        while std::fs::read(b_path.join("readiness-canary.bin"))
+            .ok()
+            .as_deref()
+            != Some(readiness.as_slice())
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        normal_rate_readiness_received = true;
+        fixture_options(
+            b.client(),
+            json!({"maxRecvKbps":1,"limitBandwidthInLan":true}),
+        )
+        .await?;
+        let limit = b.client().network_configuration().await?;
+        assert_eq!(limit.extra["maxRecvKbps"], 1);
+        assert_eq!(limit.extra["limitBandwidthInLan"], true);
+        std::fs::write(a_path.join("payload.bin"), &sample)?;
+        payload_created = true;
+        a.client().request_scan(&af.configuration.id).await?;
         loop {
             let need = b.client().folder_need(&bf.configuration.id, page).await?;
             if need
@@ -644,7 +669,7 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
                 .chain(&need.rest)
                 .any(|f| f.name == "payload.bin" && f.size == Some(sample.len() as u64))
             {
-                break Ok::<_, Error>(need);
+                break TestResult::Ok(need);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -669,7 +694,10 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
                 "local_files":status.local_files,
                 "configured_paused":config.paused,
                 "fixture_rate":b.client().network_configuration().await?.extra.get("maxRecvKbps"),
-                "receiver_payload_exists":b_path.join("payload.bin").exists()
+                "receiver_payload_exists":b_path.join("payload.bin").exists(),
+                "normal_rate_readiness_received":normal_rate_readiness_received,
+                "source_payload_created":payload_created,
+                "single_preparation_deadline_seconds":20
             })
         );
     }
@@ -748,6 +776,14 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     })
     .await??;
     assert_eq!(std::fs::read(&target)?, sample);
+    assert_eq!(
+        std::fs::read(a_path.join("readiness-canary.bin"))?,
+        readiness
+    );
+    assert_eq!(
+        std::fs::read(b_path.join("readiness-canary.bin"))?,
+        readiness
+    );
     a.client().pause_device(&b_id).await?;
     b.client().pause_device(&a_id).await?;
     for instance in [&mut b, &mut a] {
@@ -757,7 +793,7 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     std::fs::remove_dir_all(root)?;
     println!(
         "public active sync observation evidence: {}",
-        json!({"actual_distinct_key_registration_ids":true,"actual_private_peer_associations":true,"fixture_receiveonly_and_throttle_readback":true,"actual_nonempty_receiver_need":true,"actual_needed_filename_and_size":true,"actual_positive_need_bytes":true,"fixture_limit_restored":true,"actual_full_received_bytes_and_zero_need":true,"actual_receive_only_local_change":true,"actual_local_change_name_and_size":true,"source_data_not_modified_by_local_change":true,"actual_content_and_mtime_restored":true,"actual_local_changes_clear_after_restore":true,"both_actual_normal_tree_exits":true})
+        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"original_payload_created_after_throttle":payload_created,"actual_distinct_key_registration_ids":true,"actual_private_peer_associations":true,"fixture_receiveonly_and_throttle_readback":true,"actual_nonempty_receiver_need":true,"actual_needed_filename_and_size":true,"actual_positive_need_bytes":true,"fixture_limit_restored":true,"actual_full_received_bytes_and_zero_need":true,"actual_receive_only_local_change":true,"actual_local_change_name_and_size":true,"source_data_not_modified_by_local_change":true,"actual_content_and_mtime_restored":true,"actual_local_changes_clear_after_restore":true,"both_actual_normal_tree_exits":true})
     );
     Ok(())
 }
