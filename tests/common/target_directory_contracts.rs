@@ -168,3 +168,126 @@ async fn directory_helpers_refuse_foreign_path_syntax_and_changed_identity_befor
     assert_eq!(server.finish().await?.len(), 3);
     Ok(())
 }
+
+#[tokio::test]
+async fn native_path_browse_preserves_target_paths_private_queries_and_empty_native_result(
+) -> TestResult {
+    use verysync_sidecar::TargetPathBrowseOptions;
+    let prefix = TargetPath::remote(PathStyle::Unix, "/synthetic prefix/\u{4e8c} + %2F")?;
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!([format!("/target/{KEY}"), "/other"])),
+        identity(),
+        Reply::json(serde_json::json!([])),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let options = TargetPathBrowseOptions::default()
+        .current(prefix.clone())
+        .filesystem("basic");
+    let paths = client.browse_target_paths(&options).await?;
+    assert_eq!(paths.paths.len(), 2);
+    assert_eq!(paths.paths[0].style(), PathStyle::Unix);
+    assert!(paths.paths[0].local_path().is_none());
+    assert_eq!(paths.paths[0].to_protocol()?, format!("/target/{KEY}"));
+    assert!(!format!("{options:?} {paths:?}").contains(KEY));
+    assert!(client
+        .browse_target_paths(&TargetPathBrowseOptions::default())
+        .await?
+        .paths
+        .is_empty());
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    let uri = url::Url::parse(&format!(
+        "http://synthetic.invalid{}",
+        requests[3].split_whitespace().nth(1).unwrap()
+    ))?;
+    assert_eq!(uri.path(), "/prefix/rest/system/browse");
+    assert_eq!(
+        uri.query_pairs().find(|(k, _)| k == "current").unwrap().1,
+        prefix.to_protocol()?
+    );
+    assert!(uri
+        .query_pairs()
+        .any(|(k, v)| k == "filesystem" && v == "basic"));
+    assert!(!uri.as_str().contains("%25252F"));
+    assert!(requests[5].starts_with("GET /prefix/rest/system/browse HTTP"));
+    Ok(())
+}
+#[tokio::test]
+async fn native_path_browse_guards_style_and_backend_before_io_and_rejects_bad_results(
+) -> TestResult {
+    use verysync_sidecar::TargetPathBrowseOptions;
+    let server = ScriptedServer::start(vec![version(), identity()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    for backend in [String::new(), "bad\nselector".into(), "x".repeat(129)] {
+        assert!(matches!(
+            client
+                .browse_target_paths(&TargetPathBrowseOptions::default().filesystem(backend))
+                .await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert!(matches!(
+        client
+            .browse_target_paths(
+                &TargetPathBrowseOptions::default()
+                    .current(TargetPath::remote(PathStyle::Windows, "C:\\prefix")?)
+            )
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    for response in [
+        serde_json::Value::Null,
+        serde_json::json!({}),
+        serde_json::json!([42]),
+        serde_json::json!([""]),
+        serde_json::json!([format!("/private/{KEY}\0")]),
+    ] {
+        let server = ScriptedServer::start(vec![
+            version(),
+            identity(),
+            identity(),
+            Reply::json(response),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .browse_target_paths(&TargetPathBrowseOptions::default())
+            .await
+            .expect_err("invalid native paths are not empty successes");
+        assert!(
+            matches!(error, Error::InvalidResponse { .. }),
+            "native malformed path error: {error:?}"
+        );
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    for status in [200, 503] {
+        let server = ScriptedServer::start(vec![
+            version(),
+            identity(),
+            identity(),
+            Reply {
+                status,
+                ..Reply::json(serde_json::json!({"error":KEY}))
+            },
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .browse_target_paths(&TargetPathBrowseOptions::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            (&error, status),
+            (Error::Api { .. }, 200) | (Error::Http { .. }, 503)
+        ));
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}

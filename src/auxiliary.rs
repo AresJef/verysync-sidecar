@@ -315,3 +315,52 @@ impl fmt::Debug for NativeQrCode {
             .finish()
     }
 }
+
+/// One native target path-completion request, distinct from directory-picker
+/// listing. Default selects native roots with the native basic filesystem.
+#[derive(Clone, Default)]
+pub struct TargetPathBrowseOptions {
+    pub(crate) current: Option<TargetPath>,
+    pub(crate) filesystem: Option<String>,
+}
+impl TargetPathBrowseOptions {
+    /// Select a target-native complete or partial path. The SDK does not look
+    /// it up, expand it or concatenate filesystem path strings. Default omits
+    /// this value and requests the native roots.
+    pub fn current(mut self, current: TargetPath) -> Self {
+        self.current = Some(current);
+        self
+    }
+    /// Send one explicit native filesystem selector. Omitted uses native basic.
+    /// Selectors must be nonempty, at most 128 bytes and control-free. An empty
+    /// result does not establish that a requested backend is supported.
+    pub fn filesystem(mut self, filesystem: impl Into<String>) -> Self {
+        self.filesystem = Some(filesystem.into());
+        self
+    }
+}
+impl fmt::Debug for TargetPathBrowseOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TargetPathBrowseOptions")
+            .field("has_current", &self.current.is_some())
+            .field("has_filesystem", &self.filesystem.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// One native path-completion snapshot. Explicit paths can be private; ordinary
+/// Debug shows only the count. Empty is a native observation, not proof of a
+/// supported backend, existing directory or successful permission check.
+#[derive(Clone)]
+pub struct TargetPathCompletions {
+    /// Exact ordered untrusted native paths. Inspect explicitly and redact
+    /// before logging; values have remote provenance and target syntax.
+    pub paths: Vec<TargetPath>,
+}
+impl fmt::Debug for TargetPathCompletions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TargetPathCompletions")
+            .field("path_count", &self.paths.len())
+            .finish_non_exhaustive()
+    }
+}
