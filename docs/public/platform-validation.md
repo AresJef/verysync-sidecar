@@ -11,12 +11,21 @@ combinations on native hosted runners. Its accepted evidence, current candidate
 results and individual feature conditions must be distinguished. A failed or
 cancelled candidate is not an accepted platform revision.
 
+The [additional-platform run for source 712ea2e](https://github.com/AresJef/verysync-sidecar/actions/runs/43709925411)
+passed all 13 selected jobs with matching fixed archives and controller targets.
+Those logs verify the selected default-TLS management, managed-instance and
+lifetime suites, explicit examples and exact cleanup. This is evidence for that
+source and those conditions; newer candidate helpers and the full feature set
+still require their own same-source acceptance. The inventory retains native,
+compatibility and emulation classes rather than combining them into a native
+hardware or minimum-system support claim.
+
 The additional platform workflow uses a 32-bit Rust host toolchain and matching
 32-bit core for Linux x86 on an x64 Linux host and Windows x86 through WOW64.
 Its first execution slice checks real management/file effects, managed startup
 and cancellation, process ownership, host exit, peer lifecycle and synthetic
-sharing, with exact executable cleanup. Until these jobs pass, these remain
-pending execution candidates. The Linux x86 Rust host requires the explicit
+sharing, with exact executable cleanup. These selected compatibility effects passed on source 712ea2e; the remaining
+feature and minimum-system conditions stay pending. The Linux x86 Rust host requires the explicit
 32-bit loader, C/C++ runtime and zlib packages. Windows x86 default TLS builds
 require NASM; the job installs the fixed Chocolatey 2.16.3 package (NASM
 2.16.03), retaining the default TLS and assembly configuration. See the
@@ -45,9 +54,11 @@ controller target. This is not an automatic CPU fallback, native ARM evidence,
 or a minimum-ARMv5 claim. The package's actual minimum native ISA remains
 unverified; its `GOARM=5` metadata alone does not establish that requirement.
 
-ARM jobs remain pending until their real core/controller management, file,
-startup, cancellation and host-exit effects pass. A positive exact-core process
-inventory is required before absence can mean successful cleanup. User-mode
+The three ARM jobs passed their selected real core/controller management, file,
+startup, cancellation and host-exit effects on source 712ea2e. Each Unix case
+observed an exact-core inventory of zero, one during the controlled panic, then
+zero after cleanup. A positive inventory remains required before absence can
+mean successful cleanup. User-mode
 emulation can change process observation and signal behavior; those are tested
 conditions, not automatic exceptions to the original deadlines or exit gates.
 Other feature suites, native ARM hosts and minimum systems retain separate gates.
@@ -81,8 +92,26 @@ acceptance. A plain pipe launch or missing startup configuration is a different
 condition. Timeout cleanup targets only the exact unreaped child's private
 group, and the job still requires exact-core cleanup.
 
+The four MIPS packages passed the selected suites through explicit frozen
+Rust 1.85 source/bootstrap custom standard libraries, GNU sysroots and pinned
+interpreters. This experimental build mode is separate from distributed stock
+standard libraries and official stable build-std support. MIPS64 GNU socket ABI
+constants are guarded at compile time and libc is pinned to the verified
+0.2.186 mapping; the earlier protocol-type connection failures remain historical
+evidence. ELF32 MIPS uses the separately checksummed Ubuntu QEMU 8.2.2 static
+package and reviewed binfmt-P alias; no package post-installation runs.
+LoongArch64, RISC-V64 and S390x passed their selected pinned QEMU profiles;
+PPC64LE passed the explicit POWER9 profile, retaining the earlier POWER8 SIGILL
+without claiming a native minimum ISA.
+
+Green native hardware-handling tests include faithful native limitations.
+S390x's declared emulation profile reports an empty CPU inventory, and the
+selected 32-bit GNU cores can return the known ghw memory arithmetic error.
+These are retained native empty/error outcomes, not positive CPU or memory data
+support, and the SDK does not substitute controller hardware data.
+
 MIPS, LoongArch64, PPC64LE, RISC-V64, S390x and the two Windows legacy
-packages retain separate execution requirements. Cross compilation, user-mode
+packages retain their remaining feature and minimum-system requirements. Cross compilation, user-mode
 emulation, compatibility execution and native execution are different evidence
 classes. An emulator on a modern host does not establish an old kernel's
 process-lifecycle behavior. Wine does not establish an actual Windows 7/8 or
