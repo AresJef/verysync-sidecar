@@ -329,3 +329,220 @@ jobs:
               sys.exit(1)
           print('Selected QEMU effects, positive owned-core inventory and exact cleanup passed; native ARM, minimum kernel and remaining feature gates are separate.')
           PY
+
+  other-emulated:
+    name: ${{ matrix.package }} (QEMU user emulation)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: linux-loong64-standard
+            rust: loongarch64-unknown-linux-gnu
+            platform: loong64
+            emulator: qemu-loongarch64
+            compiler: loongarch64-linux-gnu
+            cc: loongarch64-linux-gnu-gcc-14
+            cxx: loongarch64-linux-gnu-g++-14
+            apt: g++-14-loongarch64-linux-gnu libc6-dev-loong64-cross
+            cpu: la464
+          - package: linux-ppc64le-standard
+            rust: powerpc64le-unknown-linux-gnu
+            platform: ppc64le
+            emulator: qemu-ppc64le
+            compiler: powerpc64le-linux-gnu
+            cc: powerpc64le-linux-gnu-gcc
+            cxx: powerpc64le-linux-gnu-g++
+            apt: g++-powerpc64le-linux-gnu
+            cpu: power8
+          - package: linux-riscv64-standard
+            rust: riscv64gc-unknown-linux-gnu
+            platform: riscv64
+            emulator: qemu-riscv64
+            compiler: riscv64-linux-gnu
+            cc: riscv64-linux-gnu-gcc
+            cxx: riscv64-linux-gnu-g++
+            apt: g++-riscv64-linux-gnu
+            cpu: rv64
+          - package: linux-s390x-standard
+            rust: s390x-unknown-linux-gnu
+            platform: s390x
+            emulator: qemu-s390x
+            compiler: s390x-linux-gnu
+            cc: s390x-linux-gnu-gcc
+            cxx: s390x-linux-gnu-g++
+            apt: g++-s390x-linux-gnu
+            cpu: max
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+      CARGO_BUILD_TARGET: ${{ matrix.rust }}
+      QEMU_CPU: ${{ matrix.cpu }}
+      QEMU_BINARY: ${{ matrix.emulator }}
+      QEMU_LD_PREFIX: /usr/${{ matrix.compiler }}
+      TARGET_CC: ${{ matrix.cc }}
+      TARGET_CXX: ${{ matrix.cxx }}
+      TARGET_AR: ${{ matrix.compiler }}-ar
+      VERYSYNC_TEST_EMULATION_PROFILE: ${{ matrix.package }}
+      CARGO_PROFILE_DEV_OPT_LEVEL: '3'
+      CARGO_PROFILE_TEST_OPT_LEVEL: '3'
+      QEMU_IMAGE: docker.io/tonistiigi/binfmt@sha256:1b804311fe87047a4c96d38b4b3ef6f62fca8cd125265917a9e3dc3c996c39e6
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Register only the selected architecture on this disposable runner
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: ${{ env.QEMU_IMAGE }}
+          platforms: ${{ matrix.platform }}
+          cache-image: false
+      - name: Install the explicit GNU cross compiler and controller sysroot
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ${{ matrix.apt }}
+          dpkg-query -W ${{ matrix.apt }}
+          "$TARGET_CC" --version
+          "$TARGET_CC" -print-sysroot
+          "$TARGET_CC" -print-file-name=libc.so
+      - name: Retain pinned interpreter bytes and record the selected profile
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-linux-emulator'
+          root.mkdir(mode=0o700)
+          name = os.environ['QEMU_BINARY']
+          binary = root / name
+          image = os.environ['QEMU_IMAGE']
+          container = subprocess.check_output(['docker', 'create', image], text=True).strip()
+          try:
+              subprocess.run(['docker', 'cp', container + ':/usr/bin/' + name, str(binary)], check=True)
+          finally:
+              subprocess.run(['docker', 'rm', container], check=True)
+          binary.chmod(0o700)
+          target = os.environ['CARGO_BUILD_TARGET']
+          suffix = target.replace('-', '_')
+          emulator_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              for key, value in {
+                  'CARGO_TARGET_' + suffix.upper() + '_LINKER': os.environ['TARGET_CC'],
+                  'CC_' + suffix: os.environ['TARGET_CC'],
+                  'CXX_' + suffix: os.environ['TARGET_CXX'],
+                  'AR_' + suffix: os.environ['TARGET_AR'],
+                  'VERYSYNC_TEST_EMULATOR_SHA256': emulator_sha,
+              }.items():
+                  output.write(key + '=' + value + '\n')
+          registration = pathlib.Path('/proc/sys/fs/binfmt_misc', name).read_text()
+          flags = next((line.removeprefix('flags:').strip() for line in registration.splitlines()
+                        if line.startswith('flags:')), '')
+          if not registration.startswith('enabled\n') or not {'P', 'F'}.issubset(flags):
+              raise ValueError('the fixed registration must preserve argv0 and its interpreter')
+          info = {'execution': 'QEMU user emulation', 'runner_arch': os.environ['RUNNER_ARCH'],
+                  'profile': os.environ['VERYSYNC_TEST_EMULATION_PROFILE'], 'rust_target': target,
+                  'cpu': os.environ['QEMU_CPU'], 'compiler': os.environ['TARGET_CC'],
+                  'controller_sysroot': os.environ['QEMU_LD_PREFIX'], 'image': image,
+                  'qemu_sha256': emulator_sha, 'registration_flags': flags,
+                  'controller_dev_opt_level': os.environ['CARGO_PROFILE_DEV_OPT_LEVEL'],
+                  'controller_test_opt_level': os.environ['CARGO_PROFILE_TEST_OPT_LEVEL'],
+                  'native_target_host': False, 'minimum_kernel_verified': False,
+                  'minimum_native_isa_verified': False}
+          (root / 'identity.json').write_text(json.dumps(info, indent=2) + '\n')
+          print(json.dumps(info))
+          print(registration)
+          subprocess.run([str(binary), '--version'], check=True)
+          PY
+      - name: Install the fixed compiler and selected Rust standard library
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --target "$CARGO_BUILD_TARGET"
+          rustc +"$TEST_TOOLCHAIN" -vV
+          rustc +"$TEST_TOOLCHAIN" --print cfg --target "$CARGO_BUILD_TARGET"
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Require registered and explicit argument preservation with a Rust canary
+        run: |
+          python - <<'PYPROBE'
+          import json, os, pathlib, re, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-linux-emulator'
+          probe = root / 'qemu-argv-probe'
+          subprocess.run(['rustc', '+' + os.environ['TEST_TOOLCHAIN'], '--edition=2021',
+                          '--target', os.environ['CARGO_BUILD_TARGET'], '-C',
+                          'linker=' + os.environ['TARGET_CC'],
+                          'scripts/probes/qemu_argv.rs', '-o', str(probe)], check=True, timeout=120)
+          emulator = root / os.environ['QEMU_BINARY']
+          arguments = ['argv-canary', '--test-threads=1', '--nocapture']
+          results = []
+          for name, prefix, expected in [
+              ('registered_exec', [str(probe)], 0),
+              ('explicit_preserved_argv0', [str(emulator), str(probe), str(probe)], 0),
+              ('old_unpadded_negative_control', [str(emulator), str(probe)], 23),
+          ]:
+              result = subprocess.run([*prefix, *arguments], capture_output=True, timeout=10)
+              observation = result.stdout.decode('ascii').strip()
+              if not re.fullmatch(r'argc=[0-9]+ arg0_match=(true|false) canary_match=(true|false) threads_match=(true|false) capture_match=(true|false)', observation):
+                  raise RuntimeError('The bounded argument probe did not report its fixed observation schema')
+              row = {'execution_path': name, 'exit_code': result.returncode,
+                     'guest_argument_observation': observation, 'expected_exit_code': expected,
+                     'contract_passed': result.returncode == expected,
+                     'diagnostic_cpu': os.environ['QEMU_CPU'], 'sdk_runtime_acceptance': False}
+              results.append(row)
+              print(json.dumps(row), flush=True)
+          (root / 'argument-contract.json').write_text(json.dumps(results, indent=2) + '\n')
+          if not all(row['contract_passed'] for row in results):
+              raise RuntimeError('The fixed interpreter did not preserve the frozen argument contract')
+          PYPROBE
+      - name: Explicitly prepare the fixed official target core and record ELF ABI
+        run: |
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Record official executable headers without executing bundled integration samples
+        run: ${{ matrix.compiler }}-readelf -h -l -A --version-info "$VERYSYNC_TEST_BINARY"
+      - name: Verify bounded private metadata contracts and the exact fixed CPU
+        run: |
+          python -m unittest discover -s scripts/tests -p test_calibrate_arm_core.py
+          python scripts/calibrate-arm-core.py
+          python scripts/prepare-test-engine.py check-cleanup
+      - name: Compile default-TLS SDK test executables and public controller examples
+        run: |
+          cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test engine_control --test managed_instance --test managed_lifetime --no-run --locked
+          python scripts/prepare-test-examples.py --toolchain "$TEST_TOOLCHAIN" --github-env "$GITHUB_ENV"
+      - name: Verify actual management and synthetic file effects
+        id: emulated_engine_control
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-other-control"
+      - name: Verify actual startup, cancellation, shutdown and state reuse
+        id: emulated_managed_instance
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-other-managed"
+      - name: Require positive core inventory and actual owned host-exit effects
+        id: emulated_managed_lifetime
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_lifetime --evidence-dir "${{ runner.temp }}/vs-other-lifetime"
+      - name: Require exact owned-executable cleanup
+        id: emulated_cleanup
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require all selected emulated outcomes and positive-inventory cases
+        if: always()
+        env:
+          PLATFORM_STEP_RESULTS: ${{ toJson(steps) }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          steps = json.loads(os.environ['PLATFORM_STEP_RESULTS'])
+          required = ['emulated_engine_control', 'emulated_managed_instance', 'emulated_managed_lifetime', 'emulated_cleanup']
+          failed = [name for name in required if steps.get(name, {}).get('outcome') != 'success']
+          if failed:
+              print('Required emulated outcomes did not pass: ' + ', '.join(failed), file=sys.stderr)
+              sys.exit(1)
+          print('Selected emulated control, positive core inventory and exact cleanup passed; native hardware, minimum systems and other feature gates remain separate.')
+          PY

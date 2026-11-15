@@ -46,6 +46,36 @@ impl fmt::Debug for NativeHealth {
     }
 }
 
+/// One global native migration-progress snapshot. It has no caller job ID and
+/// can already describe a finished migration when the connection is created.
+#[derive(Clone, Deserialize)]
+pub struct NativeMigrationProgress {
+    /// Exact native task label, potentially private and untrusted.
+    pub name: String,
+    /// Native total counter. Its unit and sentinel values are not inferred.
+    pub total: i64,
+    /// Native completed counter, preserved independently of the total.
+    pub completed: i64,
+    /// Native percentage. The SDK neither clamps nor recomputes this value.
+    pub percent: f64,
+    /// Native finished flag; this does not establish success or job ownership.
+    pub finished: bool,
+    /// Native task error text. A nonempty value remains snapshot data rather
+    /// than a transport/request failure; inspect it separately from `finished`.
+    #[serde(rename = "error")]
+    pub error_message: String,
+    /// Additional native fields, retained without interpretation.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for NativeMigrationProgress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeMigrationProgress")
+            .field("finished", &self.finished)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Native configuration/data locations, interpreted on the connected target.
 /// These observations do not read or create controller files.
 #[derive(Clone)]

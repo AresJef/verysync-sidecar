@@ -118,5 +118,63 @@ print('verysync v2.33.2 synthetic')
             self.assertNotIn("private-canary", text)
 
 
+class OtherVersionProfileContracts(unittest.TestCase):
+    def test_each_profile_uses_its_exact_interpreter_cpu_and_private_state(self):
+        profiles = {
+            "linux-loong64-standard": ("qemu-loongarch64", "la464"),
+            "linux-ppc64le-standard": ("qemu-ppc64le", "power8"),
+            "linux-riscv64-standard": ("qemu-riscv64", "rv64"),
+            "linux-s390x-standard": ("qemu-s390x", "max"),
+        }
+        for profile, (emulator_name, cpu) in profiles.items():
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                emulator = root / emulator_name
+                emulator.write_bytes(b"synthetic; never executed")
+                core = root / "verysync"
+                core.write_bytes(b"synthetic; never executed")
+                commands = []
+                states = []
+
+                def inspect(command, child_env, state):
+                    self.assertEqual(child_env["QEMU_CPU"], cpu)
+                    self.assertEqual(child_env["VSMONITORED"], "yes")
+                    self.assertEqual((state / "appconf.yaml").read_text(), "auto_startup: false\n")
+                    self.assertEqual((state / "appconf.yaml").stat().st_mode & 0o777, 0o600)
+                    self.assertEqual(Path(child_env["HOME"]).parent, state)
+                    commands.append(command)
+                    states.append(state)
+                    return {"exit_code": 0, "version_probe_passed": True}
+
+                with patch.object(HELPER, "capture_version", side_effect=inspect), contextlib.redirect_stdout(io.StringIO()):
+                    HELPER.calibrate_linux_profile(root, core, profile)
+                self.assertEqual(len(commands), 2)
+                self.assertEqual(commands[0][:-3], [str(core)])
+                self.assertEqual(commands[1][:-3], [str(emulator), str(core), str(core)])
+                self.assertNotEqual(states[0], states[1])
+                self.assertTrue(all(not state.exists() for state in states))
+
+    def test_unknown_profile_is_rejected_before_any_launch(self):
+        with patch.object(HELPER, "capture_version") as capture:
+            with self.assertRaisesRegex(ValueError, "profile"):
+                HELPER.calibrate_linux_profile(Path("unused"), Path("unused"), "unknown")
+        capture.assert_not_called()
+
+    def test_explicit_failure_is_retained_and_cannot_pass_with_registered_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "qemu-riscv64").write_bytes(b"synthetic; never executed")
+            core = root / "verysync"
+            core.write_bytes(b"synthetic; never executed")
+            outcomes = [{"exit_code": 0, "version_probe_passed": True},
+                        {"exit_code": -4, "version_probe_passed": False}]
+            with patch.object(HELPER, "capture_version", side_effect=outcomes), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "both"):
+                    HELPER.calibrate_linux_profile(root, core, "linux-riscv64-standard")
+            rows = json.loads((root / "cpu-version-calibration.json").read_text())
+            self.assertEqual(len(rows), 2)
+            self.assertFalse(rows[1]["version_probe_passed"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,24 @@ responses. Unknown values are omitted from ordinary Debug output. Native body
 errors remain typed API errors even if the HTTP status is 200. The snapshot does
 not establish folder completion, task success or commercial authorization.
 
+`native_migration_progress()` reads the global native migration snapshot from
+`/rest/migrate/progress`, after a fresh target-identity check. It preserves the
+native task label, signed total/completed counters, percentage, finished flag,
+task error text and unknown fields. Counter units and sentinel values are not
+inferred; the percentage is neither clamped nor recomputed from the counters.
+All known fields must be present with the expected types. A full progress
+snapshot with nonempty task error text remains data; a native request-error
+envelope remains a typed API error, and unsuccessful HTTP responses retain their
+typed transport/authentication or HTTP errors.
+
+Reading progress does not start or cancel a migration. This global snapshot has
+no caller job ID and may already report a finished migration on a fresh instance.
+Inspect `error_message` separately from `finished`; neither flag nor percentage
+alone proves the success of work initiated by your application. The native test
+checks the existing completed baseline without starting migration work. Active
+and failed snapshots have synthetic transport coverage. Names, task errors,
+counters and additional values are omitted from ordinary Debug output.
+
 `normalize_device_id(text)` asks the selected engine to validate and normalize
 device text. Native lowercase and ungrouped forms can return the same canonical
 `DeviceId`. This differs from `DeviceId::parse`, which checks the local canonical
@@ -50,11 +68,12 @@ requiring its own effect evidence.
 ```no_run
 # async fn example(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
 let health = client.native_health().await?;
+let migration = client.native_migration_progress().await?;
 let canonical = client.normalize_device_id("caller-provided device text").await?;
 let report = client.collect_native_usage_report().await?;
 let pending = client.pending_native_link().await?;
 // Handle untrusted pending text explicitly, without automatically opening it.
-# let _ = (health, canonical, report, pending);
+# let _ = (health, migration, canonical, report, pending);
 # Ok(()) }
 ```
 

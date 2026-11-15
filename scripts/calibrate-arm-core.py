@@ -11,6 +11,12 @@ import time
 
 CAPTURE_LIMIT = 65536
 CPU_MODELS = ("arm926", "arm1176", "cortex-a7")
+OTHER_PROFILES = {
+    "linux-loong64-standard": ("qemu-loongarch64", "la464"),
+    "linux-ppc64le-standard": ("qemu-ppc64le", "power8"),
+    "linux-riscv64-standard": ("qemu-riscv64", "rv64"),
+    "linux-s390x-standard": ("qemu-s390x", "max"),
+}
 
 
 def capture_version(command, child_env, state, timeout=12):
@@ -82,18 +88,32 @@ def capture_version(command, child_env, state, timeout=12):
 
 
 def calibrate(root, core, requested):
-    if requested not in CPU_MODELS:
+    return _calibrate(root, core, requested, "qemu-arm", CPU_MODELS)
+
+
+def calibrate_linux_profile(root, core, profile):
+    if profile not in OTHER_PROFILES:
+        raise ValueError("unknown fixed Linux emulation profile")
+    emulator, cpu = OTHER_PROFILES[profile]
+    results = _calibrate(root, core, cpu, emulator, (cpu,))
+    if not all(row["version_probe_passed"] for row in results):
+        raise RuntimeError("both registered and explicit version paths must pass the fixed profile")
+    return results
+
+
+def _calibrate(root, core, requested, emulator_name, cpu_models):
+    if requested not in cpu_models:
         raise ValueError("CPU is outside the explicit calibration set")
-    emulator = (root / "qemu-arm").resolve(strict=True)
+    emulator = (root / emulator_name).resolve(strict=True)
     core = core.resolve(strict=True)
     results = []
     launches = (("sdk_registered_exec", [str(core)]),
                 # The pinned binfmt image defaults to preserve-argv0, including
                 # direct invocations whose AT_FLAGS are zero. Supply argv[0].
                 ("explicit_emulator_exec", [str(emulator), str(core), str(core)]))
-    for cpu in CPU_MODELS:
+    for cpu in cpu_models:
         for execution_path, prefix in launches:
-            with tempfile.TemporaryDirectory(prefix="vs-arm-version-", dir=root) as state_text:
+            with tempfile.TemporaryDirectory(prefix="vs-core-version-", dir=root) as state_text:
                 state = Path(state_text)
                 for relative in ("tmp", "profile/data", "roaming", "local"):
                     (state / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -123,10 +143,22 @@ def calibrate(root, core, requested):
     if not next(row["version_probe_passed"] for row in results
                 if row["cpu"] == requested and row["execution_path"] == "sdk_registered_exec"):
         raise RuntimeError("The fixed core did not pass the requested CPU version probe; preserve this unverified target condition")
+    return results
 
 
 if __name__ == "__main__":
-    if not (os.name == "posix" and Path("/proc/sys/fs/binfmt_misc/qemu-arm").is_file()):
-        raise RuntimeError("this explicit probe requires the prepared Linux ARM emulation job")
-    calibrate(Path(os.environ["RUNNER_TEMP"]) / "vs-arm-emulator",
-              Path(os.environ["VERYSYNC_TEST_BINARY"]), os.environ["QEMU_CPU"])
+    profile = os.environ.get("VERYSYNC_TEST_EMULATION_PROFILE")
+    if profile is None:
+        if not (os.name == "posix" and Path("/proc/sys/fs/binfmt_misc/qemu-arm").is_file()):
+            raise RuntimeError("this explicit probe requires the prepared Linux ARM emulation job")
+        calibrate(Path(os.environ["RUNNER_TEMP"]) / "vs-arm-emulator",
+                  Path(os.environ["VERYSYNC_TEST_BINARY"]), os.environ["QEMU_CPU"])
+    else:
+        if profile not in OTHER_PROFILES:
+            raise ValueError("unknown fixed Linux emulation profile")
+        emulator, cpu = OTHER_PROFILES[profile]
+        if not (os.name == "posix" and Path("/proc/sys/fs/binfmt_misc", emulator).is_file()
+                and os.environ.get("QEMU_CPU") == cpu):
+            raise RuntimeError("the fixed Linux profile requires its matching registration and CPU")
+        calibrate_linux_profile(Path(os.environ["RUNNER_TEMP"]) / "vs-linux-emulator",
+                                Path(os.environ["VERYSYNC_TEST_BINARY"]), profile)
