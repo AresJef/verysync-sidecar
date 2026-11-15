@@ -427,14 +427,21 @@ retry, core stop/restart or change to ordinary owned-core cleanup is implicit.
 
 The macOS native integration case denies every pinned Chrome executable
 candidate in a temporary test-only execution policy and captures the native
-fallback through an owned opener. It verifies two exact owned URL requests,
+fallback through an owned opener. It verifies two successful exact URL requests,
 live authenticated verification, dispatch after normal shutdown with verification
 disabled, independent helper identities, unchanged primary configuration/keys/data,
 and an actor that continues executing after each root result. The outer wrapper
-must observe every actor's actual exit before deleting its capture. This proves
-native request/lifetime behavior through that fallback; it does not establish a
-visible application window, Chrome-mode runtime behavior, other platforms, or
-the remaining cancellation/failure integration gates. The library installs no
+must observe every actor's actual exit before deleting its capture. A separate
+owned invalid opener produces the real native code-1 `NativeFailure`, with no
+successful descendant release. Cancellation is exercised while the native CLI
+is actually awaiting an owned opener and an actor has received a third exact
+URL. The worker's state lease must release, and the outer observer requires the
+exact native root and cancellation actor to have exited before sending any
+cleanup stop markers. Primary and both helper profiles retain their bytes.
+These tests prove
+native request/lifetime behavior through that fallback; they do not establish a
+visible application window, Chrome-mode runtime behavior or other platforms.
+The library installs no
 execution policy or desktop hook. The browser integration wrapper currently
 refuses platforms without a verified selector isolation setup.
 

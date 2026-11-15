@@ -81,7 +81,9 @@ impl Drop for Capture {
     fn drop(&mut self) {
         if let Ok(calls) = self.calls() {
             for call in calls {
-                let _ = fs::write(call.with_extension("stop"), b"test scope cleanup");
+                if !call.with_extension("must-exit").exists() {
+                    let _ = fs::write(call.with_extension("stop"), b"test scope cleanup");
+                }
             }
         }
     }
@@ -94,6 +96,33 @@ async fn wait_file(path: &Path) -> TestResult {
     })
     .await?;
     Ok(())
+}
+struct InvalidOwnedOpener {
+    path: PathBuf,
+    backup: PathBuf,
+}
+impl InvalidOwnedOpener {
+    fn install() -> TestResult<Self> {
+        let path = PathBuf::from(
+            std::env::var_os("VERYSYNC_TEST_OPENER_EXECUTABLE").ok_or("owned opener required")?,
+        );
+        let backup = path.with_extension("saved-valid-opener");
+        let permissions = fs::metadata(&path)?.permissions();
+        fs::rename(&path, &backup)?;
+        let guard = Self { path, backup };
+        fs::write(
+            &guard.path,
+            b"intentionally invalid owned executable; no interpreter header",
+        )?;
+        fs::set_permissions(&guard.path, permissions)?;
+        Ok(guard)
+    }
+}
+impl Drop for InvalidOwnedOpener {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::rename(&self.backup, &self.path);
+    }
 }
 fn private_program(root: &Path) -> TestResult<(PathBuf, [u8; 32])> {
     let source = PathBuf::from(
@@ -220,6 +249,15 @@ async fn actual_native_browser_preserves_primary_and_releases_only_successful_la
     capture.after_result(1, &url).await?;
     assert_eq!(snapshot(&state)?, before);
     assert_eq!(snapshot(&helper)?, helper_before);
+    let invalid_opener = InvalidOwnedOpener::install()?;
+    let failed = core
+        .request_native_browser(&helper, false, Duration::from_secs(10))
+        .await?;
+    assert_eq!(failed.outcome, NativeBrowserOutcome::NativeFailure);
+    assert_eq!(failed.code, Some(1));
+    assert!(!failed.descendants_released && failed.helper_state_released);
+    assert_eq!(capture.calls()?.len(), 2);
+    drop(invalid_opener);
     let role = helper.join(".verysync-sidecar-browser-helper");
     let original_role = fs::read(&role)?;
     fs::write(&role, b"corrupted test role")?;
@@ -244,6 +282,57 @@ async fn actual_native_browser_preserves_primary_and_releases_only_successful_la
     assert_eq!(capture.calls()?.len(), 2);
     assert_eq!(snapshot(&state)?, before);
     assert_eq!(snapshot(&helper)?, helper_before);
-    eprintln!("native browser evidence: exact_owned_url_calls=2 verify_live_identity=true verify_false_after_normal_stop=true actual_root_zero=true desktop_actor_executed_after_each_result=true actor_native_exit_requires_outer_wrapper=true independent_helper_keys=true primary_config_keys_data_preserved=true helper_reused=true overlap_refused=true program_drift_refused=true real_desktop_opened=false");
+    fs::write(
+        capture.0.join("hold-native-root"),
+        b"test-only bounded cancellation point",
+    )?;
+    let cancelled_helper = root.path().join("cancelled-helper");
+    let mut request =
+        Box::pin(core.request_native_browser(&cancelled_helper, false, Duration::from_secs(15)));
+    tokio::select! {
+        _=&mut request => return Err("native request finished before the controlled cancellation point".into()),
+        ready=tokio::time::timeout(Duration::from_secs(10),async {
+            while !capture.0.join("native-root-held").is_file() || capture.calls()?.len()!=3 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<_,Box<dyn std::error::Error+Send+Sync>>(())
+        }) => ready??,
+    }
+    let cancelled_call = capture
+        .calls()?
+        .into_iter()
+        .find(|p| !p.with_extension("after-root").exists())
+        .ok_or("cancelled native argv absent")?;
+    let mut expected_url = url.as_bytes().to_vec();
+    expected_url.push(0);
+    assert_eq!(fs::read(cancelled_call)?, expected_url);
+    let cancelled_before = snapshot(&cancelled_helper)?;
+    drop(request);
+    let fence = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(cancelled_helper.join(".verysync-sidecar-lease"))?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match fs2::FileExt::try_lock_exclusive(&fence) {
+                Ok(()) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(Duration::from_millis(10)).await
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok::<_, std::io::Error>(())
+    })
+    .await??;
+    assert_eq!(snapshot(&cancelled_helper)?, cancelled_before);
+    assert_eq!(snapshot(&state)?, before);
+    assert_eq!(snapshot(&helper)?, helper_before);
+    assert_eq!(fs::read(&sentinel)?, b"primary caller data preserved");
+    assert_eq!(capture.calls()?.len(), 3);
+    // The outer wrapper must independently observe the exact native CLI PID
+    // and cancellation actor dead before it sends any cleanup stop markers.
+    drop(fence);
+    eprintln!("native browser evidence: exact_owned_url_calls=3 successful_root_receipts=2 native_failed_opener_code=1 failure_never_releases_descendants=true cancellation_after_native_root_and_actor_started=true cancellation_lease_released=true cancelled_helper_bytes_preserved=true verify_live_identity=true verify_false_after_normal_stop=true desktop_actor_executed_after_each_success_result=true cancellation_native_exit_before_outer_cleanup_required=true independent_helper_keys=true primary_config_keys_data_preserved=true helper_reused=true overlap_refused=true program_drift_refused=true real_desktop_opened=false");
     Ok(())
 }
