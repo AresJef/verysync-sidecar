@@ -19,7 +19,21 @@ sharing, with exact executable cleanup. Until these jobs pass, these remain
 pending execution candidates. Passing this slice does not validate every
 storage protocol, upgrade, licensed feature or minimum operating system.
 
-ARM32, MIPS, LoongArch64, PPC64LE, RISC-V64, S390x and the two Windows legacy
+The first ARM32 execution slice selects the three separate official packages
+and matching Rust targets: ARMv5 soft float, ARMv6 soft float and ARMv7 hard
+float. It uses pinned QEMU bytes, an explicit emulated CPU and a matching GNU
+controller sysroot. The fixed core ELF files inspected for these three packages
+have no dynamic interpreter or dynamic program segment, despite reporting CGO
+enabled. That observation does not establish a minimum kernel or native runtime.
+
+ARM jobs remain pending until their real core/controller management, file,
+startup, cancellation and host-exit effects pass. A positive exact-core process
+inventory is required before absence can mean successful cleanup. User-mode
+emulation can change process observation and signal behavior; those are tested
+conditions, not automatic exceptions to the original deadlines or exit gates.
+Other feature suites, native ARM hosts and minimum systems retain separate gates.
+
+MIPS, LoongArch64, PPC64LE, RISC-V64, S390x and the two Windows legacy
 packages retain separate execution requirements. Cross compilation, user-mode
 emulation, compatibility execution and native execution are different evidence
 classes. An emulator on a modern host does not establish an old kernel's
