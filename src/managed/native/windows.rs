@@ -37,6 +37,41 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken,
 
 pub(in crate::managed) struct ProcessGuard(OwnedHandle);
 
+// Observe the held descendant process, not a duplicated Job handle. Keeping a
+// Job open in a test would conceal an erroneous kill-on-last-close policy.
+#[cfg(test)]
+pub(in crate::managed) struct TestChildObservation(OwnedHandle);
+#[cfg(test)]
+pub(in crate::managed) fn observe_test_descendant(
+    _group: u32,
+    pid: u32,
+) -> io::Result<TestChildObservation> {
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+    // SAFETY: Read-only synchronization access to a task-owned descendant PID.
+    // The returned noninheritable handle retains its identity across root exit.
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: Successful OpenProcess returns one uniquely owned live handle.
+    Ok(TestChildObservation(unsafe {
+        OwnedHandle::from_raw_handle(handle)
+    }))
+}
+#[cfg(test)]
+impl TestChildObservation {
+    pub(in crate::managed) fn stopped(&self) -> io::Result<bool> {
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+        // SAFETY: Zero-time read-only observation on the retained process handle.
+        match unsafe { WaitForSingleObject(self.0.as_raw_handle(), 0) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+}
+
 pub(in crate::managed) fn spawn(
     mut command: Command,
     helper: bool,

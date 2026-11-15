@@ -89,6 +89,31 @@ pub(in crate::managed) struct ProcessGuard {
     group: libc::pid_t,
 }
 
+// Read-only test observation never signals a reaped/recycled process group.
+#[cfg(test)]
+pub(in crate::managed) struct TestChildObservation {
+    group: libc::pid_t,
+}
+#[cfg(test)]
+pub(in crate::managed) fn observe_test_descendant(
+    group: u32,
+    _pid: u32,
+) -> io::Result<TestChildObservation> {
+    let group =
+        libc::pid_t::try_from(group).map_err(|_| io::Error::other("invalid owned group"))?;
+    Ok(TestChildObservation { group })
+}
+#[cfg(test)]
+impl TestChildObservation {
+    pub(in crate::managed) fn stopped(&self) -> io::Result<bool> {
+        ProcessGuard {
+            master: None,
+            group: self.group,
+        }
+        .tree_stopped()
+    }
+}
+
 pub(in crate::managed) fn spawn(
     mut command: Command,
     helper: bool,

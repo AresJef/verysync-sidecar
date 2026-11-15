@@ -15,10 +15,14 @@ def failures(package, steps):
     required.add("native_mechanism_" + family)
     if family == "windows":
         required.add("native_windows_ui")
+    if family == "macos":
+        required.add("native_browser_engine")
     # New native steps are required too, except explicitly inapplicable ones.
     inapplicable = {"native_mechanism_" + other for other in {"macos", "linux", "windows"} if other != family}
     if family != "windows":
         inapplicable.add("native_windows_ui")
+    if family != "macos":
+        inapplicable.add("native_browser_engine")
     required.update(key for key in steps if key.startswith("native_") and key not in inapplicable)
     return [key for key in sorted(required) if steps.get(key, {}).get("outcome") != "success"]
 
