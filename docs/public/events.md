@@ -37,7 +37,9 @@ async fn observe(client: &Client) -> Result<()> {
 Without a resume cursor, `subscribe_events` establishes the current position
 before returning and excludes earlier history. `EventOptions::resume_from`
 accepts a previously consumed `EventCursor`. A cursor includes the authenticated
-device ID, last sequence ID and the engine's reported start time when available.
+device ID, native `EventSource`, last sequence ID and the engine's reported start
+time when available. Ordinary and disk buffers have independent sequence IDs;
+a cursor from one source is rejected by the other before any network reads.
 It is serializable, but is not a server-side subscription or a durable checkpoint.
 The subscription's `cursor()` advances only when `next()` returns an event or
 gap; a producer filling its queue does not acknowledge those unconsumed items.
@@ -50,6 +52,41 @@ event is not proof that files have synchronized. Ordinary Debug omits payload
 values, extra values, unknown names and the reported generation string. Real
 configuration events can include management credentials. Avoid logging or
 publishing `data()` and `extra()` indiscriminately.
+
+## Disk changes
+
+`Client::subscribe_disk_events(EventOptions)` reads the separate fixed
+`GET /rest/events/disk` buffer. It shares the bounded queue, cancellation,
+generation checks, finite read recovery and explicit gap notifications described
+here. Its cursors use `EventSource::Disk`; ordinary subscriptions use
+`EventSource::Standard`. Persist the complete cursor, including its source.
+
+`EventKind::LocalChangeDetected` and `RemoteChangeDetected` identify native disk
+change records. Inspect `data()` explicitly for the target-native `path`,
+`folder` / `folderID`, `action`, file `type`, `label`, `modifiedBy` and
+`modifiedTime`. Strings and unknown fields are retained without controller-side
+filesystem access, path normalization, timestamp conversion or identity
+expansion. A native `modifiedBy` short identifier is not a full `DeviceId`.
+These records describe native changes; a file event alone does not prove that a
+whole folder, every peer or an external network has synchronized. Debug hides
+paths and all payload values.
+
+The v2.33.2 disk buffer is created lazily. When it contains no records, the first
+request can interrupt its response instead of returning an empty list. The
+library returns that initial transport error without starting a background task
+or silently retrying. That request has registered the native subscription; the
+caller can explicitly try again after an actual change occurs. The library
+does not write a file, scan a folder or change configuration to seed the buffer.
+An empty list, if returned, remains a valid empty observation. After successful
+initial reads, the shared bounded recovery policy applies.
+
+Without a resume cursor, a successful subscription starts after the latest
+available disk record. To consume available records from the beginning, supply
+an explicit disk cursor with `last_id: 0`, the authenticated device identity and
+the currently reported start time; the usual resumed-continuity gap is still
+reported. The buffer is finite and is not a durable audit trail. Earlier changes
+that predate native subscription registration cannot be recovered through this
+endpoint. No event-name filter is invented for its fixed disk mask.
 
 ## Continuity and recovery
 
@@ -109,3 +146,10 @@ ahead-cursor recovery, actual normal engine shutdown and same-identity restart
 with reconnection and generation-gap notification. Synthetic transport tests
 exercise malformed/unknown schemas, finite/disabled recovery and cancellation
 observed as an actual closed HTTP connection. Evidence is recorded separately.
+
+Native disk-event tests separately observe three actual local file changes,
+bounded backpressure and four received changes during a real two-core private
+transfer. They retain the original archive/restoration byte checks, normal
+owned process exits and caller data. The initial empty-buffer interruption is
+recorded as a native limitation, with no implicit mutation or retry. These are
+functional observations, not event latency or throughput guarantees.

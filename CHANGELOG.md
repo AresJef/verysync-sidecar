@@ -2,6 +2,13 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add source-bound disk-change subscriptions that reuse bounded event recovery,
+  cancellation and gap reporting. Preserve the fixed program's empty-buffer
+  interruption and require explicit caller retry; never seed events implicitly.
+
+- Add a distinct whole-folder native version inventory using existing typed
+  archive records, preserving paused/error and empty-map semantics.
+
 - Require actual JSON objects for native error envelopes so legitimate data
   arrays cannot be mistaken for API or license failures.
 

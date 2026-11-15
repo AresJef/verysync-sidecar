@@ -548,3 +548,94 @@ async fn native_helpers_refuse_malformed_mismatched_or_missing_results_and_chang
     assert_eq!(server.finish().await?.len(), 3);
     Ok(())
 }
+
+#[tokio::test]
+async fn whole_folder_versions_keep_exact_private_records_without_prefix_or_traversal() -> TestResult
+{
+    let folder = verysync_sidecar::FolderId::parse("archive ?%")?;
+    let config = || {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":folder.as_str(),"label":"synthetic","path":"/synthetic","paused":false}]}),
+        )
+    };
+    let server=ScriptedServer::start(vec![version(),identity(),identity(),config(),Reply::json(serde_json::json!({KEY:[{"versionTime":"2026-11-11T12:34:56.123456789+08:00","modTime":KEY,"size":37,"future":KEY}]})),identity(),config(),Reply::json(serde_json::json!({}))]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let history: verysync_sidecar::FolderVersionHistory =
+        client.folder_version_inventory(&folder).await?;
+    assert_eq!(history.0.len(), 1);
+    let version = &history.0[KEY][0];
+    assert_eq!(version.version_time, "2026-11-11T12:34:56.123456789+08:00");
+    assert_eq!(version.mod_time, KEY);
+    assert_eq!(version.size, 37);
+    assert_eq!(version.extra["future"], KEY);
+    assert!(!format!("{history:?} {version:?}").contains(KEY));
+    assert!(client.folder_version_inventory(&folder).await?.0.is_empty());
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    for i in [4, 7] {
+        let uri = url::Url::parse(&format!(
+            "http://synthetic.invalid{}",
+            requests[i].split_whitespace().nth(1).unwrap()
+        ))?;
+        assert_eq!(uri.path(), "/prefix/rest/folder/versions");
+        assert_eq!(
+            uri.query_pairs().collect::<Vec<_>>(),
+            vec![("folder".into(), folder.as_str().into())]
+        );
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn whole_folder_versions_refuse_missing_scope_malformed_and_native_failures() -> TestResult {
+    let folder = verysync_sidecar::FolderId::parse("archive")?;
+    let config = || {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":"archive","label":"synthetic","path":"/synthetic","paused":false}]}),
+        )
+    };
+    for (reply, kind) in [
+        serde_json::Value::Null,
+        serde_json::json!([]),
+        serde_json::json!({KEY:[{"versionTime":KEY,"modTime":KEY,"size":-1}]}),
+    ]
+    .into_iter()
+    .map(|v| (Reply::json(v), 0))
+    .chain([
+        (Reply::json(serde_json::json!({"error":KEY})), 1),
+        (
+            Reply {
+                status: 500,
+                ..Reply::json(serde_json::json!({"private":KEY}))
+            },
+            2,
+        ),
+    ]) {
+        let server =
+            ScriptedServer::start(vec![version(), identity(), identity(), config(), reply]).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .folder_version_inventory(&folder)
+            .await
+            .expect_err("whole inventory errors are not empty archives");
+        assert!(matches!(
+            (&error, kind),
+            (Error::InvalidResponse { .. }, 0) | (Error::Api { .. }, 1) | (Error::Http { .. }, 2)
+        ));
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 5);
+    }
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"folders":[]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client.folder_version_inventory(&folder).await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 4);
+    Ok(())
+}

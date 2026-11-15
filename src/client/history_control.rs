@@ -41,6 +41,28 @@ fn archive_components(value: &str, style: crate::PathStyle) -> Result<Vec<String
 }
 
 impl Client {
+    /// Read the versioner's whole-folder inventory once through the distinct
+    /// native route. This differs from prefix archive browsing. Fresh identity
+    /// and folder checks precede the read; paused/unavailable versioners retain
+    /// native errors. Empty maps are valid; null/malformed maps are errors.
+    /// Existing response/deadline bounds apply. No recursive requests, restore,
+    /// scan, timestamp rewriting or controller filesystem access occurs.
+    pub async fn folder_version_inventory(
+        &self,
+        folder: &FolderId,
+    ) -> Result<FolderVersionHistory> {
+        self.system_status().await?;
+        self.folder(folder).await?;
+        let records: std::collections::BTreeMap<String, Vec<crate::ArchivedFileVersion>> = self
+            .connection
+            .get_json_with_query(
+                "read whole folder version inventory",
+                "rest/folder/versions",
+                &[("folder", folder.as_str())],
+            )
+            .await?;
+        Ok(FolderVersionHistory(records))
+    }
     async fn require_past_archive_second(&self, latest: i64) -> Result<()> {
         // Use the target's fresh clock immediately before writing. Never use
         // controller wall time or rewrite the native token submitted in POST.

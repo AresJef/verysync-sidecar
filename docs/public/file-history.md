@@ -189,3 +189,42 @@ mutation. It checks fresh identity, serializes with other writes, requires the
 native error-free response, and never retries. It clears the global audit log,
 independently from version archives. Follow-up totals are a separate observation;
 an empty free-instance reset is not evidence of removing real recorded history.
+
+## Whole-folder version inventory
+
+`folder_version_inventory(folder)` reads the distinct `/rest/folder/versions`
+endpoint once. It returns the existing `FolderVersionHistory` and
+`ArchivedFileVersion` types for the versioner's whole-folder map, without a
+prefix parameter, SDK recursive traversal, automatic paging or restore.
+`folder_versions(folder, prefix)` keeps its separate `/versions/browse`
+semantics, including descendant-prefix behavior. Neither method substitutes a
+file-manager resource listing or global audit records for archived versions.
+
+The whole-folder read checks fresh identity and configured scope before one GET,
+requires configuration-read permission and retains normal response/deadline
+bounds. A native empty object is valid. Null or malformed root maps remain
+errors on this route; prefix browsing's older native-null normalization is
+unchanged. Paused/unavailable versioners and other native failures remain errors,
+not empty histories. Preflight and inventory are separate observations.
+
+Untrusted native relative names, exact version/modification timestamps, byte
+sizes and unknown record fields are retained without path traversal or clock
+conversion. Debug omits names, timestamps and unknown values. The read performs
+no controller filesystem access, scan, restore or additional archive requests.
+Large native inventories can exceed configured response bounds; the SDK does
+not silently return a partial map or select an archive version automatically.
+
+```no_run
+# async fn versions(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+let inventory = client.folder_version_inventory(folder).await?;
+// Explicitly inspect inventory.0 and redact private names/timestamps before logging.
+# let _ = inventory;
+# Ok(()) }
+```
+
+The existing real remote-archive/restore case additionally observes the paused
+error, an empty active inventory and two actual retained archives after three
+remote updates. Whole and prefix routes retain the same known archived records,
+and current bytes remain unchanged by the read. Archive creation, retention,
+explicit restore and normal owned exits stay independently asserted. Full
+same-source platform acceptance remains pending.

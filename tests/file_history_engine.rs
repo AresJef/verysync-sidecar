@@ -293,6 +293,10 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
     let new = b"second distinct synthetic replacement version bytes";
     std::fs::write(source.join("version-sample.bin"), initial_bytes)?;
     let (af, bf) = register(&a, &b, &source, &receive).await?;
+    assert!(matches!(
+        b.client().folder_version_inventory(&bf.id).await,
+        Err(verysync_sidecar::Error::Http { response }) if response.status()==500
+    ));
     let initial = b.client().folder_versioning(&bf.id).await?;
     assert_eq!(initial.kind, "");
     let configured = b
@@ -315,12 +319,28 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
         configured.configuration.filesystem_type,
         initial.filesystem_type
     );
+    // Establish the separate lazy native disk buffer before real peer changes.
+    match b
+        .client()
+        .subscribe_disk_events(verysync_sidecar::EventOptions::default())
+        .await
+    {
+        Ok(stream) => stream.close().await?,
+        Err(verysync_sidecar::Error::Transport { .. }) => (),
+        Err(error) => return Err(error.into()),
+    }
     a.client().resume_folder(&af.id).await?;
     b.client().resume_folder(&bf.id).await?;
     a.client().request_scan(&af.id).await?;
     eprintln!("private version stage: initial-transfer");
     data(&receive.join("version-sample.bin"), initial_bytes).await?;
     assert!(b.client().folder_versions(&bf.id, None).await?.0.is_empty());
+    assert!(b
+        .client()
+        .folder_version_inventory(&bf.id)
+        .await?
+        .0
+        .is_empty());
     for bytes in [old.as_slice(), middle.as_slice(), new.as_slice()] {
         // Archive names use one-second timestamps; create distinct revisions.
         tokio::time::sleep(Duration::from_millis(1100)).await;
@@ -329,7 +349,59 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
         eprintln!("private version stage: remote-update");
         data(&receive.join("version-sample.bin"), bytes).await?;
     }
+    let remote_cursor = verysync_sidecar::EventCursor {
+        source: verysync_sidecar::EventSource::Disk,
+        device_id: b.client().instance().device_id.clone(),
+        engine_started_at: b.client().system_status().await?.start_time,
+        last_id: 0,
+    };
+    let mut disk = b
+        .client()
+        .subscribe_disk_events(
+            verysync_sidecar::EventOptions::default().resume_from(remote_cursor)?,
+        )
+        .await?;
+    let remote_changes = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut count = 0;
+        while count < 4 {
+            let item = disk.next().await.ok_or("remote disk stream ended")??;
+            if let verysync_sidecar::EventStreamItem::Event(event) = item {
+                assert_eq!(event.cursor.source, verysync_sidecar::EventSource::Disk);
+                assert!(!format!("{event:?}").contains("version-sample.bin"));
+                if event.kind == verysync_sidecar::EventKind::RemoteChangeDetected
+                    && event.data()["folderID"] == bf.id.as_str()
+                    && event.data()["path"] == "version-sample.bin"
+                {
+                    assert_eq!(event.data()["action"], "modified");
+                    assert_eq!(event.data()["type"], "file");
+                    count += 1;
+                }
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(count)
+    })
+    .await??;
+    assert_eq!(remote_changes, 4);
+    disk.close().await?;
     let history = b.client().folder_versions(&bf.id, None).await?;
+    let inventory = b.client().folder_version_inventory(&bf.id).await?;
+    assert_eq!(inventory.0.len(), history.0.len());
+    for (name, versions) in &history.0 {
+        let all = inventory
+            .0
+            .get(name)
+            .ok_or("whole inventory omitted a known native archive")?;
+        let records = |items: &[verysync_sidecar::ArchivedFileVersion]| {
+            items
+                .iter()
+                .map(|v| (v.version_time.clone(), v.mod_time.clone(), v.size))
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(records(all), records(versions));
+    }
+    assert!(!format!("{inventory:?}").contains("version-sample.bin"));
+    assert_eq!(std::fs::read(receive.join("version-sample.bin"))?, new);
+
     let versions = history
         .0
         .get("version-sample.bin")
@@ -399,7 +471,7 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
     std::fs::remove_dir_all(root)?;
     println!(
         "public version history evidence: {}",
-        serde_json::json!({"actual_default_disabled":true,"actual_simple_configuration":true,"actual_archive_location_preserved":true,"actual_remote_old_to_new_update":true,"actual_keep_two_after_three_remote_updates":true,"actual_file_prefix_observes_empty_descendants":true,"actual_nonempty_versions_and_original_size":true,"actual_source_stopped_before_restore":true,"actual_exact_old_bytes_restored":true,"actual_restored_sha256":true,"actual_stopped_source_new_bytes_preserved":true,"actual_disable_preserves_archives":true,"actual_normal_both_owned_tree_exits":true})
+        serde_json::json!({"actual_remote_disk_change_events":4,"actual_default_disabled":true,"whole_version_inventory_empty_and_actual_two_archives":true,"whole_inventory_retains_exact_browse_records":true,"paused_versioner_error_not_empty":true,"actual_simple_configuration":true,"actual_archive_location_preserved":true,"actual_remote_old_to_new_update":true,"actual_keep_two_after_three_remote_updates":true,"actual_file_prefix_observes_empty_descendants":true,"actual_nonempty_versions_and_original_size":true,"actual_source_stopped_before_restore":true,"actual_exact_old_bytes_restored":true,"actual_restored_sha256":true,"actual_stopped_source_new_bytes_preserved":true,"actual_disable_preserves_archives":true,"actual_normal_both_owned_tree_exits":true})
     );
     Ok(())
 }

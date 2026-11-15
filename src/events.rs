@@ -10,6 +10,18 @@ use tokio::task::JoinHandle;
 
 use crate::{Client, DeviceId, Error, ResponseDiagnostic, Result, BASELINE_ENGINE_VERSION};
 
+/// A fixed native event buffer. Sequence IDs belong only to their source.
+///
+/// Disk changes use a separate native subscription from ordinary engine events.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum EventSource {
+    /// Ordinary engine events from `GET /rest/events` with the native default mask.
+    Standard,
+    /// Local and remote disk changes from `GET /rest/events/disk`.
+    Disk,
+}
+
 /// A consumed position in the upstream event sequence, bound to engine identity.
 ///
 /// The start time is the upstream string, not a durable generation identifier.
@@ -17,6 +29,8 @@ use crate::{Client, DeviceId, Error, ResponseDiagnostic, Result, BASELINE_ENGINE
 /// no unobserved restart occurred between subscriptions.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EventCursor {
+    /// Native buffer whose sequence IDs this cursor describes.
+    pub source: EventSource,
     /// Authenticated engine device identity.
     pub device_id: DeviceId,
     /// Reported engine start time, when available.
@@ -27,6 +41,7 @@ pub struct EventCursor {
 impl fmt::Debug for EventCursor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EventCursor")
+            .field("source", &self.source)
             .field("device_id", &self.device_id)
             .field("generation_reported", &self.engine_started_at.is_some())
             .field("last_id", &self.last_id)
@@ -46,6 +61,10 @@ pub enum EventKind {
     FolderResumed,
     /// One folder's activity state changed.
     StateChanged,
+    /// The native engine detected a local filesystem change.
+    LocalChangeDetected,
+    /// The native engine applied a change received from a peer.
+    RemoteChangeDetected,
     /// Another upstream name, retained without discarding its payload.
     Unknown(String),
 }
@@ -56,6 +75,8 @@ impl fmt::Debug for EventKind {
             Self::FolderPaused => "FolderPaused",
             Self::FolderResumed => "FolderResumed",
             Self::StateChanged => "StateChanged",
+            Self::LocalChangeDetected => "LocalChangeDetected",
+            Self::RemoteChangeDetected => "RemoteChangeDetected",
             Self::Unknown(_) => "Unknown(..)",
         })
     }
@@ -306,6 +327,8 @@ impl WireEvent {
             "FolderPaused" => EventKind::FolderPaused,
             "FolderResumed" => EventKind::FolderResumed,
             "StateChanged" => EventKind::StateChanged,
+            "LocalChangeDetected" => EventKind::LocalChangeDetected,
+            "RemoteChangeDetected" => EventKind::RemoteChangeDetected,
             _ => EventKind::Unknown(self.name),
         };
         EngineEvent {
@@ -327,14 +350,15 @@ pub(crate) fn validate_wire(events: &[WireEvent], limit: usize) -> bool {
         && events.windows(2).all(|pair| pair[0].id < pair[1].id)
 }
 
-async fn head(client: &Client) -> Result<EventCursor> {
+async fn head(client: &Client, source: EventSource) -> Result<EventCursor> {
     let status = client.system_status().await?;
-    let latest = client.event_wire(0, 1).await?;
+    let latest = client.event_wire(source, 0, 1).await?;
     let after = client.system_status().await?;
     if status.start_time != after.start_time {
         return Err(Error::EventGenerationChanged);
     }
     Ok(EventCursor {
+        source,
         device_id: status.device_id,
         engine_started_at: status.start_time,
         last_id: latest.last().map_or(0, |e| e.id),
@@ -350,10 +374,41 @@ impl Client {
     /// snapshot before requesting a known available tail; this avoids the fixed
     /// engine's broken response observed for a cursor ahead of its current ID.
     pub async fn subscribe_events(&self, options: EventOptions) -> Result<EventSubscription> {
+        self.subscribe_event_source(EventSource::Standard, options)
+            .await
+    }
+
+    /// Observe the fixed native disk-change buffer using a caller-owned stream.
+    ///
+    /// Uses the same bounded queue, continuity checks and finite read recovery
+    /// as [`Self::subscribe_events`]. Disk and ordinary cursors are rejected when
+    /// supplied to the other source, before network reads. No configuration or
+    /// file mutation is performed to manufacture an event.
+    ///
+    /// In v2.33.2 a newly created, empty disk buffer can interrupt its response.
+    /// Initial errors are returned without starting a task or retrying. That
+    /// first request registers the native disk subscription; after an actual
+    /// change, callers can explicitly try again. A successful initial read
+    /// excludes earlier changes unless a disk cursor is supplied.
+    pub async fn subscribe_disk_events(&self, options: EventOptions) -> Result<EventSubscription> {
+        self.subscribe_event_source(EventSource::Disk, options)
+            .await
+    }
+
+    async fn subscribe_event_source(
+        &self,
+        source: EventSource,
+        options: EventOptions,
+    ) -> Result<EventSubscription> {
         tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
             reason: "event subscriptions require a Tokio runtime with I/O and timers",
         })?;
         if let Some(cursor) = &options.cursor {
+            if cursor.source != source {
+                return Err(Error::InvalidConfiguration {
+                    reason: "event cursor belongs to another native event source",
+                });
+            }
             if cursor.device_id != self.instance().device_id {
                 return Err(Error::IdentityMismatch {
                     expected: cursor.device_id.clone(),
@@ -362,7 +417,7 @@ impl Client {
             }
         }
         verify_version(self).await?;
-        let latest = head(self).await?;
+        let latest = head(self, source).await?;
         let cursor = options.cursor.clone().unwrap_or_else(|| latest.clone());
         let (sender, receiver) = mpsc::channel(options.queue_capacity);
         let worker_cursor = cursor.clone();
@@ -427,7 +482,7 @@ async fn batch(
         *cursor = latest;
     } else if latest.last_id > cursor.last_id {
         let events = client
-            .event_wire(cursor.last_id, options.batch_limit)
+            .event_wire(cursor.source, cursor.last_id, options.batch_limit)
             .await?;
         if client.system_status().await?.start_time != cursor.engine_started_at {
             return Err(Error::EventGenerationChanged);
@@ -494,7 +549,7 @@ async fn run(
             }
             let latest = match snapshot.take() {
                 Some(latest) => latest,
-                None => head(&client).await?,
+                None => head(&client, cursor.source).await?,
             };
             if recovering
                 && !send(
