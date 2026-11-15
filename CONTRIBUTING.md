@@ -25,6 +25,12 @@ SHA-256. The fixture checks this digest before running anything, generates fresh
 state and GUI credentials, authenticates a private management address, and
 compares the generated identity before any mutation.
 
+The core version assertions use the observed Go architecture names (`amd64`,
+`arm64`, `386` and `arm`) for their corresponding Rust controller targets. Unknown
+mappings fail explicitly. Additional-architecture execution does not promote the
+capability report into the six recorded 64-bit native profiles: those controllers
+must still report `OutsideNativeEvidence`, including builds without default TLS.
+
 The fixture also writes `auto_startup: false` in its own `appconf.yaml` and
 explicitly disables the tracker and tray options. Child processes use private
 working, temporary and profile/cache directories; child HOME/XDG paths on Unix
