@@ -183,6 +183,13 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target file_transfer_engine
           --evidence-dir "${{ runner.temp }}/vs-file-transfer-proxy"
+      - name: Verify native host watch-limit observations and explicit refusals
+        id: native_host_watch_limit
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target host_control_engine
+          --evidence-dir "${{ runner.temp }}/vs-host-watch-limit-observations"
       - name: Verify actual version retention, deleted-file restoration and free audit conditions
         id: native_file_history_engine
         continue-on-error: true
@@ -536,5 +543,44 @@ jobs:
           --test-filter actual_native_folder_open_requests_capture_exact_owned_target_dispatch
           --evidence-dir "${{ runner.temp }}/vs-windows-folder-opener-diagnosis"
       - name: Require exact owned-executable cleanup after the original result
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+
+  host-watch-limit-positive:
+    name: Explicit Linux host watch-limit effects (isolated VM only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+      VERYSYNC_TEST_ALLOW_HOST_CONFIGURATION: github-actions-isolated-linux-vm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install native Rust and fetch locked dependencies without elevation
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare fixed private Linux core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Compile and identify the exact host test as the normal runner
+        run: >-
+          python scripts/host-test-cargo.py prepare --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Run only the prebuilt pinned privileged case and restore the VM setting
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --cargo "$VERYSYNC_HOST_TEST_CARGO_SHIM" --test-target host_control_engine
+          --test-filter privileged_native_watch_limit_is_raised_then_independently_restored
+          --evidence-dir "${{ runner.temp }}/vs-host-watch-limit-positive"
+      - name: Require exact owned-core cleanup
         if: always()
         run: python scripts/prepare-test-engine.py check-cleanup
