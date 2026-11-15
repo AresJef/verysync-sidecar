@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add native indexed-tree snapshots with explicit depth, target-relative prefix
+  and directory filters, exact private recursive metadata and no implicit scan.
+
 - Classify live GUI/API hot-disable as unsupported on fixed v2.33.2. Keep the
   explicit stored configuration request, passive owned-listener observations
   and separate caller-selected process cleanup; never infer closure from a flag.

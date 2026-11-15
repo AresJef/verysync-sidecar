@@ -7,6 +7,209 @@ use std::{
 use verysync_sidecar::{Error, ManagedInstance};
 
 #[tokio::test]
+async fn actual_native_index_browse_keeps_depth_filters_and_index_only_observations() -> TestResult
+{
+    use verysync_sidecar::{
+        CreateFolderOptions, FolderId, FolderScanPatch, FolderState, IndexBrowseOptions,
+        IndexTreeEntry, SyncFileKind, TargetPath,
+    };
+    fn node<'a>(entries: &'a [IndexTreeEntry], name: &str) -> TestResult<&'a IndexTreeEntry> {
+        entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .ok_or_else(|| "expected indexed entry absent".into())
+    }
+    let root = tempfile::Builder::new()
+        .prefix("vs-index-tree-")
+        .tempdir()?
+        .keep();
+    let data = root.join("synthetic data");
+    let branch = std::path::Path::new("branch \u{4e8c} % +");
+    let deep = branch.join("deep");
+    std::fs::create_dir_all(data.join(&deep))?;
+    let payload = b"synthetic indexed browse bytes";
+    let files = [
+        std::path::PathBuf::from("root.txt"),
+        branch.join("child.txt"),
+        deep.join("leaf.txt"),
+    ];
+    for file in &files {
+        std::fs::write(data.join(file), payload)?;
+    }
+    let mut owner = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = owner.client().instance().device_id.clone();
+    let folder = FolderId::parse("typed-native-index-browse")?;
+    owner
+        .client()
+        .create_folder(
+            &CreateFolderOptions::new(folder.clone(), TargetPath::local(&data)).paused(true),
+        )
+        .await?;
+    owner
+        .client()
+        .update_folder_scan_configuration(
+            &folder,
+            &FolderScanPatch::default()
+                .watcher(false)
+                .rescan_interval_seconds(0)
+                .disable_initial_scan(false),
+        )
+        .await?;
+    owner.client().resume_folder(&folder).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let status = owner.client().folder_status(&folder).await?;
+            if status.state == Some(FolderState::Idle) && status.local_files == Some(3) {
+                return Ok::<_, verysync_sidecar::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await??;
+    let configuration = std::fs::read(root.join("core").join("setting.dat"))?;
+    // A newly created but unscanned file proves that this reads native index
+    // knowledge rather than performing a controller or target filesystem listing.
+    std::fs::write(data.join("not-indexed.txt"), b"unindexed retained bytes")?;
+    let flat = owner
+        .client()
+        .browse_index(&folder, &IndexBrowseOptions::default())
+        .await?;
+    assert_eq!(flat.entries.len(), 2);
+    assert!(flat.entries.iter().all(|entry| entry.children.is_none()));
+    let branch_name = branch.to_str().ok_or("synthetic prefix must be UTF8")?;
+    assert_eq!(
+        node(&flat.entries, branch_name)?.kind,
+        SyncFileKind::Directory
+    );
+    assert_eq!(node(&flat.entries, "root.txt")?.size, payload.len() as u64);
+    assert!(!format!("{flat:?} {:?}", node(&flat.entries, branch_name)?).contains(branch_name));
+    let one = owner
+        .client()
+        .browse_index(&folder, &IndexBrowseOptions::default().levels(Some(1)))
+        .await?;
+    let first = node(&one.entries, branch_name)?
+        .children
+        .as_ref()
+        .ok_or("first descendant level absent")?;
+    assert_eq!(first.len(), 2);
+    assert!(node(first, "deep")?.children.is_none());
+    let complete = owner
+        .client()
+        .browse_index(&folder, &IndexBrowseOptions::default().levels(None))
+        .await?;
+    let first = node(&complete.entries, branch_name)?
+        .children
+        .as_ref()
+        .ok_or("native descendants absent")?;
+    let second = node(first, "deep")?
+        .children
+        .as_ref()
+        .ok_or("second descendant level absent")?;
+    assert_eq!(node(second, "leaf.txt")?.kind, SyncFileKind::File);
+    assert!(!node(second, "leaf.txt")?.modified.is_empty());
+    let directories = owner
+        .client()
+        .browse_index(
+            &folder,
+            &IndexBrowseOptions::default()
+                .levels(None)
+                .directories_only(true),
+        )
+        .await?;
+    assert_eq!(directories.entries.len(), 1);
+    assert_eq!(directories.entries[0].kind, SyncFileKind::Directory);
+    let nested = directories.entries[0]
+        .children
+        .as_ref()
+        .ok_or("nested directory absent")?;
+    assert_eq!(nested.len(), 1);
+    assert_eq!(nested[0].name, "deep");
+    assert_eq!(nested[0].kind, SyncFileKind::Directory);
+    assert!(nested[0].children.is_none());
+    let all_again = owner
+        .client()
+        .browse_index(
+            &folder,
+            &IndexBrowseOptions::default()
+                .levels(None)
+                .directories_only(false),
+        )
+        .await?;
+    assert_eq!(all_again.entries.len(), 2);
+    assert_eq!(
+        node(&all_again.entries, "root.txt")?.kind,
+        SyncFileKind::File
+    );
+    let scoped = owner
+        .client()
+        .browse_index(
+            &folder,
+            &IndexBrowseOptions::default().prefix(TargetPath::local(branch)),
+        )
+        .await?;
+    assert_eq!(scoped.entries.len(), 2);
+    assert_eq!(
+        node(&scoped.entries, "child.txt")?.size,
+        payload.len() as u64
+    );
+    assert!(node(&scoped.entries, "deep")?.children.is_none());
+    let nested = owner
+        .client()
+        .browse_index(
+            &folder,
+            &IndexBrowseOptions::default().prefix(TargetPath::local(&deep)),
+        )
+        .await?;
+    assert_eq!(nested.entries.len(), 1);
+    assert_eq!(nested.entries[0].name, "leaf.txt");
+    for prefix in [
+        std::path::Path::new("absent"),
+        std::path::Path::new("root.txt"),
+    ] {
+        assert!(owner
+            .client()
+            .browse_index(
+                &folder,
+                &IndexBrowseOptions::default().prefix(TargetPath::local(prefix))
+            )
+            .await?
+            .entries
+            .is_empty());
+    }
+    assert!(matches!(
+        owner
+            .client()
+            .browse_index(
+                &FolderId::parse("not-configured")?,
+                &IndexBrowseOptions::default()
+            )
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert_eq!(
+        owner.client().folder_status(&folder).await?.local_files,
+        Some(3)
+    );
+    assert_eq!(owner.client().system_status().await?.device_id, identity);
+    assert_eq!(
+        std::fs::read(root.join("core").join("setting.dat"))?,
+        configuration
+    );
+    for file in &files {
+        assert_eq!(std::fs::read(data.join(file))?, payload);
+    }
+    assert_eq!(
+        std::fs::read(data.join("not-indexed.txt"))?,
+        b"unindexed retained bytes"
+    );
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("native_index_browse_snapshots=9 flat_zero_and_native_unlimited_depth=true actual_directory_filter_and_false_omission=true native_relative_unicode_prefix=true empty_missing_or_file_prefix=true index_not_filesystem_observation=true unknown_folder_refused=true identity_configuration_and_four_files_retained=true normal_owned_tree_exit=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn actual_native_core_log_text_retains_messages_filters_and_owned_state() -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("vslogtext-")
