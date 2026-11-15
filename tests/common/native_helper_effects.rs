@@ -46,6 +46,40 @@ async fn actual_native_helpers_normalize_ids_collect_reports_and_preserve_explic
         );
     }
     let before = owner.client().diagnostics_options().await?;
+    let health = owner.client().native_health().await?;
+    assert!(matches!(
+        health.status,
+        verysync_sidecar::NativeHealthStatus::Ok
+    ));
+    let native_health = owner
+        .client()
+        .raw_request(&verysync_sidecar::RawRequest::new(
+            verysync_sidecar::RawMethod::Get,
+            ["rest", "noauth", "health"],
+            verysync_sidecar::RequestEffect::ReadOnly,
+        )?)
+        .await?;
+    assert_eq!(native_health.status(), 200);
+    let raw_health: serde_json::Value = serde_json::from_slice(native_health.body_bytes())?;
+    assert_eq!(raw_health["status"], health.status.native_value());
+    #[cfg(unix)]
+    {
+        let control = reqwest::Client::builder()
+            .unix_socket(root.join("core").join("gui.sock"))
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()?;
+        let reply = control
+            .get("http://localhost/rest/noauth/health")
+            .send()
+            .await?;
+        assert_eq!(reply.status(), reqwest::StatusCode::OK);
+        assert!(reply.content_length().is_some_and(|length| length <= 4096));
+        let value: serde_json::Value = reply.json().await?;
+        assert_eq!(value["status"], "OK");
+        println!("native_health_unauthenticated_control=true private_unix_socket_only=true");
+    }
     let report = owner.client().collect_native_usage_report().await?;
     assert_eq!(report.version, verysync_sidecar::BASELINE_ENGINE_VERSION);
     let version = &owner.client().instance().version;
@@ -71,6 +105,6 @@ async fn actual_native_helpers_normalize_ids_collect_reports_and_preserve_explic
     let exit = owner.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
-    println!("native_helper_effects=10 native_id_normalization_and_checksum_rejection=true explicit_loopback_lookup=true report_collection_without_consent_change=true random_quality_not_asserted=true empty_link_only_native_effect=true");
+    println!("native_helper_observations native_health_ok=true health_matches_independent_native_response=true native_id_normalization_and_checksum_rejection=true explicit_loopback_lookup=true report_collection_without_consent_change=true random_quality_not_asserted=true empty_link_only_native_effect=true");
     Ok(())
 }

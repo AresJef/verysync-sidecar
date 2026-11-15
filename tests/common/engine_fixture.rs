@@ -82,10 +82,7 @@ struct OwnedChild {
 impl OwnedChild {
     fn spawn(command: &mut Command) -> TestResult<Self> {
         #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
+        configure_private_fixture_group(command);
         #[cfg(windows)]
         let job = {
             use std::os::windows::process::CommandExt;
@@ -109,6 +106,23 @@ impl OwnedChild {
         #[cfg(windows)]
         self.job.wait_empty(Duration::from_secs(10))?;
         Ok(())
+    }
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn configure_private_fixture_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: force the fork/pre-exec path so user-mode emulation cannot lose
+    // the posix_spawn group attribute. Only the new child calls the
+    // async-signal-safe setpgid; no allocation, locks or caller state changes.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
 }
 
@@ -242,6 +256,10 @@ impl EngineFixture {
         let log = File::create(state.path().join("engine.log"))?;
         protect_file(&state.path().join("engine.log"))?;
         let mut command = engine_command(&binary.path, state.path())?;
+        #[cfg(target_os = "linux")]
+        // Select the official direct-core mode. The Linux outer monitor can
+        // move its inner core outside the fixture's private process group.
+        command.env("VSMONITORED", "yes");
         command
             .arg("serve")
             .arg("--home")

@@ -1,5 +1,15 @@
 # Explicit native helpers
 
+`native_health()` reads the program's native HTTP health snapshot through the
+selected authenticated connection, with a fresh target-identity check. The native
+route `/rest/noauth/health` itself does not require authentication; this `Client`
+method is intended for an already connected instance. `NativeHealthStatus::Ok`
+represents the exact `OK` token. Other nonempty tokens and additional fields are
+retained, while missing, empty or wrongly typed status fields are invalid
+responses. Unknown values are omitted from ordinary Debug output. Native body
+errors remain typed API errors even if the HTTP status is 200. The snapshot does
+not establish folder completion, task success or commercial authorization.
+
 `normalize_device_id(text)` asks the selected engine to validate and normalize
 device text. Native lowercase and ungrouped forms can return the same canonical
 `DeviceId`. This differs from `DeviceId::parse`, which checks the local canonical
@@ -39,11 +49,12 @@ requiring its own effect evidence.
 
 ```no_run
 # async fn example(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+let health = client.native_health().await?;
 let canonical = client.normalize_device_id("caller-provided device text").await?;
 let report = client.collect_native_usage_report().await?;
 let pending = client.pending_native_link().await?;
 // Handle untrusted pending text explicitly, without automatically opening it.
-# let _ = (canonical, report, pending);
+# let _ = (health, canonical, report, pending);
 # Ok(()) }
 ```
 
