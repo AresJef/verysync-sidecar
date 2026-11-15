@@ -273,7 +273,7 @@ def main():
     parser.add_argument("--cargo", default=shutil.which("cargo"))
     parser.add_argument("--evidence-dir", required=True, type=Path)
     suite = parser.add_mutually_exclusive_group(required=True)
-    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine", "files_engine", "file_transfer_engine", "file_history_engine", "maintenance_engine", "file_mutation_engine", "local_sync_engine", "local_sync_protocol_engine", "local_sync_advanced_engine", "local_sync_runtime_engine", "local_sync_automation_engine", "local_sync_repair_engine", "local_sync_protocol_advanced_engine", "local_sync_configuration_engine", "configuration_engine", "authentication_engine", "ldap_trusted_ca_engine"])
+    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine", "files_engine", "file_transfer_engine", "file_history_engine", "maintenance_engine", "file_mutation_engine", "local_sync_engine", "local_sync_protocol_engine", "local_sync_advanced_engine", "local_sync_runtime_engine", "local_sync_automation_engine", "local_sync_repair_engine", "local_sync_protocol_advanced_engine", "local_sync_configuration_engine", "configuration_engine", "authentication_engine", "ldap_trusted_ca_engine", "wallpaper_engine"])
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
     parser.add_argument("--test-filter")
     parser.add_argument("--allow-private-discovery", action="store_true",
@@ -282,6 +282,8 @@ def main():
                         help="allow genuine end-to-end TLS only to upgrades.verysync.cn:443")
     parser.add_argument("--serve-pinned-upgrade-archive", action="store_true",
                         help="serve only the verified local v2.33.2 archive for its exact official HTTP URL")
+    parser.add_argument("--allow-wallpaper-source", action="store_true",
+                        help="explicit wallpaper suite only: permit target Bing HTTPS through a child-only proxy bypass")
     args = parser.parse_args()
     if args.test_target == "managed_lifetime" and sys.platform not in {"darwin", "linux", "win32"}:
         raise RuntimeError("owned-host acceptance requires native macOS, Linux or Windows")
@@ -293,6 +295,8 @@ def main():
         raise ValueError("private discovery routing is restricted to the explicit network suite")
     if (args.allow_upgrade_metadata or args.serve_pinned_upgrade_archive) and args.test_target != "upgrade_engine":
         raise ValueError("upgrade routing is restricted to the explicit upgrade suite")
+    if args.allow_wallpaper_source and args.test_target != "wallpaper_engine":
+        raise ValueError("wallpaper source access is restricted to its explicit native suite")
     if not args.cargo or not Path(args.cargo).is_absolute():
         raise ValueError("an explicit resolved Cargo executable is required")
     binary = os.environ.get("VERYSYNC_TEST_BINARY")
@@ -335,8 +339,9 @@ def main():
         for name in proxy_names:
             env[name] = address
         for name in bypass_names:
-            env[name] = "127.0.0.1,localhost,::1"
+            env[name] = "127.0.0.1,localhost,::1" + (",bing.com" if args.allow_wallpaper_source else "")
         env["CARGO_NET_OFFLINE"] = "true"
+        env["VERYSYNC_TEST_WALLPAPER_SOURCE_ALLOWED"] = "1" if args.allow_wallpaper_source else "0"
         # Short-lived external-versioner fixture only; the library installs no helper.
         env["VERYSYNC_TEST_PYTHON"] = str(Path(sys.executable).resolve(strict=True))
         # Never accept a target supplied by an unrelated parent environment.
@@ -404,6 +409,7 @@ def main():
                   "private_discovery_forwarding_enabled": args.allow_private_discovery,
                   "private_connections_forwarded": proxy.forwarded,
                   "requests_blocked": observed, "handler_errors": errors,
+                  "wallpaper_source_proxy_bypass_suffix": "bing.com" if args.allow_wallpaper_source else None,
                   "test_exit_code": returncode}
         (args.evidence_dir / "proxy-observations.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print("Isolated engine HTTP proxy observations: " + json.dumps(report, sort_keys=True))

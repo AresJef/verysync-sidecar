@@ -267,3 +267,8 @@ required-features = ["engine-tests"]
 name = "native_folder_opener"
 path = "examples/native_folder_opener.rs"
 required-features = ["engine-tests"]
+
+[[test]]
+name = "wallpaper_engine"
+path = "tests/wallpaper_engine.rs"
+required-features = ["engine-tests"]
