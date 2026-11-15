@@ -81,7 +81,7 @@ tests refuse a changed provider version instead of downloading an unknown
 program. Plain fixture tests retain their default blocking behavior.
 
 For explicit test preparation, `scripts/prepare-test-engine.py prepare` accepts
-one of the six alpha package IDs from the fixed release manifest and a `--parent`
+an in-scope package ID from the fixed release manifest and a `--parent`
 directory. It downloads with HTTPS validation, verifies archive size/SHA-256,
 and writes only the selected executable into a newly created private directory.
 Its JSON receipt contains the executable path and digest for the variables above.
@@ -97,6 +97,13 @@ the current compiler. The `engine_control` target combines the earlier fixture
 contracts with public API acceptance so shared harness checks run only once.
 Tests are named to distinguish fixture evidence from public control behavior;
 fixture success alone is not complete lifecycle acceptance.
+Focused Linux device-removal and Intel Mac GUI-listener diagnostic jobs run
+the original conditions twice in independent private states. Both raw outcomes
+and exact cleanup remain required; a later success cannot override a failure.
+Listener diagnostics execute after the original eight-second failure and report
+only counts by retained-root PID match and the bounded private configuration's
+enabled flag. They never probe a released address or signal a process. These
+jobs provide diagnostic evidence alongside the complete native feature bundle.
 The helper's explicit `check-cleanup` command inspects only the exact test binary
 path and reports lingering processes; it does not kill by name.
 

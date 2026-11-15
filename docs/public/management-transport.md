@@ -75,6 +75,12 @@ core backend. Direct native GUI TLS listener changes and the full same-source
 platform matrix have their own acceptance gates. No remote public service or
 user trust-store modification is needed for this test.
 
+The test-only peer binds literal loopback addresses without reverse DNS. Its
+original 12-second readiness deadline is unchanged. If startup times out, the
+test reports a bounded, fixed-name startup phase and child-exit status; private
+stderr stays in the dedicated test directory. This diagnostic does not establish
+that a platform's full runtime acceptance has passed.
+
 The implementation uses the locked reqwest transport APIs for
 [additional roots](https://docs.rs/reqwest/0.13.5/reqwest/struct.ClientBuilder.html#method.tls_certs_merge),
 [certificate decoding](https://docs.rs/reqwest/0.13.5/reqwest/tls/struct.Certificate.html)

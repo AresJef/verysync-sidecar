@@ -25,7 +25,19 @@ transport = config.get("transport", "plain")
 if transport not in ("plain", "tls", "starttls"):
     raise ValueError("explicit supported test transport required")
 tls_context = None
-if transport != "plain":
+public_manifest = config.get("public_tls_manifest")
+if public_manifest is not None:
+    if transport != "tls":
+        raise ValueError("public CA fixture requires explicit strict TLS selection")
+    import ldap_tls_fixture
+    ldap_tls_fixture.check_dns()
+    _, certificate, private_key = ldap_tls_fixture.load_manifest(public_manifest)
+    cert_path, key_path = root / "synthetic-ldap-cert.pem", root / "synthetic-ldap-key.pem"
+    ldap_tls_fixture.write_private(cert_path, certificate)
+    ldap_tls_fixture.write_private(key_path, private_key)
+    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls_context.load_cert_chain(cert_path, key_path)
+elif transport != "plain":
     from datetime import datetime, timedelta, timezone
     import ipaddress
     from cryptography import x509
@@ -36,14 +48,14 @@ if transport != "plain":
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "synthetic LDAP peer")])
     now = datetime.now(timezone.utc)
-    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+    cert_builder = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
             .public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(minutes=1))
             .not_valid_after(now + timedelta(days=1))
-            .add_extension(x509.SubjectAlternativeName([
-                x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
-            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
-            .sign(key, hashes.SHA256()))
+            .add_extension(x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False))
+    cert = cert_builder.sign(key, hashes.SHA256())
     cert_path, key_path = root / "synthetic-ldap-cert.pem", root / "synthetic-ldap-key.pem"
     cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
@@ -167,5 +179,6 @@ with Server(("127.0.0.1", 0), Handler) as server:
         raise ValueError("reserved live-instance port refused")
     print(json.dumps({"ready": True, "loopback_only": True,
                       "port": server.server_address[1], "protocol": "ldap", "transport": transport,
+                      "public_ca": public_manifest is not None,
                       "python_platform": sysconfig.get_platform()}), flush=True)
     server.serve_forever(poll_interval=0.1)

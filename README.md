@@ -150,7 +150,7 @@ The development plan runs through full delivery. Alpha releases are intermediate
 
 The library remains independent of application frameworks and business workflows. Callers choose when to run instances, what roles devices take, and how to combine operations.
 
-The [capability inventory](docs/capabilities.csv) separates behavior candidates, aliases, resources and unresolved entries. The [platform inventory](docs/platforms.csv) records the official package mapping and planned execution paths. An inventory entry is not a support claim. The fixed baseline is VerySync **v2.33.2**; there is no implicit update to the latest engine.
+The [capability inventory](docs/capabilities.csv) separates behavior candidates, aliases, resources and unresolved entries. The [platform inventory](docs/platforms.csv) records the official package mapping and planned execution paths. The [platform validation guide](docs/public/platform-validation.md) distinguishes native, 32-bit compatibility, emulated and minimum-OS evidence. An inventory entry is not a support claim. The fixed baseline is VerySync **v2.33.2**; there is no implicit update to the latest engine.
 
 ## Development
 

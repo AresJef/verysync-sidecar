@@ -2,9 +2,23 @@
 
 #[path = "common/engine_fixture.rs"]
 mod engine_fixture;
+#[path = "common/managed_fixture.rs"]
+mod managed_fixture;
 
+#[path = "common/auxiliary_maintenance_effects.rs"]
+mod auxiliary_maintenance_effects;
+#[path = "common/direct_restart_effects.rs"]
+mod direct_restart_effects;
+#[path = "common/gui_resource_effects.rs"]
+mod gui_resource_effects;
+#[path = "common/hardware_effects.rs"]
+mod hardware_effects;
+#[path = "common/native_helper_effects.rs"]
+mod native_helper_effects;
 #[path = "common/response_proxy.rs"]
 mod response_proxy;
+#[path = "common/target_directory_effects.rs"]
+mod target_directory_effects;
 
 use engine_fixture::{EngineFixture, TestBinary, TestResult};
 use reqwest::{Method, StatusCode};

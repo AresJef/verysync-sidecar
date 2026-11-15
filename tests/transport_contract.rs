@@ -22,10 +22,24 @@ mod folder_options_contracts;
 #[path = "common/folder_policy_contracts.rs"]
 mod folder_policy_contracts;
 
+#[path = "common/auxiliary_maintenance_contracts.rs"]
+mod auxiliary_maintenance_contracts;
 #[path = "common/gui_listener_contracts.rs"]
 mod gui_listener_contracts;
+#[path = "common/gui_resource_contracts.rs"]
+mod gui_resource_contracts;
+#[path = "common/hardware_contracts.rs"]
+mod hardware_contracts;
 #[path = "common/management_transport_contracts.rs"]
 mod management_transport_contracts;
+#[path = "common/native_helper_contracts.rs"]
+mod native_helper_contracts;
+#[path = "common/network_limits_contracts.rs"]
+mod network_limits_contracts;
+#[path = "common/system_actions_contracts.rs"]
+mod system_actions_contracts;
+#[path = "common/target_directory_contracts.rs"]
+mod target_directory_contracts;
 
 #[tokio::test]
 async fn remote_tunnel_connection_preserves_prefix_and_requires_target_identity() -> TestResult {

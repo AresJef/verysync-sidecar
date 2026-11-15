@@ -1471,7 +1471,7 @@ fn report_upgrade_diagnostic(stage: &str, bytes: &[u8]) {
         ("http_forbidden", &["403", "forbidden"]),
         ("timeout", &["timeout", "deadline exceeded"]),
         (
-            "missing_matching_release",
+            "release_selection",
             &[
                 "couldn't find a release to download",
                 "no version",
@@ -1499,6 +1499,16 @@ fn report_upgrade_diagnostic(stage: &str, bytes: &[u8]) {
         .collect::<String>();
     eprintln!(
         "Native upgrade private diagnostic classification: {}",
-        serde_json::json!({"stage":stage,"bytes":bytes.len(),"sha256":sha,"categories":tags})
+        serde_json::json!({"stage":stage,"bytes":bytes.len(),"sha256":sha,"categories":tags,
+            "known_no_matching_archive":text.contains("couldn't find a release to download"),
+            "empty_release_selection":text.contains("no version to select"),
+            "metadata_fetch_failed":text.contains("failed to fetch latest release information")
+                || text.contains("couldn't fetch release information"),
+            "metadata_decode_failed":text.contains("failed to decode latest release information"),
+            "unexpected_eof":text.contains("eof"),
+            "http_rate_limited":text.contains("429 too many requests"),
+            "http_gateway_failure":text.contains("502 bad gateway")
+                || text.contains("503 service unavailable") || text.contains("504 gateway timeout")
+        })
     );
 }

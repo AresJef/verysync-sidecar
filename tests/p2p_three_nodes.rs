@@ -1,6 +1,8 @@
 //! Native logical-node relay evidence; this is not a WAN bandwidth benchmark.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/three_node_diagnostic.rs"]
+mod three_node_diagnostic;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -97,18 +99,27 @@ fn out(connection: &PeerConnection) -> TestResult<u64> {
 }
 
 async fn received(
+    stage: &'static str,
     client: &Client,
     folder: &FolderId,
     path: &Path,
     samples: &[(PathBuf, Vec<u8>)],
 ) -> TestResult {
+    let mut matched_files = 0;
+    let mut last_status = None;
     tokio::time::timeout(Duration::from_secs(40), async {
         loop {
-            let bytes_match = samples
-                .iter()
-                .all(|(name, bytes)| std::fs::read(path.join(name)).is_ok_and(|v| v == *bytes));
+            matched_files = 0;
+            let bytes_match = samples.iter().all(|(name, bytes)| {
+                let matches = std::fs::read(path.join(name)).is_ok_and(|v| v == *bytes);
+                if matches {
+                    matched_files += 1;
+                }
+                matches
+            });
             if bytes_match {
                 let status = client.folder_status(folder).await?;
+                last_status = Some((status.need_bytes, status.local_files));
                 if status.need_bytes == Some(0) && status.local_files == Some(samples.len() as u64)
                 {
                     return Ok::<_, Error>(());
@@ -117,20 +128,29 @@ async fn received(
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await??;
+    .await
+    .inspect_err(|_| eprintln!("three-node receive deadline: {}",json!({"stage":stage,
+        "matching_prefix_files":matched_files,"expected_files":samples.len(),"last_need_and_local_files":last_status,
+        "original_timeout_seconds":40})))??;
     Ok(())
 }
 
 #[tokio::test]
 async fn actual_readonly_node_serves_blank_readonly_peer_after_source_exits() -> TestResult {
     let root = tempfile::Builder::new().prefix("vs3-").tempdir()?.keep();
+    let phase = three_node_diagnostic::Phase::new(root.clone());
+    phase.set("start-source");
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    phase.set("start-first-readonly");
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
     assert_ne!(a_id, b_id);
+    phase.set("source-listener");
     let a_address = private_tcp(a.client()).await?;
+    phase.set("first-readonly-listener");
     let b_address = private_tcp(b.client()).await?;
+    phase.set("prepare-keys-and-source-samples");
     let keys = a.client().generate_share().await?;
     let rw = a.client().validate_share_key(&keys.read_write_key).await?;
     let ro = b.client().validate_share_key(&keys.read_only_key).await?;
@@ -178,22 +198,36 @@ async fn actual_readonly_node_serves_blank_readonly_peer_after_source_exits() ->
     assert!(bf.configuration.extra["readWriteSecret"] == "");
     associate(a.client(), &af.configuration.id, &b_id, &b_address, false).await?;
     associate(b.client(), &bf.configuration.id, &a_id, &a_address, false).await?;
+    phase.set("source-to-first-readonly-connection");
     let a_before = out(&connected(a.client(), &b_id).await?)?;
+    phase.set("first-readonly-to-source-connection");
     let b_to_a_before = out(&connected(b.client(), &a_id).await?)?;
+    phase.set("receive-first-readonly");
     a.client().resume_folder(&af.configuration.id).await?;
     b.client().resume_folder(&bf.configuration.id).await?;
     a.client().request_scan(&af.configuration.id).await?;
-    received(b.client(), &bf.configuration.id, &retained, &samples).await?;
+    received(
+        "source-to-first-readonly",
+        b.client(),
+        &bf.configuration.id,
+        &retained,
+        &samples,
+    )
+    .await?;
+    phase.set("source-transfer-counter-readback");
     let a_after = out(&connected(a.client(), &b_id).await?)?;
     let b_to_a_after = out(&connected(b.client(), &a_id).await?)?;
     assert!(a_after > a_before && b_to_a_after >= b_to_a_before);
+    phase.set("source-normal-exit");
     let a_exit = a.shutdown(Duration::from_secs(10)).await?;
     assert!(a_exit.tree_stopped && !a_exit.forced && a_exit.code == Some(0));
 
     // C has no state, files, identity or peer relationship while A is alive.
+    phase.set("start-blank-readonly-after-source-exit");
     let mut c = ManagedInstance::start(options(&root.join("c"))?).await?;
     let c_id = c.client().instance().device_id.clone();
     assert!(c_id != a_id && c_id != b_id);
+    phase.set("blank-readonly-listener");
     let c_address = private_tcp(c.client()).await?;
     let blank = root.join("blank-c");
     assert!(!blank.exists());
@@ -209,6 +243,7 @@ async fn actual_readonly_node_serves_blank_readonly_peer_after_source_exits() ->
     assert!(cf.configuration.extra["readWriteSecret"] == "");
     assert!(samples.iter().all(|(name, _)| !blank.join(name).exists()));
 
+    phase.set("prepare-wrong-address-negative");
     let rejector = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     let rejected_address = format!("tcp://{}", rejector.local_addr()?);
     associate(b.client(), &bf.configuration.id, &c_id, &c_address, true).await?;
@@ -224,6 +259,7 @@ async fn actual_readonly_node_serves_blank_readonly_peer_after_source_exits() ->
         .update_network_configuration(&NetworkPatch::default().reconnection_interval_seconds(1))
         .await?;
     c.client().resume_folder(&cf.configuration.id).await?;
+    phase.set("observe-wrong-address-on-owned-rejector");
     let (rejected_stream, rejected_peer) =
         tokio::time::timeout(Duration::from_secs(15), rejector.accept()).await??;
     assert!(rejected_peer.ip().is_loopback());
@@ -248,10 +284,21 @@ async fn actual_readonly_node_serves_blank_readonly_peer_after_source_exits() ->
         .update_device(&b_id, &DevicePatch::default().addresses(vec![b_address]))
         .await?;
     b.client().resume_device(&c_id).await?;
+    phase.set("retained-to-blank-readonly-connection");
     let b_before = out(&connected(b.client(), &c_id).await?)?;
+    phase.set("blank-to-retained-readonly-connection");
     let c_before = out(&connected(c.client(), &b_id).await?)?;
+    phase.set("receive-blank-readonly-with-source-stopped");
     c.client().resume_folder(&cf.configuration.id).await?;
-    received(c.client(), &cf.configuration.id, &blank, &samples).await?;
+    received(
+        "retained-to-blank-readonly",
+        c.client(),
+        &cf.configuration.id,
+        &blank,
+        &samples,
+    )
+    .await?;
+    phase.set("relay-transfer-counter-readback");
     let b_after = out(&connected(b.client(), &c_id).await?)?;
     let c_after = out(&connected(c.client(), &b_id).await?)?;
     assert!(b_after > b_before && c_after >= c_before);
@@ -271,7 +318,11 @@ async fn actual_readonly_node_serves_blank_readonly_peer_after_source_exits() ->
     assert!(c.client().folder(&cf.configuration.id).await?.extra["readWriteSecret"] == "");
     b.client().pause_device(&c_id).await?;
     c.client().pause_device(&b_id).await?;
-    for core in [&mut c, &mut b] {
+    for (stage, core) in [
+        ("blank-readonly-normal-exit", &mut c),
+        ("retained-readonly-normal-exit", &mut b),
+    ] {
+        phase.set(stage);
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     }
@@ -286,7 +337,9 @@ async fn actual_readonly_node_serves_blank_readonly_peer_after_source_exits() ->
             "scope":"logical loopback peers; protocol byte counters, not WAN savings"
         })
     );
+    phase.set("all-data-and-counter-checks-complete");
     std::fs::remove_dir_all(root)?;
+    phase.complete();
     println!(
         "public readonly three-node evidence: {}",
         json!({

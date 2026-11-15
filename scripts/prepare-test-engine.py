@@ -141,8 +141,13 @@ def prepare(args):
     if manifest["version"] != version:
         raise ValueError("test setup differs from the explicitly selected fixed version")
     packages = [p for p in manifest["packages"] if p["id"] == args.package]
-    if len(packages) != 1 or not packages[0]["alpha_target"]:
-        raise ValueError("this fixture setup currently covers the six alpha package mappings only")
+    if len(packages) != 1:
+        raise ValueError("test package must have one exact fixed catalog entry")
+    # Preparing an explicitly selected non-alpha architecture is separate from
+    # claiming it can run here. Keep the older upgrade fixture's narrower scope.
+    scope_field = "alpha_target" if older else "in_scope"
+    if packages[0].get(scope_field) is not True:
+        raise ValueError("test package is outside the selected fixed catalog scope")
     package = packages[0]
     root = "-".join(["verysync", package["os"], package["upstream_arch"], manifest["version"]])
     parent = Path(args.parent).resolve(strict=True)
@@ -270,6 +275,73 @@ def windows_processes_for_binary(binary):
     return matches
 
 
+def linux_process_stamp(directory):
+    fields = (directory / "stat").read_text().rpartition(")")[2].split()
+    return int(fields[19])
+
+
+def linux_emulated_processes(binary, expected_emulator_sha256, proc_root=Path("/proc")):
+    """Require exact core argv, its mapped inode and the declared emulator bytes."""
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", expected_emulator_sha256):
+        raise ValueError("an explicit pinned emulator SHA-256 is required")
+    core = Path(binary).resolve(strict=True)
+    core_stat = core.stat()
+    identity = (os.major(core_stat.st_dev), os.minor(core_stat.st_dev), core_stat.st_ino)
+    argument = os.fsencode(core)
+    matches = []
+    images = {}
+    for directory in proc_root.iterdir():
+        if not directory.name.isdecimal() or int(directory.name) <= 0:
+            continue
+        try:
+            before = linux_process_stamp(directory)
+            with (directory / "cmdline").open("rb") as source:
+                arguments = source.read(65537)
+            if len(arguments) > 65536 or argument not in arguments.split(b"\0"):
+                continue
+            with (directory / "maps").open("rb") as source:
+                mappings = source.read(1024 * 1024 + 1)
+            if len(mappings) > 1024 * 1024:
+                continue
+            mapped = False
+            for line in mappings.splitlines():
+                fields = line.split(None, 5)
+                if len(fields) < 5:
+                    continue
+                device = fields[3].split(b":")
+                if len(device) == 2 and (int(device[0], 16), int(device[1], 16), int(fields[4])) == identity:
+                    mapped = True
+                    break
+            if not mapped:
+                continue
+            executable = directory / "exe"
+            with executable.open("rb") as source:
+                info = os.fstat(source.fileno())
+                if not 0 < info.st_size <= MAX_EXECUTABLE_BYTES:
+                    continue
+                image_identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+                original_core_image = (info.st_dev, info.st_ino) == (core_stat.st_dev, core_stat.st_ino)
+                if not original_core_image and image_identity not in images:
+                    digest = hashlib.sha256()
+                    for chunk in iter(lambda: source.read(65536), b""):
+                        digest.update(chunk)
+                    images[image_identity] = digest.hexdigest()
+            if not original_core_image and images[image_identity] != expected_emulator_sha256.lower():
+                continue
+            after = executable.stat()
+            if ((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == image_identity
+                    and linux_process_stamp(directory) == before
+                    and (directory / "cmdline").read_bytes() == arguments):
+                matches.append(int(directory.name))
+        except (OSError, ValueError, IndexError):
+            # A disappearing/recycled process or inaccessible image is never
+            # invented as a positive ownership observation.
+            continue
+    if len(matches) > 4096:
+        raise RuntimeError("explicit emulator inventory exceeds its bound")
+    return sorted(matches)
+
+
 def owned_processes(binary=None):
     """Read exact native image/argv ownership, including filesystem aliases."""
     binary = binary or os.environ.get("VERYSYNC_TEST_BINARY")
@@ -280,14 +352,19 @@ def owned_processes(binary=None):
     binary = str(Path(binary).resolve())
     if os.name == "nt":
         return sorted(windows_processes_for_binary(binary))
+    emulator = os.environ.get("VERYSYNC_TEST_EMULATOR_SHA256")
+    if emulator:
+        if sys.platform != "linux":
+            raise ValueError("the explicit emulated-image observer requires Linux procfs")
+        return linux_emulated_processes(binary, emulator)
     result = subprocess.run(["pgrep", "-f", "^" + re.escape(binary) + "( |$)"],
                             capture_output=True, text=True, timeout=10)
     if result.returncode not in (0, 1):
         raise RuntimeError("cannot verify exact test-process ownership")
-    if result.returncode == 1:
-        return []
-    matches = sorted(int(pid) for pid in result.stdout.split())
-    if not matches or len(matches) > 4096 or any(pid <= 0 for pid in matches):
+    matches = sorted(int(pid) for pid in result.stdout.split()) if result.returncode == 0 else []
+    if result.returncode == 0 and not matches:
+        raise RuntimeError("exact test-process inventory was incomplete")
+    if len(matches) > 4096 or any(pid <= 0 for pid in matches):
         raise RuntimeError("exact test-process inventory was incomplete")
     return matches
 

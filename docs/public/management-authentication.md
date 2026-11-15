@@ -226,3 +226,26 @@ in the tls.Config`; it does not reach certificate validation in this case. The
 library preserves this native limitation and performs no automatic downgrade or
 bypass. A trusted-certificate positive path, further directory conditions and full
 same-source platform evidence remain required before broad support claims.
+
+The separate `ldap_trusted_ca_engine` target selects an explicitly prepared,
+pinned public-CA certificate for the synthetic `ldap.localhost.direct` peer.
+The fixture uses the publisher's internal-development certificate bundle and
+keeps its key in private temporary files. It never adds or removes operating
+system trust entries. Preparation occurs in an explicit CI step, outside Cargo
+and the network-blocked runtime wrapper; dependency installation and compilation
+do not download a certificate or start a server.
+
+The target keeps certificate-chain and hostname verification enabled, requires
+all DNS results to be loopback, and refuses other addresses before starting the
+core. It tests encrypted correct-password login, wrong-password and wrong-hostname
+refusal, persisted verification policy after restart, logout, normal owned-core
+exit, and private peer/file cleanup. The existing self-signed cases separately
+exercise untrusted-chain refusal. A changed or expired pinned certificate fails
+preparation and requires an explicit fixture update; it is never silently
+replaced or accepted with verification disabled. Keys and certificate bundles
+must not be committed, included in Cargo packages, logged, cached, or uploaded
+as workflow artifacts. The [publisher's terms](https://github.com/Upinel/localhost.direct#eula) apply to this development fixture.
+
+These are test requirements. A prepared certificate or passing fixture boundary
+contract is not native authentication acceptance; final source and platform
+results remain separate evidence.

@@ -49,8 +49,13 @@
 #![doc = include_str!("../docs/public/remote-management.md")]
 #![doc = include_str!("../docs/public/management-transport.md")]
 #![doc = include_str!("../docs/public/gui-listener.md")]
+#![doc = include_str!("../docs/public/target-directories.md")]
+#![doc = include_str!("../docs/public/native-helpers.md")]
+#![doc = include_str!("../docs/public/native-hardware.md")]
+#![doc = include_str!("../docs/public/native-gui-resources.md")]
 
 mod auth;
+mod auxiliary;
 mod capabilities;
 mod client;
 mod configuration;
@@ -71,6 +76,7 @@ mod folders;
 mod gui_listener;
 mod gui_preferences;
 mod gui_session;
+mod hardware;
 mod ignores;
 mod invitations;
 mod ldap;
@@ -101,6 +107,11 @@ mod transports;
 mod upgrades;
 
 pub use auth::{ApiKey, DeviceId};
+pub use auxiliary::{
+    FolderTemporaryCleanup, NativeGuiMetadata, NativeQrCode, NativeSystemPaths, NativeUsageReport,
+    PendingNativeLink, TargetDirectoryCreation, TargetDirectoryEntry, TargetDirectoryLocation,
+    TargetIpLocation,
+};
 pub use capabilities::{
     library_capabilities, Capability, CapabilityReport, ImplementationStatus, InstanceConditions,
     InstanceObservation, LibraryCapability, TargetSnapshot, TargetValidation, VerificationStatus,
@@ -153,6 +164,11 @@ pub use gui_listener::{
 pub use gui_preferences::{GuiPreferences, GuiPreferencesPatch, GuiPreferencesUpdate};
 pub use gui_session::{
     GuiCredentialUpdate, GuiCredentials, GuiLoginOptions, GuiLogoutReceipt, GuiSession,
+};
+pub use hardware::{
+    NativeBlockDisk, NativeBlockHardware, NativeBlockPartition, NativeCpuCore, NativeCpuHardware,
+    NativeCpuPackage, NativeMemoryHardware, NativeMemoryModule, NativeNetworkHardware,
+    NativeNetworkInterface, NativeNicCapability,
 };
 pub use ignores::{IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
 pub use invitations::{

@@ -1,4 +1,6 @@
 //! Actual private device controls and their independent connection/file effects.
+#[path = "common/device_removal_diagnostic.rs"]
+mod device_removal_diagnostic;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/private_redial.rs"]
@@ -71,8 +73,12 @@ async fn address(client: &Client) -> TestResult<String> {
     })
     .await??)
 }
-async fn connected(client: &Client, id: &DeviceId, expected: bool) -> TestResult {
-    tokio::time::timeout(Duration::from_secs(20), async {
+async fn connected(
+    client: &Client,
+    id: &DeviceId,
+    expected: bool,
+) -> TestResult<serde_json::Value> {
+    let observed = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let snapshot = raw(
                 client,
@@ -91,13 +97,92 @@ async fn connected(client: &Client, id: &DeviceId, expected: bool) -> TestResult
                     .ok_or("peer connection state missing")?,
             };
             if actual == expected {
-                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(());
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(snapshot);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await??;
-    Ok(())
+    Ok(observed)
+}
+
+async fn removal_events(client: &Client, since: u64) -> TestResult<Vec<serde_json::Value>> {
+    let response = client
+        .raw_request(
+            &RawRequest::new(RawMethod::Get, ["rest", "events"], RequestEffect::ReadOnly)?
+                // Match the event adapter's verified head-snapshot strategy:
+                // requesting at the current head can break this fixed core.
+                .query("since", "0")
+                .query("timeout", "0")
+                .query("limit", "256"),
+        )
+        .await?;
+    if response.status() != 200 {
+        return Err("private removal event snapshot failed".into());
+    }
+    let events: Vec<serde_json::Value> = serde_json::from_slice(response.body_bytes())?;
+    Ok(events
+        .into_iter()
+        .filter(|event| event["id"].as_u64().is_some_and(|id| id > since))
+        .collect())
+}
+
+async fn removal_state_diagnostic(
+    role: &'static str,
+    client: &Client,
+    peer: &DeviceId,
+    before_started: Option<&str>,
+    since: u64,
+    removal_started: std::time::SystemTime,
+) -> TestResult<serde_json::Value> {
+    println!("synthetic removal diagnostic stage: {role} connections");
+    let connections = raw(
+        client,
+        RawMethod::Get,
+        &["rest", "system", "connections"],
+        None,
+    )
+    .await?;
+    let row = connections["connections"].get(peer.as_str());
+    let connected = row.and_then(|value| value["connected"].as_bool());
+    let started_changed = before_started
+        .zip(row.and_then(|value| value["startedAt"].as_str()))
+        .map(|(before, after)| before != after);
+    println!(
+        "synthetic removal diagnostic connection: {}",
+        json!({"role":role,"row_present":row.is_some(),"connected":connected,"connection_start_changed":started_changed})
+    );
+    println!("synthetic removal diagnostic stage: {role} configuration");
+    let configuration = raw(client, RawMethod::Get, &["rest", "config"], None).await?;
+    let configured = configuration["devices"]
+        .as_array()
+        .ok_or("diagnostic device array missing")?
+        .iter()
+        .any(|value| value["deviceID"] == peer.as_str());
+    let references = configuration["folders"]
+        .as_array()
+        .ok_or("diagnostic folder array missing")?
+        .iter()
+        .filter(|folder| {
+            folder["devices"].as_array().is_some_and(|values| {
+                values
+                    .iter()
+                    .any(|value| value["deviceID"] == peer.as_str())
+            })
+        })
+        .count();
+    println!(
+        "synthetic removal diagnostic config: {}",
+        json!({"role":role,"device_configured":configured,"folder_reference_count":references})
+    );
+    println!("synthetic removal diagnostic stage: {role} events");
+    let events = removal_events(client, since).await?;
+    let count = |kind| events.iter().filter(|event| event["type"] == kind).count();
+    let timeline =
+        device_removal_diagnostic::removal_timeline(&events, peer.as_str(), removal_started);
+    Ok(
+        json!({"role":role,"event_scope":"since_fixture_initialization","device_configured":configured,"folder_reference_count":references,"peer_row_present":row.is_some(),"connected":connected,"connection_start_changed":started_changed,"events_returned":events.len(),"device_connected_events":count("DeviceConnected"),"device_disconnected_events":count("DeviceDisconnected"),"device_rejected_events":count("DeviceRejected"),"event_tail_gap":events.first().and_then(|event|event["id"].as_u64()).map(|first|first>since.saturating_add(1)),"timeline_clock":"owned_runner_wall_clock","timeline":timeline}),
+    )
 }
 
 #[tokio::test]
@@ -249,6 +334,18 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
     private_redial::configure(b.client()).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
+    // Establish diagnostics before the original lifecycle sequence, so no
+    // additional read is inserted between reconnect observation and DELETE.
+    let a_events = removal_events(a.client(), 0).await?;
+    let b_events = removal_events(b.client(), 0).await?;
+    let a_since = a_events
+        .last()
+        .and_then(|event| event["id"].as_u64())
+        .unwrap_or(0);
+    let b_since = b_events
+        .last()
+        .and_then(|event| event["id"].as_u64())
+        .unwrap_or(0);
     let a_path = root.join("source files");
     let b_path = root.join("received files");
     std::fs::create_dir(&a_path)?;
@@ -324,12 +421,71 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
             .await?
             .requested_fields_match
     );
-    connected(a.client(), &b_id, true).await?;
-    connected(b.client(), &a_id, true).await?;
+    let a_before = connected(a.client(), &b_id, true).await?;
+    let b_before = connected(b.client(), &a_id, true).await?;
     println!("synthetic device effect stage: remove registration and observe remote disconnect");
+    let removal_started = std::time::SystemTime::now();
     let removed = a.client().remove_device(&b_id).await?;
     assert!(removed.configuration_absent && removed.remaining_folder_associations.is_empty());
-    connected(b.client(), &a_id, false).await?;
+    let disconnect = connected(b.client(), &a_id, false).await;
+    // Diagnose native lifecycle state without changing the original 20s
+    // condition, extending it, retrying removal, or exposing IDs/addresses.
+    let source_diagnostic = async {
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            removal_state_diagnostic(
+                "source",
+                a.client(),
+                &b_id,
+                a_before["connections"]
+                    .get(b_id.as_str())
+                    .and_then(|value| value["startedAt"].as_str()),
+                a_since,
+                removal_started,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(observed)) => println!("synthetic device removal diagnostic: {observed}"),
+            Ok(Err(_)) => {
+                println!("synthetic device removal diagnostic: role=source observation_error=true")
+            }
+            Err(_) => println!(
+                "synthetic device removal diagnostic: role=source observation_timed_out=true"
+            ),
+        }
+    };
+    let receiver_diagnostic = async {
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            removal_state_diagnostic(
+                "receiver",
+                b.client(),
+                &a_id,
+                b_before["connections"]
+                    .get(a_id.as_str())
+                    .and_then(|value| value["startedAt"].as_str()),
+                b_since,
+                removal_started,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(observed)) => println!("synthetic device removal diagnostic: {observed}"),
+            Ok(Err(_)) => println!(
+                "synthetic device removal diagnostic: role=receiver observation_error=true"
+            ),
+            Err(_) => println!(
+                "synthetic device removal diagnostic: role=receiver observation_timed_out=true"
+            ),
+        }
+    };
+    tokio::join!(source_diagnostic, receiver_diagnostic);
+    println!(
+        "synthetic original removal disconnect condition passed={}",
+        disconnect.is_ok()
+    );
+    disconnect?;
     assert_eq!(std::fs::read(a_path.join("sample.bin"))?, sample);
     assert_eq!(std::fs::read(b_path.join("sample.bin"))?, sample);
     assert_eq!(a.client().folder(&af.id).await?.id, af.id);

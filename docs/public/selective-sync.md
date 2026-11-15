@@ -65,3 +65,27 @@ No native positive-selection or deletion support is claimed from the refusal
 tests. Current native evidence covers real tree/search/cursor data, all five
 typed licence refusals, unchanged selection/data after refusal, and explicit
 restoration of free ordinary synchronization with exact bytes and normal exits.
+
+The macOS native fixture records bounded process identities before normal
+shutdown and checks their birth times when diagnosing a timeout. It reports
+root/worker state separately from log exit markers. The observer sends no
+signals, retries no shutdown request and leaves the original ten-second failure
+intact. A missing or changed identity remains an observation gap, rather than
+proof that the owned tree exited.
+
+After restoring and verifying ordinary synchronization, the fixture explicitly
+pauses both private peers and waits up to twenty seconds for both connection
+snapshots to report no active connection. A pause acknowledgement alone does
+not establish disconnection. Each subsequent normal process exit still has its
+original ten-second bound. Private three-node research reproduced a fixed-engine
+shutdown stall with an active connection: its close callback was waiting for an
+internal SQLite write lock while model shutdown waited for that callback.
+Explicit pause followed by observed disconnection avoided that stall in the
+controlled comparison. A separate bounded observation retained the original
+ten-second failure and subsequently observed an unforced, zero-code tree exit
+at 10.011 seconds. A blocked callback at the deadline therefore does not establish
+a permanent deadlock. These observations do not prove that every historical
+exit timeout has the same cause, or establish successful shutdown under every
+active workload.
+The library's shutdown API never pauses devices implicitly; a timeout retains
+ownership and requires explicit reconciliation or cleanup by the caller.

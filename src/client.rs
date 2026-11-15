@@ -1,5 +1,7 @@
 //! Authenticated management connections, separate from process ownership.
 
+mod auxiliary_control;
+mod auxiliary_maintenance;
 mod configuration_control;
 mod default_versioning;
 mod device_control;
@@ -10,6 +12,8 @@ mod file_transfer;
 mod folder_options;
 mod gui_listener;
 mod gui_preferences;
+mod gui_resources;
+mod hardware_control;
 mod history_control;
 mod ignore_control;
 mod invitation_control;
@@ -18,6 +22,7 @@ mod license_control;
 mod local_sync_control;
 mod maintenance_control;
 mod management_auth;
+mod native_helpers;
 mod network_control;
 mod official_account_control;
 mod recovery;
@@ -443,6 +448,46 @@ impl Client {
             )
             .await
             .map(|_| ())
+    }
+
+    /// Request the native restart action once after checking the current identity.
+    ///
+    /// Success acknowledges the command, without waiting for another program
+    /// generation. A monitor may relaunch an externally managed program. The
+    /// library's owned inner program instead exits with the native restart code;
+    /// use [`crate::ManagedInstance::restart`] for explicit owned stop/start.
+    /// An uncertain write or invalid acknowledgement is never retried. Observe
+    /// a fresh identity and changed start time separately when reconciling it.
+    pub async fn request_restart(&self) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Acknowledgement {
+            ok: String,
+        }
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                "request native restart",
+                reqwest::Method::POST,
+                self.connection.management_url("rest/system/restart", &[])?,
+                None,
+                true,
+            )
+            .await?;
+        let uncertain = || Error::MutationOutcomeUnknown {
+            operation: "validate native restart acknowledgement",
+            source: Box::new(Error::InvalidResponse {
+                operation: "request native restart",
+                response: ResponseDiagnostic::new(status, bytes.clone()),
+            }),
+        };
+        let acknowledgement: Acknowledgement =
+            serde_json::from_slice(&bytes).map_err(|_| uncertain())?;
+        if acknowledgement.ok != "restarting" {
+            return Err(uncertain());
+        }
+        Ok(())
     }
 
     /// Authenticate, apply the version policy, and read/optionally compare ID.

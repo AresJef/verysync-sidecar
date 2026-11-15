@@ -21,6 +21,17 @@ impl LdapService {
         Self::start_transport(root, "plain")
     }
     pub fn start_transport(root: &Path, transport: &str) -> TestResult<Self> {
+        Self::start_with_fixture(root, transport, None)
+    }
+    #[allow(dead_code)] // Used by the separate strict public-CA native target.
+    pub fn start_public_tls(root: &Path, manifest: &Path) -> TestResult<Self> {
+        Self::start_with_fixture(root, "tls", Some(manifest))
+    }
+    fn start_with_fixture(
+        root: &Path,
+        transport: &str,
+        public_manifest: Option<&Path>,
+    ) -> TestResult<Self> {
         let python = std::env::var_os("VERYSYNC_STORAGE_TEST_PYTHON")
             .ok_or("explicit private LDAP test Python required")?;
         let mut random = [0; 24];
@@ -45,7 +56,7 @@ impl LdapService {
         let mut input = child.stdin.take().ok_or("LDAP peer input absent")?;
         serde_json::to_writer(
             &mut input,
-            &serde_json::json!({"root":root,"dn":"uid=ldap-test-user,dc=example,dc=test","password":service.password,"transport":transport}),
+            &serde_json::json!({"root":root,"dn":"uid=ldap-test-user,dc=example,dc=test","password":service.password,"transport":transport,"public_tls_manifest":public_manifest}),
         )?;
         input.write_all(b"\n")?;
         drop(input);
@@ -79,6 +90,7 @@ impl LdapService {
             || ready["loopback_only"] != true
             || ready["protocol"] != "ldap"
             || ready["transport"] != transport
+            || ready["public_ca"] != public_manifest.is_some()
         {
             return Err("private LDAP readiness contract failed".into());
         }

@@ -31,10 +31,10 @@ jobs:
   fixture:
     name: ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
-    # Complete native suites grew from baseline control to protocols/recovery.
-    # Two source1535 profiles reached the old 45-minute job capacity; individual
-    # native deadlines/workloads remain unchanged and failures still gate.
-    timeout-minutes: 55
+    # Source abe7 Windows AMD64 reached 55 minutes in the final mechanism probes
+    # after product suites completed. Allow the complete required bundle and its
+    # cleanup to finish; individual native deadlines and all outcome gates stay.
+    timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
@@ -72,7 +72,9 @@ jobs:
       - name: Check extraction and exact process inventory contracts
         run: |
           python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+          python -m unittest discover -s scripts/tests -p test_prepare_test_examples.py
           python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+          python -m unittest discover -s scripts/tests -p test_ldap_tls_fixture.py
       - name: Install native Rust toolchain
         run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
       - name: Record compiler identity
@@ -124,6 +126,42 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_instance --test-filter restart_preserves_identity_folders_settings_and_samples
           --evidence-dir "${{ runner.temp }}/vs-managed-ui-proxy"
+      - name: Verify management, account, license and remote-tunnel boundaries
+        id: native_authentication_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
+      - name: Explicitly prepare the pinned private public-CA loopback TLS fixture
+        id: native_ldap_tls_preparation
+        continue-on-error: true
+        run: >-
+          python scripts/prepare-ldap-tls-fixture.py prepare
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify strict public-CA LDAP without system trust modification
+        id: native_ldap_trusted_ca_engine
+        continue-on-error: true
+        timeout-minutes: 4
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target ldap_trusted_ca_engine
+          --evidence-dir "${{ runner.temp }}/vs-ldap-trusted-ca-proxy"
+      - name: Verify actual sync, selective browse, recovery and bounded transfers
+        id: native_sync_observation
+        continue-on-error: true
+        env:
+          VERYSYNC_BANDWIDTH_PHASE: acceptance
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target sync_observation
+          --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
+      - name: Verify fixed-version upgrades, state restoration and cancellation
+        id: native_upgrade_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
       - name: Verify mounted resource metadata, checksums and native previews
         id: native_files_engine
         continue-on-error: true
@@ -211,12 +249,6 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target configuration_engine --evidence-dir "${{ runner.temp }}/vs-configuration-proxy"
-      - name: Verify management, account, license and remote-tunnel boundaries
-        id: native_authentication_engine
-        continue-on-error: true
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
         id: native_managed_lifetime
         continue-on-error: true
@@ -254,15 +286,6 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target network --allow-private-discovery
           --evidence-dir "${{ runner.temp }}/vs-network-proxy"
-      - name: Verify actual sync, selective browse, recovery and bounded transfers
-        id: native_sync_observation
-        continue-on-error: true
-        env:
-          VERYSYNC_BANDWIDTH_PHASE: acceptance
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target sync_observation
-          --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
       - name: Verify read-only handoff to a fresh third node with the source stopped
         id: native_p2p_three_nodes
         continue-on-error: true
@@ -270,13 +293,6 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target p2p_three_nodes
           --evidence-dir "${{ runner.temp }}/vs-three-node-proxy"
-      - name: Verify fixed-version upgrades, state restoration and cancellation
-        id: native_upgrade_engine
-        continue-on-error: true
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
-          --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
       - name: Run independent-engine fixture contracts
         id: native_engine_control
         continue-on-error: true
@@ -348,6 +364,10 @@ jobs:
         id: native_cleanup_upgrade
         if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Remove only this job's private public-CA fixture
+        id: native_ldap_tls_cleanup
+        if: always()
+        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "${{ runner.temp }}"
       - name: Require every applicable native suite and exact cleanup
         if: always()
         env:
@@ -355,23 +375,131 @@ jobs:
           NATIVE_MATRIX_PACKAGE: ${{ matrix.package }}
         run: python scripts/check-native-step-results.py
 
-  smb-diagnostic:
-    name: SMB diagnosis only (${{ matrix.package }})
-    runs-on: ${{ matrix.runner }}
+  device-removal-diagnostic:
+    name: Device removal diagnosis only (linux-amd64-standard)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install the native Rust toolchain
+        run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+      - name: Fetch fixed dependencies explicitly
+        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare the fixed isolated core explicitly
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe the original device-removal condition with bounded role diagnostics
+        id: device_first
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --test-filter actual_device_pause_disconnects
+          --evidence-dir "${{ runner.temp }}/vs-device-removal-first"
+      - name: Require exact owned-core cleanup before the independent repetition
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Repeat independently without overriding the first outcome
+        id: device_second
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --test-filter actual_device_pause_disconnects
+          --evidence-dir "${{ runner.temp }}/vs-device-removal-second"
+      - name: Verify exact owned-core cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require both original device conditions; this is not full acceptance
+        if: always()
+        env:
+          FIRST_OUTCOME: ${{ steps.device_first.outcome }}
+          SECOND_OUTCOME: ${{ steps.device_second.outcome }}
+        run: >-
+          python -c "import os,sys; sys.exit(0 if all(os.environ[k]=='success' for k in ['FIRST_OUTCOME','SECOND_OUTCOME']) else 1)"
+
+
+  listener-release-diagnostic:
+    name: GUI listener diagnosis only (macos-amd64-standard)
+    runs-on: macos-15-intel
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install native Rust and fetch fixed dependencies
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the pinned private TLS-peer Python environment
+        run: >-
+          python scripts/prepare-storage-test-environment.py
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Explicitly prepare the fixed private Intel Mac core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package macos-amd64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe the original eight-second listener release condition
+        id: listener_first
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target authentication_engine
+          --test-filter native_listener_tls_address_and_disable_effects_keep_explicit_owner_control
+          --evidence-dir "${{ runner.temp }}/vs-listener-release-first"
+      - name: Require exact owned-core cleanup before the independent repetition
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Repeat the original condition independently
+        id: listener_second
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target authentication_engine
+          --test-filter native_listener_tls_address_and_disable_effects_keep_explicit_owner_control
+          --evidence-dir "${{ runner.temp }}/vs-listener-release-second"
+      - name: Require exact owned-core cleanup
+        id: listener_cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require both original conditions and cleanup; full acceptance remains separate
+        if: always()
+        env:
+          FIRST_OUTCOME: ${{ steps.listener_first.outcome }}
+          SECOND_OUTCOME: ${{ steps.listener_second.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.listener_cleanup.outcome }}
+        run: >-
+          python -c "import os,sys; sys.exit(0 if all(os.environ[k]=='success' for k in ['FIRST_OUTCOME','SECOND_OUTCOME','CLEANUP_OUTCOME']) else 1)"
+
+  hardware-diagnostic:
+    name: Native hardware diagnosis only (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
-          - package: windows-amd64-standard
-            runner: windows-2022
-            rust: x86_64-pc-windows-msvc
-          - package: windows-arm64-standard
-            runner: windows-11-arm
-            rust: aarch64-pc-windows-msvc
-    defaults:
-      run:
-        shell: bash
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
     env:
       TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
     steps:
@@ -381,36 +509,34 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
-      - name: Select separate x64 peer interpreter on Windows ARM
-        if: matrix.package == 'windows-arm64-standard'
-        id: storage_tools_python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-          architecture: x64
-          update-environment: false
-      - name: Prepare explicit private protocol peers
-        env:
-          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
-        run: python scripts/prepare-storage-test-environment.py --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Install the native Rust toolchain
-        run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
-      - name: Fetch fixed dependencies explicitly
-        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
-      - name: Prepare the fixed isolated core explicitly
+      - name: Install native Rust and fetch dependencies before runtime isolation
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed private Mac core
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Diagnose only the actual SMB case; this is not full acceptance
+      - name: Verify native hardware data and exact observed backend-refusal conditions
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target local_sync_protocol_engine --test-filter public_smb_
-          --evidence-dir "${{ runner.temp }}/vs-smb-diagnostic-proxy"
-      - name: Diagnose actual SMB reverse, two-way conflicts and selected effects only
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target local_sync_protocol_advanced_engine --test-filter public_smb_
-          --evidence-dir "${{ runner.temp }}/vs-smb-advanced-diagnostic-proxy"
-      - name: Verify exact owned-core cleanup
+          --test-target engine_control --test-filter hardware_effects
+          --evidence-dir "${{ runner.temp }}/vs-hardware-component-diagnosis"
+      - name: Observe the upstream Darwin CPU prerequisite after the original result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, shutil, subprocess
+          binary = shutil.which('sysctl')
+          if binary is None:
+              raise ValueError('the native sysctl prerequisite is absent')
+          result = subprocess.run([binary, '-a'], capture_output=True, timeout=15)
+          print(json.dumps({'prerequisite': 'ghw v0.13.0 CPU sysctl -a',
+                            'exit_code': result.returncode,
+                            'stdout_bytes': len(result.stdout), 'stderr_bytes': len(result.stderr),
+                            'permission_error_marker': any(marker in result.stderr.lower() for marker in [b'operation not permitted', b'permission denied']),
+                            'native_output_logged': False, 'sdk_runtime_acceptance': False}))
+          PY
+      - name: Require exact owned-executable cleanup after the original result
         if: always()
         run: python scripts/prepare-test-engine.py check-cleanup

@@ -1,0 +1,288 @@
+name: Additional platform acceptance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: additional-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  x86-compatibility:
+    name: ${{ matrix.package }} (${{ matrix.execution }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: linux-386-standard
+            runner: ubuntu-24.04
+            rust: i686-unknown-linux-gnu
+            execution: x86 on x64 Linux
+          - package: windows-386-standard
+            runner: windows-2022
+            rust: i686-pc-windows-msvc
+            execution: WOW64
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install the explicit 32-bit Linux compiler and loader
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes gcc-multilib g++-multilib libc6-dev-i386 lib32z1
+          dpkg-query -W gcc-multilib g++-multilib libc6-dev-i386 lib32z1
+      - name: Install the explicit Windows x86 assembly build prerequisite
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm --version=2.16.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory = Join-Path $env:ProgramFiles 'NASM'
+          $nasmBinary = Join-Path $nasmDirectory 'nasm.exe'
+          & $nasmBinary -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Record compatibility host and install the 32-bit Rust host toolchain
+        run: |
+          python -c 'import os, platform, struct; print({"runner_arch": os.environ["RUNNER_ARCH"], "python_machine": platform.machine(), "python_bits": struct.calcsize("P") * 8})'
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --force-non-host
+          rustc +"$TEST_TOOLCHAIN" -vV
+          rustc +"$TEST_TOOLCHAIN" --print cfg
+      - name: Check exact extraction, selection and isolated-runner contracts
+        run: |
+          python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+          python -m unittest discover -s scripts/tests -p test_prepare_test_examples.py
+          python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+      - name: Fetch locked dependencies before isolated execution
+        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed 32-bit official core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Compile all public targets and execute synthetic contracts in 32-bit Rust
+        run: |
+          cargo +"$TEST_TOOLCHAIN" check --all-targets --all-features --locked
+          cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test devices_contract --test invitations_contract --test network_contract --test sync_observation_contract --test releases --locked
+      - name: Explicitly build every required controller example
+        run: >-
+          python scripts/prepare-test-examples.py --toolchain "$TEST_TOOLCHAIN"
+          --github-env "$GITHUB_ENV"
+      - name: Verify real management and synthetic file effects
+        # The following suites also execute manage_owned, not just library tests.
+        id: native_engine_control
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-x86-control"
+      - name: Verify actual startup, cancellation, shutdown and state reuse
+        id: native_managed_instance
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-x86-managed"
+      - name: Verify real owned-host exit and exact process containment
+        id: native_managed_lifetime
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_lifetime --evidence-dir "${{ runner.temp }}/vs-x86-lifetime"
+      - name: Verify actual peer pause, resume and removal effects
+        id: native_devices
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --evidence-dir "${{ runner.temp }}/vs-x86-devices"
+      - name: Verify actual synthetic key-based sharing
+        id: native_sharing
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target sharing --evidence-dir "${{ runner.temp }}/vs-x86-sharing"
+      - name: Require exact owned-executable cleanup
+        id: native_cleanup
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require every compatibility execution outcome
+        if: always()
+        env:
+          PLATFORM_STEP_RESULTS: ${{ toJson(steps) }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          steps = json.loads(os.environ['PLATFORM_STEP_RESULTS'])
+          required = ['native_engine_control', 'native_managed_instance', 'native_managed_lifetime', 'native_devices', 'native_sharing', 'native_cleanup']
+          failed = [name for name in required if steps.get(name, {}).get('outcome') != 'success']
+          if failed:
+              print('Required compatibility outcomes did not pass: ' + ', '.join(failed), file=sys.stderr)
+              sys.exit(1)
+          print('All selected 32-bit compatibility effects and exact cleanup passed; minimum OS and other feature suites remain separate gates.')
+          PY
+
+  arm-emulated:
+    name: ${{ matrix.package }} (QEMU user emulation)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: linux-arm-standard
+            rust: armv5te-unknown-linux-gnueabi
+            compiler: arm-linux-gnueabi
+            cpu: arm926
+          - package: linux-armv6-standard
+            rust: arm-unknown-linux-gnueabi
+            compiler: arm-linux-gnueabi
+            cpu: arm1176
+          - package: linux-armhf-standard
+            rust: armv7-unknown-linux-gnueabihf
+            compiler: arm-linux-gnueabihf
+            cpu: cortex-a7
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+      CARGO_BUILD_TARGET: ${{ matrix.rust }}
+      QEMU_CPU: ${{ matrix.cpu }}
+      QEMU_LD_PREFIX: /usr/${{ matrix.compiler }}
+      QEMU_IMAGE: docker.io/tonistiigi/binfmt@sha256:1b804311fe87047a4c96d38b4b3ef6f62fca8cd125265917a9e3dc3c996c39e6
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Register only ARM emulation on this disposable CI runner
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: ${{ env.QEMU_IMAGE }}
+          platforms: arm
+          cache-image: false
+      - name: Install the matching cross compiler and GNU controller sysroot
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes g++-${{ matrix.compiler }}
+          dpkg-query -W g++-${{ matrix.compiler }}
+          ${{ matrix.compiler }}-gcc --version
+      - name: Select the same pinned QEMU bytes for the controller and record emulation
+        env:
+          CROSS_COMPILER: ${{ matrix.compiler }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-arm-emulator'
+          root.mkdir(mode=0o700)
+          binary = root / 'qemu-arm'
+          image = os.environ['QEMU_IMAGE']
+          container = subprocess.check_output(['docker', 'create', image], text=True).strip()
+          try:
+              subprocess.run(['docker', 'cp', container + ':/usr/bin/qemu-arm', str(binary)], check=True)
+          finally:
+              subprocess.run(['docker', 'rm', container], check=True)
+          binary.chmod(0o700)
+          if any(c.isspace() for c in str(binary)):
+              raise ValueError('the explicit Cargo runner path must not contain whitespace')
+          target = os.environ['CARGO_BUILD_TARGET']
+          suffix = target.replace('-', '_')
+          compiler = os.environ['CROSS_COMPILER']
+          emulator_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write('CARGO_TARGET_' + suffix.upper() + '_LINKER=' + compiler + '-gcc\n')
+              output.write('CARGO_TARGET_' + suffix.upper() + '_RUNNER=' + str(binary) + '\n')
+              output.write('CC_' + suffix + '=' + compiler + '-gcc\n')
+              output.write('CXX_' + suffix + '=' + compiler + '-g++\n')
+              output.write('AR_' + suffix + '=' + compiler + '-ar\n')
+              output.write('VERYSYNC_TEST_EMULATOR_SHA256=' + emulator_sha + '\n')
+          info = {'execution': 'QEMU user emulation', 'runner_arch': os.environ['RUNNER_ARCH'],
+                  'rust_target': target, 'cpu': os.environ['QEMU_CPU'],
+                  'controller_sysroot': os.environ['QEMU_LD_PREFIX'], 'image': image,
+                  'qemu_sha256': emulator_sha,
+                  'native_arm_host': False, 'minimum_kernel_verified': False}
+          (root / 'identity.json').write_text(json.dumps(info, indent=2) + '\n')
+          print(json.dumps(info))
+          subprocess.run([str(binary), '--version'], check=True)
+          registration = pathlib.Path('/proc/sys/fs/binfmt_misc/qemu-arm').read_text()
+          if not registration.startswith('enabled\n') or 'flags:' not in registration:
+              raise ValueError('the required explicit ARM registration is unavailable')
+          print(registration)
+          PY
+      - name: Install fixed Rust compiler and the selected ARM standard library
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --target "$CARGO_BUILD_TARGET"
+          rustc +"$TEST_TOOLCHAIN" -vV
+          rustc +"$TEST_TOOLCHAIN" --print cfg --target "$CARGO_BUILD_TARGET"
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare only the selected fixed ARM core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify private metadata terminal and bounded calibration contracts
+        run: python -m unittest discover -s scripts/tests -p test_calibrate_arm_core.py
+      - name: Calibrate the fixed core on bounded explicit CPU models before SDK tests
+        run: python scripts/calibrate-arm-core.py
+      - name: Compile the actual ARM test executables with default TLS enabled
+        run: >-
+          cargo +"$TEST_TOOLCHAIN" test --features engine-tests
+          --test engine_control --test managed_instance --test managed_lifetime
+          --no-run --locked
+      - name: Explicitly build every required example for the actual ARM target
+        run: >-
+          python scripts/prepare-test-examples.py --toolchain "$TEST_TOOLCHAIN"
+          --github-env "$GITHUB_ENV"
+      - name: Verify real public Rust management and synthetic file effects under emulation
+        id: emulated_engine_control
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-arm-control"
+      - name: Verify actual owned startup, cancellation, shutdown and state reuse under emulation
+        id: emulated_managed_instance
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-arm-managed"
+      - name: Require positive owned-core inventory and actual public host-exit effects
+        id: emulated_managed_lifetime
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_lifetime --evidence-dir "${{ runner.temp }}/vs-arm-lifetime"
+      - name: Require exact owned-executable cleanup
+        id: emulated_cleanup
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require all selected emulated outcomes and positive-inventory cases
+        if: always()
+        env:
+          PLATFORM_STEP_RESULTS: ${{ toJson(steps) }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          steps = json.loads(os.environ['PLATFORM_STEP_RESULTS'])
+          required = ['emulated_engine_control', 'emulated_managed_instance', 'emulated_managed_lifetime', 'emulated_cleanup']
+          failed = [name for name in required if steps.get(name, {}).get('outcome') != 'success']
+          if failed:
+              print('Required emulated outcomes did not pass: ' + ', '.join(failed), file=sys.stderr)
+              sys.exit(1)
+          print('Selected QEMU effects, positive owned-core inventory and exact cleanup passed; native ARM, minimum kernel and remaining feature gates are separate.')
+          PY

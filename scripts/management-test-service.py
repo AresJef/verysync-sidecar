@@ -15,22 +15,37 @@ import os
 from pathlib import Path
 import select
 import socket
+import socketserver
 import ssl
 import sys
 import sysconfig
 import threading
+import time
 import urllib.parse
-
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 config = json.loads(sys.stdin.buffer.readline(32769))
 root = Path(config["root"])
 backend = config["backend_port"]
 if not root.is_dir() or not isinstance(backend, int) or not 0 < backend <= 65535 or backend == 18886:
     raise ValueError("explicit owned backend and private directory required")
+startup_started = time.monotonic()
+
+
+def startup_phase(phase):
+    temporary = root / ".management-startup.tmp"
+    with temporary.open("x", encoding="utf-8") as output:
+        os.chmod(temporary, 0o600)
+        json.dump({"phase": phase, "elapsed_millis": int((time.monotonic() - startup_started) * 1000)}, output)
+    os.replace(temporary, root / "management-startup.json")
+
+
+startup_phase("loading_crypto")
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+startup_phase("creating_certificates")
 observations = root / "management-observations.jsonl"
 observations.touch(exist_ok=False)
 lock = threading.Lock()
@@ -91,6 +106,7 @@ for name, data in [
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.minimum_version = ssl.TLSVersion.TLSv1_2
 context.load_cert_chain(root / "server.pem", root / "server.key")
+startup_phase("certificates_ready")
 expected_auth = "Basic " + base64.b64encode(
     (config["username"] + ":" + config["password"]).encode()).decode()
 HOP = {"connection", "proxy-connection", "proxy-authorization", "transfer-encoding",
@@ -100,6 +116,13 @@ HOP = {"connection", "proxy-connection", "proxy-authorization", "transfer-encodi
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
+
+    def server_bind(self):
+        # HTTPServer otherwise performs getfqdn() even for this literal loopback
+        # address. No hostname lookup is needed for the private fixed-name peer.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
 
     def get_request(self):
         stream, address = super().get_request()
@@ -227,6 +250,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def start(role, secure):
+    startup_phase("binding_" + role)
     server = Server(("127.0.0.1", 0), Handler)
     if server.server_port == 18886:
         raise ValueError("shared default port prohibited")
@@ -238,6 +262,7 @@ def start(role, secure):
 origin = start("origin", True)
 proxy = start("http_proxy", False)
 tls_proxy = start("https_proxy", True)
+startup_phase("ready")
 print(json.dumps({"ready": True, "loopback_only": True, "origin_port": origin.server_port,
                   "proxy_port": proxy.server_port, "tls_proxy_port": tls_proxy.server_port,
                   "python_platform": sysconfig.get_platform()}), flush=True)

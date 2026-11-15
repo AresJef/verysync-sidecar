@@ -40,3 +40,14 @@ same-source macOS/Windows/Linux amd64/arm64 matrix is a separate gate. Physical
 network topology, WAN discovery/NAT/relay behavior, minimum operating systems
 and other architectures require their own evidence. A successful loopback
 handoff does not certify those conditions.
+
+The fixture emits fixed stage names for connection, transfer, source exit,
+wrong-address rejection and final cleanup. An original receive timeout includes
+the number of matching prefix files and the last observed counters. This keeps
+the original short-circuit file reads and forty-second receive bound. On failure,
+only this fixture's three private log prefixes are summarized, bounded to 64 KiB
+each. Panic/exit markers, a prefix digest and up to eight native function names
+omit raw log bodies, call arguments, paths, addresses and credentials. Existing
+fifteen-second connection/negative and ten-second normal-exit bounds remain.
+Diagnostics preserve the failure; a successful local run does not establish the
+cause or resolution of a Windows ARM64 timeout.
