@@ -1150,18 +1150,28 @@ pub(crate) async fn send_checked(
         #[serde(default)]
         code: Option<i64>,
     }
-    if let Ok(envelope) = serde_json::from_slice::<ErrorEnvelope>(&bytes) {
-        if !envelope.error.is_empty() {
-            if envelope.code == Some(3000) {
-                return Err(Error::LicenseRequired {
-                    code: 3000,
+    // Serde can deserialize structs from JSON sequences. Only an actual JSON
+    // object can be a native error envelope; a one/two-element data array must
+    // never become Api or LicenseRequired because it fits those struct fields.
+    if bytes
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        == Some(b'{')
+    {
+        if let Ok(envelope) = serde_json::from_slice::<ErrorEnvelope>(&bytes) {
+            if !envelope.error.is_empty() {
+                if envelope.code == Some(3000) {
+                    return Err(Error::LicenseRequired {
+                        code: 3000,
+                        response: ResponseDiagnostic::new(status, bytes),
+                    });
+                }
+                return Err(uncertain(Error::Api {
+                    operation,
                     response: ResponseDiagnostic::new(status, bytes),
-                });
+                }));
             }
-            return Err(uncertain(Error::Api {
-                operation,
-                response: ResponseDiagnostic::new(status, bytes),
-            }));
         }
     }
     Ok(RawResponse {
