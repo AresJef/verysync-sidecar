@@ -130,12 +130,16 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
-      - name: Verify strict trusted-CA LDAP and exact temporary VM trust cleanup
+      - name: Explicitly prepare the pinned private public-CA loopback TLS fixture
+        id: native_ldap_tls_preparation
+        continue-on-error: true
+        run: >-
+          python scripts/prepare-ldap-tls-fixture.py prepare
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify strict public-CA LDAP without system trust modification
         id: native_ldap_trusted_ca_engine
         continue-on-error: true
         timeout-minutes: 4
-        env:
-          VERYSYNC_TEST_EPHEMERAL_CA_TRUST: selected
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target ldap_trusted_ca_engine
@@ -358,6 +362,10 @@ jobs:
         id: native_cleanup_upgrade
         if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Remove only this job's private public-CA fixture
+        id: native_ldap_tls_cleanup
+        if: always()
+        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "${{ runner.temp }}"
       - name: Require every applicable native suite and exact cleanup
         if: always()
         env:
@@ -397,8 +405,8 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
-      - name: Verify trust scope and stale-setting failure contracts
-        run: python -m unittest discover -s scripts/tests -p test_ephemeral_ci_trust.py
+      - name: Verify private TLS fixture scope and DNS failure contracts
+        run: python -m unittest discover -s scripts/tests -p test_ldap_tls_fixture.py
       - name: Select separate x64 peer interpreter on Windows ARM
         if: matrix.package == 'windows-arm64-standard'
         id: storage_tools_python
@@ -419,10 +427,12 @@ jobs:
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Diagnose strict native LDAP and exact CA cleanup only; not full acceptance
+      - name: Explicitly prepare the pinned private public-CA loopback TLS fixture
+        run: >-
+          python scripts/prepare-ldap-tls-fixture.py prepare
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Diagnose strict native public-CA LDAP only; not full acceptance
         timeout-minutes: 4
-        env:
-          VERYSYNC_TEST_EPHEMERAL_CA_TRUST: selected
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target ldap_trusted_ca_engine
@@ -430,6 +440,9 @@ jobs:
       - name: Verify exact owned-core cleanup
         if: always()
         run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Remove only this job's private public-CA fixture
+        if: always()
+        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "${{ runner.temp }}"
 
   smb-diagnostic:
     name: SMB diagnosis only (${{ matrix.package }})

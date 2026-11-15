@@ -28,7 +28,19 @@ trusted_ca = config.get("trusted_ca", False)
 if type(trusted_ca) is not bool or trusted_ca and transport != "tls":
     raise ValueError("CA-issued peer is an explicit TLS-only test selection")
 tls_context = None
-if transport != "plain":
+public_manifest = config.get("public_tls_manifest")
+if public_manifest is not None:
+    if transport != "tls" or not trusted_ca:
+        raise ValueError("public CA fixture requires explicit strict TLS selection")
+    import ldap_tls_fixture
+    ldap_tls_fixture.check_dns()
+    _, certificate, private_key = ldap_tls_fixture.load_manifest(public_manifest)
+    cert_path, key_path = root / "synthetic-ldap-cert.pem", root / "synthetic-ldap-key.pem"
+    ldap_tls_fixture.write_private(cert_path, certificate)
+    ldap_tls_fixture.write_private(key_path, private_key)
+    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls_context.load_cert_chain(cert_path, key_path)
+elif transport != "plain":
     from datetime import datetime, timedelta, timezone
     import ipaddress
     from cryptography import x509
@@ -196,5 +208,6 @@ with Server(("127.0.0.1", 0), Handler) as server:
     print(json.dumps({"ready": True, "loopback_only": True,
                       "port": server.server_address[1], "protocol": "ldap", "transport": transport,
                       "trusted_ca": trusted_ca,
+                      "public_ca": public_manifest is not None,
                       "python_platform": sysconfig.get_platform()}), flush=True)
     server.serve_forever(poll_interval=0.1)

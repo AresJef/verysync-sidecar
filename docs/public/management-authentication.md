@@ -227,27 +227,25 @@ library preserves this native limitation and performs no automatic downgrade or
 bypass. A trusted-certificate positive path, further directory conditions and full
 same-source platform evidence remain required before broad support claims.
 
-The separate `ldap_trusted_ca_engine` target prepares an ephemeral CA and a
-localhost-only LDAP certificate on an explicitly selected disposable GitHub-hosted
-VM. Its test helper temporarily provisions only that CA in the VM's trust store
-and removes it by fingerprint after the native core exits. It refuses ordinary
-local and self-hosted environments before running trust commands. This target
-requires strict chain/hostname verification, encrypted correct-password acceptance,
-wrong-password and wrong-hostname refusal, persisted policy and exact CA cleanup.
-Its same-source native results remain a separate acceptance gate; fixture-only
-certificate checks do not establish that the Rust/native authentication passed.
-On hosted macOS, cleanup removes only the generated CA's native trust-record
-index through Apple's portable administrative trust representation. It checks
-an unchanged second snapshot before import and exact preservation of every other
-entry afterwards, then deletes only the generated certificate by SHA-256. It
-independently reads settings for that exact DER certificate through the native
-Security API. A remaining or unobservable trust
-record fails cleanup and keeps the private recovery lease. No authorization
-database policy or unrelated trust record is changed. The separate macOS LDAP
-diagnosis jobs shorten feedback for this platform-specific cleanup condition;
-the complete native matrix and its final gate are still required.
-Windows uses the explicitly selected disposable VM's administrative
-`LocalMachine\Root` store, with exact DER matching and fingerprint cleanup.
-Interactive current-user root-store prompts are not automated. This provisioning
-is confined to the runtime test helper; adding or compiling the crate changes
-no certificate store.
+The separate `ldap_trusted_ca_engine` target selects an explicitly prepared,
+pinned public-CA certificate for the synthetic `ldap.localhost.direct` peer.
+The fixture uses the publisher's internal-development certificate bundle and
+keeps its key in private temporary files. It never adds or removes operating
+system trust entries. Preparation occurs in an explicit CI step, outside Cargo
+and the network-blocked runtime wrapper; dependency installation and compilation
+do not download a certificate or start a server.
+
+The target keeps certificate-chain and hostname verification enabled, requires
+all DNS results to be loopback, and refuses other addresses before starting the
+core. It tests encrypted correct-password login, wrong-password and wrong-hostname
+refusal, persisted verification policy after restart, logout, normal owned-core
+exit, and private peer/file cleanup. The existing self-signed cases separately
+exercise untrusted-chain refusal. A changed or expired pinned certificate fails
+preparation and requires an explicit fixture update; it is never silently
+replaced or accepted with verification disabled. Keys and certificate bundles
+must not be committed, included in Cargo packages, logged, cached, or uploaded
+as workflow artifacts. The [publisher's terms](https://github.com/Upinel/localhost.direct#eula) apply to this development fixture.
+
+These are test requirements. A prepared certificate or passing fixture boundary
+contract is not native authentication acceptance; final source and platform
+results remain separate evidence.

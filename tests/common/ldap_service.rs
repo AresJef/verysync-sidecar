@@ -21,13 +21,18 @@ impl LdapService {
         Self::start_transport(root, "plain")
     }
     pub fn start_transport(root: &Path, transport: &str) -> TestResult<Self> {
-        Self::start_transport_with_ca(root, transport, false)
+        Self::start_transport_with_ca(root, transport, false, None)
     }
-    #[allow(dead_code)] // Used by the separate ephemeral-runner trusted-CA target.
-    pub fn start_trusted_tls(root: &Path) -> TestResult<Self> {
-        Self::start_transport_with_ca(root, "tls", true)
+    #[allow(dead_code)] // Used by the separate strict public-CA native target.
+    pub fn start_public_tls(root: &Path, manifest: &Path) -> TestResult<Self> {
+        Self::start_transport_with_ca(root, "tls", true, Some(manifest))
     }
-    fn start_transport_with_ca(root: &Path, transport: &str, trusted_ca: bool) -> TestResult<Self> {
+    fn start_transport_with_ca(
+        root: &Path,
+        transport: &str,
+        trusted_ca: bool,
+        public_manifest: Option<&Path>,
+    ) -> TestResult<Self> {
         let python = std::env::var_os("VERYSYNC_STORAGE_TEST_PYTHON")
             .ok_or("explicit private LDAP test Python required")?;
         let mut random = [0; 24];
@@ -52,7 +57,7 @@ impl LdapService {
         let mut input = child.stdin.take().ok_or("LDAP peer input absent")?;
         serde_json::to_writer(
             &mut input,
-            &serde_json::json!({"root":root,"dn":"uid=ldap-test-user,dc=example,dc=test","password":service.password,"transport":transport,"trusted_ca":trusted_ca}),
+            &serde_json::json!({"root":root,"dn":"uid=ldap-test-user,dc=example,dc=test","password":service.password,"transport":transport,"trusted_ca":trusted_ca,"public_tls_manifest":public_manifest}),
         )?;
         input.write_all(b"\n")?;
         drop(input);
@@ -87,6 +92,7 @@ impl LdapService {
             || ready["protocol"] != "ldap"
             || ready["transport"] != transport
             || ready["trusted_ca"] != trusted_ca
+            || ready["public_ca"] != public_manifest.is_some()
         {
             return Err("private LDAP readiness contract failed".into());
         }
