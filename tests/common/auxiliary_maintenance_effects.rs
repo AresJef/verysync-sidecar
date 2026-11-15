@@ -69,7 +69,17 @@ async fn actual_native_temporary_cleanup_and_paths_preserve_other_data_and_resta
     );
     assert!(std::path::Path::new(paths.configuration_file.to_protocol()?).is_file());
     assert!(std::path::Path::new(paths.database_directory.to_protocol()?).is_dir());
+    #[cfg(unix)]
     assert_eq!(paths.extra.get("logFile").map(String::as_str), Some("-"));
+    #[cfg(windows)]
+    {
+        let reported = paths
+            .extra
+            .get("logFile")
+            .ok_or("native log location missing")?;
+        let expected = root.join("core").join("verysync.log");
+        assert_eq!(std::path::Path::new(reported), expected);
+    }
     let data = root.join("synthetic & + % 测试");
     std::fs::create_dir(&data)?;
     let id = FolderId::parse("auxiliary-temp-cleanup")?;
