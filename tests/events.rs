@@ -7,7 +7,7 @@ mod managed_fixture;
 use managed_fixture::options;
 use std::time::Duration;
 use verysync_sidecar::{
-    Client, CreateFolderOptions, EventCursor, EventGapReason, EventKind, EventOptions,
+    Client, CreateFolderOptions, EventCursor, EventGapReason, EventKind, EventOptions, EventSource,
     EventStreamItem, EventSubscription, FolderId, FolderPatch, ManagedInstance, TargetPath,
 };
 
@@ -64,6 +64,7 @@ async fn actual_changes_unknown_events_and_backpressure_preserve_the_engine_and_
     let identity = client.instance().device_id.clone();
     let current = client.system_status().await?;
     let resume = EventCursor {
+        source: EventSource::Standard,
         device_id: identity.clone(),
         engine_started_at: current.start_time,
         last_id: 0,
@@ -214,6 +215,7 @@ async fn real_tail_loss_future_cursor_and_restart_report_gaps_and_resume_explici
     assert!(gap.resume_from.last_id > gap.previous.last_id);
     tail.close().await?;
     let future = EventCursor {
+        source: EventSource::Standard,
         device_id: identity.clone(),
         engine_started_at: client.system_status().await?.start_time,
         last_id: 1_000_000,

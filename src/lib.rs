@@ -141,8 +141,8 @@ pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use engine_source::{EngineSource, LocalProgram, ProgramInfo};
 pub use error::{Error, ManagedStateLock, ProcessDiagnostic, ResponseDiagnostic, Result};
 pub use events::{
-    EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventStreamItem,
-    EventSubscription,
+    EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventSource,
+    EventStreamItem, EventSubscription,
 };
 pub use file_history::{
     ArchivedFileVersion, AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate,
