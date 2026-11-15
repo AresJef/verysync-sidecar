@@ -25,6 +25,11 @@ SHA-256. The fixture checks this digest before running anything, generates fresh
 state and GUI credentials, authenticates a private management address, and
 compares the generated identity before any mutation.
 
+File-history failure traces retain the original deadline and error, reporting
+elapsed time, the bounded SDK error chain, HTTP status/size and boolean checks
+of synthetic data. They omit bodies and private values and issue no extra
+native requests. A later pass alone does not establish an intermittent cause.
+
 The core version assertions use the observed Go architecture names (`amd64`,
 `arm64`, `386` and `arm`) for their corresponding Rust controller targets. Unknown
 mappings fail explicitly. Additional-architecture execution does not promote the
