@@ -16,7 +16,12 @@ The additional platform workflow uses a 32-bit Rust host toolchain and matching
 Its first execution slice checks real management/file effects, managed startup
 and cancellation, process ownership, host exit, peer lifecycle and synthetic
 sharing, with exact executable cleanup. Until these jobs pass, these remain
-pending execution candidates. Passing this slice does not validate every
+pending execution candidates. The Linux x86 Rust host requires the explicit
+32-bit loader, C/C++ runtime and zlib packages. Windows x86 default TLS builds
+require NASM; the job installs the fixed Chocolatey 2.16.3 package (NASM
+2.16.03), retaining the default TLS and assembly configuration. See the
+[upstream Windows build requirements](https://aws.github.io/aws-lc-rs/requirements/windows.html).
+Passing this slice does not validate every
 storage protocol, upgrade, licensed feature or minimum operating system.
 
 The first ARM32 execution slice selects the three separate official packages
@@ -39,6 +44,12 @@ with stable process-birth checks. An unverified empty snapshot is insufficient
 for cleanup acceptance. Bounded version probes record each explicit CPU model;
 a different model's success cannot validate the requested model. A successful
 version probe is neither Rust runtime acceptance nor minimum-native-ISA proof.
+The probe uses the same private controlling stderr terminal and bounded stdout
+file as the Rust metadata helper, an independent process session and child-only
+signal settings. Each selected CPU retains the original 12-second probe limit.
+A plain pipe launch is a different condition; its timeout does not prove that
+the same CPU cannot run the library. Timeout cleanup targets only the exact
+unreaped child's private group, and the job still requires exact-core cleanup.
 
 MIPS, LoongArch64, PPC64LE, RISC-V64, S390x and the two Windows legacy
 packages retain separate execution requirements. Cross compilation, user-mode

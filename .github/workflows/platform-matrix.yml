@@ -47,7 +47,19 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes gcc-multilib libc6-dev-i386
+          sudo apt-get install --no-install-recommends --yes gcc-multilib g++-multilib libc6-dev-i386 lib32z1
+          dpkg-query -W gcc-multilib g++-multilib libc6-dev-i386 lib32z1
+      - name: Install the explicit Windows x86 assembly build prerequisite
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm --version=2.16.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory = Join-Path $env:ProgramFiles 'NASM'
+          $nasmBinary = Join-Path $nasmDirectory 'nasm.exe'
+          & $nasmBinary -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Record compatibility host and install the 32-bit Rust host toolchain
         run: |
           python -c 'import os, platform, struct; print({"runner_arch": os.environ["RUNNER_ARCH"], "python_machine": platform.machine(), "python_bits": struct.calcsize("P") * 8})'
@@ -224,44 +236,10 @@ jobs:
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify private metadata terminal and bounded calibration contracts
+        run: python -m unittest discover -s scripts/tests -p test_calibrate_arm_core.py
       - name: Calibrate the fixed core on bounded explicit CPU models before SDK tests
-        run: |
-          python - <<'PYCODE'
-          import json, os, pathlib, re, resource, subprocess, tempfile
-          resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-arm-emulator'
-          emulator = root / 'qemu-arm'
-          core = pathlib.Path(os.environ['VERYSYNC_TEST_BINARY'])
-          requested = os.environ['QEMU_CPU']
-          results = []
-          for cpu in ['arm926', 'arm1176', 'cortex-a7']:
-              with tempfile.TemporaryDirectory(prefix='vs-arm-version-', dir=os.environ['RUNNER_TEMP']) as state_text:
-                  state = pathlib.Path(state_text)
-                  child_env = dict(os.environ, QEMU_CPU=cpu, VSMONITORED='yes')
-                  child_env.update({'HOME': str(state / 'profile'), 'TMPDIR': str(state),
-                                    'XDG_CONFIG_HOME': str(state / 'roaming'),
-                                    'XDG_CACHE_HOME': str(state / 'local'),
-                                    'XDG_DATA_HOME': str(state / 'data')})
-                  try:
-                      result = subprocess.run([str(emulator), str(core), 'version', '--home', str(state)],
-                                              env=child_env, cwd=state, capture_output=True, timeout=12)
-                      versions = re.findall(rb'(?m)^verysync (v[0-9]+\.[0-9]+\.[0-9]+)(?:[ \t]|$)', result.stdout)
-                      matches = versions == [b'v2.33.2']
-                      row = {'cpu': cpu, 'exit_code': result.returncode,
-                             'termination_signal': -result.returncode if result.returncode < 0 else None,
-                             'version_matches': matches, 'timed_out': False,
-                             'version_probe_passed': result.returncode == 0 and matches}
-                  except subprocess.TimeoutExpired:
-                      row = {'cpu': cpu, 'exit_code': None, 'termination_signal': None,
-                             'version_matches': False, 'timed_out': True, 'version_probe_passed': False}
-                  row.update({'requested_cpu': cpu == requested, 'sdk_runtime_acceptance': False,
-                              'minimum_native_isa_verified': False, 'core_dumps_enabled': False})
-                  results.append(row)
-                  print(json.dumps(row), flush=True)
-          (root / 'cpu-version-calibration.json').write_text(json.dumps(results, indent=2) + '\n')
-          if not next(row['version_probe_passed'] for row in results if row['cpu'] == requested):
-              raise RuntimeError('The fixed core did not pass the requested CPU version probe; preserve this unverified target condition')
-          PYCODE
+        run: python scripts/calibrate-arm-core.py
       - name: Compile the actual ARM test executables with default TLS enabled
         run: >-
           cargo +"$TEST_TOOLCHAIN" test --features engine-tests
