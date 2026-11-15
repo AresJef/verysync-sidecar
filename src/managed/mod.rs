@@ -28,6 +28,10 @@ mod instance;
 pub use instance::{ManagedExit, ManagedInstance};
 mod native;
 mod process;
+// Promote this separately verified launcher boundary when the browser API is
+// connected; ordinary core/CLI ownership does not use it.
+#[cfg(test)]
+mod launcher;
 mod restart;
 pub use restart::ProgramTransition;
 mod shutdown;
