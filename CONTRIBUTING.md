@@ -396,13 +396,13 @@ heading indices and an allowlist of diagnostic words, without outputting paths
 or arbitrary native text. Original exits, assertions and deadlines remain
 required; this diagnostic neither accepts native failure nor repairs a parser.
 
-The private browser-launcher prototype currently runs only in library tests.
+The separate browser-launcher boundary is exercised in library tests.
 It uses separate owned Rust processes to verify that a zero-exit root can
 release a still-running descendant, an unfinished root retains cleanup, and a
 nonzero exit never becomes success. Windows observes the held descendant
 process rather than retaining an extra Job handle that could conceal a
 kill-on-close mistake. Unix observations inspect only the owned process group.
-These are actual native lifetime tests, not VerySync/browser feature acceptance.
-The public browser API remains pending, and ordinary managed core/CLI cleanup
-continues through its existing owner type. A dispatched desktop request cannot
+These are native lifetime tests; actual VerySync/browser API effects require
+their own integration evidence. Ordinary managed core/CLI cleanup continues
+through its existing owner type. A dispatched desktop request cannot
 promise graphical rollback after native failure or caller cancellation.

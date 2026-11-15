@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit native browser dispatch with a separate private helper profile,
+  actual root outcomes and desktop-lifetime release; native acceptance pending.
+
 - Retain native console preambles separately from complete CLI path reports;
   preserve exact Windows unsupported-shell exits and private diagnostics.
 

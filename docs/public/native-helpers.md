@@ -384,3 +384,53 @@ if receipt.outcome == NativeWatchLimitOutcome::MinimumObserved {
 }
 # Ok(()) }
 ```
+
+## Explicit native browser dispatch
+
+`ManagedInstance::request_native_browser(helper_state, verify, timeout)` invokes
+the exact last-ready local program's `browser` command for its explicitly
+configured HTTP(S) management URL. This unreleased API requires its own native
+integration acceptance; successful compilation is not evidence of GUI effects.
+Unix-socket-only owners have no browser URL and are rejected.
+
+Provide a separate persistent helper directory. It must be new/empty or already
+marked specifically for this browser helper. Primary-state overlap (including
+parent/child relationships and resolved aliases), ordinary application profiles
+and other managed-core state are rejected. Fresh helpers generate their own
+private keys and configuration; primary credentials, registrations and files are
+not copied. The helper does not serve, listen, synchronize or install a service.
+The directory persists for explicit inspection and reuse, including after failure.
+
+With `verify=true`, the SDK first authenticates the owned target identity within
+the total deadline and passes native `--verify`. The native HTTP probe itself
+does not certify authentication or status; its HTTPS trust is separate from SDK
+TLS options. With false, the last configured URL can be dispatched after the
+owned core has stopped, without either probe. Neither choice proves a window
+opened or that a web application is usable.
+
+`NativeBrowserExit` preserves the actual root code, program fingerprint and
+verification/release observations. `CommandSucceeded` means the exact root
+exited zero and its desktop descendants' lifetime guard was released.
+`NativeFailure` preserves a nonzero or abnormal native exit. Root standard
+streams are discarded so a desktop child cannot retain an output capture;
+preparation errors keep the existing private metadata diagnostics. Ordinary
+Debug excludes the helper path. Explicit path access is available through
+`helper_state_directory()`.
+
+Only the root is awaited. A dispatched desktop request may outlive native
+failure, timeout or caller cancellation; the SDK does not promise graphical
+rollback. Cancellation retains worker ownership until root cleanup finishes,
+and an immediate reuse can still encounter the helper-state lease. No request
+retry, core stop/restart or change to ordinary owned-core cleanup is implicit.
+
+```no_run
+# async fn example(core: &verysync_sidecar::ManagedInstance, helper: std::path::PathBuf) -> verysync_sidecar::Result<()> {
+use std::time::Duration;
+use verysync_sidecar::NativeBrowserOutcome;
+let receipt = core.request_native_browser(helper, true, Duration::from_secs(30)).await?;
+if receipt.outcome == NativeBrowserOutcome::CommandSucceeded {
+    assert!(receipt.helper_state_released);
+    // Command success does not establish a visible browser window.
+}
+# Ok(()) }
+```
