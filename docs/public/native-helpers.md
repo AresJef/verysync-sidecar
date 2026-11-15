@@ -187,6 +187,11 @@ test child's environment, then verify the official core's exact normal/trash
 arguments. This proves native dispatch without opening desktop applications.
 It does not prove that a real graphical shell or chosen file manager is
 available. Current-source target execution remains separate from local evidence.
+The Windows fixture selects the socket provider for the actual compiled opener's
+PE architecture, including x86 under WOW64. Its runtime preflight executes that
+same owned target executable and requires a successful loopback bind with the
+matching architecture and pointer width. A host Python socket check cannot
+establish that a different target architecture can initialize Winsock.
 
 ```no_run
 # async fn example(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
