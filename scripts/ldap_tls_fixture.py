@@ -18,7 +18,8 @@ HOSTNAME = "ldap.localhost.direct"
 SOURCE = "https://github.com/Upinel/localhost.direct"
 README_URL = "https://raw.githubusercontent.com/Upinel/localhost.direct/master/README.md"
 README_SHA256 = "5fd457cf93ddc050df0584883257aeb000ec8565c968ba7104994d840d1110c8"
-BUNDLE_URL = "https://aka.re/localhost"
+# Canonical destination of the publisher's documented short download link.
+BUNDLE_URL = "https://get.localhost.direct/localhost.direct.OP.zip"
 BUNDLE_SHA256 = "775a3517f5c7c1b62165d72dff98e092b432502d454a0dcd687b2463c2832ad8"
 LEAF_SHA256 = "a747b1c21a3f5269462e0c005b41f32dbca8e5da59f20f879380e26bc03af2d7"
 FILES = {"certificate-chain.pem", "private-key.pem", "manifest.json"}
@@ -65,7 +66,8 @@ class DownloadPolicy(urllib.request.HTTPRedirectHandler):
 
 def download(url, digest, limit):
     opener = urllib.request.build_opener(DownloadPolicy())
-    with opener.open(url, timeout=20) as response:
+    request = urllib.request.Request(url, headers={"User-Agent": "verysync-sidecar-ci-fixture/1.0"})
+    with opener.open(request, timeout=20) as response:
         value = response.read(limit + 1)
     if len(value) > limit or hashlib.sha256(value).hexdigest() != digest:
         raise ValueError("pinned development fixture changed; review the publisher's current bundle explicitly")

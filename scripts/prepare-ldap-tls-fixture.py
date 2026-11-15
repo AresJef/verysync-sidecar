@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import urllib.error
 
 
 def main():
@@ -45,5 +46,6 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as error:
         # Provider ZIP exceptions and URLs must not disclose private inputs.
-        print("Private LDAP TLS fixture failed: " + type(error).__name__, file=sys.stderr)
+        status = " HTTP " + str(error.code) if isinstance(error, urllib.error.HTTPError) else ""
+        print("Private LDAP TLS fixture failed: " + type(error).__name__ + status, file=sys.stderr)
         raise SystemExit(1)

@@ -73,6 +73,8 @@ class PrivateTlsFixtureTests(unittest.TestCase):
             for limit in [2, 128]:
                 with self.assertRaises(ValueError):
                     FIXTURE.download(FIXTURE.BUNDLE_URL, "a" * 64, limit)
+                request = opener.open.call_args.args[0]
+                self.assertEqual(request.get_header("User-agent"), "verysync-sidecar-ci-fixture/1.0")
 
     def test_cleanup_refuses_unowned_paths_without_reading_or_deleting(self):
         with tempfile.TemporaryDirectory() as directory:
