@@ -88,6 +88,53 @@ reported. The buffer is finite and is not a durable audit trail. Earlier changes
 that predate native subscription registration cannot be recovered through this
 endpoint. No event-name filter is invented for its fixed disk mask.
 
+## Native name selections
+
+Use `EventFilter::new` and `Client::subscribe_filtered_events` to select event
+names on the native `GET /rest/events?events=...` endpoint:
+
+```rust
+use verysync_sidecar::{Client, EventFilter, EventKind, EventOptions, Result};
+
+async fn selected(client: &Client) -> Result<()> {
+    let filter = EventFilter::new([
+        EventKind::ConfigurationSaved,
+        EventKind::StateChanged,
+    ])?;
+    let stream = client.subscribe_filtered_events(filter, EventOptions::default()).await?;
+    // Consume events and gaps before committing application state.
+    stream.close().await
+}
+```
+
+The selection accepts 1 through 64 entries, each at most 128 UTF-8 bytes. Empty
+names, commas, whitespace and controls are rejected before network reads. Names
+are sorted and deduplicated, so reordered or duplicate input has the same
+`EventSource::Filtered(filter)` cursor identity. Names serialize as one canonical
+comma-separated string; deserialization revalidates the same bounds. Debug
+shows only the number of selected names; inspect `filter.names()` explicitly.
+Known `EventKind` variants map to their verified native spellings. Explicit
+`EventKind::Unknown(name)` values preserve other spellings, without claiming that
+the fixed engine recognizes them. Native unknown-name behavior is not converted
+into a supported-feature claim.
+
+Selections are performed by the engine, without fetching and discarding a
+broader stream in the SDK. A filtered cursor is rejected by ordinary, disk or
+different-filter subscriptions before network reads. Resume with the same
+canonical filter. The native program caches finite buffers by the resolved
+event mask until its service exits. Creating selections can therefore allocate
+native buffers; closing the SDK stream cancels its task and does not delete a
+shared native buffer. The SDK conservatively keeps different canonical name
+selections distinct even if the native program resolves them to the same mask.
+
+New native masks begin observing after registration; their empty buffer can
+produce the initial interruption described for disk events. No initial retry,
+implicit mutation or reconstruction of earlier history is performed. Retained
+history and continuity remain subject to the same gap and generation limits.
+The default ordinary mask excludes disk changes; explicitly selected disk names
+on the ordinary endpoint are still a distinct SDK source from the fixed disk
+endpoint.
+
 ## Continuity and recovery
 
 Gap notifications require the caller to refresh relevant state. They cover ID
@@ -153,3 +200,9 @@ transfer. They retain the original archive/restoration byte checks, normal
 owned process exits and caller data. The initial empty-buffer interruption is
 recorded as a native limitation, with no implicit mutation or retry. These are
 functional observations, not event latency or throughput guarantees.
+
+Native filter tests separately observe a configuration-save-only stream, a
+folder-pause-only stream and a union of configuration/state changes. They verify
+independent source-bound cursors, equivalent reordered/duplicate selections,
+credential-safe Debug, retained caller data and normal owned exit. Successful
+native effects do not imply every unknown event name is recognized.
