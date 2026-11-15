@@ -168,3 +168,32 @@ record and has no completed file. Its explicit rate/configuration setup and
 caller-controlled polling are test fixtures, not implicit behavior of this read.
 They do not establish WAN behavior, completed downloads or signature trust.
 Full same-source native platform acceptance remains pending.
+
+## Native index-file diagnostic route
+
+`Client::index_file_diagnostics(folder, &TargetPath)` reads the independent
+`GET /rest/debug/file` endpoint once after current identity, configured-folder
+and strict target-relative path checks. It reuses `IndexFileInfo`,
+`IndexFileMetadata`, `IndexFileSignature` and `IndexFileAvailability` because the
+fixed program returns the same full metadata schema as the ordinary index-file
+endpoint. Unknown fields, target-native names, null availability and encoded
+hash/signature fields are retained with the same private Debug policy.
+
+The endpoints have different missing-file behavior. A native diagnostic lookup
+can return HTTP success with both global and local zero records: empty names and
+version vectors, size/block count zero, null hashes and an empty signature.
+These records are not existing zero-byte files. The ordinary `index_file_info`
+endpoint instead returns a native 404 for a missing file in the exercised
+baseline. Neither route causes a scan or reads the controller's filesystem.
+An unscanned newly written file can remain a zero diagnostic record until the
+caller explicitly requests a separate scan. SDK errors and schema failures are
+not converted into zero records.
+
+Directory and nested Unicode target paths use the same connected-target syntax.
+An advertised peer remains an availability observation, without proof of
+reachability, completed bytes or whole-folder synchronization. A real private
+two-core test reads the diagnostic global signature/source while the local
+record is still zero and the receiver's complete file is absent. No SDK hash or
+signature verification, normalization, mutation, polling or retry is introduced.
+The independent support ZIP and native profiling APIs are separate operations;
+this endpoint is not a support-file download.

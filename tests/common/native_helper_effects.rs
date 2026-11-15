@@ -170,6 +170,28 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
     assert_eq!(file.global.size, original.len() as u64);
     assert_eq!(file.local.size, original.len() as u64);
     assert!(!file.global.version.is_empty());
+    let detailed = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local("root.txt"))
+        .await?;
+    assert_eq!(detailed.global.name, file.global.name);
+    assert_eq!(detailed.global.version, file.global.version);
+    assert_eq!(detailed.global.blocks_hash, file.global.blocks_hash);
+    assert_eq!(detailed.local.size, file.local.size);
+    assert!(detailed.availability.is_none());
+    let absent = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local("absent.txt"))
+        .await?;
+    for record in [&absent.global, &absent.local] {
+        assert!(record.name.is_empty() && record.version.is_empty());
+        assert_eq!(record.size, 0);
+        assert_eq!(record.num_blocks, 0);
+        assert!(record.blocks_hash.is_none());
+        assert_eq!(record.signature.version, 0);
+        assert!(record.signature.encoded_signature.is_none());
+    }
+
     assert_eq!(file.global.version, file.local.version);
     assert!(file.availability.is_none());
     assert!(!file.global.deleted && !file.global.ignored && !file.global.invalid);
@@ -186,6 +208,13 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
         .await?;
     assert!(child.global.name.ends_with("child.txt"));
     assert_eq!(child.global.size, b"distinct child bytes".len() as u64);
+    let detailed_child = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local(branch.join("child.txt")))
+        .await?;
+    assert_eq!(detailed_child.global.name, child.global.name);
+    assert_eq!(detailed_child.global.version, child.global.version);
+
     let directory = owner
         .client()
         .index_file_info(&folder, &TargetPath::local(branch))
@@ -194,6 +223,13 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
     assert_eq!(directory.global.size, 0);
     assert_eq!(directory.global.num_blocks, 0);
     assert!(directory.global.blocks_hash.is_none());
+    let detailed_directory = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local(branch))
+        .await?;
+    assert_eq!(detailed_directory.global.kind, SyncFileKind::Directory);
+    assert_eq!(detailed_directory.global.num_blocks, 0);
+
     assert!(matches!(
         owner
             .client()
@@ -205,6 +241,11 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
         data.join("unscanned.txt"),
         b"caller explicitly scans this later",
     )?;
+    let unscanned = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local("unscanned.txt"))
+        .await?;
+    assert!(unscanned.global.name.is_empty() && unscanned.local.name.is_empty());
     assert!(matches!(
         owner
             .client()
@@ -235,6 +276,13 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
         scanned.global.size,
         b"caller explicitly scans this later".len() as u64
     );
+    let scanned_diagnostics = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local("unscanned.txt"))
+        .await?;
+    assert_eq!(scanned_diagnostics.global.name, "unscanned.txt");
+    assert_eq!(scanned_diagnostics.global.size, scanned.global.size);
+
     assert_eq!(owner.client().system_status().await?.device_id, id);
     assert_eq!(
         std::fs::read(root.join("core").join("setting.dat"))?,
@@ -252,7 +300,7 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
     let exit = owner.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
-    println!("native_index_file_metadata_snapshots=4 native_missing_objects=2 nested_unicode_target_path=true directory_kind_and_null_hash=true null_availability_retained=true unscanned_file_not_fabricated=true explicit_scan_effect_separate=true identity_configuration_and_three_files_retained=true normal_owned_exit=true");
+    println!("native_index_file_diagnostic_snapshots=6 native_zero_debug_records_contrast_real_db_404=true native_index_file_metadata_snapshots=4 native_missing_objects=2 nested_unicode_target_path=true directory_kind_and_null_hash=true null_availability_retained=true unscanned_file_not_fabricated=true explicit_scan_effect_separate=true identity_configuration_and_three_files_retained=true normal_owned_exit=true");
     Ok(())
 }
 
@@ -406,6 +454,28 @@ async fn actual_native_index_file_availability_preserves_zero_local_state() -> T
         .iter()
         .any(|source| source.device_id == aid && !source.from_temporary));
     assert_eq!(info.global.signature.version, 3);
+    let diagnostics = b
+        .client()
+        .index_file_diagnostics(&bf.configuration.id, &file)
+        .await?;
+    assert_eq!(diagnostics.global.name, info.global.name);
+    assert_eq!(diagnostics.global.size, info.global.size);
+    assert_eq!(diagnostics.global.signature.version, 3);
+    assert!(diagnostics
+        .global
+        .signature
+        .encoded_signature
+        .as_ref()
+        .is_some_and(|s| !s.is_empty()));
+    assert!(diagnostics.local.name.is_empty() && diagnostics.local.version.is_empty());
+    assert_eq!(diagnostics.local.size, 0);
+    assert!(diagnostics
+        .availability
+        .as_ref()
+        .is_some_and(|sources| sources
+            .iter()
+            .any(|source| source.device_id == aid && !source.from_temporary)));
+
     let encoded = info
         .global
         .signature
@@ -421,7 +491,7 @@ async fn actual_native_index_file_availability_preserves_zero_local_state() -> T
     assert!(!debug.contains(aid.as_str()));
     assert!(!debug.contains(keys.read_only_key.expose_secret()));
     assert!(!debug.contains(keys.read_write_key.expose_secret()));
-    println!("native_index_file_availability=true actual_private_peer_matches=true non_temporary_source_record=true shared_native_signature_version3_preserved_without_verification=true zero_local_record_preserved=true receiver_file_not_complete=true no_wan_or_completion_claim=true caller_fixture_polling_separate_from_single_sdk_reads=true");
+    println!("native_debug_index_file_actual_peer_availability=true native_index_file_availability=true actual_private_peer_matches=true non_temporary_source_record=true shared_native_signature_version3_preserved_without_verification=true zero_local_record_preserved=true receiver_file_not_complete=true no_wan_or_completion_claim=true caller_fixture_polling_separate_from_single_sdk_reads=true");
     assert_eq!(std::fs::read(origin.join("sample.bin"))?, sample);
     assert_eq!(a.client().system_status().await?.device_id, aid);
     assert_eq!(b.client().system_status().await?.device_id, bid);
