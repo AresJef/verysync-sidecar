@@ -426,3 +426,14 @@ Windows/Linux browser integration is still pending and is not inferred from
 these macOS results or cross-compilation. Windows opener preparation also
 checks its separate Winsock preflight without confusing it with Cargo artifact
 selection; the full native bundles retain that preflight contract.
+
+The browser case also replaces only its owned opener with an invalid executable
+and requires an actual code-1 native failure. It restores that fixture before
+holding the native root at an explicitly journaled opener call and dropping the
+public API future. The separate helper lease must release; the outer observer
+checks the exact native parent and actor are already dead before it sends any
+normal cleanup stop. This prevents the observer itself from concealing failed
+library cancellation. The only native unsafe call in this test fixture is a
+narrowly scoped read of its own direct parent PID. The temporary policy blocks
+the four enumerated browser bundles and four native executable paths; it leaves
+the runner's Xcode toolchain usable during Cargo compilation.
