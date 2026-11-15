@@ -26,8 +26,14 @@ class NativeStepContracts(unittest.TestCase):
         steps["native_browser_engine"] = {"outcome": "success"}
         self.assertEqual(HELPER.failures("macos-arm64-standard", steps), [])
 
+    def test_linux_browser_is_a_required_native_outcome(self):
+        steps = self.successful_steps("linux")
+        self.assertIn("native_browser_engine", HELPER.failures("linux-amd64-standard", steps))
+        steps["native_browser_engine"] = {"outcome": "success"}
+        self.assertEqual(HELPER.failures("linux-amd64-standard", steps), [])
+
     def test_other_platform_browser_scope_does_not_waive_existing_gates(self):
-        for family in ["windows", "linux"]:
+        for family in ["windows"]:
             steps = self.successful_steps(family)
             steps["native_browser_engine"] = {"outcome": "skipped"}
             self.assertEqual(HELPER.failures(family + "-amd64-standard", steps), [])
@@ -37,6 +43,7 @@ class NativeStepContracts(unittest.TestCase):
 
     def test_unknown_new_native_failure_remains_required(self):
         steps = self.successful_steps("linux")
+        steps["native_browser_engine"] = {"outcome": "success"}
         steps["native_future_effect"] = {"outcome": "failure"}
         self.assertIn("native_future_effect", HELPER.failures("linux-arm64-standard", steps))
 
