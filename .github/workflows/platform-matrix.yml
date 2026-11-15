@@ -505,6 +505,49 @@ jobs:
           python -m unittest discover -s scripts/tests -p test_calibrate_arm_core.py
           python scripts/calibrate-arm-core.py
           python scripts/prepare-test-engine.py check-cleanup
+      - name: Verify standalone Rust unwinding before any PPC SDK panic case
+        if: matrix.package == 'linux-ppc64le-standard'
+        run: |
+          ulimit -c 0
+          python - <<'PYUNWIND'
+          import json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-linux-emulator'
+          probe = root / 'qemu-unwind-probe'
+          subprocess.run(['rustc', '+' + os.environ['TEST_TOOLCHAIN'], '--edition=2021',
+                          '--target', os.environ['CARGO_BUILD_TARGET'], '-C',
+                          'linker=' + os.environ['TARGET_CC'], '-C', 'opt-level=3',
+                          '-C', 'debuginfo=2', '-C', 'panic=unwind',
+                          '-C', 'debug-assertions=yes', '-C', 'overflow-checks=yes',
+                          'scripts/probes/qemu_unwind.rs', '-o', str(probe)], check=True, timeout=120)
+          emulator = root / os.environ['QEMU_BINARY']
+          requested = os.environ['QEMU_CPU']
+          results = []
+          for cpu in ['power8', 'power9', 'power10']:
+              for name, command in [
+                  ('registered_exec', [str(probe)]),
+                  ('explicit_preserved_argv0', [str(emulator), str(probe), str(probe)]),
+              ]:
+                  child_env = dict(os.environ, QEMU_CPU=cpu)
+                  timed_out = False
+                  try:
+                      result = subprocess.run(command, env=child_env, capture_output=True, timeout=10)
+                      code = result.returncode
+                      schema_matches = result.stdout.strip() == b'unwind_caught=true drop_ran=true'
+                  except subprocess.TimeoutExpired:
+                      code = None
+                      schema_matches = False
+                      timed_out = True
+                  row = {'cpu': cpu, 'requested_cpu': cpu == requested,
+                         'execution_path': name, 'exit_code': code, 'timed_out': timed_out,
+                         'unwind_and_drop_verified': code == 0 and schema_matches and not timed_out,
+                         'official_program_started': False, 'sdk_runtime_acceptance': False}
+                  results.append(row)
+                  print(json.dumps(row), flush=True)
+          (root / 'unwind-calibration.json').write_text(json.dumps(results, indent=2) + '\n')
+          selected = [row for row in results if row['requested_cpu']]
+          if len(selected) != 2 or not all(row['unwind_and_drop_verified'] for row in selected):
+              raise RuntimeError('The selected PPC profile must pass both standalone unwind paths; another CPU cannot replace it')
+          PYUNWIND
       - name: Compile default-TLS SDK test executables and public controller examples
         run: |
           cargo +"$TEST_TOOLCHAIN" test --features engine-tests --test engine_control --test managed_instance --test managed_lifetime --no-run --locked
