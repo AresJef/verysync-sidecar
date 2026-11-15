@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add exact private native text-log snapshots with explicit timestamp filters,
+  preserved line endings, valid empty output and strict UTF-8 error handling.
+
 - Add explicit native random-string generation with verified optional lengths,
   private result formatting, preserved unknown fields and uncertain mutation
   errors without retries. Keep native generation separate from secure API keys.
