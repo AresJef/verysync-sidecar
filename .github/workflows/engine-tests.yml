@@ -299,6 +299,19 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-control-proxy"
+      - name: Verify native wallpaper source denial without external permission
+        id: native_wallpaper_denied
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target wallpaper_engine --evidence-dir "${{ runner.temp }}/vs-wallpaper-denied"
+      - name: Verify explicit native wallpaper image and conditional resource
+        id: native_wallpaper_resource
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target wallpaper_engine --allow-wallpaper-source
+          --evidence-dir "${{ runner.temp }}/vs-wallpaper-resource"
       - name: Exercise public bounded events, gaps, cancellation and actual restart recovery
         id: native_events
         continue-on-error: true

@@ -193,3 +193,45 @@ let receipt = client.request_native_folder_open(
 # let _ = receipt;
 # Ok(()) }
 ```
+
+## Native wallpaper resources
+
+`native_wallpaper(if_none_match)` retrieves `/verysync/wallpaper` from the
+authenticated target after a fresh identity check. The fixed program fetches
+its Bing metadata and image upstream. The SDK contacts only the management
+endpoint; it does not fetch a provider URL, save or decode image data, persist
+a cache, set a system wallpaper or open a desktop application.
+
+`NativeWallpaperResponse` reports `Image` for a nonempty HTTP 200 advertised as
+image media, or `NotModified` for HTTP 304 with no returned bytes. Media headers
+do not prove that a decoder will accept the opaque bytes. Exact headers remain
+available, including unknown and duplicate values; ordinary Debug omits their
+contents and the resource data.
+
+Pass an explicit opaque ETag string to send `If-None-Match` unchanged. Tags must
+be nonempty, at most 1024 UTF-8 bytes and control-free; this is an SDK input
+bound. The native handler uses exact string comparison and still performs
+upstream requests before deciding to return 304. The SDK neither implements a
+cache nor creates bytes for a not-modified response. Native cache headers are
+observations, not a local persistence or freshness guarantee.
+
+Unavailable/blocked upstream services, authentication failures, native body
+errors, invalid responses, size bounds and deadlines remain typed failures.
+No automatic request retry occurs. Source availability is independent of the
+management connection. The native tests require both source-denied behavior
+and a separately explicit live-source image/304 observation, with unchanged
+configuration, identity, synthetic sample and normal owned-process exit.
+Images stay in memory; no third-party picture is published in test evidence.
+
+```no_run
+# async fn example(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+let resource = client.native_wallpaper(None).await?;
+match resource.status() {
+    verysync_sidecar::NativeWallpaperStatus::Image => {
+        let untrusted_bytes = resource.body_bytes();
+        let _ = untrusted_bytes;
+    }
+    verysync_sidecar::NativeWallpaperStatus::NotModified => {}
+}
+# Ok(()) }
+```

@@ -3,6 +3,82 @@ use super::Client;
 use crate::{Error, NativeGuiMetadata, NativeQrCode, ResponseDiagnostic, Result};
 
 impl Client {
+    /// Explicitly retrieve the native wallpaper resource. The target contacts
+    /// Bing; the SDK contacts only the authenticated management endpoint.
+    /// This never sets a system wallpaper, saves an image, opens a desktop
+    /// application, persists a cache or retries a request.
+    ///
+    /// An optional nonempty ETag value (at most 1024 bytes, no controls) is sent
+    /// exactly as If-None-Match. The fixed target still fetches upstream data
+    /// before it can return HTTP 304. Native image bytes and all headers remain
+    /// opaque, private and untrusted; media headers do not prove image validity.
+    pub async fn native_wallpaper(
+        &self,
+        if_none_match: Option<&str>,
+    ) -> Result<crate::NativeWallpaperResponse> {
+        let invalid_header = || Error::InvalidConfiguration {
+            reason: "native wallpaper cache tag must be nonempty, bounded and control-free",
+        };
+        let header = if_none_match
+            .map(|value| {
+                if value.is_empty() || value.len() > 1024 || value.chars().any(char::is_control) {
+                    return Err(invalid_header());
+                }
+                let mut header =
+                    reqwest::header::HeaderValue::from_str(value).map_err(|_| invalid_header())?;
+                header.set_sensitive(true);
+                Ok(header)
+            })
+            .transpose()?;
+        self.system_status().await?;
+        let operation = "read native wallpaper resource";
+        let mut outgoing = self
+            .connection
+            .http
+            .get(self.connection.management_url("verysync/wallpaper", &[])?)
+            .header("X-API-Key", self.connection.key.header());
+        if let Some(header) = header {
+            outgoing = outgoing.header("If-None-Match", header);
+        }
+        let response = self
+            .connection
+            .receive_response(operation, outgoing, false)
+            .await?;
+        let invalid = |r: &crate::RawResponse| Error::InvalidResponse {
+            operation,
+            response: ResponseDiagnostic::new(r.status(), r.body_bytes().to_vec()),
+        };
+        if response.status() == 304 {
+            if !response.body_bytes().is_empty() {
+                return Err(invalid(&response));
+            }
+            return Ok(crate::NativeWallpaperResponse {
+                status: crate::NativeWallpaperStatus::NotModified,
+                response,
+            });
+        }
+        let response = super::checked_response(operation, response, false)?;
+        let media: Vec<_> = response
+            .headers()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            .collect();
+        let image_media = media.len() == 1
+            && std::str::from_utf8(media[0].1)
+                .ok()
+                .and_then(|v| v.split(';').next())
+                .map(str::trim)
+                .is_some_and(|v| {
+                    v.len() > 6 && v.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("image/"))
+                });
+        if response.status() != 200 || response.body_bytes().is_empty() || !image_media {
+            return Err(invalid(&response));
+        }
+        Ok(crate::NativeWallpaperResponse {
+            status: crate::NativeWallpaperStatus::Image,
+            response,
+        })
+    }
+
     /// Read the native language preferences for one explicit Accept-Language
     /// header. This is request-header negotiation, not changing the engine or
     /// a browser's selected language. Native order, casing and empty entries

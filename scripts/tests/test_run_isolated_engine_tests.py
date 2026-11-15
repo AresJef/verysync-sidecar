@@ -286,5 +286,39 @@ class NativeOpenerContracts(unittest.TestCase):
             self.assertEqual(list(evidence.iterdir()),[])
 
 
+
+class WallpaperSourceContracts(unittest.TestCase):
+    def test_source_permission_is_refused_outside_the_explicit_wallpaper_suite(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence=Path(temporary)/"not-created"
+            argv=[str(SOURCE),"--toolchain","synthetic","--cargo",str(Path(sys.executable).resolve()),"--test-target","engine_control","--allow-wallpaper-source","--evidence-dir",str(evidence)]
+            with patch.object(HELPER.sys,"argv",argv):
+                with self.assertRaises(ValueError):
+                    HELPER.main()
+            self.assertFalse(evidence.exists())
+
+    def test_wallpaper_bypass_and_permission_flag_only_reach_the_owned_child(self):
+        process=MagicMock()
+        process.__enter__.return_value=process
+        process.stdout=iter([])
+        process.wait.return_value=7
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            binary=root/"not-executed"
+            binary.write_bytes(b"synthetic never-run core")
+            evidence=root/"evidence"
+            argv=[str(SOURCE),"--toolchain","synthetic","--cargo",str(Path(sys.executable).resolve()),"--test-target","wallpaper_engine","--allow-wallpaper-source","--evidence-dir",str(evidence)]
+            with patch.object(HELPER.sys,"argv",argv), patch.dict(HELPER.os.environ,{"VERYSYNC_TEST_BINARY":str(binary),"VERYSYNC_TEST_BINARY_SHA256":"0"*64,"VERYSYNC_TEST_WALLPAPER_SOURCE_ALLOWED":"untrusted-parent"}), patch.object(HELPER.subprocess,"Popen",return_value=process) as run, patch.object(HELPER.sys,"stdout",io.StringIO()):
+                self.assertEqual(HELPER.main(),7)
+                child=run.call_args.kwargs["env"]
+                self.assertEqual(child["NO_PROXY"],"127.0.0.1,localhost,::1,bing.com")
+                self.assertEqual(child["VERYSYNC_TEST_WALLPAPER_SOURCE_ALLOWED"],"1")
+                self.assertEqual(HELPER.os.environ["VERYSYNC_TEST_WALLPAPER_SOURCE_ALLOWED"],"untrusted-parent")
+            report=json.loads((evidence/"proxy-observations.json").read_text())
+            self.assertEqual(report["wallpaper_source_proxy_bypass_suffix"],"bing.com")
+            self.assertFalse(report["external_forwarding_implemented"])
+            self.assertEqual(report["test_exit_code"],7)
+
+
 if __name__ == "__main__":
     unittest.main()

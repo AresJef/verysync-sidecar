@@ -1136,11 +1136,20 @@ pub(crate) async fn send_checked(
     mutation: bool,
     response_limit: usize,
 ) -> Result<RawResponse> {
+    let response = send_bounded(operation, request, mutation, response_limit).await?;
+    checked_response(operation, response, mutation)
+}
+
+pub(crate) fn checked_response(
+    operation: &'static str,
+    response: RawResponse,
+    mutation: bool,
+) -> Result<RawResponse> {
     let RawResponse {
         status,
         body: bytes,
         headers,
-    } = send_bounded(operation, request, mutation, response_limit).await?;
+    } = response;
     if status == 401 {
         return Err(Error::Authentication { status });
     }

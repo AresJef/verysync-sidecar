@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add native wallpaper image and conditional-304 resources with opaque private
+  bytes, exact cache metadata and no implicit saving or wallpaper changes.
+
 - Add explicit target-native folder/trash open requests with private receipts,
   mutation uncertainty and no inferred graphical window success.
 

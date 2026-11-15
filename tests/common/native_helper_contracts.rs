@@ -994,3 +994,124 @@ async fn native_folder_open_failures_preserve_uncertainty_and_do_not_retry_or_in
     assert_eq!(server.finish().await?.len(), 4);
     Ok(())
 }
+
+#[tokio::test]
+async fn native_wallpaper_preserves_image_headers_conditional_304_and_private_values() -> TestResult
+{
+    use verysync_sidecar::NativeWallpaperStatus;
+    let bytes = format!("opaque image bytes {KEY}").into_bytes();
+    let first=Reply{headers:format!("Content-Type: image/jpeg\r\nETag: \"{KEY}\"\r\nCache-Control: public, max-age=86400\r\nX-Future: {KEY}\r\n"),body:bytes.clone(),..Reply::json(serde_json::Value::Null)};
+    let second = Reply {
+        status: 304,
+        body: Vec::new(),
+        headers: format!("ETag: \"{KEY}\"\r\n"),
+        ..Reply::json(serde_json::Value::Null)
+    };
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        first,
+        identity(),
+        second,
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let image: verysync_sidecar::NativeWallpaperResponse = client.native_wallpaper(None).await?;
+    assert_eq!(image.status(), NativeWallpaperStatus::Image);
+    assert_eq!(image.body_bytes(), bytes);
+    assert!(image
+        .headers()
+        .any(|(k, v)| k == "x-future" && v == KEY.as_bytes()));
+    assert!(!format!("{image:?}").contains(KEY));
+    let tag = format!("\"{KEY}\"");
+    let unchanged = client.native_wallpaper(Some(&tag)).await?;
+    assert_eq!(unchanged.status(), NativeWallpaperStatus::NotModified);
+    assert!(unchanged.body_bytes().is_empty());
+    assert!(!format!("{unchanged:?}").contains(KEY));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    assert!(requests[3].starts_with("GET /prefix/verysync/wallpaper HTTP/1.1"));
+    assert!(!requests[3].to_lowercase().contains("if-none-match"));
+    assert!(requests[5].contains(&format!("if-none-match: {tag}")));
+    Ok(())
+}
+#[tokio::test]
+async fn native_wallpaper_input_guards_and_native_failures_do_not_become_image_success(
+) -> TestResult {
+    let server = ScriptedServer::start(vec![version(), identity()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    for tag in ["".to_owned(), "\r\nprivate".to_owned(), "x".repeat(1025)] {
+        assert!(matches!(
+            client.native_wallpaper(Some(&tag)).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    for (kind, reply) in [
+        (
+            0,
+            Reply {
+                body: Vec::new(),
+                headers: "Content-Type: image/png\r\n".into(),
+                ..Reply::json(serde_json::Value::Null)
+            },
+        ),
+        (
+            0,
+            Reply {
+                body: KEY.as_bytes().to_vec(),
+                headers: "Content-Type: text/html\r\n".into(),
+                ..Reply::json(serde_json::Value::Null)
+            },
+        ),
+        (
+            0,
+            Reply {
+                status: 204,
+                body: Vec::new(),
+                ..Reply::json(serde_json::Value::Null)
+            },
+        ),
+        (
+            1,
+            Reply {
+                status: 500,
+                ..Reply::json(serde_json::json!({"private":KEY}))
+            },
+        ),
+        (2, Reply::json(serde_json::json!({"error":KEY}))),
+        (
+            3,
+            Reply {
+                body: vec![0; 1024],
+                ..Reply::json(serde_json::Value::Null)
+            },
+        ),
+        (
+            4,
+            Reply {
+                status: 401,
+                ..Reply::json(serde_json::Value::Null)
+            },
+        ),
+    ] {
+        let server = ScriptedServer::start(vec![version(), identity(), identity(), reply]).await?;
+        let client = Client::connect(server.options()?.response_limit(256)?).await?;
+        let error = client
+            .native_wallpaper(None)
+            .await
+            .expect_err("failed native wallpaper is not an image");
+        assert!(!format!("{error:?}").contains(KEY));
+        assert!(matches!(
+            (kind, &error),
+            (0, Error::InvalidResponse { .. })
+                | (1, Error::Http { .. })
+                | (2, Error::Api { .. })
+                | (3, Error::ResponseTooLarge { limit: 256 })
+                | (4, Error::Authentication { .. })
+        ));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
