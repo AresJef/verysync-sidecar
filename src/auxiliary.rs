@@ -416,3 +416,41 @@ impl fmt::Debug for NativeFolderOpenReceipt {
             .finish_non_exhaustive()
     }
 }
+
+/// Successful native wallpaper resource response status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeWallpaperStatus {
+    /// Nonempty resource advertised by the native target as image media.
+    Image,
+    /// Native HTTP 304; no cached image bytes are invented or returned.
+    NotModified,
+}
+/// Bounded native wallpaper bytes and exact HTTP metadata. No image decoding,
+/// saving, desktop application, cache persistence or controller URL fetch occurs.
+#[derive(Clone)]
+pub struct NativeWallpaperResponse {
+    pub(crate) status: NativeWallpaperStatus,
+    pub(crate) response: crate::RawResponse,
+}
+impl NativeWallpaperResponse {
+    /// The typed native image/not-modified response status.
+    pub fn status(&self) -> NativeWallpaperStatus {
+        self.status
+    }
+    /// Explicitly inspect opaque untrusted native bytes. Empty for HTTP 304.
+    pub fn body_bytes(&self) -> &[u8] {
+        self.response.body_bytes()
+    }
+    /// Exact native headers, including duplicate and unknown private values.
+    pub fn headers(&self) -> impl Iterator<Item = (&str, &[u8])> {
+        self.response.headers()
+    }
+}
+impl fmt::Debug for NativeWallpaperResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeWallpaperResponse")
+            .field("status", &self.status)
+            .field("body_bytes", &self.response.body_bytes().len())
+            .finish_non_exhaustive()
+    }
+}
