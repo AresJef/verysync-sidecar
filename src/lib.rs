@@ -256,10 +256,10 @@ pub use sharing::{
 };
 pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
 pub use sync_observation::{
-    CompletionSnapshot, DeviceStatistics, FolderErrorPage, FolderStatistics, FolderSyncError,
-    IndexBrowseOptions, IndexFileAvailability, IndexFileInfo, IndexFileMetadata,
-    IndexFileSignature, IndexTree, IndexTreeEntry, LastFileObservation, ListPage, NeedPage,
-    SyncFile, SyncFileKind, SyncFilePage,
+    CompletionSnapshot, DeviceStatistics, FileDownloadProgress, FolderDownloadProgress,
+    FolderErrorPage, FolderStatistics, FolderSyncError, IndexBrowseOptions, IndexFileAvailability,
+    IndexFileInfo, IndexFileMetadata, IndexFileSignature, IndexTree, IndexTreeEntry,
+    LastFileObservation, ListPage, NeedPage, SyncFile, SyncFileKind, SyncFilePage,
 };
 pub use system_preferences::{NativePathSelection, SystemPreferences, SystemPreferencesPatch};
 pub use transports::{

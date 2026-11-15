@@ -495,3 +495,63 @@ impl fmt::Debug for IndexFileInfo {
             .finish_non_exhaustive()
     }
 }
+
+/// Native per-file block counters and byte estimates at one instant.
+/// Fields retain signed native values without normalization. Byte estimates
+/// need not equal the file size, and no completion percentage is inferred.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDownloadProgress {
+    /// Native total block count.
+    #[serde(rename = "total")]
+    pub total_blocks: i64,
+    /// Native reused block count.
+    #[serde(rename = "reused")]
+    pub reused_blocks: i64,
+    /// Native blocks copied from their original offsets.
+    #[serde(rename = "copiedFromOrigin")]
+    pub copied_from_origin_blocks: i64,
+    /// Native blocks copied from shifted original offsets.
+    #[serde(rename = "copiedFromOriginShifted")]
+    pub copied_from_origin_shifted_blocks: i64,
+    /// Native blocks copied from other locations.
+    #[serde(rename = "copiedFromElsewhere")]
+    pub copied_from_elsewhere_blocks: i64,
+    /// Native pulled block count.
+    #[serde(rename = "pulled")]
+    pub pulled_blocks: i64,
+    /// Native pulling block count.
+    #[serde(rename = "pulling")]
+    pub pulling_blocks: i64,
+    /// Native completed-byte estimate, retained without recomputation.
+    pub bytes_done: i64,
+    /// Native total-byte estimate; not a file-size or transfer-size guarantee.
+    pub bytes_total: i64,
+    /// Additional private native fields, preserved without interpretation.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for FileDownloadProgress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileDownloadProgress")
+            .finish_non_exhaustive()
+    }
+}
+
+/// One native folder download-progress snapshot, separate from folder state,
+/// index need, advertised availability and peer completion. Empty data does not
+/// prove a completed transfer; native missing progress state can also be an error.
+#[derive(Clone, Deserialize)]
+#[serde(transparent)]
+pub struct FolderDownloadProgress {
+    /// Untrusted native file-name keys and their reported progress. Never joined
+    /// to a controller path or interpreted as verified local file existence.
+    pub files: BTreeMap<String, FileDownloadProgress>,
+}
+impl fmt::Debug for FolderDownloadProgress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FolderDownloadProgress")
+            .field("reported_files", &self.files.len())
+            .finish_non_exhaustive()
+    }
+}
