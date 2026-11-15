@@ -8,6 +8,68 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 impl Client {
+    /// Read native path completions or roots once, independently from the
+    /// directory-picker list. Returned paths retain the target's syntax and
+    /// native order, and are untrusted remote values. No controller filesystem
+    /// I/O, prefix expansion, retry or follow-up traversal occurs.
+    /// Native empty output can mean no matching directory, an unavailable path
+    /// or an unsupported backend; it does not prove existence or support.
+    pub async fn browse_target_paths(
+        &self,
+        options: &crate::TargetPathBrowseOptions,
+    ) -> Result<crate::TargetPathCompletions> {
+        if options.filesystem.as_ref().is_some_and(|name| {
+            name.is_empty() || name.len() > 128 || name.chars().any(char::is_control)
+        }) {
+            return Err(Error::InvalidConfiguration {
+                reason:
+                    "native browse filesystem selector must be nonempty, bounded and control-free",
+            });
+        }
+        let style = self.folder_path_style()?;
+        let current = options
+            .current
+            .as_ref()
+            .map(|path| {
+                if path.style() != style {
+                    return Err(Error::InvalidPath {
+                        reason: "native browse prefix must use the target path syntax",
+                    });
+                }
+                path.to_protocol()
+            })
+            .transpose()?;
+        self.system_status().await?;
+        let mut query = Vec::new();
+        if let Some(current) = current {
+            query.push(("current", current));
+        }
+        if let Some(filesystem) = options.filesystem.as_deref() {
+            query.push(("filesystem", filesystem));
+        }
+        let operation = "browse native target path completions";
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                operation,
+                reqwest::Method::GET,
+                self.connection
+                    .management_url("rest/system/browse", &query)?,
+                None,
+                false,
+            )
+            .await?;
+        let invalid = || Error::InvalidResponse {
+            operation,
+            response: ResponseDiagnostic::new(status, bytes.clone()),
+        };
+        let paths: Vec<String> = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        let paths = paths
+            .into_iter()
+            .map(|path| TargetPath::remote(style, path).map_err(|_| invalid()))
+            .collect::<Result<_>>()?;
+        Ok(crate::TargetPathCompletions { paths })
+    }
     /// Read native directory-picker starting locations (`system/storeages`,
     /// retaining the engine's spelling). This reads no controller directories.
     /// Titles can be localized; paths use the connected target's syntax.

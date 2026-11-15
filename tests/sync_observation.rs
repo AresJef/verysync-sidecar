@@ -561,6 +561,11 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     let root = tempfile::Builder::new().prefix("vssn-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    // Explicit owned-fixture scheduling: an initial dial can be closed while
+    // peer/folder configuration is being established. Keep retry opportunities
+    // inside the original observation window without changing SDK/core defaults.
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
     let a_address = private_tcp(a.client()).await?;
@@ -630,6 +635,15 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
             )
             .await?;
         client.share_folder_with(folder, peer).await?;
+    }
+    for client in [a.client(), b.client()] {
+        assert_eq!(
+            client
+                .network_configuration()
+                .await?
+                .reconnection_interval_seconds,
+            5
+        );
     }
     let page = ListPage::new(1, 5)?;
     let mut normal_rate_readiness_received = false;
@@ -793,7 +807,7 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     std::fs::remove_dir_all(root)?;
     println!(
         "public active sync observation evidence: {}",
-        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"original_payload_created_after_throttle":payload_created,"actual_distinct_key_registration_ids":true,"actual_private_peer_associations":true,"fixture_receiveonly_and_throttle_readback":true,"actual_nonempty_receiver_need":true,"actual_needed_filename_and_size":true,"actual_positive_need_bytes":true,"fixture_limit_restored":true,"actual_full_received_bytes_and_zero_need":true,"actual_receive_only_local_change":true,"actual_local_change_name_and_size":true,"source_data_not_modified_by_local_change":true,"actual_content_and_mtime_restored":true,"actual_local_changes_clear_after_restore":true,"both_actual_normal_tree_exits":true})
+        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"original_payload_created_after_throttle":payload_created,"actual_distinct_key_registration_ids":true,"actual_private_peer_associations":true,"explicit_owned_fixture_reconnection_seconds":5,"fixture_receiveonly_and_throttle_readback":true,"actual_nonempty_receiver_need":true,"actual_needed_filename_and_size":true,"actual_positive_need_bytes":true,"fixture_limit_restored":true,"actual_full_received_bytes_and_zero_need":true,"actual_receive_only_local_change":true,"actual_local_change_name_and_size":true,"source_data_not_modified_by_local_change":true,"actual_content_and_mtime_restored":true,"actual_local_changes_clear_after_restore":true,"both_actual_normal_tree_exits":true})
     );
     Ok(())
 }

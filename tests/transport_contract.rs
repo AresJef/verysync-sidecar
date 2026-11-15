@@ -6274,3 +6274,27 @@ async fn local_sync_complete_failed_run_is_data_while_error_envelopes_still_fail
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn native_error_envelopes_require_objects_not_struct_shaped_arrays() -> TestResult {
+    for value in [
+        serde_json::json!([KEY]),
+        serde_json::json!([KEY, null]),
+        serde_json::json!([KEY, 3000]),
+    ] {
+        let expected = serde_json::to_string(&value)?;
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(value),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let text = client.core_log_text(None).await?;
+        assert_eq!(text.text, expected);
+        assert!(!format!("{text:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
