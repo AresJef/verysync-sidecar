@@ -235,3 +235,44 @@ match resource.status() {
 }
 # Ok(()) }
 ```
+
+## Native CLI storage locations
+
+After explicitly stopping an owned instance, call
+`inspect_native_storage_paths(timeout)` to run the exact last-ready executable's
+`paths --home <owned-state>` command. This is separate from the REST
+`native_system_paths()` request. It uses the dedicated native profile, retains
+the state lease through contained child cleanup, verifies the executable hash,
+and bounds captured private output to 64 KiB. It never starts a serving core,
+connects to an existing instance, retries, downloads, or changes caller environment.
+Native helper initialization may create directories inside that owned state.
+
+`NativeStoragePathsExit` preserves the actual exit and private native output.
+Only exit zero with all seven recognized groups produces the nine typed local
+`PathBuf` fields. Failure and unrecognized output are distinct; unknown text is
+retained instead of inventing an empty successful result. Ordinary Debug hides
+path values. Newline/control-containing paths and changed native report schemas
+remain unrecognized rather than being guessed or normalized.
+
+A reported path does not prove existence, writeability, active configuration,
+registered synchronization folders, or an active HTTPS listener. In particular,
+the default sync directory and HTTPS files may be absent. This inspection
+invalidates the prior clean-generation backup eligibility like other stopped
+CLI commands; explicitly start and normally stop again before a fresh backup.
+Running owners and invalid deadlines are rejected. Cancellation requests exact
+helper cleanup; the worker holds its state locks until cleanup ends.
+
+```no_run
+# async fn example(core: &mut verysync_sidecar::ManagedInstance) -> verysync_sidecar::Result<()> {
+use std::time::Duration;
+use verysync_sidecar::NativeStoragePathsOutcome;
+core.shutdown(Duration::from_secs(10)).await?;
+let exit = core.inspect_native_storage_paths(Duration::from_secs(10)).await?;
+if exit.outcome == NativeStoragePathsOutcome::Success {
+    if let Some(paths) = &exit.paths {
+        let database_directory = &paths.database_directory;
+        let _ = database_directory;
+    }
+}
+# Ok(()) }
+```

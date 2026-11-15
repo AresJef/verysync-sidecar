@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Inspect native CLI storage locations on stopped owned instances with typed
+  local paths, private output and explicit exit/schema outcomes.
+
 - Add native wallpaper image and conditional-304 resources with opaque private
   bytes, exact cache metadata and no implicit saving or wallpaper changes.
 
