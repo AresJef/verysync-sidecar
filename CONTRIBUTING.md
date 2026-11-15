@@ -104,6 +104,12 @@ Listener diagnostics execute after the original eight-second failure and report
 only counts by retained-root PID match and the bounded private configuration's
 enabled flag. They never probe a released address or signal a process. These
 jobs provide diagnostic evidence alongside the complete native feature bundle.
+The active-need fixture first receives a small readiness file at normal speed,
+then applies the explicit 1 KiB/s receive limit and creates the original 1 MiB
+payload. Resuming, readiness, rate selection and nonempty-need observation share
+one original 20-second preparation window. Complete-byte transfer, receive-only
+edit and content/mtime restoration retain their original 40/15/15-second
+observation windows. Normal exit and exact cleanup keep their separate gates.
 The helper's explicit `check-cleanup` command inspects only the exact test binary
 path and reports lingering processes; it does not kill by name.
 

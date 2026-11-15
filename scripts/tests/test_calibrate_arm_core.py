@@ -93,7 +93,8 @@ print('verysync v2.33.2 synthetic')
                 HELPER.calibrate(root, core, "arm926")
             self.assertEqual(len(commands), 6)
             self.assertTrue(all(command[0] == str(core.resolve()) for command in commands[::2]))
-            self.assertTrue(all(command[:2] == [str(emulator.resolve()), str(core.resolve())] for command in commands[1::2]))
+            self.assertTrue(all(command[:3] == [str(emulator.resolve()), str(core.resolve()), str(core.resolve())]
+                                for command in commands[1::2]))
             rows = json.loads((root / "cpu-version-calibration.json").read_text())
             self.assertEqual([row["execution_path"] for row in rows[:2]],
                              ["sdk_registered_exec", "explicit_emulator_exec"])
