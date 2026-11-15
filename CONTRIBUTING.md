@@ -130,6 +130,15 @@ final job fails; an absent readiness prerequisite cannot turn into acceptance.
 Fixture summaries omit error messages and URLs while retaining reqwest flags,
 native I/O error kinds and errno, without sending another request.
 
+The Unix dependency graph pins `libc` 0.2.186. The reviewed 0.2.190/0.2.191
+GNU architecture selection omits MIPS64 and selects generic socket type values;
+the observed MIPS64 management failure reports EPROTOTYPE (errno 98).
+A MIPS64 GNU compile-time assertion requires the native stream/datagram values
+before any runtime claim. See the [affected bindings](https://github.com/rust-lang/libc/blob/ccc2ff4aaab962f7fde7b8edda7379c045b1ca12/src/new/glibc/sysdeps/unix/linux/mod.rs)
+and [GNU MIPS socket definitions](https://github.com/bminor/glibc/blob/glibc-2.39/sysdeps/unix/sysv/linux/mips/bits/socket_type.h).
+Dependency updates must preserve that ABI assertion and pass the actual
+management/lifecycle gates. Registry files and caller toolchains are unmodified.
+
 ```sh
 cargo +1.85.0 fetch --locked
 python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \
