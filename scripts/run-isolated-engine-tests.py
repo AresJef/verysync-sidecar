@@ -83,6 +83,50 @@ def prepare_native_opener(cargo, toolchain, evidence_dir, env):
     env["VERYSYNC_TEST_OPENER_EXECUTABLE"] = str(executable)
     return {"fixture_only": True, "name": name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
 
+def isolate_browser_command(command, evidence_dir, env):
+    """Test-only pinned macOS native Chrome rejection and owned open fallback."""
+    if sys.platform != "darwin":
+        raise ValueError("native browser selector isolation not verified on this platform")
+    profile = evidence_dir / "browser-exec.sb"
+    profile.write_text('''(version 1)
+(allow default)
+(deny process-exec (subpath "/Applications")
+ (literal "/usr/bin/google-chrome-stable")
+ (literal "/usr/bin/google-chrome")
+ (literal "/usr/bin/chromium")
+ (literal "/usr/bin/chromium-browser"))
+''', encoding="utf-8")
+    env["VERYSYNC_TEST_BROWSER_ISOLATION"] = "macos-seatbelt-fallback-v1"
+    return ["/usr/bin/sandbox-exec", "-f", str(profile)] + command
+
+def finish_browser_actors(directory):
+    """Observe only PIDs emitted by the exact owned browser actor fixture."""
+    calls = list((directory / "captured").glob("*.argv"))
+    actors = list((directory / "captured").glob("*.owned"))
+    owned = {call.stem: call for call in calls + actors}
+    if len(owned) > 16 or any(not pid.isdecimal() or not 1 < int(pid) <= 0xffffffff for pid in owned):
+        raise ValueError("bounded exact owned actor PIDs required")
+    for call in owned.values():
+        call.with_suffix(".stop").write_bytes(b"outer test-owned cleanup")
+    pending = {int(pid) for pid in owned}
+    deadline = time.monotonic() + 3
+    while pending and time.monotonic() < deadline:
+        for pid in list(pending):
+            result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "stat="],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, timeout=2)
+            if result.returncode not in (0, 1):
+                raise OSError("owned browser exit observation unavailable")
+            state = result.stdout.strip()
+            if not state or state.startswith("Z"):
+                pending.remove(pid)
+        if pending:
+            time.sleep(0.01)
+    if pending:
+        raise RuntimeError("owned browser actor still alive; preserve fixture")
+    return {"captured_actor_count": len(calls), "journaled_actor_count": len(actors), "every_actor_native_exit_observed": True,
+            "observer_outside_browser_sandbox": True}
+
 class BlockedProxy(socketserver.ThreadingTCPServer):
     daemon_threads = True
     allow_reuse_address = False
@@ -300,7 +344,7 @@ def main():
     parser.add_argument("--cargo", default=shutil.which("cargo"))
     parser.add_argument("--evidence-dir", required=True, type=Path)
     suite = parser.add_mutually_exclusive_group(required=True)
-    suite.add_argument("--test-target", choices=["managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine", "files_engine", "file_transfer_engine", "file_history_engine", "maintenance_engine", "file_mutation_engine", "local_sync_engine", "local_sync_protocol_engine", "local_sync_advanced_engine", "local_sync_runtime_engine", "local_sync_automation_engine", "local_sync_repair_engine", "local_sync_protocol_advanced_engine", "local_sync_configuration_engine", "configuration_engine", "authentication_engine", "ldap_trusted_ca_engine", "wallpaper_engine", "host_control_engine"])
+    suite.add_argument("--test-target", choices=["browser_engine", "managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine", "files_engine", "file_transfer_engine", "file_history_engine", "maintenance_engine", "file_mutation_engine", "local_sync_engine", "local_sync_protocol_engine", "local_sync_advanced_engine", "local_sync_runtime_engine", "local_sync_automation_engine", "local_sync_repair_engine", "local_sync_protocol_advanced_engine", "local_sync_configuration_engine", "configuration_engine", "authentication_engine", "ldap_trusted_ca_engine", "wallpaper_engine", "host_control_engine"])
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
     parser.add_argument("--test-filter")
     parser.add_argument("--allow-private-discovery", action="store_true",
@@ -378,11 +422,14 @@ def main():
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TARGET_FILE"] = str(discovery_file)
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TOKEN"] = discovery_token
         opener = None
-        for name in ("VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE", "VERYSYNC_TEST_OPENER_SYSTEM_ROOT", "VERYSYNC_TEST_OPENER_OWNED_CHILD"):
+        for name in ("VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE", "VERYSYNC_TEST_OPENER_SYSTEM_ROOT", "VERYSYNC_TEST_OPENER_OWNED_CHILD", "VERYSYNC_TEST_BROWSER_HOLD", "VERYSYNC_TEST_BROWSER_ACTOR", "VERYSYNC_TEST_BROWSER_ISOLATION"):
             env.pop(name, None)
-        if args.test_target == "engine_control":
+        if args.test_target in {"engine_control", "browser_engine"}:
             opener = prepare_native_opener(args.cargo, args.toolchain, args.evidence_dir, env)
             (args.evidence_dir / "native-opener-fixture.json").write_text(json.dumps(opener), encoding="utf-8")
+            if args.test_target == "browser_engine":
+                env["BROWSER"] = env["VERYSYNC_TEST_OPENER_EXECUTABLE"]
+                env["VERYSYNC_TEST_BROWSER_HOLD"] = "1"
         label = args.test_target or "mechanism-" + args.mechanism
         log_path = args.evidence_dir / (label.replace("_", "-") + ".log")
         try:
@@ -393,6 +440,8 @@ def main():
                 if args.test_filter:
                     command += [args.test_filter]
                 command += ["--", "--test-threads=1", "--nocapture"]
+                if args.test_target == "browser_engine":
+                    command = isolate_browser_command(command, args.evidence_dir, env)
             else:
                 command = [sys.executable, str(Path(__file__).with_name(f"run-{args.mechanism}-lifetime-probes.py")),
                            "--toolchain", args.toolchain, "--evidence-dir", str(args.evidence_dir / "mechanism")]
@@ -410,6 +459,10 @@ def main():
                 if opener is not None:
                     owned_opener = args.evidence_dir / "owned-native-opener"
                     captures = sum(1 for _ in (owned_opener / "captured").glob("*.argv"))
+                    if args.test_target == "browser_engine":
+                        actor_report = finish_browser_actors(owned_opener)
+                        (args.evidence_dir / "browser-actor-exits.json").write_text(json.dumps(actor_report), encoding="utf-8")
+                        print("Isolated browser actor exits: " + json.dumps(actor_report), flush=True)
                     if owned_opener.exists():
                         shutil.rmtree(owned_opener)
                     opener["captured_calls"] = captures

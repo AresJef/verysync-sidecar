@@ -81,6 +81,11 @@ path = "tests/ldap_trusted_ca_engine.rs"
 required-features = ["engine-tests"]
 
 [[test]]
+name = "browser_engine"
+path = "tests/browser_engine.rs"
+required-features = ["engine-tests"]
+
+[[test]]
 name = "engine_control"
 path = "tests/engine_control.rs"
 required-features = ["engine-tests"]
