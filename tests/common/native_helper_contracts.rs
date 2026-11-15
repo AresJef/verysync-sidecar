@@ -9,6 +9,93 @@ fn identity() -> Reply {
 }
 
 #[tokio::test]
+async fn native_core_log_text_preserves_exact_utf8_empty_snapshots_and_timestamp_queries(
+) -> TestResult {
+    let text = format!("native private text 二 %\r\n{KEY}\n");
+    let plain = |body: Vec<u8>| Reply {
+        body,
+        ..Reply::json(serde_json::Value::Null)
+    };
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        plain(text.as_bytes().to_vec()),
+        identity(),
+        plain(text.as_bytes().to_vec()),
+        identity(),
+        plain(Vec::new()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let all: verysync_sidecar::CoreLogText = client.core_log_text(None).await?;
+    assert_eq!(all.text, text);
+    assert!(!format!("{all:?}").contains(KEY));
+    let since = "2026-11-11T12:34:56.123456789+08:00";
+    assert_eq!(client.core_log_text(Some(since)).await?.text, text);
+    assert!(client
+        .core_log_text(Some("2100-01-01T00:00:00Z"))
+        .await?
+        .text
+        .is_empty());
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    assert!(requests[3].starts_with("GET /prefix/rest/system/log.txt HTTP/1.1"));
+    assert!(requests[5].contains("since=2026-11-11T12%3A34%3A56.123456789%2B08%3A00"));
+    assert!(!requests[5].contains("%252B"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_core_log_text_and_json_share_input_guards_before_any_native_request() -> TestResult
+{
+    let server = ScriptedServer::start(vec![version(), identity()]).await?;
+    let client = Client::connect(server.options()?).await?;
+    for value in [String::new(), "\nprivate".to_owned(), "x".repeat(129)] {
+        assert!(matches!(
+            client.core_log_text(Some(&value)).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+        assert!(matches!(
+            client.core_log(Some(&value)).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_core_log_text_keeps_read_errors_and_invalid_utf8_without_retry() -> TestResult {
+    for kind in 0..3 {
+        let reply = match kind {
+            0 => Reply {
+                body: vec![0xff, 0xfe],
+                ..Reply::json(serde_json::Value::Null)
+            },
+            1 => Reply {
+                status: 503,
+                ..Reply::json(serde_json::json!({"private":KEY}))
+            },
+            _ => Reply::json(serde_json::json!({"error":KEY})),
+        };
+        let server = ScriptedServer::start(vec![version(), identity(), identity(), reply]).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .core_log_text(None)
+            .await
+            .expect_err("failed read is not successful text");
+        assert!(matches!(
+            (&error, kind),
+            (Error::InvalidResponse { .. }, 0) | (Error::Http { .. }, 1) | (Error::Api { .. }, 2)
+        ));
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_random_strings_keep_lengths_private_values_and_explicit_queries() -> TestResult {
     let cases = [
         (None, 32),

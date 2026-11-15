@@ -7,6 +7,54 @@ use std::{
 use verysync_sidecar::{Error, ManagedInstance};
 
 #[tokio::test]
+async fn actual_native_core_log_text_retains_messages_filters_and_owned_state() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vslogtext-")
+        .tempdir()?
+        .keep();
+    let state = root.join("core");
+    let sentinel = root.join("retained.txt");
+    std::fs::write(&sentinel, b"text log reads retain synthetic bytes")?;
+    let mut owner = ManagedInstance::start(options(&state)?).await?;
+    let identity = owner.client().instance().device_id.clone();
+    let configuration = std::fs::read(state.join("setting.dat"))?;
+    let nonce = "synthetic-private-text-log-message 二 %";
+    owner.client().record_core_error(nonce).await?;
+    let all = owner.client().core_log_text(None).await?;
+    assert!(all.text.contains(nonce));
+    assert!(!format!("{all:?}").contains(nonce));
+    assert!(owner
+        .client()
+        .core_log_text(Some("1970-01-01T00:00:00Z"))
+        .await?
+        .text
+        .contains(nonce));
+    assert!(owner
+        .client()
+        .core_log_text(Some("2100-01-01T00:00:00Z"))
+        .await?
+        .text
+        .is_empty());
+    assert!(owner
+        .client()
+        .core_log_text(None)
+        .await?
+        .text
+        .contains(nonce));
+    assert_eq!(owner.client().system_status().await?.device_id, identity);
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, configuration);
+    assert_eq!(
+        std::fs::read(&sentinel)?,
+        b"text log reads retain synthetic bytes"
+    );
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("native_core_log_text_snapshots=4 actual_explicit_synthetic_message=true native_past_filter=true empty_future_filter=true repeated_read_retains_message=true private_debug=true identity_configuration_sentinel_retained=true normal_owned_tree_exit=true no_controller_logger=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn actual_native_random_strings_preserve_requested_lengths_and_owned_state() -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("vsrandom-")

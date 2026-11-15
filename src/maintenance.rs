@@ -95,6 +95,22 @@ impl fmt::Debug for CoreErrorLog {
             .finish_non_exhaustive()
     }
 }
+/// One exact native UTF-8 text log snapshot. Empty filtered output is valid.
+/// No line parsing, timestamp conversion, polling or controller logging occurs.
+#[derive(Clone)]
+pub struct CoreLogText {
+    /// Exact private native text, including line endings and native prefixes.
+    /// Inspect explicitly and redact before copying it into application logs.
+    pub text: String,
+}
+impl fmt::Debug for CoreLogText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreLogText")
+            .field("byte_length", &self.text.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// One bounded log snapshot. The SDK does not automatically poll or paginate it.
 #[derive(Clone, Deserialize)]
 pub struct CoreLogSnapshot {

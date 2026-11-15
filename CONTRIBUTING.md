@@ -195,13 +195,19 @@ the current compiler. The `engine_control` target combines the earlier fixture
 contracts with public API acceptance so shared harness checks run only once.
 Tests are named to distinguish fixture evidence from public control behavior;
 fixture success alone is not complete lifecycle acceptance.
-Focused Linux device-removal and Intel Mac GUI-listener diagnostic jobs run
-the original conditions twice in independent private states. Both raw outcomes
-and exact cleanup remain required; a later success cannot override a failure.
-Listener diagnostics execute after the original eight-second failure and report
-only counts by retained-root PID match and the bounded private configuration's
-enabled flag. They never probe a released address or signal a process. These
-jobs provide diagnostic evidence alongside the complete native feature bundle.
+The focused Linux device-removal diagnostic job runs the original condition
+twice in independent private states. Both raw outcomes and exact cleanup remain
+required; a later success cannot override a failure. These observations are
+separate from the complete native feature bundle.
+The native authentication suite verifies stored GUI disable as the fixed
+v2.33.2 limitation: one explicit PATCH, persisted false flag, an unchanged
+eight-second passive exact-image monitor/worker listener observation, retained
+identity/data and separately selected process cleanup. It starts with an empty
+exact-image inventory and requires a positive owned-listener observation before
+the request. It never reserves the address or probes a released endpoint. Missing
+observations fail; continued listening is recorded as unsupported live
+hot-disable. The earlier closure failure and bind-reservation false positive
+remain historical evidence; a duplicate diagnosis-only job is no longer needed.
 The active-need fixture first receives a small readiness file at normal speed,
 then applies the explicit 1 KiB/s receive limit and creates the original 1 MiB
 payload. Resuming, readiness, rate selection and nonempty-need observation share

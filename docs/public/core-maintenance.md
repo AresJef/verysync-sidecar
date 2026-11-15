@@ -18,6 +18,16 @@ encodes it as a query value. It performs no automatic polling, deduplication,
 pagination, or conversion to the controller's timezone. Native log rotation and
 concurrent writes can create gaps; this is not a durable logging subscription.
 
+`core_log_text(since)` reads the native `/rest/system/log.txt` snapshot once.
+`CoreLogText.text` preserves exact UTF-8, native prefixes and line endings;
+it is neither reconstructed from JSON log entries nor written to a controller
+logger. Empty filtered output is valid. Invalid UTF-8 remains an error with
+bounded private response bytes. The timestamp has the same bounded,
+control-free input rules as `core_log`, retains its offset and precision, and is
+encoded once. Reads check the target identity and retain normal response limits
+and deadlines without retry, polling or draining the native log. Ordinary Debug
+omits text values; inspect and redact the explicit field before logging it.
+
 `core_log_levels()` returns active native package identifiers, their levels and
 descriptions. `set_core_log_levels()` updates only 1–128 explicitly selected
 existing packages. `Debug`, `Info`, `Warn` and `Error` map to the verified native
@@ -32,6 +42,9 @@ readback does not promise persistence across a program restart.
 use std::collections::BTreeMap;
 use verysync_sidecar::CoreLogLevel;
 
+let text_snapshot = client.core_log_text(None).await?;
+// Inspect text_snapshot.text explicitly; redact it before application logging.
+# let _ = text_snapshot;
 let before = client.core_log_levels().await?;
 let changed = client.set_core_log_levels(&BTreeMap::from([
     ("main".to_owned(), CoreLogLevel::Debug),
