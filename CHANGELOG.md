@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Read the independent native index-file diagnostic endpoint using the existing
+  full metadata types, preserving its successful zero-record missing-file result.
+
+- Add explicit native support ZIP collection with bounded private bytes,
+  mutation uncertainty and no implicit save, extraction or request retry.
+
 - Add native event-name selections with bounded canonical filters and validated
   serialized cursors. Different selections retain separate source identities.
 

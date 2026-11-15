@@ -146,6 +146,49 @@ impl Client {
         Ok(CoreProfile { request, bytes })
     }
 
+    /// Explicitly collect the native support archive once.
+    ///
+    /// The fixed handler collects target configuration/logs/metrics and native
+    /// heap, CPU and goroutine profiles. Its CPU collection runs for four seconds
+    /// when available. This GET serializes with mutations because native GC and
+    /// profiler state can change. It does not change the GUI debugging setting,
+    /// install a controller profiler, save a file, unpack data or retry.
+    ///
+    /// The connection's response bound and deadline apply without extension.
+    /// Cancellation or a failed response can leave native collection running;
+    /// it does not prove target cancellation. Native entries can be unavailable,
+    /// and native redaction is not a guarantee that the ZIP is safe to publish.
+    /// ZIP signature validation is not CRC or archive-content validation.
+    ///
+    /// ```rust,no_run
+    /// # async fn example(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+    /// let bundle = client.collect_core_support_bundle().await?;
+    /// // Inspect or store privately only when explicitly selected by your caller.
+    /// assert!(!bundle.body_bytes().is_empty());
+    /// # Ok(()) }
+    /// ```
+    pub async fn collect_core_support_bundle(&self) -> Result<crate::CoreSupportBundle> {
+        let operation = "collect native support bundle";
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let url = self.connection.management_url("rest/debug/support", &[])?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(operation, reqwest::Method::GET, url, None, true)
+            .await?;
+        if bytes.len() < 52 || !bytes.starts_with(b"PK\x03\x04") {
+            return Err(mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                },
+            ));
+        }
+        Ok(crate::CoreSupportBundle { bytes })
+    }
+
     /// Read one bounded native metrics exposition from `metrics` under the
     /// selected management base path. The API key is attached normally. This
     /// does not enable unauthenticated metrics, open another listener, parse

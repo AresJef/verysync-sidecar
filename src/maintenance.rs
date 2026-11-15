@@ -259,6 +259,32 @@ impl fmt::Debug for CoreProfile {
     }
 }
 
+/// Bounded, unchanged native support ZIP bytes. This can contain private target
+/// configuration, logs, metrics and profiles. Ordinary Debug exposes only size.
+#[derive(Clone)]
+pub struct CoreSupportBundle {
+    pub(crate) bytes: Vec<u8>,
+}
+impl CoreSupportBundle {
+    /// Inspect the exact private native ZIP bytes explicitly. The SDK checks
+    /// only a nonempty ZIP signature/minimum length; it does not decompress,
+    /// validate CRCs, sanitize entries or promise complete native redaction.
+    pub fn body_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    /// Take the unchanged bytes for caller-selected private storage or tooling.
+    pub fn into_body_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+impl fmt::Debug for CoreSupportBundle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreSupportBundle")
+            .field("compressed_bytes", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// One bounded UTF-8 Prometheus exposition snapshot from the authenticated
 /// management endpoint. Missing metrics, units, rates and timestamps are not
 /// invented. Parsing/aggregation follows the caller's chosen metrics tooling.

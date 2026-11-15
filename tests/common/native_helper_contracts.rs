@@ -639,3 +639,90 @@ async fn whole_folder_versions_refuse_missing_scope_malformed_and_native_failure
     assert_eq!(server.finish().await?.len(), 4);
     Ok(())
 }
+
+#[tokio::test]
+async fn native_support_bundle_preserves_private_bytes_and_uses_one_explicit_collection(
+) -> TestResult {
+    let mut bytes = b"PK\x03\x04".to_vec();
+    bytes.extend_from_slice(&[0; 48]);
+    bytes.extend_from_slice(KEY.as_bytes());
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply {
+            body: bytes.clone(),
+            ..Reply::json(serde_json::Value::Null)
+        },
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let bundle: verysync_sidecar::CoreSupportBundle = client.collect_core_support_bundle().await?;
+    assert_eq!(bundle.body_bytes(), bytes);
+    assert!(!format!("{bundle:?}").contains(KEY));
+    assert_eq!(bundle.into_body_bytes(), bytes);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 4);
+    assert!(requests[3].starts_with("GET /prefix/rest/debug/support HTTP/1.1"));
+    assert!(!requests.iter().any(|r| r.starts_with("PATCH ")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_support_bundle_failures_keep_bounds_uncertainty_and_never_retry() -> TestResult {
+    for kind in 0..7 {
+        let reply = match kind {
+            0 => Reply {
+                body: Vec::new(),
+                ..Reply::json(serde_json::Value::Null)
+            },
+            1 => Reply {
+                body: format!("<html>{KEY}</html>").into_bytes(),
+                ..Reply::json(serde_json::Value::Null)
+            },
+            2 => Reply {
+                body: b"PK\x03\x04".to_vec(),
+                ..Reply::json(serde_json::Value::Null)
+            },
+            3 => Reply {
+                status: 503,
+                ..Reply::json(serde_json::json!({"private":KEY}))
+            },
+            4 => Reply::json(serde_json::json!({"error":KEY})),
+            5 => Reply {
+                body: vec![0; 1024],
+                ..Reply::json(serde_json::Value::Null)
+            },
+            _ => Reply {
+                status: 403,
+                ..Reply::json(serde_json::json!({"private":KEY}))
+            },
+        };
+        let server = ScriptedServer::start(vec![version(), identity(), identity(), reply]).await?;
+        let client = Client::connect(server.options()?.response_limit(256)?).await?;
+        let error = client
+            .collect_core_support_bundle()
+            .await
+            .expect_err("failed collection is not a support bundle");
+        assert!(!format!("{error:?}").contains(KEY));
+        if kind == 6 {
+            assert!(matches!(
+                error,
+                verysync_sidecar::Error::AccessDenied { .. }
+            ));
+        } else {
+            let verysync_sidecar::Error::MutationOutcomeUnknown { source, .. } = error else {
+                return Err("collection uncertainty missing".into());
+            };
+            assert!(matches!(
+                (kind, source.as_ref()),
+                (0..=2, verysync_sidecar::Error::InvalidResponse { .. })
+                    | (3, verysync_sidecar::Error::Http { .. })
+                    | (4, verysync_sidecar::Error::Api { .. })
+                    | (5, verysync_sidecar::Error::ResponseTooLarge { limit: 256 })
+            ));
+        }
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}

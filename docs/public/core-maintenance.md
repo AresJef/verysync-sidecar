@@ -221,3 +221,44 @@ if result.outcome == DatabaseCommandOutcome::Success {
 }
 # Ok(()) }
 ```
+
+## Explicit native support archive
+
+`Client::collect_core_support_bundle()` explicitly collects
+`GET /rest/debug/support` from the authenticated fixed v2.33.2 program. It
+returns `CoreSupportBundle` with unchanged private ZIP bytes through
+`body_bytes()` / `into_body_bytes()`. The SDK performs no file save, extraction,
+entry rewriting or native-filename-based path selection. Native HTTP attachment
+headers remain available through the separate raw-request API when needed.
+
+The fixed handler gathers configuration, in-memory logs, version/platform,
+usage information, metrics and connection statistics. It also attempts native
+heap, CPU and goroutine profiles, including a native four-second CPU collection.
+Unavailable components can be omitted by the engine; a returned ZIP does not
+promise every profile was collected. This is a functional archive operation,
+not a performance benchmark or a CPU-sampling quality guarantee.
+
+Although this is an HTTP GET, collection changes native GC/profiler state. It
+uses the connection's mutation lock and is never retried. Existing deadlines
+and response-byte bounds apply without extension. Cancellation, a lost response,
+a response limit or malformed archive acknowledgement can leave
+`MutationOutcomeUnknown`; collection can continue on the target after the future
+ends. The library does not take control of the caller's logging, profiler or
+process lifetime. It does not change the GUI debugging preference; an isolated
+free baseline instance returned a valid archive with that preference false.
+
+The SDK checks only a nonempty ZIP signature and minimum byte length. It does
+not decompress, validate CRCs, validate archive paths or prove complete native
+redaction. Treat the bytes and any explicit decoded fields as sensitive target
+data. The native configuration entry was observed to replace the management API
+key with `REDACTED`; this is not a guarantee that all logs, profiles, paths or
+other values are safe to publish. The response bound limits compressed bytes;
+callers must bound decompression and validate entries before using archive tools.
+
+Native validation independently decodes the archive with the Python standard
+library, checks all CRCs and required metadata, validates available compressed
+profile members and the native API-key redaction, then verifies that a separate
+4-KiB response bound rejects a real collection. Identity, unchanged settings,
+synthetic file SHA and normal owned process-tree exit are checked separately.
+Synthetic contracts cover exact bytes, malformed/empty acknowledgements, native
+errors, authorization refusal, response bounds and no automatic retries.

@@ -170,6 +170,28 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
     assert_eq!(file.global.size, original.len() as u64);
     assert_eq!(file.local.size, original.len() as u64);
     assert!(!file.global.version.is_empty());
+    let detailed = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local("root.txt"))
+        .await?;
+    assert_eq!(detailed.global.name, file.global.name);
+    assert_eq!(detailed.global.version, file.global.version);
+    assert_eq!(detailed.global.blocks_hash, file.global.blocks_hash);
+    assert_eq!(detailed.local.size, file.local.size);
+    assert!(detailed.availability.is_none());
+    let absent = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local("absent.txt"))
+        .await?;
+    for record in [&absent.global, &absent.local] {
+        assert!(record.name.is_empty() && record.version.is_empty());
+        assert_eq!(record.size, 0);
+        assert_eq!(record.num_blocks, 0);
+        assert!(record.blocks_hash.is_none());
+        assert_eq!(record.signature.version, 0);
+        assert!(record.signature.encoded_signature.is_none());
+    }
+
     assert_eq!(file.global.version, file.local.version);
     assert!(file.availability.is_none());
     assert!(!file.global.deleted && !file.global.ignored && !file.global.invalid);
@@ -186,6 +208,13 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
         .await?;
     assert!(child.global.name.ends_with("child.txt"));
     assert_eq!(child.global.size, b"distinct child bytes".len() as u64);
+    let detailed_child = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local(branch.join("child.txt")))
+        .await?;
+    assert_eq!(detailed_child.global.name, child.global.name);
+    assert_eq!(detailed_child.global.version, child.global.version);
+
     let directory = owner
         .client()
         .index_file_info(&folder, &TargetPath::local(branch))
@@ -194,6 +223,13 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
     assert_eq!(directory.global.size, 0);
     assert_eq!(directory.global.num_blocks, 0);
     assert!(directory.global.blocks_hash.is_none());
+    let detailed_directory = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local(branch))
+        .await?;
+    assert_eq!(detailed_directory.global.kind, SyncFileKind::Directory);
+    assert_eq!(detailed_directory.global.num_blocks, 0);
+
     assert!(matches!(
         owner
             .client()
@@ -205,6 +241,11 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
         data.join("unscanned.txt"),
         b"caller explicitly scans this later",
     )?;
+    let unscanned = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local("unscanned.txt"))
+        .await?;
+    assert!(unscanned.global.name.is_empty() && unscanned.local.name.is_empty());
     assert!(matches!(
         owner
             .client()
@@ -235,6 +276,13 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
         scanned.global.size,
         b"caller explicitly scans this later".len() as u64
     );
+    let scanned_diagnostics = owner
+        .client()
+        .index_file_diagnostics(&folder, &TargetPath::local("unscanned.txt"))
+        .await?;
+    assert_eq!(scanned_diagnostics.global.name, "unscanned.txt");
+    assert_eq!(scanned_diagnostics.global.size, scanned.global.size);
+
     assert_eq!(owner.client().system_status().await?.device_id, id);
     assert_eq!(
         std::fs::read(root.join("core").join("setting.dat"))?,
@@ -252,7 +300,7 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
     let exit = owner.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
-    println!("native_index_file_metadata_snapshots=4 native_missing_objects=2 nested_unicode_target_path=true directory_kind_and_null_hash=true null_availability_retained=true unscanned_file_not_fabricated=true explicit_scan_effect_separate=true identity_configuration_and_three_files_retained=true normal_owned_exit=true");
+    println!("native_index_file_diagnostic_snapshots=6 native_zero_debug_records_contrast_real_db_404=true native_index_file_metadata_snapshots=4 native_missing_objects=2 nested_unicode_target_path=true directory_kind_and_null_hash=true null_availability_retained=true unscanned_file_not_fabricated=true explicit_scan_effect_separate=true identity_configuration_and_three_files_retained=true normal_owned_exit=true");
     Ok(())
 }
 
@@ -406,6 +454,28 @@ async fn actual_native_index_file_availability_preserves_zero_local_state() -> T
         .iter()
         .any(|source| source.device_id == aid && !source.from_temporary));
     assert_eq!(info.global.signature.version, 3);
+    let diagnostics = b
+        .client()
+        .index_file_diagnostics(&bf.configuration.id, &file)
+        .await?;
+    assert_eq!(diagnostics.global.name, info.global.name);
+    assert_eq!(diagnostics.global.size, info.global.size);
+    assert_eq!(diagnostics.global.signature.version, 3);
+    assert!(diagnostics
+        .global
+        .signature
+        .encoded_signature
+        .as_ref()
+        .is_some_and(|s| !s.is_empty()));
+    assert!(diagnostics.local.name.is_empty() && diagnostics.local.version.is_empty());
+    assert_eq!(diagnostics.local.size, 0);
+    assert!(diagnostics
+        .availability
+        .as_ref()
+        .is_some_and(|sources| sources
+            .iter()
+            .any(|source| source.device_id == aid && !source.from_temporary)));
+
     let encoded = info
         .global
         .signature
@@ -421,7 +491,7 @@ async fn actual_native_index_file_availability_preserves_zero_local_state() -> T
     assert!(!debug.contains(aid.as_str()));
     assert!(!debug.contains(keys.read_only_key.expose_secret()));
     assert!(!debug.contains(keys.read_write_key.expose_secret()));
-    println!("native_index_file_availability=true actual_private_peer_matches=true non_temporary_source_record=true shared_native_signature_version3_preserved_without_verification=true zero_local_record_preserved=true receiver_file_not_complete=true no_wan_or_completion_claim=true caller_fixture_polling_separate_from_single_sdk_reads=true");
+    println!("native_debug_index_file_actual_peer_availability=true native_index_file_availability=true actual_private_peer_matches=true non_temporary_source_record=true shared_native_signature_version3_preserved_without_verification=true zero_local_record_preserved=true receiver_file_not_complete=true no_wan_or_completion_claim=true caller_fixture_polling_separate_from_single_sdk_reads=true");
     assert_eq!(std::fs::read(origin.join("sample.bin"))?, sample);
     assert_eq!(a.client().system_status().await?.device_id, aid);
     assert_eq!(b.client().system_status().await?.device_id, bid);
@@ -848,5 +918,141 @@ async fn actual_native_helpers_normalize_ids_collect_reports_and_preserve_explic
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
     println!("native_helper_observations native_health_ok=true health_matches_independent_native_response=true migration_completed_baseline_matches_independent_native_response=true migration_not_started=true migration_active_effect_not_observed=true native_id_normalization_and_checksum_rejection=true explicit_loopback_lookup=true report_collection_without_consent_change=true random_quality_not_asserted=true empty_link_only_native_effect=true");
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_native_support_bundle_contains_valid_private_archive_and_preserves_owned_state(
+) -> TestResult {
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        ApiKey, Client, ConnectOptions, CreateFolderOptions, FolderId, TargetPath,
+    };
+    let root = tempfile::Builder::new().prefix("vns-").tempdir()?.keep();
+    let state = root.join("core");
+    let settings = options(&state)?;
+    let endpoint = settings.management_endpoint().clone();
+    let mut owner = ManagedInstance::start(settings).await?;
+    let id = owner.client().instance().device_id.clone();
+    assert!(!owner.client().gui_preferences().await?.debugging);
+    let data = root.join("synthetic bundle data");
+    std::fs::create_dir(&data)?;
+    let sample = b"retained private bundle sentinel";
+    std::fs::write(data.join("sentinel.txt"), sample)?;
+    let folder = FolderId::parse("typed-native-support-bundle")?;
+    owner
+        .client()
+        .create_folder(&CreateFolderOptions::new(folder, TargetPath::local(&data)).paused(true))
+        .await?;
+    let config = std::fs::read(state.join("setting.dat"))?;
+    let before = Sha256::digest(std::fs::read(data.join("sentinel.txt"))?);
+    let hashes = ["key.pem", "cert.pem", ".verysync-sidecar-identity"]
+        .into_iter()
+        .map(|name| std::fs::read(state.join(name)).map(|v| Sha256::digest(v).to_vec()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let bundle = owner.client().collect_core_support_bundle().await?;
+    assert!(bundle.body_bytes().len() > 4096);
+    assert!(!format!("{bundle:?}").contains("synthetic bundle data"));
+    let archive = root.join("private bundle.debug");
+    std::fs::write(&archive, bundle.body_bytes())?;
+    let inspect = r#"import gzip,json,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    entries=z.infolist()
+    assert len(entries)<=64 and sum(e.file_size for e in entries)<=8*1024*1024
+    assert all(e.file_size<=2*1024*1024 for e in entries)
+    assert z.testzip() is None
+    names={e.filename for e in entries}
+    required={'config.json.txt','log-inmemory.txt','version-platform.json.txt','usage-reporting.json.txt','metrics.txt','connection-stats.json.txt'}
+    assert required<=names
+    config=json.loads(z.read('config.json.txt'))
+    assert config['gui']['apiKey']=='REDACTED'
+    assert config['gui']['debugging'] is False and len(config['folders'])==1
+    version=json.loads(z.read('version-platform.json.txt'))
+    assert version['version']=='v2.33.2'
+    profiles=[e for e in entries if e.filename.endswith('.pprof')]
+    for entry in profiles:
+        assert gzip.decompress(z.read(entry))
+    goroutines=[e for e in entries if e.filename.startswith('verysync-goroutine-')]
+    for entry in goroutines:
+        assert b'goroutine' in z.read(entry)
+    print(json.dumps({'zip_entries':len(entries),'native_gzip_profiles':len(profiles),'native_goroutine_reports':len(goroutines),'zip_all_crc_valid':True,'actual_native_config_api_key_redacted':True,'native_redaction_not_complete_privacy_guarantee':True,'native_version_metadata_matches':True}))
+"#;
+    let validation = {
+        use std::io::Read;
+        struct Inspector(std::process::Child);
+        impl Drop for Inspector {
+            fn drop(&mut self) {
+                if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+        }
+        let stdout = tempfile::NamedTempFile::new_in(&root)?;
+        let stderr = tempfile::NamedTempFile::new_in(&root)?;
+        let mut command = std::process::Command::new(
+            std::env::var_os("VERYSYNC_TEST_PYTHON").ok_or("explicit fixture Python missing")?,
+        );
+        command
+            .arg("-c")
+            .arg(inspect)
+            .arg(&archive)
+            .stdin(std::process::Stdio::null())
+            .stdout(stdout.as_file().try_clone()?)
+            .stderr(stderr.as_file().try_clone()?);
+        let mut child = Inspector(command.spawn()?);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.0.try_wait()? {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("owned archive inspector deadline".into());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let mut error = String::new();
+        stderr.reopen()?.take(4097).read_to_string(&mut error)?;
+        assert!(error.len() <= 4096);
+        assert!(status.success(), "native ZIP validation failed: {error}");
+        let mut output = String::new();
+        stdout.reopen()?.take(4097).read_to_string(&mut output)?;
+        assert!(output.len() <= 4096);
+        output
+    };
+    println!("native support archive validation: {}", validation.trim());
+    let decoded = rmpv::decode::read_value(&mut std::io::Cursor::new(&config))?;
+    let key = decoded["4"]["6"]
+        .as_str()
+        .ok_or("private credential missing")?;
+    let small = Client::connect(
+        ConnectOptions::new(endpoint, ApiKey::new(key)?)
+            .expected_device_id(id.clone())
+            .response_limit(4096)?,
+    )
+    .await?;
+    assert!(
+        matches!(small.collect_core_support_bundle().await,Err(Error::MutationOutcomeUnknown{source,..}) if matches!(source.as_ref(),Error::ResponseTooLarge{limit:4096}))
+    );
+    assert_eq!(owner.client().system_status().await?.device_id, id);
+    assert!(!owner.client().gui_preferences().await?.debugging);
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
+    assert_eq!(
+        Sha256::digest(std::fs::read(data.join("sentinel.txt"))?),
+        before
+    );
+    for (name, hash) in ["key.pem", "cert.pem", ".verysync-sidecar-identity"]
+        .into_iter()
+        .zip(hashes)
+    {
+        assert_eq!(
+            Sha256::digest(std::fs::read(state.join(name))?).as_slice(),
+            hash
+        );
+    }
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("native_support_bundle_typed=true collected_with_debugging_false=true explicit_caller_fixture_storage_only=true actual_compressed_response_limit=true response_limit_keeps_collection_uncertain=true identity_configuration_and_sample_sha_preserved=true normal_owned_tree_exit=true");
     Ok(())
 }
