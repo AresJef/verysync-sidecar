@@ -123,6 +123,13 @@ and [file list](https://packages.ubuntu.com/noble/amd64/qemu-user-static/filelis
 identify the two ELF32 interpreters. The matching fixed Debian source archive
 contains `linux-user-binfmt-P.diff`, which defines the selected argv0 convention.
 
+The MIPS candidate first requires the existing authenticated management test.
+Failure retains its original deadline, bounded transport/error classification
+and exact cleanup. The remaining suites stay unexecuted and required, so the
+final job fails; an absent readiness prerequisite cannot turn into acceptance.
+Fixture summaries omit error messages and URLs while retaining reqwest flags,
+native I/O error kinds and errno, without sending another request.
+
 ```sh
 cargo +1.85.0 fetch --locked
 python scripts/run-isolated-engine-tests.py --toolchain 1.85.0 \

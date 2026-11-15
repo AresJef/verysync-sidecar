@@ -780,6 +780,14 @@ jobs:
         run: |
           "$VERYSYNC_CARGO" +"$TEST_TOOLCHAIN" test --features engine-tests --test engine_control --test managed_instance --test managed_lifetime --no-run --locked
           python scripts/prepare-test-examples.py --cargo "$VERYSYNC_CARGO" --toolchain "$TEST_TOOLCHAIN" --github-env "$GITHUB_ENV"
+      - name: Require actual private management readiness before the MIPS suites
+        id: mips_management_prerequisite
+        if: matrix.custom_std == true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --cargo "$VERYSYNC_CARGO" --test-target engine_control
+          --test-filter connect_auth_version_and_identity_through_the_public_api
+          --evidence-dir "${{ runner.temp }}/vs-mips-management-prerequisite"
       - name: Verify actual management and synthetic file effects
         id: emulated_engine_control
         continue-on-error: true
@@ -806,11 +814,14 @@ jobs:
         if: always()
         env:
           PLATFORM_STEP_RESULTS: ${{ toJson(steps) }}
+          REQUIRE_MIPS_PREREQUISITE: ${{ matrix.custom_std }}
         run: |
           python - <<'PY'
           import json, os, sys
           steps = json.loads(os.environ['PLATFORM_STEP_RESULTS'])
           required = ['emulated_engine_control', 'emulated_managed_instance', 'emulated_managed_lifetime', 'emulated_cleanup']
+          if os.environ.get('REQUIRE_MIPS_PREREQUISITE') == 'true':
+              required.append('mips_management_prerequisite')
           failed = [name for name in required if steps.get(name, {}).get('outcome') != 'success']
           if failed:
               print('Required emulated outcomes did not pass: ' + ', '.join(failed), file=sys.stderr)
