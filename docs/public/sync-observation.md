@@ -197,3 +197,48 @@ record is still zero and the receiver's complete file is absent. No SDK hash or
 signature verification, normalization, mutation, polling or retry is introduced.
 The independent support ZIP and native profiling APIs are separate operations;
 this endpoint is not a support-file download.
+
+## Native per-file download progress
+
+`folder_download_progress(&folder)` reads `/rest/folder/downloadprogress` once
+after fresh identity and configured-folder checks. This is separate from index
+need, advertised sources, folder state, selective browsing and peer completion.
+It returns `FolderDownloadProgress.files`, keyed by exact, untrusted native file
+names. The SDK never joins these names to controller paths or starts a scan,
+transfer, observer, retry or filesystem operation.
+
+Each `FileDownloadProgress` retains the native total, reused, origin-copy,
+shifted-origin-copy, other-location-copy, pulled and pulling block counters,
+plus `bytes_done` and `bytes_total`. Required fields use signed native integer
+values; they are not clamped, recomputed or converted into a percentage. Unknown
+per-file fields remain available. Both result types omit filenames, counters
+and extension values from ordinary Debug, except the wrapper's record count.
+
+The byte values are native estimates. In a controlled 4 MiB transfer the fixed
+core reported 32 blocks and a total-byte estimate different from the actual
+file length. Neither those estimates nor an empty map establish filesystem
+existence, transfer completion, peer health or a caller's durable task outcome.
+Verify required file content or separate task criteria explicitly.
+
+The fixed program can return HTTP 500 `no such folder` before that folder has
+progress-emitter state, despite its valid configuration. Paused folders can
+also return HTTP 500. These native errors remain errors; they never become an
+empty successful map. The SDK does not retry. Applications choose whether and
+when to request another independent snapshot. An actual successful empty map
+is retained when the program reports it.
+
+The isolated native test captures partial block and byte counters while the
+receiver's complete file is absent. The test caller then explicitly releases
+its throttle, independently verifies all final file bytes, observes an empty
+native map and checks the paused-folder error. This is private loopback
+evidence, with current-source platform acceptance and real WAN tests separate.
+
+```no_run
+# async fn example(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+let snapshot = client.folder_download_progress(folder).await?;
+for (untrusted_name, native) in &snapshot.files {
+    // Display explicitly as private data; do not infer a completed file here.
+    let _ = (untrusted_name, native.pulled_blocks, native.pulling_blocks);
+}
+# Ok(()) }
+```

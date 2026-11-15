@@ -306,6 +306,16 @@ async fn actual_native_index_file_metadata_preserves_native_records_and_missing_
 
 #[tokio::test]
 async fn actual_native_index_file_availability_preserves_zero_local_state() -> TestResult {
+    incomplete_native_peer_observation(false).await
+}
+
+#[tokio::test]
+async fn actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters(
+) -> TestResult {
+    incomplete_native_peer_observation(true).await
+}
+
+async fn incomplete_native_peer_observation(observe_download: bool) -> TestResult {
     use verysync_sidecar::{
         BandwidthPatch, Client, CreateDeviceOptions, DeviceId, DevicePatch, DeviceTransport,
         FolderId, JoinFolderOptions, RawMethod, RawRequest, RequestEffect, TargetPath,
@@ -372,7 +382,11 @@ async fn actual_native_index_file_availability_preserves_zero_local_state() -> T
     let received = root.join("receiver files");
     std::fs::create_dir_all(&origin)?;
     let mut seed = 0x34abcdef12345678u64;
-    let sample: Vec<u8> = (0..131072)
+    let sample: Vec<u8> = (0..if observe_download {
+        4 * 1024 * 1024
+    } else {
+        131072
+    })
         .map(|_| {
             seed ^= seed << 13;
             seed ^= seed >> 7;
@@ -492,6 +506,73 @@ async fn actual_native_index_file_availability_preserves_zero_local_state() -> T
     assert!(!debug.contains(keys.read_only_key.expose_secret()));
     assert!(!debug.contains(keys.read_write_key.expose_secret()));
     println!("native_debug_index_file_actual_peer_availability=true native_index_file_availability=true actual_private_peer_matches=true non_temporary_source_record=true shared_native_signature_version3_preserved_without_verification=true zero_local_record_preserved=true receiver_file_not_complete=true no_wan_or_completion_claim=true caller_fixture_polling_separate_from_single_sdk_reads=true");
+
+    if observe_download {
+        let progress = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                match b
+                    .client()
+                    .folder_download_progress(&bf.configuration.id)
+                    .await
+                {
+                    Ok(progress)
+                        if progress
+                            .files
+                            .get("sample.bin")
+                            .is_some_and(|p| p.pulled_blocks > 0 && p.pulling_blocks > 0) =>
+                    {
+                        return Ok::<_, Error>(progress)
+                    }
+                    Ok(_) => {}
+                    Err(Error::Http { response }) if response.status() == 500 => {}
+                    Err(error) => return Err(error),
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await??;
+        let current = &progress.files["sample.bin"];
+        assert_eq!(current.total_blocks, 32);
+        assert!(current.bytes_done > 0 && current.bytes_done < current.bytes_total);
+        assert!(current.bytes_total > 0 && current.bytes_total <= sample.len() as i64);
+        assert!(!received.join("sample.bin").exists());
+        assert!(!format!("{progress:?} {current:?}").contains("sample.bin"));
+        // The caller explicitly releases the fixture throttle and independently
+        // verifies the file. The progress getter neither starts nor waits for it.
+        assert!(
+            b.client()
+                .update_bandwidth_configuration(
+                    &BandwidthPatch::default().max_receive_kib_per_second(0)
+                )
+                .await?
+                .requested_fields_match
+        );
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                match std::fs::read(received.join("sample.bin")) {
+                    Ok(bytes) if bytes == sample => {
+                        return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await??;
+        assert!(b
+            .client()
+            .folder_download_progress(&bf.configuration.id)
+            .await?
+            .files
+            .is_empty());
+        b.client().pause_folder(&bf.configuration.id).await?;
+        assert!(
+            matches!(b.client().folder_download_progress(&bf.configuration.id).await,Err(Error::Http{response}) if response.status()==500)
+        );
+        println!("native_folder_download_progress_actual_partial_record=true actual_total_blocks=32 actual_incomplete_receiver_before_explicit_throttle_release=true native_bytes_retained_without_file_length_assumption=true caller_separately_verified_completed_bytes=true completed_native_map_empty=true paused_native_http_500_preserved=true sdk_polling_or_transfer_side_effects_not_claimed=true");
+    }
     assert_eq!(std::fs::read(origin.join("sample.bin"))?, sample);
     assert_eq!(a.client().system_status().await?.device_id, aid);
     assert_eq!(b.client().system_status().await?.device_id, bid);
