@@ -156,6 +156,10 @@ let snapshot = client.probe_target_path_writeability(&path, false).await?;
 # Ok(()) }
 ```
 
+For the fixed macOS baseline, support here means faithful native-result
+preservation with this limitation, rather than a reliable permission oracle.
+Other platforms retain their own independent validation requirements.
+
 ## Explicit target-side folder open requests
 
 `request_native_folder_open(&folder, NativeFolderOpenLocation::Folder)` asks the
@@ -319,6 +323,48 @@ let exit = core.native_completion_instructions(
 if exit.outcome == NativeCompletionOutcome::InstructionText {
     let exact_native_text = exit.instruction_text();
     let _ = exact_native_text; // Present or review it under caller policy.
+}
+# Ok(()) }
+```
+
+## Explicit native host watch limits
+
+`ManagedInstance::request_native_file_watch_limit(minimum, timeout)` explicitly
+runs `configure-host --watch-files N` on a confirmed stopped owned instance.
+This is a host-wide Linux kernel action. The SDK never elevates privileges,
+starts a serving core, installs a service or persists a sysctl setting. The
+fixed Linux implementation only raises an insufficient current value; zero
+requests no increase, and it cannot lower the value. The minimum must fit the
+local signed native integer range.
+
+The native CLI discards its internal read/parse/write errors and can return zero
+without changing the setting. The SDK independently reads at most 33 bytes from
+the Linux inotify watch-limit procfs file before and after the command.
+`NativeWatchLimitExit` preserves the actual code, bounded private diagnostic,
+requested minimum and both `NativeWatchLimitObservation` snapshots.
+`MinimumObserved` means a post-command value was at least the request;
+`MinimumNotObserved` means a known value stayed below it. `Unobservable` and
+`NativeFailure` remain explicit. Observation failures preserve I/O category
+and OS code; missing, malformed or timed-out observations never become zero.
+Other hosts have no Linux observation; their actual native exit is retained.
+
+These are snapshots, not exclusive host administration or proof that this caller
+caused a change. Other administrators can race the request, and a host restart
+can reset the value. One total deadline covers observations and CLI work;
+necessary contained cleanup can finish afterward. Cancellation or failure can
+leave a changed host limit. No retry or rollback is implicit. State leases,
+executable hashes, alias rejection and private profile protection remain in force;
+clean-backup eligibility is invalidated like other stopped CLI commands.
+
+```no_run
+# async fn example(core: &mut verysync_sidecar::ManagedInstance) -> verysync_sidecar::Result<()> {
+use std::time::Duration;
+use verysync_sidecar::NativeWatchLimitOutcome;
+core.shutdown(Duration::from_secs(10)).await?;
+let receipt = core.request_native_file_watch_limit(524_288, Duration::from_secs(10)).await?;
+if receipt.outcome == NativeWatchLimitOutcome::MinimumObserved {
+    let observed = receipt.after;
+    let _ = observed;
 }
 # Ok(()) }
 ```

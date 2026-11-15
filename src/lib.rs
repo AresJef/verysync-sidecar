@@ -216,7 +216,8 @@ pub use managed::{
     KernelUpgradeCommand, KernelUpgradeExit, ManagedExit, ManagedInstance, ManagedLifetime,
     ManagedOptions, ManagedUpgradeChecks, NativeCompletionAction, NativeCompletionExit,
     NativeCompletionOutcome, NativeStoragePaths, NativeStoragePathsExit, NativeStoragePathsOutcome,
-    ProgramTransition, StateBackup, StateBackupInfo, StateBackupOptions,
+    NativeWatchLimitExit, NativeWatchLimitObservation, NativeWatchLimitOutcome, ProgramTransition,
+    StateBackup, StateBackupInfo, StateBackupOptions,
 };
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};

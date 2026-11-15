@@ -61,11 +61,12 @@ impl ManagedInstance {
                 let result = (|| {
                     let state = state::existing(&state)?;
                     let mut lease = state::StateLease::acquire(&state)?;
-                    if plan
-                        .arguments
-                        .first()
-                        .is_some_and(|s| matches!(s.as_str(), "debug" | "install-completions"))
-                    {
+                    if plan.arguments.first().is_some_and(|s| {
+                        matches!(
+                            s.as_str(),
+                            "debug" | "install-completions" | "configure-host"
+                        )
+                    }) {
                         let management_socket = management_socket
                             .as_deref()
                             .and_then(|path| std::fs::canonicalize(path).ok());

@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Request native Linux file-watch minimums with independent bounded kernel
+  observations, preserving zero-exit failures instead of assuming application.
+
 - Request native shell-completion instructions with private exact text, explicit
   action/exit outcomes and stopped-state alias checks; never evaluate shell code.
 
