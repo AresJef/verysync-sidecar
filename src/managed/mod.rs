@@ -5,6 +5,8 @@ mod archive;
 mod backup;
 mod bootstrap;
 mod command;
+mod host;
+pub use host::{NativeWatchLimitExit, NativeWatchLimitObservation, NativeWatchLimitOutcome};
 mod completions;
 pub use completions::{NativeCompletionAction, NativeCompletionExit, NativeCompletionOutcome};
 mod database;
