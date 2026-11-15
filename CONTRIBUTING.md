@@ -65,8 +65,22 @@ cleanup from the library's ready-owner cleanup.
 The independent Linux fixture explicitly selects the official direct-core
 environment mode (`VSMONITORED=yes`), matching the SDK's Linux launch mode.
 Unix group creation uses a child-only pre-exec `setpgid` call, including under
-emulation. Exact-image absence remains required
-alongside group absence, so a detached descendant cannot make cleanup pass.
+emulation. Exact-image absence remains required alongside group absence, so a
+detached descendant cannot make cleanup pass.
+
+The additional Linux matrix prepares four separate emulated profiles:
+LoongArch64/LA464 with the LP64D GNU sysroot and GCC 14, PPC64LE/POWER8,
+RISC-V64/rv64 and S390x/max. Each records its exact compiler, target, sysroot,
+fixed QEMU image and emulator SHA, registration flags, and official ELF headers.
+An independent Rust canary must preserve arguments through registered and
+explicit execution and reject the original unpadded explicit form. Both native
+version-launch paths must pass the selected fixed CPU before the SDK cases run.
+There is no automatic fallback to a different CPU or a no-TLS runtime suite.
+The default-TLS management, startup and host-exit suites retain positive core
+inventory, normal shutdown and exact-image cleanup requirements. These are
+emulated execution candidates; native hardware, minimum kernel/libc and the
+remaining feature suites require separate evidence. The Rust 1.85 LoongArch
+target enables LSX; selecting LA464 does not establish a native minimum ISA.
 
 ```sh
 cargo +1.85.0 fetch --locked
