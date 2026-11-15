@@ -24,6 +24,8 @@ mod folder_policy_contracts;
 
 #[path = "common/auxiliary_maintenance_contracts.rs"]
 mod auxiliary_maintenance_contracts;
+#[path = "common/download_progress_contracts.rs"]
+mod download_progress_contracts;
 #[path = "common/gui_listener_contracts.rs"]
 mod gui_listener_contracts;
 #[path = "common/gui_resource_contracts.rs"]

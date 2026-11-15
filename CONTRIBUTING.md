@@ -301,6 +301,15 @@ When the source directory is synchronized by another program, configure
 `CARGO_TARGET_DIR` outside that directory to avoid synchronization placeholders
 interfering with compiler caches. Keep that machine-specific choice local.
 
+The FTP disconnect fixture traces the single explicit Stop request without
+changing its workload, deadline or retry count. It reports state booleans and
+operation/run identity matches, excluding identifiers and native payloads. On
+failure it unwraps only the SDK uncertainty to its credential-safe error, prints
+response status/byte metadata, and permits at most two seconds of concurrent
+read-only status/run observations. It then returns the original Stop error;
+observations never rescue the test or automatically repeat a control request.
+A later passing run does not establish the cause of an earlier native failure.
+
 ## Public content
 
 The repository tracks source, tests, English user documentation, CI and sanitized

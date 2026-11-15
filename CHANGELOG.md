@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Read independent native per-file download-progress maps with exact block
+  counters, byte estimates, private results and preserved missing-state errors.
+
 - Expose explicit native path-writeability snapshots with conservative mutation
   semantics, preserving the fixed core permission-detection limitation.
 

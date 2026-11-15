@@ -6,6 +6,28 @@ use crate::{
 };
 use std::collections::BTreeMap;
 impl Client {
+    /// Read the independent native per-file download-progress map once.
+    /// Fresh identity and configured-folder checks precede a single GET.
+    /// No scan, transfer, retry, polling, filesystem read or completion inference
+    /// occurs. Native missing progress state and paused folders can return HTTP
+    /// 500 even while the folder remains configured; these remain errors.
+    /// An empty map means no records in this snapshot, not completed work.
+    /// Byte estimates are retained and need not equal the source file length.
+    pub async fn folder_download_progress(
+        &self,
+        folder: &FolderId,
+    ) -> Result<crate::FolderDownloadProgress> {
+        self.system_status().await?;
+        self.folder(folder).await?;
+        self.connection
+            .get_json_with_query(
+                "read native folder download progress",
+                "rest/folder/downloadprogress",
+                &[("folder", folder.as_str())],
+            )
+            .await
+    }
+
     /// Read one full native index FileInfo observation for a strictly relative
     /// target path. Fresh identity and configured-folder checks precede one GET.
     /// Missing index objects remain native HTTP errors, not zero-file successes.
