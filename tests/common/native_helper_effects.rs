@@ -7,6 +7,46 @@ use std::{
 use verysync_sidecar::{Error, ManagedInstance};
 
 #[tokio::test]
+async fn actual_native_random_strings_preserve_requested_lengths_and_owned_state() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vsrandom-")
+        .tempdir()?
+        .keep();
+    let state = root.join("core");
+    let sentinel = root.join("retained.txt");
+    std::fs::write(&sentinel, b"native generation retains synthetic data")?;
+    let mut owner = ManagedInstance::start(options(&state)?).await?;
+    let identity = owner.client().instance().device_id.clone();
+    let configuration = std::fs::read(state.join("setting.dat"))?;
+    for (length, expected) in [
+        (None, 32),
+        (Some(0), 32),
+        (Some(1), 1),
+        (Some(16), 16),
+        (Some(u16::MAX), 65535),
+    ] {
+        let result = owner.client().native_random_string(length).await?;
+        assert_eq!(result.value.len(), expected);
+        assert!(result.value.bytes().all(|b| b.is_ascii_alphanumeric()));
+        if expected >= 16 {
+            assert!(!format!("{result:?}").contains(&result.value));
+        }
+    }
+    assert_eq!(owner.client().system_status().await?.device_id, identity);
+    assert!(owner.client().folders().await?.is_empty());
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, configuration);
+    assert_eq!(
+        std::fs::read(&sentinel)?,
+        b"native generation retains synthetic data"
+    );
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("native_random_string_effects=5 default_and_zero_length_32=true exact_positive_lengths_1_16_65535=true ascii_alphanumeric=true identity_configuration_and_sentinel_retained=true private_debug=true normal_owned_tree_exit=true no_uniqueness_or_cryptographic_claim=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn actual_native_helpers_normalize_ids_collect_reports_and_preserve_explicit_boundaries(
 ) -> TestResult {
     let root = tempfile::Builder::new()

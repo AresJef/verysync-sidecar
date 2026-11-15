@@ -47,6 +47,18 @@ claim. Use `ApiKey::generate()` for secure management credentials. The native GE
 uses mutation semantics and is never automatically retried, since random state
 can advance even if a response is lost or malformed.
 
+`native_random_string(length)` explicitly generates one native ASCII
+alphanumeric string. `None` omits the query and `Some(0)` selects the native
+32-character default. Positive `u16` lengths request the exact byte count,
+including 65535. The result retains unknown fields and excludes the value and
+unknown data from ordinary Debug. Inspect `value` explicitly and redact it
+before logging. Wrong lengths, malformed values and native body errors remain
+errors, with unknown mutation outcomes after a request may have advanced state.
+There is no retry, cryptographic-strength or uniqueness guarantee; use
+`ApiKey::generate()` for secure management credentials. The SDK bound describes
+the verified typed interface, not an inferred native maximum; raw requests remain
+available for separately validated inputs.
+
 `collect_native_usage_report()` explicitly collects the engine's report snapshot,
 including its version, platform, device count and additional native fields. The
 SDK neither enables reporting nor uploads the returned report. Native background
@@ -69,11 +81,13 @@ requiring its own effect evidence.
 # async fn example(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
 let health = client.native_health().await?;
 let migration = client.native_migration_progress().await?;
+let generated = client.native_random_string(Some(16)).await?;
+assert_eq!(generated.value.len(), 16);
 let canonical = client.normalize_device_id("caller-provided device text").await?;
 let report = client.collect_native_usage_report().await?;
 let pending = client.pending_native_link().await?;
 // Handle untrusted pending text explicitly, without automatically opening it.
-# let _ = (health, migration, canonical, report, pending);
+# let _ = (health, migration, generated, canonical, report, pending);
 # Ok(()) }
 ```
 
