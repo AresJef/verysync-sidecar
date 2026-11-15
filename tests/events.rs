@@ -283,3 +283,155 @@ async fn real_tail_loss_future_cursor_and_restart_report_gaps_and_resume_explici
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn actual_disk_changes_keep_source_cursors_private_bounded_and_owned() -> TestResult {
+    use verysync_sidecar::{Error, FolderScanPatch, FolderState};
+    let root = tempfile::Builder::new().prefix("vsd-").tempdir()?.keep();
+    let state = root.join("state");
+    let mut owner = ManagedInstance::start(options(&state)?).await?;
+    let client = owner.client().clone();
+    let identity = client.instance().device_id.clone();
+    let identity_before = identity_hashes(&state)?;
+    let first_interrupted = match client
+        .subscribe_disk_events(fast()?.reconnect_attempts(0)?)
+        .await
+    {
+        Ok(empty) => {
+            assert_eq!(empty.cursor().source, EventSource::Disk);
+            assert_eq!(empty.cursor().last_id, 0);
+            empty.close().await?;
+            false
+        }
+        Err(Error::Transport { .. }) => true,
+        Err(error) => return Err(error.into()),
+    };
+    authenticated(&client, &identity).await?;
+    let path = root.join("synthetic disk changes");
+    std::fs::create_dir(&path)?;
+    let id = FolderId::parse("typed-native-disk-changes")?;
+    client
+        .create_folder(&CreateFolderOptions::new(id.clone(), TargetPath::local(&path)).paused(true))
+        .await?;
+    client
+        .update_folder_scan_configuration(
+            &id,
+            &FolderScanPatch::default()
+                .watcher(false)
+                .rescan_interval_seconds(0),
+        )
+        .await?;
+    client.resume_folder(&id).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if client.folder_status(&id).await?.state == Some(FolderState::Idle) {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    let config = std::fs::read(state.join("setting.dat"))?;
+    let relative = "synthetic disk event % +.txt";
+    std::fs::write(path.join(relative), b"first actual disk event bytes")?;
+    client.request_scan(&id).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let status = client.folder_status(&id).await?;
+            if status.state == Some(FolderState::Idle) && status.local_files == Some(1) {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    let cursor = EventCursor {
+        source: EventSource::Disk,
+        device_id: identity.clone(),
+        engine_started_at: client.system_status().await?.start_time,
+        last_id: 0,
+    };
+    let mut stream = client
+        .subscribe_disk_events(fast()?.resume_from(cursor)?)
+        .await?;
+    assert!(
+        matches!(next(&mut stream).await?,EventStreamItem::Gap(g) if g.reason==EventGapReason::ResumedContinuityUnverified&&g.resume_from.source==EventSource::Disk)
+    );
+    let EventStreamItem::Event(event) = next(&mut stream).await? else {
+        return Err("actual disk event missing".into());
+    };
+    assert_eq!(event.kind, EventKind::LocalChangeDetected);
+    assert_eq!(event.cursor.source, EventSource::Disk);
+    assert_eq!(event.data()["folderID"], id.as_str());
+    assert_eq!(event.data()["folder"], id.as_str());
+    assert_eq!(event.data()["path"], relative);
+    assert_eq!(event.data()["action"], "modified");
+    assert_eq!(event.data()["type"], "file");
+    assert!(event.data()["modifiedBy"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty()));
+    assert!(event.data()["modifiedTime"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty()));
+    assert!(!format!("{event:?} {stream:?}").contains(relative));
+    stream.close().await?;
+    let mut stream = client
+        .subscribe_disk_events(fast()?.queue_capacity(2)?)
+        .await?;
+    let before = stream.cursor().clone();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), stream.next())
+            .await
+            .is_err()
+    );
+    assert_eq!(stream.cursor(), &before);
+    for name in ["second.txt", "third.txt"] {
+        std::fs::write(path.join(name), name.as_bytes())?;
+    }
+    client.request_scan(&id).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while stream.buffered_items() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?;
+    assert_eq!(stream.buffered_items(), 2);
+    assert_eq!(stream.cursor(), &before);
+    let mut observed = std::collections::BTreeSet::new();
+    let mut last = before.last_id;
+    for _ in 0..2 {
+        let EventStreamItem::Event(e) = next(&mut stream).await? else {
+            return Err("actual queued disk change missing".into());
+        };
+        assert_eq!(e.kind, EventKind::LocalChangeDetected);
+        assert_eq!(e.cursor.source, EventSource::Disk);
+        assert!(e.cursor.last_id > last);
+        last = e.cursor.last_id;
+        observed.insert(
+            e.data()["path"]
+                .as_str()
+                .ok_or("disk path missing")?
+                .to_owned(),
+        );
+    }
+    assert_eq!(
+        observed,
+        std::collections::BTreeSet::from(["second.txt".to_owned(), "third.txt".to_owned()])
+    );
+    stream.close().await?;
+    authenticated(&client, &identity).await?;
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
+    assert_eq!(identity_hashes(&state)?, identity_before);
+    assert_eq!(
+        std::fs::read(path.join(relative))?,
+        b"first actual disk event bytes"
+    );
+    for name in ["second.txt", "third.txt"] {
+        assert_eq!(std::fs::read(path.join(name))?, name.as_bytes());
+    }
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("actual_disk_events=3 initial_empty_native_response_interrupted={first_interrupted} distinct_disk_cursor=true actual_local_change_payload=true source_bound_resume=true initial_error_not_retried=true bounded_queue_observed=true unconsumed_cursor_not_advanced=true cancelled_next_preserves_stream=true close_leaves_core_authenticated=true identity_configuration_and_three_files_preserved=true normal_owned_exit=true");
+    Ok(())
+}
