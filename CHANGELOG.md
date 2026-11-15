@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Expose explicit native path-writeability snapshots with conservative mutation
+  semantics, preserving the fixed core permission-detection limitation.
+
 - Read the independent native index-file diagnostic endpoint using the existing
   full metadata types, preserving its successful zero-record missing-file result.
 

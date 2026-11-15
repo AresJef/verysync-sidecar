@@ -3,6 +3,32 @@ use crate::TargetPath;
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 
+/// One native path-writeability snapshot. The selected v2.33.2 macOS build
+/// returns false with an empty error object even for a writable directory.
+/// This is not a reliable permission or future-write guarantee.
+#[derive(Clone)]
+pub struct NativePathWriteability {
+    /// Exact native echoed path, using the target's syntax.
+    pub path: TargetPath,
+    /// Exact final path reported by the probe, without local traversal.
+    pub last_path: TargetPath,
+    /// Native flag, without substituting controller permission checks.
+    pub writeable: bool,
+    /// Exact native attempt token. Empty when this query was omitted.
+    pub attempt: String,
+    /// Required native error, including an uninformative object or JSON null.
+    pub native_error: serde_json::Value,
+    /// Additional private native fields, preserved without interpretation.
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for NativePathWriteability {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativePathWriteability")
+            .field("writeable", &self.writeable)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A string generated explicitly by the connected native program. No
 /// cryptographic strength, uniqueness or credential suitability is promised.
 #[derive(Clone, Deserialize)]

@@ -1056,3 +1056,69 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     println!("native_support_bundle_typed=true collected_with_debugging_false=true explicit_caller_fixture_storage_only=true actual_compressed_response_limit=true response_limit_keeps_collection_uncertain=true identity_configuration_and_sample_sha_preserved=true normal_owned_tree_exit=true");
     Ok(())
 }
+
+#[tokio::test]
+async fn actual_native_path_writeability_keeps_native_limit_and_owned_data() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::TargetPath;
+    let root = tempfile::Builder::new()
+        .prefix("vs-path-probe-")
+        .tempdir()?
+        .keep();
+    let target = root.join("probe \u{4e8c} % +");
+    std::fs::create_dir(&target)?;
+    let sample = target.join("sample.txt");
+    let contents = b"retained writable native path sample";
+    std::fs::write(&sample, contents)?;
+    let state = root.join("core");
+    let mut owner = ManagedInstance::start(options(&state)?).await?;
+    let id = owner.client().instance().device_id.clone();
+    let config = std::fs::read(state.join("setting.dat"))?;
+    let hashes = ["key.pem", "cert.pem", ".verysync-sidecar-identity"]
+        .map(|name| std::fs::read(state.join(name)).map(|b| Sha256::digest(b).to_vec()))
+        .into_iter()
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let mut native_false_errors = 0;
+    for (path, ancestors) in [
+        (target.clone(), false),
+        (target.join("missing").join("deeper"), false),
+        (target.join("missing").join("deeper"), true),
+        (sample.clone(), false),
+    ] {
+        let result = owner
+            .client()
+            .probe_target_path_writeability(&TargetPath::local(&path), ancestors)
+            .await?;
+        assert_eq!(std::path::Path::new(result.path.to_protocol()?), path);
+        assert_eq!(result.attempt, if ancestors { "true" } else { "" });
+        assert_eq!(result.last_path.style(), TargetPath::local(&path).style());
+        assert!(!format!("{result:?}").contains("probe "));
+        if !result.writeable && result.native_error.is_object() {
+            native_false_errors += 1;
+        }
+    }
+    assert!(!target.join("missing").exists());
+    assert_eq!(std::fs::read(&sample)?, contents);
+    let oracle = target.join("caller-write-oracle.txt");
+    let oracle_bytes = b"caller explicitly proves this owned directory is writable";
+    std::fs::write(&oracle, oracle_bytes)?;
+    assert_eq!(std::fs::read(&oracle)?, oracle_bytes);
+    std::fs::remove_file(oracle)?;
+    assert_eq!(std::fs::read_dir(&target)?.count(), 1);
+    assert_eq!(owner.client().system_status().await?.device_id, id);
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
+    for (name, hash) in ["key.pem", "cert.pem", ".verysync-sidecar-identity"]
+        .into_iter()
+        .zip(hashes)
+    {
+        assert_eq!(
+            Sha256::digest(std::fs::read(state.join(name))?).as_slice(),
+            hash
+        );
+    }
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("native_path_writeability_snapshots=4 native_false_with_object_errors={native_false_errors} native_permission_positive_not_claimed=true missing_directory_not_created=true caller_write_oracle_succeeded=true sample_configuration_identity_preserved=true normal_owned_tree_exit=true");
+    Ok(())
+}
