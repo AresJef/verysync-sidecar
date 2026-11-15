@@ -89,9 +89,11 @@ remain recorded and no minimum native ISA is inferred. Another model cannot
 replace the selected profile's result. A failed standalone unwind prevents starting a native
 core for those SDK cases. This separates runtime prerequisites from SDK cleanup.
 
-S390x zero-CPU failures record bounded guest procfs shape and the fixed core's
-ghw dependency record without printing hardware attributes or changing the
-positive CPU-data assertion. Native inventory effects remain a separate gate.
+S390x zero-CPU observations require the exact empty response, bounded guest
+procfs shape, declared profile and the fixed core's ghw v0.13 build record.
+Only that verified parser limitation is recorded as native empty CPU data,
+with `cpu_positive=false`. Other cases still require positive CPU data.
+The SDK neither substitutes hardware nor changes returned counts.
 
 The four MIPS candidates explicitly build the Rust 1.85 standard library from
 its matching `rust-src` component. `cargo-mips-std.py` requires a declared MIPS
