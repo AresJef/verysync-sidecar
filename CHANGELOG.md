@@ -2,6 +2,9 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Retain native console preambles separately from complete CLI path reports;
+  preserve exact Windows unsupported-shell exits and private diagnostics.
+
 - Request native Linux file-watch minimums with independent bounded kernel
   observations, preserving zero-exit failures instead of assuming application.
 

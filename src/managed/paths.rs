@@ -52,10 +52,13 @@ pub struct NativeStoragePathsExit {
     pub outcome: NativeStoragePathsOutcome,
     /// Present only after exit zero and a complete recognized report.
     pub paths: Option<NativeStoragePaths>,
+    /// Exact private native text before the recognized report, if present.
+    /// Console initialization warnings are retained, not interpreted as paths.
+    pub native_preamble: Option<ProcessDiagnostic>,
     /// Exact bounded private native output, potentially revealing local paths.
     pub diagnostic: ProcessDiagnostic,
 }
-fn parse_paths(bytes: &[u8]) -> Option<NativeStoragePaths> {
+fn parse_paths(bytes: &[u8]) -> Option<(NativeStoragePaths, Vec<u8>)> {
     const GROUPS: [(&str, usize); 7] = [
         ("Configuration file:", 1),
         ("Device private key & certificate files:", 2),
@@ -66,7 +69,17 @@ fn parse_paths(bytes: &[u8]) -> Option<NativeStoragePaths> {
         ("Default sync folder directory:", 1),
     ];
     let text = std::str::from_utf8(bytes).ok()?;
-    let mut lines = text.lines().filter(|line| !line.is_empty());
+    let mut offset = 0;
+    let mut report = None;
+    for line in text.split_inclusive('\n') {
+        if line.trim_end_matches(['\r', '\n']) == GROUPS[0].0 {
+            report = Some(offset);
+            break;
+        }
+        offset += line.len();
+    }
+    let report = report?;
+    let mut lines = text[report..].lines().filter(|line| !line.is_empty());
     let mut paths = Vec::with_capacity(9);
     for (label, count) in GROUPS {
         if lines.next()? != label {
@@ -88,17 +101,20 @@ fn parse_paths(bytes: &[u8]) -> Option<NativeStoragePaths> {
         return None;
     }
     let mut paths = paths.into_iter();
-    Some(NativeStoragePaths {
-        configuration_file: paths.next()?,
-        device_private_key: paths.next()?,
-        device_certificate: paths.next()?,
-        https_private_key: paths.next()?,
-        https_certificate: paths.next()?,
-        database_directory: paths.next()?,
-        log_file: paths.next()?,
-        gui_override_directory: paths.next()?,
-        default_sync_directory: paths.next()?,
-    })
+    Some((
+        NativeStoragePaths {
+            configuration_file: paths.next()?,
+            device_private_key: paths.next()?,
+            device_certificate: paths.next()?,
+            https_private_key: paths.next()?,
+            https_certificate: paths.next()?,
+            database_directory: paths.next()?,
+            log_file: paths.next()?,
+            gui_override_directory: paths.next()?,
+            default_sync_directory: paths.next()?,
+        },
+        bytes[..report].to_vec(),
+    ))
 }
 impl ManagedInstance {
     /// Explicitly run the native paths command against a confirmed stopped owner.
@@ -130,9 +146,16 @@ impl ManagedInstance {
                 timeout,
             )
             .await?;
-        let paths = (exit.code == Some(0))
+        let parsed = (exit.code == Some(0))
             .then(|| parse_paths(exit.diagnostic.body_bytes()))
             .flatten();
+        let (paths, native_preamble) = match parsed {
+            Some((paths, prefix)) => (
+                Some(paths),
+                (!prefix.is_empty()).then(|| ProcessDiagnostic::new(prefix)),
+            ),
+            None => (None, None),
+        };
         let outcome = if exit.code != Some(0) {
             NativeStoragePathsOutcome::Failure
         } else if paths.is_some() {
@@ -145,6 +168,7 @@ impl ManagedInstance {
             tree_stopped: exit.tree_stopped,
             outcome,
             paths,
+            native_preamble,
             diagnostic: exit.diagnostic,
         })
     }
@@ -178,9 +202,19 @@ mod tests {
         text.into_bytes()
     }
     #[test]
+    fn complete_path_report_can_follow_native_console_initialization_messages() {
+        let prefix = b"native console initialization warning\nretained native startup detail\n";
+        let bytes = [prefix.as_slice(), output().as_slice()].concat();
+        let (_, actual_prefix) = parse_paths(&bytes).unwrap();
+        assert_eq!(actual_prefix, prefix);
+        assert!(parse_paths(prefix).is_none());
+        assert!(parse_paths(&[bytes.as_slice(), b"unexpected trailer\n"].concat()).is_none());
+    }
+    #[test]
     fn complete_native_paths_keep_native_syntax_and_reject_ambiguous_or_partial_output() {
         let bytes = output();
-        let paths = parse_paths(&bytes).unwrap();
+        let (paths, prefix) = parse_paths(&bytes).unwrap();
+        assert!(prefix.is_empty());
         assert_eq!(
             paths.configuration_file,
             std::env::temp_dir().join("owned space \u{4e8c}/0")

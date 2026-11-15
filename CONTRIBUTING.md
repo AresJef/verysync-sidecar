@@ -332,6 +332,11 @@ Cargo, the caller and the actual Windows directory retain their environments.
 That child keeps the original effects and three-second assertion, and is reaped
 or terminated through an exact child guard. Optional PowerShell name tracing is
 disabled inside this owned environment; complete captured argv is required.
+The private root also retains a byte-verified copy of the runner's native
+`mswsock.dll`, whose registered Winsock provider path expands SystemRoot. A
+separate loopback-socket preflight must pass before the original dispatch case.
+The source OS file stays untouched, the temporary copy is removed with the
+owned fixture, and neither Windows runtime files nor helpers enter a release.
 
 The dedicated wallpaper suite is run twice: ordinary blocked egress must
 produce a typed source error, and the explicit --allow-wallpaper-source run

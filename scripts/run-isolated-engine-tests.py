@@ -53,9 +53,26 @@ def prepare_native_opener(cargo, toolchain, evidence_dir, env):
         system_root = directory / "windows-root"
         executable = system_root / "System32" / name
         executable.parent.mkdir(parents=True)
+        # Winsock's registered provider expands SystemRoot too. Preserve that
+        # native OS runtime in the private copy; never modify the OS directory.
+        runtime = Path(os.environ["SYSTEMROOT"]) / "System32" / "mswsock.dll"
+        if not runtime.is_absolute() or not runtime.is_file() or runtime.is_symlink():
+            raise ValueError("exact native Windows socket provider required")
+        runtime_copy = executable.parent / runtime.name
+        shutil.copy2(runtime, runtime_copy)
+        if hashlib.sha256(runtime.read_bytes()).digest() != hashlib.sha256(runtime_copy.read_bytes()).digest():
+            raise ValueError("owned native socket provider copy differs")
         # Only the exact dispatch test's separate child adopts this value.
         # Do not change SystemRoot for Cargo, the suite, or the caller.
         env["VERYSYNC_TEST_OPENER_SYSTEM_ROOT"] = str(system_root)
+        probe_env = dict(env, SYSTEMROOT=str(system_root))
+        probe = subprocess.run(
+            [sys.executable, "-c", "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); s.close()"],
+            env=probe_env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=10,
+        )
+        if probe.returncode != 0:
+            raise ValueError("owned Windows socket provider preflight failed")
     else:
         executable = directory / name
     shutil.copy2(source, executable)

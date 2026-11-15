@@ -779,6 +779,12 @@ async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity()
     let state_input = root.join("owned state \u{4e8c}");
     let mut core = ManagedInstance::start(options(&state_input)?).await?;
     let id = core.client().instance().device_id.clone();
+    let native_home = core
+        .client()
+        .native_system_paths()
+        .await?
+        .user_home_directory;
+    let expected_default = std::path::PathBuf::from(native_home.to_protocol()?).join("Sync");
     assert!(matches!(
         core.inspect_native_storage_paths(Duration::from_secs(10))
             .await,
@@ -829,11 +835,19 @@ async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity()
     assert_eq!(paths.database_directory, state.join("index-v2"));
     assert_eq!(paths.log_file, state.join("verysync.log"));
     assert_eq!(paths.gui_override_directory, state.join("gui"));
-    assert_eq!(
-        paths.default_sync_directory,
-        state.join("profile").join("Sync")
-    );
-    assert!(!paths.default_sync_directory.exists());
+    assert_eq!(paths.default_sync_directory, expected_default);
+    // Windows can report its native account home rather than the environment
+    // profile. Never open or change that caller-owned default location.
+    if expected_default.starts_with(&state) {
+        assert!(!paths.default_sync_directory.exists());
+    }
+    if let Some(prefix) = &exit.native_preamble {
+        assert!(!prefix.body_bytes().is_empty());
+        assert!(exit
+            .diagnostic
+            .body_bytes()
+            .starts_with(prefix.body_bytes()));
+    }
     assert!(!format!("{exit:?}").contains("owned state"));
     assert!(std::str::from_utf8(exit.diagnostic.body_bytes())?.contains("Configuration file:"));
     for (name, bytes) in protected.iter().zip(&before) {
@@ -846,7 +860,7 @@ async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity()
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     assert_eq!(std::fs::read(&sentinel)?, sample);
     std::fs::remove_dir_all(&root)?;
-    eprintln!("native storage paths evidence: {{\"actual_complete_nine_native_paths\":true,\"explicit_owned_home_and_profile\":true,\"absent_default_directory_stays_absent\":true,\"running_owner_refused\":true,\"invalid_deadlines_refused\":true,\"configuration_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"synthetic_sample_retained\":true,\"both_normal_owned_tree_exits\":true}}");
+    eprintln!("native storage paths evidence: {{\"actual_complete_nine_native_paths\":true,\"explicit_owned_home_and_profile\":true,\"default_matches_native_home\":true,\"outside_default_path_never_opened\":true,\"absent_owned_default_directory_stays_absent\":true,\"native_preamble_retained\":true,\"running_owner_refused\":true,\"invalid_deadlines_refused\":true,\"configuration_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"synthetic_sample_retained\":true,\"both_normal_owned_tree_exits\":true}}");
     Ok(())
 }
 
@@ -935,6 +949,8 @@ async fn actual_native_completion_instructions_keep_private_text_and_owned_profi
         assert_eq!(std::fs::read(&sentinel)?, bytes);
         std::fs::remove_file(alias)?;
     }
+    let mut instruction_receipts = 0;
+    let mut unsupported_shell_receipts = 0;
     for action in [
         NativeCompletionAction::Install,
         NativeCompletionAction::Uninstall,
@@ -946,14 +962,30 @@ async fn actual_native_completion_instructions_keep_private_text_and_owned_profi
         if exit.outcome != NativeCompletionOutcome::InstructionText {
             eprintln!("native completion output diagnostic: action={action:?} code={:?} outcome={:?} shape={}", exit.code, exit.outcome, native_cli_output_shape(exit.diagnostic.body_bytes()));
         }
-        assert_eq!(exit.code, Some(0));
         assert!(exit.tree_stopped);
-        assert_eq!(exit.outcome, NativeCompletionOutcome::InstructionText);
-        let text = exit
-            .instruction_text()
-            .ok_or("missing native completion instructions")?;
-        assert!(text.contains(filename));
-        assert_eq!(text.as_bytes(), exit.diagnostic.body_bytes());
+        if cfg!(windows) && exit.code == Some(1) {
+            // This exact upstream dependency resolves Windows' COMSPEC, but
+            // provides templates only for bash/zsh/fish. Other failures stay red.
+            let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_owned());
+            let expected = format!(": error: unsupported shell {shell}");
+            let text = std::str::from_utf8(exit.diagnostic.body_bytes())?;
+            assert!(text
+                .lines()
+                .last()
+                .is_some_and(|line| line.ends_with(&expected)));
+            assert_eq!(exit.outcome, NativeCompletionOutcome::Failure);
+            assert!(exit.instruction_text().is_none());
+            unsupported_shell_receipts += 1;
+        } else {
+            assert_eq!(exit.code, Some(0));
+            assert_eq!(exit.outcome, NativeCompletionOutcome::InstructionText);
+            let text = exit
+                .instruction_text()
+                .ok_or("missing native completion instructions")?;
+            assert!(text.contains(filename));
+            assert_eq!(text.as_bytes(), exit.diagnostic.body_bytes());
+            instruction_receipts += 1;
+        }
         assert!(!format!("{exit:?}").contains(filename));
         assert_eq!(std::fs::read(&sentinel)?, bytes);
         for (n, expected) in protected.iter().zip(&before) {
@@ -966,6 +998,7 @@ async fn actual_native_completion_instructions_keep_private_text_and_owned_profi
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     assert_eq!(std::fs::read(&sentinel)?, bytes);
     std::fs::remove_dir_all(&root)?;
-    eprintln!("native completion evidence: {{\"actual_install_and_uninstall_text\":true,\"unicode_and_space_program_path_preserved\":true,\"no_sdk_shell_evaluation\":true,\"synthetic_shell_configuration_retained\":true,\"private_state_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"both_normal_owned_tree_exits\":true}}");
+    assert_eq!(instruction_receipts + unsupported_shell_receipts, 2);
+    eprintln!("native completion evidence: {{\"instruction_text_receipts\":{instruction_receipts},\"native_unsupported_shell_receipts\":{unsupported_shell_receipts},\"unicode_and_space_program_path_preserved\":true,\"no_sdk_shell_evaluation\":true,\"synthetic_shell_configuration_retained\":true,\"private_state_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"both_normal_owned_tree_exits\":true}}");
     Ok(())
 }
