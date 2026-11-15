@@ -28,6 +28,40 @@ impl Client {
             )
             .await
     }
+    /// Read the independent native debug-file index observation once.
+    ///
+    /// Reuses the complete native [`crate::IndexFileInfo`] schema, but the
+    /// endpoint differs from [`Self::index_file_info`]: an absent file can return
+    /// HTTP success with both global/local zero records (empty names and version
+    /// vectors). These are not existing empty files or completed downloads.
+    /// Identity, configured folder and strict target-relative path checks apply.
+    /// No scan, filesystem read, transfer, normalization or retry is implicit.
+    ///
+    /// ```rust,no_run
+    /// # async fn example(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+    /// let path = verysync_sidecar::TargetPath::local("sample.bin");
+    /// let native = client.index_file_diagnostics(folder, &path).await?;
+    /// // Inspect records explicitly; an empty name is a native zero placeholder.
+    /// let _local_name = native.local.name;
+    /// # Ok(()) }
+    /// ```
+    pub async fn index_file_diagnostics(
+        &self,
+        folder: &FolderId,
+        path: &crate::TargetPath,
+    ) -> Result<crate::IndexFileInfo> {
+        let file = crate::scans::validate_subpath(path, self.folder_path_style()?)?;
+        self.system_status().await?;
+        self.folder(folder).await?;
+        self.connection
+            .get_json_with_query(
+                "read native index file diagnostics",
+                "rest/debug/file",
+                &[("folder", folder.as_str()), ("file", file)],
+            )
+            .await
+    }
+
     /// Read the selected folder's native index tree once. This differs from
     /// selective-mode browsing and file-manager resources. The default returns
     /// root entries at level zero; explicit None depth retains native unlimited

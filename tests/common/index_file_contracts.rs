@@ -188,3 +188,130 @@ async fn indexed_file_rejects_incomplete_native_schema_and_keeps_not_found_witho
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn native_index_file_diagnostics_keeps_exact_metadata_and_two_native_zero_records(
+) -> TestResult {
+    let mut empty = info();
+    for field in ["global", "local"] {
+        empty[field]["name"] = serde_json::json!("");
+        empty[field]["size"] = serde_json::json!(0);
+        empty[field]["version"] = serde_json::json!([]);
+        empty[field]["numBlocks"] = serde_json::json!(0);
+        empty[field]["blocksHash"] = serde_json::Value::Null;
+        empty[field]["signature"] = serde_json::json!({"Version":0,"Sign":null});
+    }
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        folders(),
+        Reply::json(info()),
+        identity(),
+        folders(),
+        Reply::json(empty),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("indexed ?%")?;
+    let path = TargetPath::remote(PathStyle::Unix, "branch/\u{4e8c} + %2F ?")?;
+    let actual: verysync_sidecar::IndexFileInfo =
+        client.index_file_diagnostics(&folder, &path).await?;
+    assert_eq!(actual.global.name, KEY);
+    assert_eq!(actual.global.version, vec![KEY]);
+    assert_eq!(
+        actual.global.signature.encoded_signature.as_deref(),
+        Some(KEY)
+    );
+    assert_eq!(actual.global.platform["future"], KEY);
+    assert_eq!(actual.global.extra["future"], KEY);
+    assert_eq!(actual.extra["future"], KEY);
+    assert!(actual.availability.is_none());
+    assert!(!format!("{actual:?} {:?}", actual.global).contains(KEY));
+    let absent = client.index_file_diagnostics(&folder, &path).await?;
+    for record in [&absent.global, &absent.local] {
+        assert!(record.name.is_empty() && record.version.is_empty());
+        assert_eq!(record.size, 0);
+        assert_eq!(record.num_blocks, 0);
+        assert_eq!(record.signature.version, 0);
+        assert!(record.signature.encoded_signature.is_none());
+    }
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    for index in [4, 7] {
+        let uri = url::Url::parse(&format!(
+            "http://synthetic.invalid{}",
+            requests[index].split_whitespace().nth(1).unwrap()
+        ))?;
+        assert_eq!(uri.path(), "/prefix/rest/debug/file");
+        let query = uri
+            .query_pairs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(query.len(), 2);
+        assert_eq!(query.get("folder").unwrap(), folder.as_str());
+        assert_eq!(query.get("file").unwrap(), path.to_protocol()?);
+        assert!(!uri.as_str().contains("%25252F"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_index_file_diagnostics_refuses_bad_paths_and_preserves_schema_errors_without_retry(
+) -> TestResult {
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"folders":[]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let folder = FolderId::parse("indexed ?%")?;
+    for path in [
+        TargetPath::remote(PathStyle::Unix, "../escape")?,
+        TargetPath::remote(PathStyle::Unix, "/absolute")?,
+        TargetPath::remote(PathStyle::Windows, "relative")?,
+    ] {
+        assert!(matches!(
+            client.index_file_diagnostics(&folder, &path).await,
+            Err(Error::InvalidPath { .. })
+        ));
+    }
+    assert!(matches!(
+        client
+            .index_file_diagnostics(&folder, &TargetPath::remote(PathStyle::Unix, "missing")?)
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 4);
+    for (reply, kind) in [
+        (Reply::json(serde_json::Value::Null), 0),
+        (Reply::json(serde_json::json!({})), 0),
+        (Reply::json(serde_json::json!({"error":KEY})), 1),
+        (
+            Reply {
+                status: 500,
+                ..Reply::json(serde_json::json!({"private":KEY}))
+            },
+            2,
+        ),
+    ] {
+        let server =
+            ScriptedServer::start(vec![version(), identity(), identity(), folders(), reply])
+                .await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .index_file_diagnostics(&folder, &TargetPath::remote(PathStyle::Unix, "file.bin")?)
+            .await
+            .expect_err("missing records are not native zero records");
+        assert!(
+            matches!(
+                (&error, kind),
+                (Error::InvalidResponse { .. }, 0) | (Error::Api { .. }, 1)
+            ) || matches!((&error,kind),(Error::Http{response},2)if response.status()==500)
+        );
+        assert!(!format!("{error:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 5);
+    }
+    Ok(())
+}
