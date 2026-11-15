@@ -190,6 +190,14 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target host_control_engine
           --evidence-dir "${{ runner.temp }}/vs-host-watch-limit-observations"
+      - name: Verify native browser fallback and released desktop actor in private state
+        id: native_browser_engine
+        continue-on-error: true
+        if: startsWith(matrix.package, 'macos-')
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target browser_engine
+          --evidence-dir "${{ runner.temp }}/vs-native-browser-proxy"
       - name: Verify actual version retention, deleted-file restoration and free audit conditions
         id: native_file_history_engine
         continue-on-error: true
@@ -547,6 +555,8 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
+      - name: Require Cargo artifact and separate Winsock preflight contracts
+        run: python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
       - name: Install native Rust and fetch locked dependencies
         run: |
           rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
@@ -602,4 +612,48 @@ jobs:
           --evidence-dir "${{ runner.temp }}/vs-host-watch-limit-positive"
       - name: Require exact owned-core cleanup
         if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+
+  native-browser-fallback:
+    name: Native browser fallback (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Require browser wrapper and native outcome-gate contracts
+        run: |
+          python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+          python -m unittest discover -s scripts/tests -p test_native_step_results.py
+      - name: Install native Rust and fetch dependencies before runtime isolation
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare only the matching fixed private program
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify native root exit, exact URL, separate state and continuing actor
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target browser_engine
+          --evidence-dir "${{ runner.temp }}/vs-native-browser-focused"
+      - name: Require exact owned-program cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup

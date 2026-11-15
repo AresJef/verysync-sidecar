@@ -418,3 +418,11 @@ exit before removing captures, because macOS refuses to execute its restricted
 the explicit isolation marker is refused. This test does not establish Chrome
 UI behavior or acceptance on other systems. Production library code installs
 no sandbox, browser replacement or helper service.
+
+The native CI includes two focused macOS browser fallback jobs and the same
+case in both complete macOS bundles. The applicable browser outcome must
+actually succeed; absent, skipped, cancelled and failed outcomes remain red.
+Windows/Linux browser integration is still pending and is not inferred from
+these macOS results or cross-compilation. Windows opener preparation also
+checks its separate Winsock preflight without confusing it with Cargo artifact
+selection; the full native bundles retain that preflight contract.
