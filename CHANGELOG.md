@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit native random-string generation with verified optional lengths,
+  private result formatting, preserved unknown fields and uncertain mutation
+  errors without retries. Keep native generation separate from secure API keys.
+
 - Pin the verified libc 0.2.186 Unix bindings and assert the MIPS64 GNU socket
   ABI at compile time. Preserve the original runtime deadlines and report
   actual platform effects separately from successful compilation.

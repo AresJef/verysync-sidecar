@@ -3,6 +3,26 @@ use crate::TargetPath;
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 
+/// A string generated explicitly by the connected native program. No
+/// cryptographic strength, uniqueness or credential suitability is promised.
+#[derive(Clone, Deserialize)]
+pub struct NativeRandomString {
+    /// Exact native ASCII alphanumeric value. Inspect explicitly and redact
+    /// before logging; ordinary Debug excludes this value.
+    #[serde(rename = "random")]
+    pub value: String,
+    /// Additional private native fields, preserved without interpretation.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for NativeRandomString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeRandomString")
+            .field("byte_length", &self.value.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Exact status text from the target's native HTTP health handler.
 #[derive(Clone, Eq, PartialEq)]
 pub enum NativeHealthStatus {
