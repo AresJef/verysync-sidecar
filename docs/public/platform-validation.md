@@ -27,7 +27,13 @@ storage protocol, upgrade, licensed feature or minimum operating system.
 The first ARM32 execution slice selects the three separate official packages
 and matching Rust targets: ARMv5 soft float, ARMv6 soft float and ARMv7 hard
 float. It uses pinned QEMU bytes, an explicit emulated CPU and a matching GNU
-controller sysroot. The fixed core ELF files inspected for these three packages
+controller sysroot. Controller tests execute through the registered interpreter.
+The pinned binfmt image defaults to preserving argv[0]; explicit invocation
+supplies a separate target argv[0]. A standalone Rust canary checks registered,
+corrected explicit and old unpadded argument handling before any core starts,
+including the single-thread test flag. This follows the upstream
+[preserve-argv0 patch](https://github.com/tonistiigi/binfmt/blob/master/patches/preserve-argv0/0001-linux-user-default-to-preserve-argv0.patch).
+The fixed core ELF files inspected for these three packages
 have no dynamic interpreter or dynamic program segment, despite reporting CGO
 enabled. That observation does not establish a minimum kernel or native runtime.
 

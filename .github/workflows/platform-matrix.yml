@@ -200,15 +200,12 @@ jobs:
           finally:
               subprocess.run(['docker', 'rm', container], check=True)
           binary.chmod(0o700)
-          if any(c.isspace() for c in str(binary)):
-              raise ValueError('the explicit Cargo runner path must not contain whitespace')
           target = os.environ['CARGO_BUILD_TARGET']
           suffix = target.replace('-', '_')
           compiler = os.environ['CROSS_COMPILER']
           emulator_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
               output.write('CARGO_TARGET_' + suffix.upper() + '_LINKER=' + compiler + '-gcc\n')
-              output.write('CARGO_TARGET_' + suffix.upper() + '_RUNNER=' + str(binary) + '\n')
               output.write('CC_' + suffix + '=' + compiler + '-gcc\n')
               output.write('CXX_' + suffix + '=' + compiler + '-g++\n')
               output.write('AR_' + suffix + '=' + compiler + '-ar\n')
@@ -222,8 +219,10 @@ jobs:
           print(json.dumps(info))
           subprocess.run([str(binary), '--version'], check=True)
           registration = pathlib.Path('/proc/sys/fs/binfmt_misc/qemu-arm').read_text()
-          if not registration.startswith('enabled\n') or 'flags:' not in registration:
-              raise ValueError('the required explicit ARM registration is unavailable')
+          flags = next((line.removeprefix('flags:').strip() for line in registration.splitlines()
+                        if line.startswith('flags:')), '')
+          if not registration.startswith('enabled\n') or not {'P', 'F'}.issubset(flags):
+              raise ValueError('the required pinned ARM registration must preserve argv0 and its interpreter')
           print(registration)
           PY
       - name: Install fixed Rust compiler and the selected ARM standard library
@@ -232,6 +231,44 @@ jobs:
           rustc +"$TEST_TOOLCHAIN" -vV
           rustc +"$TEST_TOOLCHAIN" --print cfg --target "$CARGO_BUILD_TARGET"
           cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Verify registered and explicit guest arguments with a safe Rust canary
+        env:
+          CROSS_COMPILER: ${{ matrix.compiler }}
+        run: |
+          python - <<'PYPROBE'
+          import json, os, pathlib, re, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-arm-emulator'
+          probe = root / 'qemu-argv-probe'
+          source = pathlib.Path('scripts/probes/qemu_argv.rs')
+          subprocess.run(['rustc', '+' + os.environ['TEST_TOOLCHAIN'], '--edition=2021',
+                          '--target', os.environ['CARGO_BUILD_TARGET'], '-C',
+                          'linker=' + os.environ['CROSS_COMPILER'] + '-gcc',
+                          str(source), '-o', str(probe)], check=True, timeout=120)
+          probe.chmod(0o700)
+          emulator = root / 'qemu-arm'
+          arguments = ['argv-canary', '--test-threads=1', '--nocapture']
+          child_env = dict(os.environ, QEMU_CPU='cortex-a7')
+          results = []
+          for name, prefix, expected in [
+              ('registered_exec', [str(probe)], 0),
+              ('explicit_preserved_argv0', [str(emulator), str(probe), str(probe)], 0),
+              ('old_unpadded_negative_control', [str(emulator), str(probe)], 23),
+          ]:
+              result = subprocess.run([*prefix, *arguments], env=child_env,
+                                      capture_output=True, timeout=10)
+              observation = result.stdout.decode('ascii').strip()
+              if not re.fullmatch(r'argc=[0-9]+ arg0_match=(true|false) canary_match=(true|false) threads_match=(true|false) capture_match=(true|false)', observation):
+                  raise RuntimeError('The bounded argument probe did not report its fixed observation schema')
+              row = {'execution_path': name, 'exit_code': result.returncode,
+                     'guest_argument_observation': observation,
+                     'expected_exit_code': expected, 'contract_passed': result.returncode == expected,
+                     'diagnostic_cpu': 'cortex-a7', 'sdk_runtime_acceptance': False}
+              results.append(row)
+              print(json.dumps(row), flush=True)
+          (root / 'argument-contract.json').write_text(json.dumps(results, indent=2) + '\n')
+          if not all(row['contract_passed'] for row in results):
+              raise RuntimeError('The pinned interpreter did not preserve the frozen argument contract')
+          PYPROBE
       - name: Explicitly prepare only the selected fixed ARM core
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
@@ -240,6 +277,8 @@ jobs:
         run: python -m unittest discover -s scripts/tests -p test_calibrate_arm_core.py
       - name: Calibrate the fixed core on bounded explicit CPU models before SDK tests
         run: python scripts/calibrate-arm-core.py
+      - name: Require exact cleanup immediately after version calibration
+        run: python scripts/prepare-test-engine.py check-cleanup
       - name: Compile the actual ARM test executables with default TLS enabled
         run: >-
           cargo +"$TEST_TOOLCHAIN" test --features engine-tests

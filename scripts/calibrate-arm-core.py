@@ -88,7 +88,9 @@ def calibrate(root, core, requested):
     core = core.resolve(strict=True)
     results = []
     launches = (("sdk_registered_exec", [str(core)]),
-                ("explicit_emulator_exec", [str(emulator), str(core)]))
+                # The pinned binfmt image defaults to preserve-argv0, including
+                # direct invocations whose AT_FLAGS are zero. Supply argv[0].
+                ("explicit_emulator_exec", [str(emulator), str(core), str(core)]))
     for cpu in CPU_MODELS:
         for execution_path, prefix in launches:
             with tempfile.TemporaryDirectory(prefix="vs-arm-version-", dir=root) as state_text:
