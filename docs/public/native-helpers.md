@@ -257,10 +257,16 @@ Only exit zero with all seven recognized groups produces the nine typed local
 retained instead of inventing an empty successful result. Ordinary Debug hides
 path values. Newline/control-containing paths and changed native report schemas
 remain unrecognized rather than being guessed or normalized.
+Native text preceding the first complete report is retained separately in
+`native_preamble`, as well as in the complete private diagnostic. The fixed
+Windows program emits console initialization messages before this report.
+Their presence does not remove any required group or accept a partial report.
 
 A reported path does not prove existence, writeability, active configuration,
 registered synchronization folders, or an active HTTPS listener. In particular,
 the default sync directory and HTTPS files may be absent. This inspection
+can report a native account home outside the dedicated environment profile,
+including on Windows; the SDK never opens that reported default location. It
 invalidates the prior clean-generation backup eligibility like other stopped
 CLI commands; explicitly start and normally stop again before a fresh backup.
 Running owners and invalid deadlines are rejected. Cancellation requests exact

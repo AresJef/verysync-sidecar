@@ -779,6 +779,12 @@ async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity()
     let state_input = root.join("owned state \u{4e8c}");
     let mut core = ManagedInstance::start(options(&state_input)?).await?;
     let id = core.client().instance().device_id.clone();
+    let native_home = core
+        .client()
+        .native_system_paths()
+        .await?
+        .user_home_directory;
+    let expected_default = std::path::PathBuf::from(native_home.to_protocol()?).join("Sync");
     assert!(matches!(
         core.inspect_native_storage_paths(Duration::from_secs(10))
             .await,
@@ -829,11 +835,19 @@ async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity()
     assert_eq!(paths.database_directory, state.join("index-v2"));
     assert_eq!(paths.log_file, state.join("verysync.log"));
     assert_eq!(paths.gui_override_directory, state.join("gui"));
-    assert_eq!(
-        paths.default_sync_directory,
-        state.join("profile").join("Sync")
-    );
-    assert!(!paths.default_sync_directory.exists());
+    assert_eq!(paths.default_sync_directory, expected_default);
+    // Windows can report its native account home rather than the environment
+    // profile. Never open or change that caller-owned default location.
+    if expected_default.starts_with(&state) {
+        assert!(!paths.default_sync_directory.exists());
+    }
+    if let Some(prefix) = &exit.native_preamble {
+        assert!(!prefix.body_bytes().is_empty());
+        assert!(exit
+            .diagnostic
+            .body_bytes()
+            .starts_with(prefix.body_bytes()));
+    }
     assert!(!format!("{exit:?}").contains("owned state"));
     assert!(std::str::from_utf8(exit.diagnostic.body_bytes())?.contains("Configuration file:"));
     for (name, bytes) in protected.iter().zip(&before) {
@@ -846,7 +860,7 @@ async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity()
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     assert_eq!(std::fs::read(&sentinel)?, sample);
     std::fs::remove_dir_all(&root)?;
-    eprintln!("native storage paths evidence: {{\"actual_complete_nine_native_paths\":true,\"explicit_owned_home_and_profile\":true,\"absent_default_directory_stays_absent\":true,\"running_owner_refused\":true,\"invalid_deadlines_refused\":true,\"configuration_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"synthetic_sample_retained\":true,\"both_normal_owned_tree_exits\":true}}");
+    eprintln!("native storage paths evidence: {{\"actual_complete_nine_native_paths\":true,\"explicit_owned_home_and_profile\":true,\"default_matches_native_home\":true,\"outside_default_path_never_opened\":true,\"absent_owned_default_directory_stays_absent\":true,\"native_preamble_retained\":true,\"running_owner_refused\":true,\"invalid_deadlines_refused\":true,\"configuration_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"synthetic_sample_retained\":true,\"both_normal_owned_tree_exits\":true}}");
     Ok(())
 }
 
