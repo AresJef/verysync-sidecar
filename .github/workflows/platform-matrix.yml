@@ -163,6 +163,8 @@ jobs:
       TEST_TOOLCHAIN: 1.85.0
       CARGO_BUILD_TARGET: ${{ matrix.rust }}
       QEMU_CPU: ${{ matrix.cpu }}
+      CARGO_PROFILE_DEV_OPT_LEVEL: '3'
+      CARGO_PROFILE_TEST_OPT_LEVEL: '3'
       QEMU_LD_PREFIX: /usr/${{ matrix.compiler }}
       QEMU_IMAGE: docker.io/tonistiigi/binfmt@sha256:1b804311fe87047a4c96d38b4b3ef6f62fca8cd125265917a9e3dc3c996c39e6
     steps:

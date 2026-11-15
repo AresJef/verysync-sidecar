@@ -262,7 +262,18 @@ async fn cancelled_start_by_sdk_deadline_cleans_an_observed_process() -> TestRes
         .startup_timeout(Duration::from_secs(12))?;
     let mut pending = Box::pin(ManagedInstance::start(settings));
     let seen = tokio::select! {
-        result = &mut pending => return Err(format!("startup ended before its observed deadline boundary: {result:?}").into()),
+        result = &mut pending => {
+            println!("SDK deadline preparation observation: {}", serde_json::json!({
+                "core_capture_created":case.state.join(".verysync-sidecar-core.log").try_exists()?,
+                "identity_record_created":case.state.join(".verysync-sidecar-identity").try_exists()?,
+                "private_key_created":case.state.join("key.pem").try_exists()?,
+                "certificate_created":case.state.join("cert.pem").try_exists()?,
+                "configuration_created":case.state.join("setting.dat").try_exists()?,
+                "observed_serve_process":false,
+                "startup_deadline_seconds":12,
+            }));
+            return Err(format!("startup ended before its observed deadline boundary: {result:?}").into());
+        },
         pids = core_created(&case.binary, &case.state) => pids?,
     };
     let root = super::managed_pause::startup_root(&seen)?;
