@@ -34,6 +34,10 @@ fn expected_core_architecture() -> TestResult<&'static str> {
         "powerpc64" if cfg!(target_endian = "little") => Ok("ppc64le"),
         "riscv64" => Ok("riscv64"),
         "s390x" => Ok("s390x"),
+        "mips" if cfg!(target_endian = "little") => Ok("mipsle"),
+        "mips" => Ok("mips"),
+        "mips64" if cfg!(target_endian = "little") => Ok("mips64le"),
+        "mips64" => Ok("mips64"),
         other => Err(format!("fixture architecture mapping not yet verified: {other}").into()),
     }
 }

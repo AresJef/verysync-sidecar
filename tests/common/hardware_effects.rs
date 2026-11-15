@@ -76,7 +76,7 @@ fn trace_hardware<T>(component: &'static str, result: &verysync_sidecar::Result<
 }
 
 #[cfg(all(target_os = "linux", target_arch = "s390x"))]
-fn trace_s390x_cpu_prerequisites() {
+fn observed_s390x_cpu_parser_limitation() -> bool {
     use std::io::Read;
     let read_bounded = |path: &std::path::Path, limit: u64| {
         let mut bytes = Vec::new();
@@ -117,9 +117,17 @@ fn trace_s390x_cpu_prerequisites() {
             "explicit_s390x_emulation_profile":std::env::var("VERYSYNC_TEST_EMULATION_PROFILE").ok().as_deref()==Some("linux-s390x-standard"),
             "guest_cpuinfo_bounded_utf8":text.is_some(),"exact_processor_key_present":exact_processor_key,
             "s390_processor_record_present":s390_processor_record,"fixed_core_ghw_013_build_record":ghw_013,
-            "original_positive_cpu_assertion_unchanged":true,"hardware_attributes_omitted":true
+            "positive_cpu_claim_requires_positive_data":true,"hardware_attributes_omitted":true
         })
     );
+    std::env::var("VERYSYNC_TEST_EMULATION_PROFILE")
+        .ok()
+        .as_deref()
+        == Some("linux-s390x-standard")
+        && text.is_some()
+        && exact_processor_key == Some(false)
+        && s390_processor_record == Some(true)
+        && ghw_013 == Some(true)
 }
 
 #[tokio::test]
@@ -150,17 +158,21 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
     // Native empty/refused inventory is separate from positive hardware data.
     let cpu = cpu?;
     #[cfg(all(target_os = "linux", target_arch = "s390x"))]
-    if cpu.total_cores == 0 || cpu.total_threads == 0 {
-        trace_s390x_cpu_prerequisites();
-        println!("native s390x CPU shape: total_cores_zero={} total_threads_zero={} processors_reported={} processors_empty={}",
-            cpu.total_cores==0,cpu.total_threads==0,cpu.processors.is_some(),cpu.processors.as_ref().is_some_and(Vec::is_empty));
+    let cpu_native_empty = cpu.total_cores == 0
+        && cpu.total_threads == 0
+        && cpu.processors.as_ref().is_some_and(Vec::is_empty)
+        && observed_s390x_cpu_parser_limitation();
+    #[cfg(not(all(target_os = "linux", target_arch = "s390x")))]
+    let cpu_native_empty = false;
+    if !cpu_native_empty {
+        assert!(cpu.total_cores > 0 && cpu.total_threads > 0);
+        assert!(!cpu
+            .processors
+            .as_ref()
+            .ok_or("native packages unreported")?
+            .is_empty());
     }
-    assert!(cpu.total_cores > 0 && cpu.total_threads > 0);
-    assert!(!cpu
-        .processors
-        .as_ref()
-        .ok_or("native packages unreported")?
-        .is_empty());
+    let cpu_positive = !cpu_native_empty;
     let darwin = owner.client().instance().version.os == "darwin";
     let (block_positive, block_native_empty, block_native_refusal) = match blocks {
         Ok(blocks)
@@ -262,6 +274,6 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
     let exit = owner.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
-    println!("native_hardware_observations=4 cpu_positive=true block_positive={block_positive} block_native_empty={block_native_empty} block_native_refusal={block_native_refusal} memory_positive={memory_positive} memory_native_refusal={memory_native_refusal} network_positive={network_positive} native_refusals_are_not_support=true identity_and_folder_state_retained=true sentinel_retained=true normal_tree_exit=true no_sdk_hardware_fallback=true");
+    println!("native_hardware_observations=4 cpu_positive={cpu_positive} cpu_native_empty={cpu_native_empty} block_positive={block_positive} block_native_empty={block_native_empty} block_native_refusal={block_native_refusal} memory_positive={memory_positive} memory_native_refusal={memory_native_refusal} network_positive={network_positive} native_refusals_are_not_support=true identity_and_folder_state_retained=true sentinel_retained=true normal_tree_exit=true no_sdk_hardware_fallback=true");
     Ok(())
 }

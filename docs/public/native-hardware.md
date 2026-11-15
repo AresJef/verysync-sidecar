@@ -65,6 +65,15 @@ disk inventory or capacity on those hosts. The SDK does not synthesize disks,
 substitute controller hardware, or bypass the native backend. Positive block
 inventory on the local Mac and the Windows/Linux runners is separate evidence.
 
+The S390x emulation candidate has returned zero CPU totals and an explicitly
+empty processor list. Its bounded guest CPU records use `processor N:` keys;
+the exact ghw v0.13 dependency embedded in the fixed core only recognizes a
+`processor:` key. Validation distinguishes this observed parser limitation only
+when the declared S390x profile, fixed dependency record, guest format and exact
+empty result all match. It records `cpu_positive=false`; this is empty native
+data, not positive CPU inventory or an inferred physical CPU count. Unknown
+shapes retain the positive-data failure. The SDK preserves the native response.
+
 Inventories can contain hardware addresses, serial numbers, identifiers,
 filesystem labels, mount locations and other private data. Their normal Debug
 formatting omits values, including nested records and unknown fields. Explicit

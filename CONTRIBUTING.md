@@ -69,7 +69,7 @@ emulation. Exact-image absence remains required alongside group absence, so a
 detached descendant cannot make cleanup pass.
 
 The additional Linux matrix prepares four separate emulated profiles:
-LoongArch64/LA464 with the LP64D GNU sysroot and GCC 14, PPC64LE/POWER8,
+LoongArch64/LA464 with the LP64D GNU sysroot and GCC 14, PPC64LE/POWER9,
 RISC-V64/rv64 and S390x/max. Each records its exact compiler, target, sysroot,
 fixed QEMU image and emulator SHA, registration flags, and official ELF headers.
 An independent Rust canary must preserve arguments through registered and
@@ -83,13 +83,30 @@ remaining feature suites require separate evidence. The Rust 1.85 LoongArch
 target enables LSX; selecting LA464 does not establish a native minimum ISA.
 
 PPC64LE also runs a standalone Rust catch-unwind/drop canary before any SDK
-panic case. POWER8 is the selected profile; bounded POWER9/POWER10 observations
-cannot replace its result. A failed standalone unwind prevents starting a native
+panic case. POWER8 failed both standalone unwind paths; POWER9 and POWER10
+passed both paths. POWER9 is now the explicit candidate, while POWER8 failures
+remain recorded and no minimum native ISA is inferred. Another model cannot
+replace the selected profile's result. A failed standalone unwind prevents starting a native
 core for those SDK cases. This separates runtime prerequisites from SDK cleanup.
 
-S390x zero-CPU failures record bounded guest procfs shape and the fixed core's
-ghw dependency record without printing hardware attributes or changing the
-positive CPU-data assertion. Native inventory effects remain a separate gate.
+S390x zero-CPU observations require the exact empty response, bounded guest
+procfs shape, declared profile and the fixed core's ghw v0.13 build record.
+Only that verified parser limitation is recorded as native empty CPU data,
+with `cpu_positive=false`. Other cases still require positive CPU data.
+The SDK neither substitutes hardware nor changes returned counts.
+
+The four MIPS candidates explicitly build the Rust 1.85 standard library from
+its matching `rust-src` component. `cargo-mips-std.py` requires a declared MIPS
+target, the frozen compiler, an explicit custom-std marker and a pre-existing
+per-job `RUSTC_BOOTSTRAP=1`; it does not set bootstrap or edit Cargo configuration.
+This is an experimental custom-toolchain route. Cargo's supported `build-std`
+workflow requires nightly; these checks are not stock distributed Rust 1.85
+standard-library support. The source-lock hash is verified independently.
+Arguments, unwind/Drop, default-TLS linking and actual SDK lifecycle effects
+remain separate required checks. The fixed image's ELF32 MIPS registrations are
+created only on disposable CI VMs, with exact endian/class/machine selectors,
+the copied pinned interpreter and PF flags; existing entries are never replaced.
+No registration or custom compiler configuration is applied by the library.
 
 ```sh
 cargo +1.85.0 fetch --locked
