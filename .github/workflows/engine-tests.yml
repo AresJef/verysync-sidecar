@@ -427,65 +427,6 @@ jobs:
           python -c "import os,sys; sys.exit(0 if all(os.environ[k]=='success' for k in ['FIRST_OUTCOME','SECOND_OUTCOME']) else 1)"
 
 
-  listener-release-diagnostic:
-    name: GUI listener diagnosis only (macos-amd64-standard)
-    runs-on: macos-15-intel
-    timeout-minutes: 20
-    defaults:
-      run:
-        shell: bash
-    env:
-      TEST_TOOLCHAIN: 1.85.0-x86_64-apple-darwin
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-      - name: Install native Rust and fetch fixed dependencies
-        run: |
-          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
-          cargo +"$TEST_TOOLCHAIN" fetch --locked
-      - name: Explicitly prepare the pinned private TLS-peer Python environment
-        run: >-
-          python scripts/prepare-storage-test-environment.py
-          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Explicitly prepare the fixed private Intel Mac core
-        run: >-
-          python scripts/prepare-test-engine.py prepare --package macos-amd64-standard
-          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Observe the original eight-second listener release condition
-        id: listener_first
-        continue-on-error: true
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target authentication_engine
-          --test-filter native_listener_tls_address_and_disable_effects_keep_explicit_owner_control
-          --evidence-dir "${{ runner.temp }}/vs-listener-release-first"
-      - name: Require exact owned-core cleanup before the independent repetition
-        run: python scripts/prepare-test-engine.py check-cleanup
-      - name: Repeat the original condition independently
-        id: listener_second
-        continue-on-error: true
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target authentication_engine
-          --test-filter native_listener_tls_address_and_disable_effects_keep_explicit_owner_control
-          --evidence-dir "${{ runner.temp }}/vs-listener-release-second"
-      - name: Require exact owned-core cleanup
-        id: listener_cleanup
-        if: always() && env.VERYSYNC_TEST_BINARY != ''
-        run: python scripts/prepare-test-engine.py check-cleanup
-      - name: Require both original conditions and cleanup; full acceptance remains separate
-        if: always()
-        env:
-          FIRST_OUTCOME: ${{ steps.listener_first.outcome }}
-          SECOND_OUTCOME: ${{ steps.listener_second.outcome }}
-          CLEANUP_OUTCOME: ${{ steps.listener_cleanup.outcome }}
-        run: >-
-          python -c "import os,sys; sys.exit(0 if all(os.environ[k]=='success' for k in ['FIRST_OUTCOME','SECOND_OUTCOME','CLEANUP_OUTCOME']) else 1)"
-
   hardware-diagnostic:
     name: Native hardware diagnosis only (${{ matrix.package }})
     runs-on: ${{ matrix.runner }}

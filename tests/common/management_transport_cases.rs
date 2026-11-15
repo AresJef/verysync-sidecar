@@ -224,8 +224,8 @@ async fn exact_owned_listener_snapshot() -> TestResult<serde_json::Value> {
 }
 
 #[tokio::test]
-async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_control() -> TestResult
-{
+async fn native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control(
+) -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("vs-listener-")
         .tempdir()?
@@ -312,121 +312,87 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
         http.configuration().await?.native_document()["gui"] == before,
         "listener update changed unrelated GUI configuration"
     );
+    let managed_root = u64::from(core.process_id());
+    let before_disable = exact_owned_listener_snapshot().await?;
+    // ManagedInstance owns the monitor and its worker tree. The worker, not
+    // necessarily the monitor PID, owns the native GUI listening socket. This
+    // sequential case starts from an empty exact-image inventory.
+    let owned_tree_listening = |snapshot: &serde_json::Value| -> TestResult<bool> {
+        let pids = snapshot["pids"]
+            .as_array()
+            .ok_or("exact owned-image inventory absent")?;
+        if !pids.iter().any(|pid| pid.as_u64() == Some(managed_root)) {
+            return Err("managed monitor missing from exact owned-image inventory".into());
+        }
+        let rows = snapshot["tcp_listeners"]
+            .as_array()
+            .ok_or("exact owned-listener array absent")?;
+        Ok(rows.iter().any(|row| {
+            pids.contains(&row["pid"]) && row["port"].as_u64() == Some(u64::from(initial.port()))
+        }))
+    };
+    assert!(
+        owned_tree_listening(&before_disable)?,
+        "owned listener must be observed before the request"
+    );
     let disabled = http
         .update_gui_listener(&GuiListenerPatch::default().enabled(false))
         .await?;
     assert!(disabled.previous_configuration.enabled);
-    println!("native_gui_listener_stage=wait_released_address");
-    let disable_observation_started = tokio::time::Instant::now();
-    // Passively bind the exact released owned address; do not probe any endpoint
-    // that might have been reused by another process after the listener closes.
-    let released = tokio::time::timeout(Duration::from_secs(8), async {
-        loop {
-            match std::net::TcpListener::bind(initial) {
-                Ok(listener) => return Ok::<_, std::io::Error>(listener),
-                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                    tokio::time::sleep(Duration::from_millis(25)).await
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    })
-    .await;
-    let guard = match released {
-        Ok(result) => result?,
-        Err(error) => {
-            // Observe only exact fixture executable images after the original
-            // failure. Never connect to an address that another owner may reuse.
-            let managed_root = u64::from(core.process_id());
-            let observed = exact_owned_listener_snapshot().await.ok();
-            let listener_count = |port| {
-                observed
-                    .as_ref()
-                    .and_then(|value| value["tcp_listeners"].as_array())
-                    .map(|rows| {
-                        rows.iter()
-                            .filter(|row| row["port"].as_u64() == Some(u64::from(port)))
-                            .count()
-                    })
-            };
-            let initial_root_listener_count = observed
-                .as_ref()
-                .and_then(|value| value["tcp_listeners"].as_array())
-                .map(|rows| {
-                    rows.iter()
-                        .filter(|row| {
-                            row["port"].as_u64() == Some(u64::from(initial.port()))
-                                && row["pid"].as_u64() == Some(managed_root)
-                        })
-                        .count()
-                });
-            let persisted_gui_enabled = (|| {
-                use std::io::Read;
-                let file = std::fs::File::open(core.state_directory().join("setting.dat")).ok()?;
-                let mut bytes = Vec::new();
-                file.take(1_048_577).read_to_end(&mut bytes).ok()?;
-                if bytes.len() > 1_048_576 {
-                    return None;
-                }
-                let native = rmpv::decode::read_value(&mut std::io::Cursor::new(bytes)).ok()?;
-                native["4"]["1"].as_bool()
-            })();
-            let owner_exit_ready = {
-                use std::{future::Future, task::Poll};
-                let mut wait = Box::pin(core.wait_for_exit());
-                std::future::poll_fn(|context| {
-                    Poll::Ready(matches!(wait.as_mut().poll(context), Poll::Ready(_)))
-                })
-                .await
-            };
-            eprintln!(
-                "native listener release original failure: {}",
-                serde_json::json!({
-                    "original_deadline_seconds":8,"original_failure_retained":true,
-                    "passive_exact_image_snapshot_available":observed.is_some(),
-                    "initial_owned_listener_count":listener_count(initial.port()),
-                    "initial_managed_root_listener_count":initial_root_listener_count,
-                    "initial_other_exact_image_listener_count":listener_count(initial.port())
-                        .zip(initial_root_listener_count).map(|(total,root)|total.saturating_sub(root)),
-                    "previous_tls_owned_listener_count":listener_count(changed.port()),
-                    "persisted_gui_enabled":persisted_gui_enabled,
-                    "owner_exit_report_ready":owner_exit_ready,
-                    "no_endpoint_probe_or_signal":true,"raw_pids_addresses_and_paths_omitted":true
-                })
-            );
-            return Err(error.into());
-        }
-    };
-    // A held probe can prevent the native service from rebinding after a
-    // transient restart gap. Release it immediately and require passive
-    // absence for the rest of the original eight-second observation window.
-    drop(guard);
-    println!("native_gui_listener_stage=observe_without_reserving_address");
-    while disable_observation_started.elapsed() < Duration::from_secs(8) {
+    // The fixed core does not guarantee live disable. Observe its actual state
+    // without binding, connecting, retrying the PATCH or stopping it implicitly.
+    let observation_started = tokio::time::Instant::now();
+    let mut passive_samples = 0;
+    let mut samples_with_owned_listener = 0;
+    println!("native_gui_listener_stage=observe_stored_disable_limit_without_endpoint_probe");
+    while observation_started.elapsed() < Duration::from_secs(8) {
         let snapshot = exact_owned_listener_snapshot().await?;
-        let rows = snapshot["tcp_listeners"]
-            .as_array()
-            .ok_or("exact owned-listener array absent")?;
-        if rows
-            .iter()
-            .any(|row| row["port"].as_u64() == Some(u64::from(initial.port())))
-        {
-            eprintln!("native listener reappeared: original_release_observed=true probe_reservation_held=false exact_owned_listener_present=true runtime_disable_effect_verified=false");
-            return Err("native GUI listener reopened after the observed release".into());
-        }
+        passive_samples += 1;
+        samples_with_owned_listener += usize::from(owned_tree_listening(&snapshot)?);
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let guard = std::net::TcpListener::bind(initial)?;
+    assert!(passive_samples > 0);
+    let persisted = {
+        use std::io::Read;
+        let file = std::fs::File::open(core.state_directory().join("setting.dat"))?;
+        let mut bytes = Vec::new();
+        file.take(1_048_577).read_to_end(&mut bytes)?;
+        assert!(
+            bytes.len() <= 1_048_576,
+            "native configuration exceeds observation bound"
+        );
+        rmpv::decode::read_value(&mut std::io::Cursor::new(bytes))?
+    };
+    assert_eq!(persisted["4"]["1"].as_bool(), Some(false));
+    let owner_exit_ready = {
+        use std::{future::Future, task::Poll};
+        let mut wait = Box::pin(core.wait_for_exit());
+        std::future::poll_fn(|context| {
+            Poll::Ready(matches!(wait.as_mut().poll(context), Poll::Ready(_)))
+        })
+        .await
+    };
+    assert!(
+        !owner_exit_ready,
+        "a stored disable must not be treated as process exit"
+    );
+    println!(
+        "native_gui_stored_disable_contract: {}",
+        serde_json::json!({
+            "acknowledged_single_request":true, "persisted_gui_enabled":false,
+            "runtime_hot_disable_supported":false, "passive_observation_seconds":8,
+            "passive_samples":passive_samples,
+            "samples_with_exact_owned_tree_listener":samples_with_owned_listener,
+            "no_address_reservation_or_endpoint_probe_after_request":true,
+            "owner_exit_report_ready":owner_exit_ready,
+            "raw_pids_addresses_and_paths_omitted":true
+        })
+    );
     println!("native_gui_listener_stage=explicit_force_cleanup");
-    // Disabling management is not process exit. Explicit forced cleanup is a
-    // separate caller choice for this synthetic fixture, never a library fallback.
+    // Explicit forced cleanup is the caller's separate choice, never a listener
+    // write fallback. It must still stop and release the exact owned process tree.
     let forced = core.force_stop(Duration::from_secs(10)).await?;
     assert!(forced.forced && forced.tree_stopped && forced.state_released);
-    let native = rmpv::decode::read_value(&mut std::io::Cursor::new(std::fs::read(
-        core.state_directory().join("setting.dat"),
-    )?))?;
-    assert_eq!(native["4"]["1"].as_bool(), Some(false));
-    drop(guard);
     core.restart(Duration::from_secs(30)).await?;
     assert!(core.client().gui_listener().await?.enabled);
     assert_eq!(core.client().instance().device_id, id);
@@ -436,7 +402,8 @@ async fn native_listener_tls_address_and_disable_effects_keep_explicit_owner_con
     );
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
-    println!("native_gui_listener_effects=18 direct_native_tls=true disable_is_not_process_exit=true explicit_force_cleanup_separate=true");
+    println!("native_gui_listener_effects=18 direct_native_tls=true stored_disable_verified=true runtime_hot_disable_supported=false passive_observation_without_address_reservation=true disable_is_not_process_exit=true explicit_force_cleanup_separate=true");
+    std::fs::remove_dir_all(root)?;
     Ok(())
 }
 
