@@ -6,6 +6,40 @@ use crate::{
 };
 use std::collections::BTreeMap;
 impl Client {
+    /// Read the selected folder's native index tree once. This differs from
+    /// selective-mode browsing and file-manager resources. The default returns
+    /// root entries at level zero; explicit None depth retains native unlimited
+    /// depth subject to response/deadline/JSON bounds. Paths use target syntax.
+    /// Fresh identity and folder checks precede the read. No scan, transfer,
+    /// retry, cursor traversal, local filesystem access or mutation occurs.
+    pub async fn browse_index(
+        &self,
+        folder: &FolderId,
+        options: &crate::IndexBrowseOptions,
+    ) -> Result<crate::IndexTree> {
+        let style = self.folder_path_style()?;
+        let prefix = options
+            .prefix
+            .as_ref()
+            .map(|path| crate::scans::validate_subpath(path, style))
+            .transpose()?;
+        self.system_status().await?;
+        self.folder(folder).await?;
+        let levels = options.levels.map(|value| value.to_string());
+        let mut query = vec![("folder", folder.as_str())];
+        if let Some(prefix) = prefix {
+            query.push(("prefix", prefix));
+        }
+        if let Some(levels) = levels.as_deref() {
+            query.push(("levels", levels));
+        }
+        if options.directories_only {
+            query.push(("dirsonly", "true"));
+        }
+        self.connection
+            .get_json_with_query("browse native index", "rest/db/browse", &query)
+            .await
+    }
     /// Read one reported folder/peer completion value. Even 100 with unknown
     /// remote state does not certify peer presence or a caller's file batch.
     pub async fn folder_completion(

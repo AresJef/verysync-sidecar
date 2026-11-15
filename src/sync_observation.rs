@@ -80,16 +80,19 @@ pub enum SyncFileKind {
     /// A regular file entry.
     #[serde(rename = "FILE_INFO_TYPE_FILE")]
     File,
+    /// A directory entry in the native index tree.
+    #[serde(rename = "FILE_INFO_TYPE_DIRECTORY")]
+    Directory,
     /// An unfamiliar label, retained without guessing filesystem semantics.
     #[serde(untagged)]
     Unknown(String),
 }
 impl fmt::Debug for SyncFileKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(if matches!(self, Self::File) {
-            "SyncFileKind::File"
-        } else {
-            "SyncFileKind::Unknown([REDACTED])"
+        f.write_str(match self {
+            Self::File => "SyncFileKind::File",
+            Self::Directory => "SyncFileKind::Directory",
+            Self::Unknown(_) => "SyncFileKind::Unknown([REDACTED])",
         })
     }
 }
@@ -272,5 +275,92 @@ pub struct FolderStatistics {
 impl fmt::Debug for FolderStatistics {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("FolderStatistics { .. }")
+    }
+}
+
+/// One explicit native index-tree request, separate from selective-mode metadata.
+/// The default asks for root entries at native level zero without children.
+#[derive(Clone, Debug)]
+pub struct IndexBrowseOptions {
+    pub(crate) prefix: Option<crate::TargetPath>,
+    pub(crate) levels: Option<u16>,
+    pub(crate) directories_only: bool,
+}
+impl Default for IndexBrowseOptions {
+    fn default() -> Self {
+        Self {
+            prefix: None,
+            levels: Some(0),
+            directories_only: false,
+        }
+    }
+}
+impl IndexBrowseOptions {
+    /// Select a strictly relative prefix using the target's path syntax.
+    /// Local callers construct it with native Path/PathBuf operations.
+    /// The default root scope sends no prefix and touches no controller files.
+    pub fn prefix(mut self, prefix: crate::TargetPath) -> Self {
+        self.prefix = Some(prefix);
+        self
+    }
+    /// Native level zero returns immediate entries without children. Positive
+    /// levels include that many descendant levels. None explicitly requests
+    /// the native unbounded-depth default; response size/deadline/JSON bounds
+    /// still apply and the SDK does not follow additional requests.
+    pub fn levels(mut self, levels: Option<u16>) -> Self {
+        self.levels = levels;
+        self
+    }
+    /// Request only directory entries. False omits the query: this fixed core
+    /// treats any nonempty dirsonly value, including the text false, as true.
+    pub fn directories_only(mut self, directories_only: bool) -> Self {
+        self.directories_only = directories_only;
+        self
+    }
+}
+/// One native index node. This reports index knowledge, not current file access,
+/// local existence, selection, peer connectivity or transfer completion.
+#[derive(Clone, Deserialize)]
+pub struct IndexTreeEntry {
+    /// Exact untrusted entry name. Never implicitly joined to a filesystem path.
+    pub name: String,
+    /// Exact native modification timestamp, preserving offset and precision.
+    #[serde(rename = "modTime")]
+    pub modified: String,
+    /// Native byte size, including the reported zero for directories.
+    pub size: u64,
+    /// Actual native kind; unfamiliar labels remain explicitly inspectable.
+    #[serde(rename = "type")]
+    pub kind: SyncFileKind,
+    /// Actual children within the requested depth. Missing/null is retained as
+    /// None, separate from an explicitly empty child list.
+    pub children: Option<Vec<IndexTreeEntry>>,
+    /// Unmodeled native metadata, potentially private.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for IndexTreeEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexTreeEntry")
+            .field("kind", &self.kind)
+            .field("size", &self.size)
+            .field("child_count", &self.children.as_ref().map(Vec::len))
+            .field("extra_field_count", &self.extra.len())
+            .finish_non_exhaustive()
+    }
+}
+/// One ordered native index snapshot, without fabricated selection/existence
+/// fields. An empty list is valid; malformed or null root responses are errors.
+#[derive(Clone, Deserialize)]
+#[serde(transparent)]
+pub struct IndexTree {
+    /// Exact native order and nodes. No automatic recursive fetch or local I/O.
+    pub entries: Vec<IndexTreeEntry>,
+}
+impl fmt::Debug for IndexTree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexTree")
+            .field("entry_count", &self.entries.len())
+            .finish_non_exhaustive()
     }
 }
