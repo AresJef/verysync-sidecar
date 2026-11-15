@@ -852,3 +852,145 @@ async fn native_path_writeability_rejects_bad_paths_and_keeps_failure_uncertaint
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn native_folder_open_requests_keep_exact_categories_and_private_acknowledgements(
+) -> TestResult {
+    use verysync_sidecar::{FolderId, NativeFolderOpenLocation};
+    let folder = FolderId::parse("open ?%")?;
+    let folders = || {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":folder.as_str(),"label":"fixture","path":"/owned","paused":true}]}),
+        )
+    };
+    let empty = || Reply {
+        body: Vec::new(),
+        ..Reply::json(serde_json::Value::Null)
+    };
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        folders(),
+        empty(),
+        identity(),
+        folders(),
+        empty(),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for location in [
+        NativeFolderOpenLocation::Folder,
+        NativeFolderOpenLocation::Trash,
+    ] {
+        let receipt: verysync_sidecar::NativeFolderOpenReceipt =
+            client.request_native_folder_open(&folder, location).await?;
+        assert_eq!(receipt.folder, folder);
+        assert_eq!(receipt.location, location);
+        assert!(!format!("{receipt:?}").contains(folder.as_str()));
+    }
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    for (index, token) in [(4, "normal"), (7, "trash")] {
+        assert!(requests[index].starts_with("GET "));
+        let uri = url::Url::parse(&format!(
+            "http://fixture.invalid{}",
+            requests[index].split_whitespace().nth(1).unwrap()
+        ))?;
+        assert_eq!(uri.path(), "/prefix/rest/svc/folder/openFolder");
+        assert_eq!(
+            uri.query_pairs().collect::<Vec<_>>(),
+            vec![
+                ("folder".into(), "open ?%".into()),
+                ("category".into(), token.into())
+            ]
+        );
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_folder_open_failures_preserve_uncertainty_and_do_not_retry_or_invent_opened_windows(
+) -> TestResult {
+    use verysync_sidecar::{FolderId, NativeFolderOpenLocation};
+    let folders = || {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":"owned","label":"fixture","path":"/owned","paused":false}]}),
+        )
+    };
+    for (kind, reply) in [
+        (0, Reply::json(serde_json::json!({}))),
+        (
+            0,
+            Reply {
+                body: b" ".to_vec(),
+                ..Reply::json(serde_json::Value::Null)
+            },
+        ),
+        (
+            0,
+            Reply {
+                status: 204,
+                body: Vec::new(),
+                ..Reply::json(serde_json::Value::Null)
+            },
+        ),
+        (
+            1,
+            Reply {
+                status: 500,
+                ..Reply::json(serde_json::json!({"private":KEY}))
+            },
+        ),
+        (2, Reply::json(serde_json::json!({"error":KEY}))),
+        (
+            3,
+            Reply {
+                body: vec![0; 1024],
+                ..Reply::json(serde_json::Value::Null)
+            },
+        ),
+    ] {
+        let server =
+            ScriptedServer::start(vec![version(), identity(), identity(), folders(), reply])
+                .await?;
+        let client = Client::connect(server.options()?.response_limit(256)?).await?;
+        let error = client
+            .request_native_folder_open(
+                &FolderId::parse("owned")?,
+                NativeFolderOpenLocation::Folder,
+            )
+            .await
+            .expect_err("failed request is not an open receipt");
+        assert!(!format!("{error:?}").contains(KEY));
+        let Error::MutationOutcomeUnknown { source, .. } = error else {
+            return Err("open uncertainty missing".into());
+        };
+        assert!(matches!(
+            (kind, source.as_ref()),
+            (0, Error::InvalidResponse { .. })
+                | (1, Error::Http { .. })
+                | (2, Error::Api { .. })
+                | (3, Error::ResponseTooLarge { limit: 256 })
+        ));
+        assert_eq!(server.finish().await?.len(), 5);
+    }
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"folders":[]})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(matches!(
+        client
+            .request_native_folder_open(
+                &FolderId::parse("absent")?,
+                NativeFolderOpenLocation::Folder
+            )
+            .await,
+        Err(Error::FolderNotFound { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 4);
+    Ok(())
+}

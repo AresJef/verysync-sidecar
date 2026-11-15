@@ -7,6 +7,58 @@ use crate::{
 use std::collections::BTreeMap;
 
 impl Client {
+    /// Explicitly ask the target to open a registered folder or its trash
+    /// location using the target's desktop opener. Nothing opens on the
+    /// controller. The SDK neither builds target filesystem paths nor launches
+    /// a controller application.
+    ///
+    /// The fixed core returns an empty HTTP 200 even if opener startup fails
+    /// or its locality check ignores the request. This is an acknowledgement,
+    /// never proof of an opened window. No retry, fallback or error repair is
+    /// implicit. Identity and configured-folder checks precede the state-changing
+    /// GET under the mutation lock; failed receipts retain unknown outcomes.
+    pub async fn request_native_folder_open(
+        &self,
+        folder: &FolderId,
+        location: crate::NativeFolderOpenLocation,
+    ) -> Result<crate::NativeFolderOpenReceipt> {
+        let operation = "request native target folder open";
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        self.folder(folder).await?;
+        let category = match location {
+            crate::NativeFolderOpenLocation::Folder => "normal",
+            crate::NativeFolderOpenLocation::Trash => "trash",
+        };
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                operation,
+                reqwest::Method::GET,
+                self.connection.management_url(
+                    "rest/svc/folder/openFolder",
+                    &[("folder", folder.as_str()), ("category", category)],
+                )?,
+                None,
+                true,
+            )
+            .await?;
+        if status != 200 || !bytes.is_empty() {
+            return Err(mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                },
+            ));
+        }
+        Ok(crate::NativeFolderOpenReceipt {
+            folder: folder.clone(),
+            location,
+        })
+    }
+
     /// Read the target program's actual configuration/data locations. Known
     /// filesystem locations use target path syntax without controller I/O.
     /// Other native values retain special markers and filename templates.

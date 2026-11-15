@@ -262,3 +262,8 @@ required-features = ["engine-tests"]
 name = "authentication_engine"
 path = "tests/authentication_engine.rs"
 required-features = ["engine-tests"]
+
+[[example]]
+name = "native_folder_opener"
+path = "examples/native_folder_opener.rs"
+required-features = ["engine-tests"]

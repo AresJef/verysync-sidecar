@@ -1203,3 +1203,71 @@ async fn actual_native_path_writeability_keeps_native_limit_and_owned_data() -> 
     println!("native_path_writeability_snapshots=4 native_false_with_object_errors={native_false_errors} native_permission_positive_not_claimed=true missing_directory_not_created=true caller_write_oracle_succeeded=true sample_configuration_identity_preserved=true normal_owned_tree_exit=true");
     Ok(())
 }
+
+#[tokio::test]
+async fn actual_native_folder_open_requests_capture_exact_owned_target_dispatch() -> TestResult {
+    use verysync_sidecar::{CreateFolderOptions, FolderId, NativeFolderOpenLocation, TargetPath};
+    let root = tempfile::Builder::new()
+        .prefix("vs-open-")
+        .tempdir()?
+        .keep();
+    let data = root.join("owned \u{4e8c} % +");
+    let archive = data.join(".verysync").join("Archive");
+    std::fs::create_dir_all(&archive)?;
+    std::fs::write(data.join("sample.txt"), b"retained opener bytes")?;
+    let capture = std::path::PathBuf::from(
+        std::env::var_os("VERYSYNC_TEST_OPENER_CAPTURE_DIR")
+            .ok_or("owned opener fixture required")?,
+    );
+    let mut owner = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let folder = FolderId::parse("owned-open")?;
+    owner
+        .client()
+        .create_folder(
+            &CreateFolderOptions::new(folder.clone(), TargetPath::local(&data)).paused(true),
+        )
+        .await?;
+    let identity = owner.client().instance().device_id.clone();
+    for (location, expected) in [
+        (NativeFolderOpenLocation::Folder, &data),
+        (NativeFolderOpenLocation::Trash, &archive),
+    ] {
+        let receipt = owner
+            .client()
+            .request_native_folder_open(&folder, location)
+            .await?;
+        assert_eq!(receipt.folder, folder);
+        assert_eq!(receipt.location, location);
+        assert!(!format!("{receipt:?}").contains(folder.as_str()));
+        let mut wanted = TargetPath::local(expected)
+            .to_protocol()?
+            .as_bytes()
+            .to_vec();
+        wanted.push(0);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                for record in std::fs::read_dir(&capture)? {
+                    let record = record?;
+                    if record.path().extension().is_some_and(|v| v == "argv")
+                        && std::fs::read(record.path())? == wanted
+                    {
+                        return Ok::<_, std::io::Error>(());
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await??;
+    }
+    assert_eq!(
+        std::fs::read(data.join("sample.txt"))?,
+        b"retained opener bytes"
+    );
+    assert_eq!(owner.client().system_status().await?.device_id, identity);
+    assert!(archive.is_dir());
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("native_folder_open_normal_and_trash_arguments_captured=true caller_desktop_never_opened=true native_ack_not_window_success=true synthetic_bytes_identity_and_archive_preserved=true normal_owned_tree_exit=true");
+    Ok(())
+}

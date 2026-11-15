@@ -155,3 +155,41 @@ let snapshot = client.probe_target_path_writeability(&path, false).await?;
 # let _ = snapshot;
 # Ok(()) }
 ```
+
+## Explicit target-side folder open requests
+
+`request_native_folder_open(&folder, NativeFolderOpenLocation::Folder)` asks the
+connected target to open a registered folder. `Trash` selects the fixed native
+trash/archive category. The target derives the location from its registration;
+the SDK accepts no arbitrary opener path, joins no filesystem strings and
+opens no application on the controller.
+
+**The receipt does not prove a window opened.** The fixed native handler returns
+an empty HTTP 200 after calling its desktop opener, ignores opener-start errors
+and can silently ignore requests that fail its locality check. The SDK does not
+override that check, retry a request, change the target's environment, repair
+the opener or fall back to a controller application.
+
+The state-changing GET is explicit, serialized with other mutations and
+preceded by fresh identity and configured-folder checks. The typed interface
+accepts the verified exact empty-200 acknowledgement. Native body failures,
+unexpected content/status and lost/oversized responses retain typed failures
+and uncertain mutation outcomes. Missing registrations fail before dispatch.
+`NativeFolderOpenReceipt` preserves the selected registration and location;
+ordinary Debug omits the registration ID.
+
+Native tests substitute a short-lived owned capture executable through the
+test child's environment, then verify the official core's exact normal/trash
+arguments. This proves native dispatch without opening desktop applications.
+It does not prove that a real graphical shell or chosen file manager is
+available. Current-source target execution remains separate from local evidence.
+
+```no_run
+# async fn example(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+let receipt = client.request_native_folder_open(
+    folder, verysync_sidecar::NativeFolderOpenLocation::Folder,
+).await?;
+// An acknowledgement alone does not establish graphical UI success.
+# let _ = receipt;
+# Ok(()) }
+```
