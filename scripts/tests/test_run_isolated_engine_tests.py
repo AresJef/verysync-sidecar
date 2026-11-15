@@ -292,7 +292,7 @@ class NativeOpenerContracts(unittest.TestCase):
             call.with_suffix(".owned").write_bytes(b"synthetic exact spawn PID journal")
             unpublished = captured / "67890.owned"
             unpublished.write_bytes(b"synthetic actor not yet publishing argv")
-            with patch.object(HELPER.os, "name", "posix"), patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="")) as observe:
+            with patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="")) as observe:
                 receipt = HELPER.finish_browser_actors(directory)
             self.assertEqual(sorted(c.args[0] for c in observe.call_args_list),
                              [["/bin/ps", "-p", "12345", "-o", "stat="],
