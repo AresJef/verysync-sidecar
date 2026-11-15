@@ -1,4 +1,6 @@
 //! Actual private device controls and their independent connection/file effects.
+#[path = "common/device_removal_diagnostic.rs"]
+mod device_removal_diagnostic;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/private_redial.rs"]
@@ -131,6 +133,7 @@ async fn removal_state_diagnostic(
     peer: &DeviceId,
     before_started: Option<&str>,
     since: u64,
+    removal_started: std::time::SystemTime,
 ) -> TestResult<serde_json::Value> {
     println!("synthetic removal diagnostic stage: {role} connections");
     let connections = raw(
@@ -175,8 +178,10 @@ async fn removal_state_diagnostic(
     println!("synthetic removal diagnostic stage: {role} events");
     let events = removal_events(client, since).await?;
     let count = |kind| events.iter().filter(|event| event["type"] == kind).count();
+    let timeline =
+        device_removal_diagnostic::removal_timeline(&events, peer.as_str(), removal_started);
     Ok(
-        json!({"role":role,"event_scope":"since_fixture_initialization","device_configured":configured,"folder_reference_count":references,"peer_row_present":row.is_some(),"connected":connected,"connection_start_changed":started_changed,"events_returned":events.len(),"device_connected_events":count("DeviceConnected"),"device_disconnected_events":count("DeviceDisconnected"),"device_rejected_events":count("DeviceRejected"),"event_tail_gap":events.first().and_then(|event|event["id"].as_u64()).map(|first|first>since.saturating_add(1))}),
+        json!({"role":role,"event_scope":"since_fixture_initialization","device_configured":configured,"folder_reference_count":references,"peer_row_present":row.is_some(),"connected":connected,"connection_start_changed":started_changed,"events_returned":events.len(),"device_connected_events":count("DeviceConnected"),"device_disconnected_events":count("DeviceDisconnected"),"device_rejected_events":count("DeviceRejected"),"event_tail_gap":events.first().and_then(|event|event["id"].as_u64()).map(|first|first>since.saturating_add(1)),"timeline_clock":"owned_runner_wall_clock","timeline":timeline}),
     )
 }
 
@@ -419,6 +424,7 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
     let a_before = connected(a.client(), &b_id, true).await?;
     let b_before = connected(b.client(), &a_id, true).await?;
     println!("synthetic device effect stage: remove registration and observe remote disconnect");
+    let removal_started = std::time::SystemTime::now();
     let removed = a.client().remove_device(&b_id).await?;
     assert!(removed.configuration_absent && removed.remaining_folder_associations.is_empty());
     let disconnect = connected(b.client(), &a_id, false).await;
@@ -435,6 +441,7 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
                     .get(b_id.as_str())
                     .and_then(|value| value["startedAt"].as_str()),
                 a_since,
+                removal_started,
             ),
         )
         .await
@@ -459,6 +466,7 @@ async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves
                     .get(a_id.as_str())
                     .and_then(|value| value["startedAt"].as_str()),
                 b_since,
+                removal_started,
             ),
         )
         .await
