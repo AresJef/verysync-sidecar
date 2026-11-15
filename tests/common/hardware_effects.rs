@@ -3,6 +3,9 @@ use super::managed_fixture::{options, TestResult};
 use std::time::Duration;
 use verysync_sidecar::{Error, ManagedInstance, ResponseDiagnostic, TargetPath};
 
+#[path = "linux32_memory_prerequisite.rs"]
+mod linux32_memory_prerequisite;
+
 fn native_error_message(response: &ResponseDiagnostic) -> TestResult<String> {
     assert_eq!(response.status(), 200);
     let value: serde_json::Value = serde_json::from_slice(response.body_bytes())?;
@@ -23,7 +26,9 @@ fn trace_hardware<T>(component: &'static str, result: &verysync_sidecar::Result<
                 .as_str()
                 .unwrap_or_default()
                 .to_ascii_lowercase();
-            let category = if text.contains("unable to populate sysctl map") {
+            let category = if text == "ghw: could not determine total usable bytes of memory" {
+                "ghw_total_usable_unavailable"
+            } else if text.contains("unable to populate sysctl map") {
                 "sysctl_map_population"
             } else if text.contains("ioreg unmarshal resulted in") {
                 "ioreg_node_shape"
@@ -140,18 +145,45 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
         }
         Err(error) => return Err(error.into()),
     };
-    let memory_positive = match memory {
+    let (memory_positive, memory_native_refusal) = match memory {
         Ok(value) => {
             assert!(
                 !darwin,
                 "fixed Darwin backend unexpectedly changed; review native evidence"
             );
             let _ = value.total_usable_bytes;
-            true
+            (true, false)
         }
         Err(Error::Api { response, .. }) if darwin => {
             assert!(native_error_message(&response)?.contains("not implemented"));
-            false
+            (false, true)
+        }
+        #[cfg(all(target_os = "linux", target_pointer_width = "32"))]
+        Err(Error::Api { response, .. }) => {
+            use std::io::Read;
+            assert!(matches!(
+                owner.client().instance().version.arch.as_str(),
+                "386" | "arm"
+            ));
+            assert_eq!(
+                native_error_message(&response)?,
+                "ghw: Could not determine total usable bytes of memory"
+            );
+            // Explicit test-only prerequisite observation, never an SDK fallback
+            // or an attempt to correct the target's native hardware data.
+            let mut meminfo = String::new();
+            std::fs::File::open(std::path::Path::new("/proc/meminfo"))?
+                .take(65537)
+                .read_to_string(&mut meminfo)?;
+            assert!(
+                meminfo.len() <= 65536,
+                "unverified memory prerequisite size"
+            );
+            assert!(
+                linux32_memory_prerequisite::unusable_wrapped_total(&meminfo)?,
+                "the exact native refusal has no matching verified int32 prerequisite"
+            );
+            (false, true)
         }
         Err(error) => return Err(error.into()),
     };
@@ -176,6 +208,6 @@ async fn actual_native_hardware_data_and_backend_refusals_preserve_owned_state()
     let exit = owner.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
-    println!("native_hardware_observations=4 cpu_positive=true block_positive={block_positive} block_native_empty={block_native_empty} block_native_refusal={block_native_refusal} memory_positive={memory_positive} network_positive={network_positive} native_refusals_are_not_support=true identity_and_folder_state_retained=true sentinel_retained=true normal_tree_exit=true no_controller_io=true");
+    println!("native_hardware_observations=4 cpu_positive=true block_positive={block_positive} block_native_empty={block_native_empty} block_native_refusal={block_native_refusal} memory_positive={memory_positive} memory_native_refusal={memory_native_refusal} network_positive={network_positive} native_refusals_are_not_support=true identity_and_folder_state_retained=true sentinel_retained=true normal_tree_exit=true no_sdk_hardware_fallback=true");
     Ok(())
 }
