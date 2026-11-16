@@ -2579,6 +2579,73 @@ async fn extended_versioners_and_remote_archive_location_keep_unknowns_and_unkno
 }
 
 #[tokio::test]
+async fn remote_version_archives_keep_native_uri_backend_and_private_policy() -> TestResult {
+    use verysync_sidecar::{FolderId, VersionArchiveLocation};
+    for scheme in ["ftp", "sftp"] {
+        let id = FolderId::parse("remote-archive")?;
+        let uri =
+            format!("{scheme}://reader:{KEY}@archive.invalid/versions%20two?connectTimeout=5");
+        let before = serde_json::json!({"type":"simple","params":{"keep":"3","native":KEY},
+            "cleanupIntervalS":3600,"fsType":"basic","fsPath":"C:\\old","unknown":KEY});
+        let mut after = before.clone();
+        after["fsType"] = scheme.into();
+        after["fsPath"] = uri.clone().into();
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let folder = |v| {
+            Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),
+            "label":"","path":"C:\\data","paused":false,"versioning":v}]}))
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+            identity(),
+            identity(),
+            folder(before),
+            Reply::json(serde_json::json!({})),
+            folder(after),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let location = VersionArchiveLocation::remote_uri(&uri)?;
+        assert!(!format!("{location:?}").contains(KEY));
+        let update = client.set_version_archive_location(&id, &location).await?;
+        assert!(update.requested_fields_match);
+        assert!(!format!("{update:?}").contains(KEY));
+        let invalid =
+            VersionArchiveLocation::RemoteUri(url::Url::parse("https://archive.invalid/")?);
+        assert!(matches!(
+            client.set_version_archive_location(&id, &invalid).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+        let requests = server.finish().await?;
+        let writes = requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 1);
+        let body: serde_json::Value =
+            serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("body")?)?;
+        assert_eq!(body["versioning"]["fsType"], scheme);
+        assert_eq!(body["versioning"]["fsPath"], uri);
+        assert_eq!(body["versioning"]["params"]["native"], KEY);
+        assert_eq!(body["versioning"]["unknown"], KEY);
+    }
+    for uri in [
+        "https://archive.invalid/",
+        "sftp:///",
+        "ftp://archive.invalid/#private",
+        "ftp://arc\nhive.invalid/",
+    ] {
+        assert!(VersionArchiveLocation::remote_uri(uri).is_err());
+    }
+    assert!(VersionArchiveLocation::remote_uri(format!(
+        "sftp://archive.invalid/{}",
+        "x".repeat(32769)
+    ))
+    .is_err());
+    Ok(())
+}
+
+#[tokio::test]
 async fn exact_version_restore_encodes_native_map_and_retains_partial_errors() -> TestResult {
     use verysync_sidecar::{FileVersionRestore, FolderId, PathStyle, TargetPath};
     let identity = || Reply::json(serde_json::json!({"myID":ID,"nowTime":"2026-11-15T00:00:00Z"}));

@@ -379,6 +379,9 @@ impl Client {
     /// archives. Native retention can clean the selected location. Target paths
     /// are not opened or expanded on the controller.
     /// The basic backend uses native target-relative/absolute/tilde semantics.
+    /// RemoteUri selects the URI's native FTP/SFTP backend, not the controller's
+    /// path syntax or Local Sync option format. Successful configuration readback
+    /// is not an authentication, host-verification or archival success receipt.
     /// Changing location can make earlier archives absent from current browsing;
     /// it does not migrate them or change an external versioner's command.
     ///
@@ -401,7 +404,7 @@ impl Client {
         self.system_status().await?;
         let mut expected = self.read_folder_versioning(folder).await?;
         expected.filesystem_path = path.to_owned();
-        expected.filesystem_type = "basic".to_owned();
+        expected.filesystem_type = location.filesystem_type().to_owned();
         self.write_folder_versioning(folder, expected, "set native version archive location")
             .await
     }
