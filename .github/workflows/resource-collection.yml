@@ -17,6 +17,7 @@ on:
       - scripts/preflight-native-resources.py
       - scripts/run-isolated-engine-tests.py
       - scripts/resource-test-requirements.txt
+      - scripts/tests/test_resource_*.py
       - .github/workflows/resource-collection.yml
   workflow_dispatch:
 
