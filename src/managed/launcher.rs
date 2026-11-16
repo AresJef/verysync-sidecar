@@ -105,7 +105,12 @@ mod tests {
         let root = PathBuf::from(std::env::var_os(ROOT).ok_or("owned fixture root required")?);
         if mode == "root" {
             let child = command(&root, "descendant")?.spawn()?;
-            std::fs::write(root.join("descendant-pid"), child.id().to_string())?;
+            // Publish the complete PID before the observer can see its journal.
+            // A ready child can otherwise race the parent's create-then-write.
+            let journal = root.join("descendant-pid");
+            let partial = journal.with_extension("pending");
+            std::fs::write(&partial, child.id().to_string())?;
+            std::fs::rename(partial, journal)?;
             until(|| Ok(root.join("descendant-ready").try_exists()?))?;
             until(|| Ok(root.join("exit-root").try_exists()?))?;
             drop(child); // The intended browser-style descendant outlives its root.

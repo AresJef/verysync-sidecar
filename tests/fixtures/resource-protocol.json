@@ -1,12 +1,12 @@
 {
-  "protocol_id": "VS045-native-resources-v12",
-  "version": 12,
+  "protocol_id": "VS045-native-resources-v13",
+  "version": 13,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "63b632e3023ac05200288eb5a0e4ad0bb921792b175a3d11ab4daf9d9d02b004",
+    "rust_sources_sha256": "61916445389a8cdbc0e2f9a4b9632da131688bf96972083d60461f290020c37c",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
     "sampler_sha256": "c2021cd0c9927d74493e37ce7abe0d085ba2cdae26e9fc33b14cfd4cfd0ac819",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a"
@@ -108,7 +108,8 @@
     "v2": "Each actual CI profile completes two opposite full pretrial orders using exact frozen source inputs before formal acquisition; prep is not formal evidence.",
     "v3": "Repeat calibration and two opposite full actual pretrial orders on each actual profile; v2 pretrial and accepted groups are not v3 samples.",
     "v4": "New counter/timer calibration and8actualfresh pretrial cases per actual profile before complete new formal and independent acquisition.",
-    "v5": "Full actual8case opposite-order native pretrial on each profile validates diagnostic recording before new formal acquisition."
+    "v5": "Full actual8case opposite-order native pretrial on each profile validates diagnostic recording before new formal acquisition.",
+    "v13": "Repeat actual source-bound calibration and two opposite complete pretrial orders on each profile before v13 formal and independent acquisition; earlier source data remains historical."
   },
   "profiles": [
     "macos-amd64-standard",
@@ -120,10 +121,10 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "fdc7bceec2af8dce21958eed61bd9c7b5154ada79dd9397386840fd833f44afa",
-    "retained": "All prior source/protocol datasets and original attempts/deadlines retained separately, never v5 members.",
-    "changes": "Explicit inline SFTP key encoding and narrowly verified empty-password omission during key-authenticated creation readback. Native probe failure stays faithful. New Rust source identity; sampler and all measurement thresholds/workloads/quotas unchanged.",
-    "unchanged": "Every Rust workload and artifact input, repeat count, operation timestamp semantics, native byte/state/exit verification, all quality/memory/stability thresholds and complete four formal+two independent fresh-process cycles.",
+    "previous_protocol_sha256": "bfbad993713661dbdc8b3ebde830eaef9c6872977609b9295382b638e6d07f97",
+    "retained": "All previous datasets and original attempts/deadlines remain historical, not members of this source protocol. No project budget or prior overrun is reset.",
+    "changes": "Typed native management ping and dedicated folder collection reads; corrected existing read-alias mappings. An existing cfg(test)-only launcher fixture publishes its PID journal atomically after a reproduced partial-read race. New Rust source identity; no sampler/workload/threshold/quota/deadline change.",
+    "unchanged": "Measured workloads, repeat counts, timing boundaries, native byte/state/exit checks, all quality/memory/stability thresholds and four formal plus two independent fresh-process cycles.",
     "diagnostic_policy": "Initial unobserved previous durations are null; diagnostics never replace required counters or become new acceptance gates."
   },
   "preflight_sha256": "4a13665bb438ce948c28aee13b992f329d5dbf4f62c3c282bbca114f4161d485",

@@ -16,6 +16,78 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn native_narrow_configuration_reads_preserve_identity_folders_and_state() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-narrow-configuration-")
+        .tempdir()?
+        .keep();
+    let data = root.join("synthetic data");
+    std::fs::create_dir(&data)?;
+    std::fs::write(
+        data.join("sentinel"),
+        b"narrow queries preserve caller files",
+    )?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    assert!(core.client().folder_configurations().await?.is_empty());
+    let id = FolderId::parse("synthetic-narrow-read")?;
+    core.client()
+        .create_folder(
+            &CreateFolderOptions::new(id.clone(), TargetPath::local(data.clone())).paused(true),
+        )
+        .await?;
+    let before = core.client().configuration().await?;
+    let ping = core.client().ping().await?;
+    assert!(ping.is_pong());
+    assert_eq!(ping.reply, "pong");
+    let folders = core.client().folder_configurations().await?;
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].id, id);
+    assert!(folders[0].paused);
+    assert_eq!(
+        folders[0].path.to_protocol()?,
+        data.to_str().ok_or("synthetic UTF-8 path absent")?
+    );
+    assert!(
+        folders[0].extra == before.folders()?[0].extra,
+        "narrow folder read changed native extension values"
+    );
+    let legacy = core
+        .client()
+        .raw_request(&RawRequest::new(
+            RawMethod::Get,
+            ["rest", "system", "config"],
+            RequestEffect::ReadOnly,
+        )?)
+        .await?;
+    assert_eq!(legacy.status(), 200);
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(legacy.body_bytes())?
+            == *before.native_document(),
+        "legacy configuration read differs from canonical snapshot"
+    );
+    let defaults = core.client().folder_defaults().await?;
+    assert!(
+        serde_json::to_value(defaults)? == before.native_document()["defaults"]["folder"],
+        "dedicated defaults differ from the complete snapshot"
+    );
+    core.client().configuration_sync_state().await?;
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    assert!(
+        core.client().configuration().await?.native_document() == before.native_document(),
+        "read queries changed native configuration"
+    );
+    assert_eq!(
+        std::fs::read(data.join("sentinel"))?,
+        b"narrow queries preserve caller files"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    println!("native_narrow_configuration_reads=3 empty_and_populated_folder_collection=true full_config_alias_equal=true ping_pong=true identity_configuration_files_preserved=true normal_owned_exit=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_system_preferences_write_real_event_audit_and_preserve_target_selections(
 ) -> TestResult {
     use std::io::Read;
