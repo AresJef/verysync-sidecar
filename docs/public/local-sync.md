@@ -442,7 +442,14 @@ its SFTP limits probe installs an unconditional accept host-key callback. The
 Local Sync backend does not supply a `known_hosts_file` setting to its SFTP
 constructor. These observations do not establish a supported way to configure
 verified SSH host identity through this API. Verified identity remains pending;
-the SDK adds no trust-policy bypass, SSH tunnel or controller trust-store edits.
+the SDK adds no trust-policy bypass, SSH tunnel or controller trust-store edits. A
+separate actual native test selected `RCLONE_SFTP_KNOWN_HOSTS_FILE` only in fresh
+test-process environments and supplied explicit wrong and matching synthetic
+public keys. Both new core generations accepted browsing and limits probes with
+`insecureTls: false`. This environment candidate therefore does not establish
+verified host identity in the inspected build, even though upstream rclone
+supports a known-hosts configuration. No system SSH files or trust stores changed.
+
 
 ## HTTPS WebDAV certificate boundary
 
