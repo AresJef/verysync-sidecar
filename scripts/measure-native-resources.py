@@ -81,58 +81,74 @@ def observer_thread_policy(worker_started=False):
 
 
 class TimerWaitError(RuntimeError):
-    """Retain the actual failed wait without guessing its underlying cause."""
-    def __init__(self, reason, wait_ns, events, os_errno=None):
-        self.diagnostic = {"reason": reason, "wait_ns": wait_ns, "os_errno": os_errno,
-                           "events": [{key: getattr(event, key) for key in
-                                       ["ident", "filter", "flags", "fflags", "data"]}
-                                      for event in events]}
+    """Retain a failed native wait without guessing its underlying cause."""
+    def __init__(self, reason, wait_ns, native_details):
+        self.diagnostic = {"reason": reason, "wait_ns": wait_ns, "native_details": native_details}
         super().__init__("owned precise timer failed: " + json.dumps(self.diagnostic))
 
 
 class SamplerTicker:
-    """Own one blocking timer; Darwin avoids power-aware timer coalescing."""
-    def __init__(self, interval_ms, critical=True):
+    """One blocking observer wait; no worker/global policy or timestamp changes."""
+    MAX_TICKS = (1 << 64) - 1
+
+    def __init__(self, interval_ms, native=True):
         self.interval_s = interval_ms / 1000
-        self.queue = None
         self.expirations = None
         self.backend = "monotonic-sleep"
-        if sys.platform == "darwin" and critical:
-            import select
-            self.queue = select.kqueue()
-            # Darwin SDK sys/event.h: NOTE_NSECONDS=0x04, NOTE_CRITICAL=0x20.
-            # NOTE_CRITICAL requests minimal coalescing on this owned descriptor;
-            # it changes no machine-wide timer, power setting or process priority.
-            timer = select.kevent(1, filter=select.KQ_FILTER_TIMER,
-                                 flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
-                                 fflags=0x04 | 0x20, data=int(interval_ms * 1000000))
-            try:
-                self.queue.control([timer], 0, 0)
-            except BaseException:
-                self.queue.close()
-                raise
-            self.backend = "darwin-kqueue-critical-nanoseconds"
+        self.parameters = {}
+        self._clock = self._wait = None
+        if sys.platform == "darwin" and native:
+            import ctypes
+            class Timebase(ctypes.Structure):
+                _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+            self._library = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+            query = self._library.mach_timebase_info
+            query.argtypes = [ctypes.POINTER(Timebase)]; query.restype = ctypes.c_int
+            self._clock = self._library.mach_absolute_time
+            self._clock.argtypes = []; self._clock.restype = ctypes.c_uint64
+            self._wait = self._library.mach_wait_until
+            self._wait.argtypes = [ctypes.c_uint64]; self._wait.restype = ctypes.c_int
+            base = Timebase()
+            status = query(ctypes.byref(base))
+            if status or not base.numer or not base.denom:
+                raise TimerWaitError("invalid-mach-timebase", 0, native_details={
+                    "kernel_return": status, "numer": base.numer, "denom": base.denom})
+            interval_ns = int(interval_ms * 1_000_000)
+            # Mach ticks are architecture dependent. Round up, never request a
+            # sub-interval wait, and retain the actual conversion for calibration.
+            self._period = (interval_ns * base.denom + base.numer - 1) // base.numer
+            self.parameters = {"numer": base.numer, "denom": base.denom,
+                               "requested_interval_ns": interval_ns, "period_ticks": self._period}
+            self._deadline = self._clock() + self._period
+            self._check_deadline()
+            self.backend = "darwin-mach-absolute-deadline"
+
+    def _check_deadline(self):
+        if not 0 < self._deadline <= self.MAX_TICKS or self._period <= 0:
+            raise TimerWaitError("mach-deadline-out-of-range", 0,
+                                 native_details={"deadline_ticks": self._deadline, **self.parameters})
 
     def wait(self):
-        if self.queue is None:
+        if self._clock is None:
             time.sleep(self.interval_s)
-        else:
-            import select
-            started = time.perf_counter_ns()
-            try:
-                events = self.queue.control(None, 1, 1)
-            except OSError as error:
-                raise TimerWaitError("syscall-error", time.perf_counter_ns()-started,
-                                     [], error.errno) from error
-            if not events:
-                raise TimerWaitError("empty-return", time.perf_counter_ns()-started, [])
-            if events[0].flags & select.KQ_EV_ERROR:
-                raise TimerWaitError("event-error", time.perf_counter_ns()-started, events)
-            self.expirations = events[0].data
+            return
+        started = time.perf_counter_ns()
+        status = self._wait(self._deadline)
+        returned = self._clock()
+        if status or returned < self._deadline:
+            raise TimerWaitError("mach-wait-failed" if status else "mach-wait-returned-early",
+                                 time.perf_counter_ns()-started, native_details={
+                                     "kernel_return": status, "deadline_ticks": self._deadline,
+                                     "returned_ticks": returned, **self.parameters})
+        # Advance to the first future deadline after a delayed wakeup. Missing
+        # intervals remain missing in raw coverage; do not spin or invent rows.
+        self.expirations = 1 + (returned-self._deadline) // self._period
+        self._deadline += self.expirations * self._period
+        self._check_deadline()
 
     def close(self):
-        if self.queue is not None:
-            self.queue.close()
+        # Absolute Mach waits own no queue, descriptor, thread or timer handle.
+        pass
 
 
 def finish_owned_observation(child, ticker, report, evidence_dir):
@@ -158,17 +174,18 @@ def finish_owned_observation(child, ticker, report, evidence_dir):
 
 def calibrate_timers(interval_ms):
     result = []
-    for critical in [False, True, True, False]:
-        ticker = SamplerTicker(interval_ms, critical=critical)
+    for native in [False, True, True, False]:
+        ticker = SamplerTicker(interval_ms, native=native)
         points = [time.perf_counter_ns()]
         try:
             for _ in range(64):
                 ticker.wait(); points.append(time.perf_counter_ns())
         finally:
             ticker.close()
-        result.append({"backend": ticker.backend, "critical_requested": critical, "order": len(result),
+        result.append({"backend": ticker.backend, "native_requested": native, "order": len(result),
                        "interval_ns": [b-a for a, b in zip(points, points[1:])],
-                       "max_gap_ns": max(b-a for a, b in zip(points, points[1:]))})
+                       "max_gap_ns": max(b-a for a, b in zip(points, points[1:])),
+                       "native_parameters": ticker.parameters})
     return result
 
 
@@ -457,6 +474,7 @@ def main():
                                 report["observer_thread_policy"] = observer_thread_policy(worker_started=True)
                                 ticker = SamplerTicker(args.interval_ms)
                                 report["timer_backend"] = ticker.backend
+                                report["timer_parameters"] = ticker.parameters
                                 phase = "baseline"
                                 events.with_suffix(".ack").write_text(nonce)
                             elif kind == "begin":
