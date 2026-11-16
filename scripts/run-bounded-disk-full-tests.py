@@ -179,7 +179,7 @@ def main():
         env["VERYSYNC_TEST_BOUNDED_FS"] = str(volume.mount)
         env["VERYSYNC_TEST_BOUNDED_FS_NONCE"] = volume.nonce
         command = [sys.executable, str(Path(__file__).with_name("run-isolated-engine-tests.py")),
-                   "--cargo", str(Path(shutil.which("cargo")).resolve(strict=True)),
+                   "--cargo", str(Path(shutil.which("cargo")).absolute()),
                    "--toolchain", args.toolchain, "--test-target", "disk_full_engine",
                    "--evidence-dir", str(args.evidence_dir / "native")]
         result = subprocess.run(command, env=env, check=False)
