@@ -464,21 +464,48 @@ can contain private context. Configuration selection does not promise a log
 retention policy or every existing-file behavior.
 
 Thumbnail/cache configuration and actual preview/cache artifacts are separate.
-An isolated macOS ARM64 native case selects a fresh cache directory, restarts
-normally and requests previews for two distinct synthetic PNG images through
+An isolated native case on each of the six standard macOS, Linux and Windows
+AMD64/ARM64 profiles selects a fresh cache directory, restarts normally and
+requests previews for two distinct synthetic PNG images through
 `resource_thumbnail()`. Both returned image bodies appear as complete raster
 files in that initially empty directory. Their exact bytes survive another
 normal restart and a subsequent explicit disabled/default-cache selection;
 the source image bytes and instance identity remain unchanged. This establishes
 that selected cache path and retained artifacts for the tested instance. It does
 not promise a fixed preview encoding or dimensions, cache eviction, hot migration,
-or preview-handler refusal when the preference is disabled. Six-profile tests
-and final integrated acceptance remain required.
+or preview-handler refusal when the preference is disabled. These scoped results
+retain their [original six-profile CI producer](https://github.com/AresJef/verysync-sidecar/commit/fd310c2e01ea06b11fc1cfebd471e42a7431cd0e).
+Final integrated delivery acceptance remains required.
 
-The proxy field is an explicitly selected native HTTP(S)/SOCKS5 URI, possibly
-with credentials; it is not a verified connection or authentication receipt.
-The isolated refusing proxy observed no request during its bounded startup
-probe, so actual proxy transfer and authentication remain unverified.
+The proxy field selects a SOCKS5 **authority**, such as `proxy.example:1080`,
+`[::1]:1080` or `user:password@proxy.example:1080`. Percent-encode reserved
+credential characters. Supply no URI scheme or path: v2.33.2 adds its own
+`socks5://` prefix. HTTP(S) and SOCKS5 URI inputs are rejected before a write.
+An empty address clears the stored selection. Readback establishes the selection;
+the update does not test a connection or restart the core.
+
+Apply the selection with an explicit restart. Managed startup reads the native
+persisted preference and passes `ALL_PROXY` and `ALL_PROXY_NO_FALLBACK` only to
+the new owned core. This preserves native proxy initialization when using direct
+core mode, without the upstream monitor. It changes neither the caller's
+environment nor the SDK management client's independent proxy policy. Clearing
+or disabling this preference stops selecting that stored proxy; inherited
+native proxy environment can still apply. Other native HTTP clients and protocols
+have their own proxy behavior.
+
+An isolated macOS ARM64 case requires wrong credentials to be refused without
+a peer connection or file transfer. Correct percent-encoded credentials then
+establish both native device connections and transfer exact file bytes through
+the selected SOCKS5 peer, whose sole upstream is another owned loopback core.
+Explicit disable/clear and restart stop using that selected peer across the
+reconnect interval. Source and receiver bytes, identities and the caller's
+environment remain intact, and both owned trees and state leases exit normally.
+The corresponding six-profile and final integrated gates remain required.
+
+This corrects an earlier alpha contract that accepted full proxy URIs. Replace
+those values with a SOCKS5 authority while the instance is running before
+restarting it. An invalid enabled stored authority fails managed preparation;
+the existing configuration is retained.
 
 ## Verification scope
 

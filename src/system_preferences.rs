@@ -153,7 +153,10 @@ impl SystemPreferencesPatch {
         self.proxy_enabled = Some(value);
         self
     }
-    /// Set or explicitly clear a native HTTP(S)/SOCKS5 URI. No connection is tested.
+    /// Select a SOCKS5 authority such as `127.0.0.1:1080` or
+    /// `user:password@proxy.example:1080`, without a URI scheme or path.
+    /// Percent-encode reserved credential characters. An empty value clears
+    /// the stored selection; applying it to native dialers requires restart.
     pub fn proxy_address(mut self, value: impl Into<String>) -> Self {
         self.proxy_address = Some(value.into());
         self
@@ -178,24 +181,7 @@ impl SystemPreferencesPatch {
             }
         }
         if let Some(value) = &self.proxy_address {
-            let invalid = || {
-                Error::InvalidConfiguration { reason:"native proxy URI must be bounded HTTP(S)/SOCKS5 authority without controls, query or fragment" }
-            };
-            if value.len() > 32768 || value.chars().any(char::is_control) {
-                return Err(invalid());
-            }
-            if !value.is_empty() {
-                let url = url::Url::parse(value).map_err(|_| invalid())?;
-                if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h")
-                    || url.host_str().is_none()
-                    || url.port() == Some(0)
-                    || url.query().is_some()
-                    || url.fragment().is_some()
-                    || !matches!(url.path(), "" | "/")
-                {
-                    return Err(invalid());
-                }
-            }
+            validate_proxy_address(value)?;
             fields.insert("userProxyAddress".into(), value.clone().into());
         }
         Ok(Value::Object(fields))
@@ -212,4 +198,29 @@ impl fmt::Debug for SystemPreferencesPatch {
             .field("changes_proxy_address", &self.proxy_address.is_some())
             .finish_non_exhaustive()
     }
+}
+
+/// The fixed core adds its own socks5:// prefix before native dialer setup.
+pub(crate) fn validate_proxy_address(value: &str) -> Result<()> {
+    let invalid = || Error::InvalidConfiguration {
+        reason: "native proxy requires a bounded SOCKS5 authority with an explicit port",
+    };
+    if value.len() > 32768
+        || value.chars().any(|c| c.is_whitespace() || c.is_control())
+        || value.contains(['/', '\\', '?', '#'])
+    {
+        return Err(invalid());
+    }
+    if !value.is_empty() {
+        let url = url::Url::parse(&format!("socks5://{value}")).map_err(|_| invalid())?;
+        if url.host_str().is_none()
+            || url.port().is_none_or(|port| port == 0)
+            || !url.path().is_empty()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
 }

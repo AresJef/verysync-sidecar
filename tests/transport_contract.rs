@@ -688,6 +688,61 @@ async fn system_preference_paths_keep_target_windows_syntax_and_explicit_native_
 }
 
 #[tokio::test]
+async fn native_proxy_authorities_preserve_socks5_credentials_and_write_only_selected_fields(
+) -> TestResult {
+    use verysync_sidecar::SystemPreferencesPatch;
+    for authority in [
+        "proxy.invalid:1080",
+        "[::1]:1080",
+        "private-user:p%40ss@proxy.invalid:1080",
+        "",
+    ] {
+        let enabled = !authority.is_empty();
+        let wire = serde_json::json!({"auditEnabled":false,"auditFile":"","thumnailEnabled":false,"thumnailCacheDir":"","userProxyEnabled":enabled,"userProxyAddress":authority,"futureSecret":KEY});
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({})),
+            Reply::json(wire),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let patch = SystemPreferencesPatch::default()
+            .proxy_enabled(enabled)
+            .proxy_address(authority);
+        let result = client.update_system_preferences(&patch).await?;
+        assert!(result.requested_fields_match);
+        assert_eq!(result.configuration.proxy_address(), authority);
+        assert_eq!(result.configuration.extra["futureSecret"], KEY);
+        for debug in [format!("{patch:?}"), format!("{result:?}")] {
+            assert!(
+                !debug.contains("private-user")
+                    && !debug.contains("p%40ss")
+                    && !debug.contains(KEY)
+            );
+        }
+        let requests = server.finish().await?;
+        let writes: Vec<_> = requests
+            .iter()
+            .filter(|v| v.starts_with("PATCH "))
+            .collect();
+        assert_eq!(writes.len(), 1);
+        let body: serde_json::Value = serde_json::from_str(
+            writes[0]
+                .split_once("\r\n\r\n")
+                .ok_or("native proxy body missing")?
+                .1,
+        )?;
+        assert_eq!(
+            body,
+            serde_json::json!({"userProxyEnabled":enabled,"userProxyAddress":authority})
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn system_preferences_reject_wrong_target_paths_and_invalid_proxy_before_requests(
 ) -> TestResult {
     use verysync_sidecar::{NativePathSelection, PathStyle, SystemPreferencesPatch, TargetPath};
@@ -707,6 +762,12 @@ async fn system_preferences_reject_wrong_target_paths_and_invalid_proxy_before_r
     for patch in [
         SystemPreferencesPatch::default(),
         SystemPreferencesPatch::default().proxy_address("file:///private/proxy"),
+        SystemPreferencesPatch::default().proxy_address("http://proxy.invalid:1080"),
+        SystemPreferencesPatch::default().proxy_address("socks5://proxy.invalid:1080"),
+        SystemPreferencesPatch::default().proxy_address("proxy.invalid"),
+        SystemPreferencesPatch::default().proxy_address("proxy.invalid:0"),
+        SystemPreferencesPatch::default().proxy_address("user:private token@proxy.invalid:1080"),
+        SystemPreferencesPatch::default().proxy_address("proxy.invalid:1080\n"),
         SystemPreferencesPatch::default().proxy_address("socks5://proxy.invalid:0"),
         SystemPreferencesPatch::default().proxy_address("http://proxy.invalid/path"),
         SystemPreferencesPatch::default().proxy_address("http://proxy.invalid/?private=token"),
