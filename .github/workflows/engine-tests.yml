@@ -574,9 +574,24 @@ jobs:
           python-version: '3.13'
       - name: Require Cargo artifact and separate Winsock preflight contracts
         run: python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+      - name: Install the explicit Windows x86 assembly build prerequisite
+        if: matrix.package == 'windows-386-standard'
+        shell: pwsh
+        run: |
+          choco install nasm --version=2.16.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory = Join-Path $env:ProgramFiles 'NASM'
+          $nasmBinary = Join-Path $nasmDirectory 'nasm.exe'
+          & $nasmBinary -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install native Rust and fetch locked dependencies
         run: |
-          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          if [[ "${{ matrix.package }}" == "windows-386-standard" ]]; then
+            rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --force-non-host
+          else
+            rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          fi
           cargo +"$TEST_TOOLCHAIN" fetch --locked
       - name: Explicitly prepare the matching fixed private core
         run: >-
