@@ -66,11 +66,30 @@ can retry independently; a configuration readback is not a callback-completion
 or cancellation receipt.
 
 `set_version_archive_location(folder, &VersionArchiveLocation)` selects either
-`FolderDefault` or `BasicDirectory(TargetPath)`. Basic selects the native basic
+`FolderDefault`, `BasicDirectory(TargetPath)`, or an explicit `RemoteUri(Url)`.
+`VersionArchiveLocation::remote_uri(text)` parses a bounded native FTP/SFTP URI
+without performing I/O. It rejects other schemes, missing hosts, fragments and
+control-containing text. The selected URI supplies the native backend and is
+independent of the management target's Windows/Unix path style. Basic selects the native basic
 filesystem backend. Native relative paths and tilde expansion are interpreted on
 the target; remote syntax must match that target. The SDK opens no controller
 path and never joins target paths with host strings. Logical path text is bounded
-to 32 KiB. Other storage backends retain separate verification gates.
+to 32 KiB.
+
+Remote URIs can contain credentials and native query selectors. They are sent
+explicitly to the core and omitted from ordinary Debug; protect serialized
+configuration and private diagnostics. Local Sync endpoint options are a
+different interface and are not translated here. URI configuration does not
+establish authentication, server identity or successful archival.
+
+An isolated macOS ARM64 SFTP case has verified real remote old bytes, native
+version browsing, restoration of a Unicode/percent filename, unchanged stopped
+source data, normal restart with the remote location retained, resetting to the
+default location without deleting remote archives, and normal owned exits.
+Native FTP URI readback succeeded, but remote archiving failed in the tested
+macOS cases with both ASCII and Unicode filenames; FTP archival and its cause
+remain unverified. Other platforms and authentication/selector combinations
+retain separate native acceptance requirements.
 
 Changing location preserves policy parameters and unknown fields. The SDK does
 not migrate existing archives; native retention can clean the selected location.
@@ -160,8 +179,11 @@ Directory restoration can affect multiple historical files, including nested
 descendants. Coordinate other writers, inspect the per-path report and verify
 actual content. Local isolated tests check nested oldest/newest restoration,
 an unselected root file, a deeper descendant, and explicit root restoration
-against actual bytes/SHA-256. Same-source multi-platform acceptance remains
-pending. The SDK performs the bounded read-only preflight described above;
+against actual bytes/SHA-256. Native Windows AMD64 and ARM64 tests also verified
+all of those directory effects, including the Unicode/percent path and both
+normal owned-process exits. Their complete six-case history suites passed;
+the relevant runtime, fixture and case sources are unchanged. Full regression
+for the final delivery candidate remains required. The SDK performs the bounded read-only preflight described above;
 the native planner still selects and restores content. No controller filesystem
 path is opened.
 

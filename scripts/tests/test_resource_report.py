@@ -148,8 +148,14 @@ class ResourceReportContracts(unittest.TestCase):
             folder = next((root / "formal").rglob("preparation-result.json")).parent
             report = REPORT.read(folder / "preparation-result.json")
             report["calibration"]["platform"] = "macOS-synthetic-test-only"
-            report["observer_thread_policy"].update(requested=0x19, observed=0x19,
-                                                     worker_started_before_assignment=False)
+            expected = protocol["observer_policy"].get("darwin_qos_class", 0x19)
+            policy = "darwin-user-interactive" if expected == 0x21 else "darwin-user-initiated"
+            report["observer_thread_policy"].update(requested=expected, observed=expected,
+                policy=policy, worker_started_before_assignment=True)
+            save(folder / "preparation-result.json", report)
+            _, quality = REPORT.check_attempt(folder, protocol, "formal", METRICS)
+            self.assertEqual(quality["status"], "VALID")
+            report["observer_thread_policy"]["worker_started_before_assignment"] = False
             save(folder / "preparation-result.json", report)
             with self.assertRaisesRegex(ValueError, "observer scheduling policy"):
                 REPORT.check_attempt(folder, protocol, "formal", METRICS)

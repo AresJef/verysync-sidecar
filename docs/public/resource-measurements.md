@@ -145,6 +145,11 @@ failures before the first ready event. An exit code without its diagnostic log
 does not establish a root cause. Earlier datasets with omitted logs retain
 that limitation.
 
+The v20 identity includes the library's remote version-archive URI selection.
+Resource worker routines, the observer and all measurement requirements are
+unchanged, but the complete measured Rust source is frozen again. Earlier
+datasets retain their own source identity and are not v20 formal members.
+
 The v5 identity includes the corrected bounded WOW64 helper query. It also
 retains diagnostic durations for journal polling, the preceding raw-record write
 and timer wait, so an observer gap can be investigated from its original trace.

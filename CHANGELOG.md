@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit native FTP/SFTP archive URI selection while preserving version
+  policy and unknown fields. Keep configuration acknowledgement separate from
+  real archival; SFTP has an isolated remote restore case and FTP effects remain
+  unverified after native failures.
+
 - Add a separate opt-in Windows SDK browser acceptance runner with restored
   per-user dispatch, exact native process-handle cancellation and private data
   retention checks. Actual Windows results remain required.
