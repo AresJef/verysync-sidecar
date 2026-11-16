@@ -80,6 +80,16 @@ def observer_thread_policy(worker_started=False):
             "worker_started_before_assignment": worker_started, "lifetime": "this observer process"}
 
 
+class TimerWaitError(RuntimeError):
+    """Retain the actual failed wait without guessing its underlying cause."""
+    def __init__(self, reason, wait_ns, events, os_errno=None):
+        self.diagnostic = {"reason": reason, "wait_ns": wait_ns, "os_errno": os_errno,
+                           "events": [{key: getattr(event, key) for key in
+                                       ["ident", "filter", "flags", "fflags", "data"]}
+                                      for event in events]}
+        super().__init__("owned precise timer failed: " + json.dumps(self.diagnostic))
+
+
 class SamplerTicker:
     """Own one blocking timer; Darwin avoids power-aware timer coalescing."""
     def __init__(self, interval_ms, critical=True):
@@ -108,14 +118,42 @@ class SamplerTicker:
             time.sleep(self.interval_s)
         else:
             import select
-            events = self.queue.control(None, 1, 1)
-            if not events or events[0].flags & select.KQ_EV_ERROR:
-                raise RuntimeError("owned precise timer did not produce a valid tick")
+            started = time.perf_counter_ns()
+            try:
+                events = self.queue.control(None, 1, 1)
+            except OSError as error:
+                raise TimerWaitError("syscall-error", time.perf_counter_ns()-started,
+                                     [], error.errno) from error
+            if not events:
+                raise TimerWaitError("empty-return", time.perf_counter_ns()-started, [])
+            if events[0].flags & select.KQ_EV_ERROR:
+                raise TimerWaitError("event-error", time.perf_counter_ns()-started, events)
             self.expirations = events[0].data
 
     def close(self):
         if self.queue is not None:
             self.queue.close()
+
+
+def finish_owned_observation(child, ticker, report, evidence_dir):
+    """Save acquisition failure even if bounded owned-worker cleanup also fails."""
+    try:
+        report["exit_code"] = child.poll()
+        if report["exit_code"] is None:
+            report["exit_code"] = child.wait(timeout=150)
+    except Exception as error:
+        report["cleanup_error"] = {"type": type(error).__name__, "message": str(error)[:320]}
+        raise
+    finally:
+        try:
+            if ticker is not None:
+                ticker.close()
+        finally:
+            (evidence_dir / "preparation-result.json").write_bytes(
+                (json.dumps(report, indent=2) + "\n").encode("utf-8"))
+            if "acquisition_error" in report:
+                (evidence_dir / "safe-error.json").write_bytes(
+                    (json.dumps(report["acquisition_error"], indent=2) + "\n").encode("utf-8"))
 
 
 def calibrate_timers(interval_ms):
@@ -260,7 +298,9 @@ def summarize(report, rows, quality=QUALITY):
     import statistics
     errors, insufficient = [], []
     events = report.get("events", [])
-    if report.get("exit_code") != 0 or [x.get("kind") for x in events] != ["ready", "begin", "end", "complete"]:
+    if (report.get("acquisition_error") or report.get("cleanup_error")
+            or report.get("exit_code") != 0
+            or [x.get("kind") for x in events] != ["ready", "begin", "end", "complete"]):
         return {"status": "ERROR", "errors": ["native outcome or correctness journal incomplete"]}
     ready, _, ending, complete = events
     if not all(complete.get(key) is True for key in ["all_actual_bytes_verified", "source_config_identity_unchanged", "normal_owned_tree_exit"]):
@@ -448,14 +488,16 @@ def main():
                 else:
                     time.sleep(args.interval_ms / 1000)
             report["exit_code"] = child.wait()
+        except Exception as error:
+            report["acquisition_error"] = {"phase": phase, "type": type(error).__name__,
+                                           "message": str(error)[:320]}
+            if isinstance(error, TimerWaitError):
+                report["acquisition_error"]["timer_wait"] = error.diagnostic
+            raise
         finally:
-            if child.poll() is None:
-                # A fixture failure still reaches its normal bounded SDK cleanup.
-                # Never kill by name or signal unrelated native processes.
-                child.wait(timeout=150)
-            if ticker is not None:
-                ticker.close()
-            (args.evidence_dir / "preparation-result.json").write_text(json.dumps(report, indent=2) + "\n")
+            # A fixture failure still reaches its normal bounded SDK cleanup.
+            # Never kill by name or signal unrelated native processes.
+            finish_owned_observation(child, ticker, report, args.evidence_dir)
     if report["exit_code"] != 0:
         print(json.dumps({"exit_code": report["exit_code"], "evidence": str(args.evidence_dir)}))
         return report["exit_code"]
