@@ -38,6 +38,33 @@ def fixture():
 
 
 class ResourceQualityContracts(unittest.TestCase):
+    def test_raw_sample_buffer_defers_io_and_preserves_every_row_on_failure(self):
+        import tempfile
+        import json
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "samples.jsonl"
+            with self.assertRaisesRegex(RuntimeError, "native attempt failed"):
+                with METRICS.BufferedSamples(path) as samples:
+                    for n in range(7):
+                        samples.append({"sequence": n, "raw": "native"})
+                    self.assertFalse(path.exists())
+                    raise RuntimeError("native attempt failed")
+            rows = [json.loads(line) for line in path.read_bytes().splitlines()]
+            self.assertEqual([row["sequence"] for row in rows], list(range(7)))
+            self.assertEqual(len(rows), 7)
+
+    def test_raw_sample_buffer_overflow_is_failure_without_dropping_saved_prefix(self):
+        import tempfile
+        import json
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "samples.jsonl"
+            with patch.object(METRICS.BufferedSamples, "LIMIT", 3):
+                with self.assertRaisesRegex(RuntimeError, "buffer limit exceeded"):
+                    with METRICS.BufferedSamples(path) as samples:
+                        for n in range(4):
+                            samples.append({"sequence": n})
+            self.assertEqual([json.loads(row)["sequence"] for row in path.read_bytes().splitlines()], [0, 1, 2])
+
     def test_observer_policy_never_calls_native_qos_on_other_systems(self):
         with patch.object(METRICS.sys, "platform", "linux"), patch("ctypes.CDLL") as library:
             self.assertEqual(METRICS.observer_thread_policy()["policy"], "unchanged")

@@ -30,6 +30,35 @@ def dependency():
     return psutil
 
 
+class BufferedSamples:
+    """Retain every bounded raw observation; persist after owned worker cleanup.
+
+    Filesystem writeback can block a sampler past its coverage deadline. The
+    observer's bounded memory is outside the measured controller/engine metrics.
+    Overflow fails the attempt instead of dropping or selecting observations.
+    """
+    LIMIT = 32768
+
+    def __init__(self, path):
+        self.path = path
+        self.rows = []
+
+    def __enter__(self):
+        return self
+
+    def append(self, row):
+        if len(self.rows) >= self.LIMIT:
+            raise RuntimeError("raw observation buffer limit exceeded")
+        self.rows.append(row)
+
+    def __exit__(self, *_):
+        with self.path.open("wb") as output:
+            for row in self.rows:
+                output.write((json.dumps(row, allow_nan=False) + "\n").encode("utf-8"))
+            output.flush()
+            os.fsync(output.fileno())
+
+
 def observer_thread_policy(worker_started=False):
     """Only this short-lived observer thread; call after the workers started."""
     if sys.platform != "darwin":
@@ -359,7 +388,7 @@ def main():
             raise ValueError("actual compiler differs from frozen release")
         report.update(protocol_sha256=digest(args.protocol), formal_sample=True,
                       acceptance="raw attempt only; requires a complete accepted group manifest")
-    with (args.evidence_dir / "console.log").open("wb") as console, (args.evidence_dir / "samples.jsonl").open("w") as samples:
+    with (args.evidence_dir / "console.log").open("wb") as console, BufferedSamples(args.evidence_dir / "samples.jsonl") as samples:
         child = subprocess.Popen(command, env=env, stdout=console, stderr=subprocess.STDOUT)
         previous_record_ns = previous_wait_ns = None
         try:
@@ -405,10 +434,10 @@ def main():
                     row = {"phase": phase, "start_ns": time.perf_counter_ns(),
                            "controller": snapshot(processes[0]), "engine": snapshot(processes[1]),
                            "end_ns": time.perf_counter_ns(), "previous_timer_expirations": ticker.expirations,
-                           "journal_poll_ns": journal_poll_ns, "previous_record_write_ns": previous_record_ns,
+                           "journal_poll_ns": journal_poll_ns, "previous_record_buffer_ns": previous_record_ns,
                            "previous_timer_wait_ns": previous_wait_ns}
                     record_start = time.perf_counter_ns()
-                    samples.write(json.dumps(row) + "\n")
+                    samples.append(row)
                     previous_record_ns = time.perf_counter_ns()-record_start
                 if child.poll() is not None:
                     break
