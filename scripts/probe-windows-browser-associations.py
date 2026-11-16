@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import sys
@@ -37,13 +38,17 @@ def shell_functions():
     return shell, query
 
 
-def effective_handler(protocol):
+def effective_association(protocol, kind):
     _, query = shell_functions()
     buffer = ctypes.create_unicode_buffer(32768)
     size = wintypes.DWORD(len(buffer))
-    # ASSOCF_IS_PROTOCOL maps current user defaults; ASSOCSTR_EXECUTABLE = 2.
-    status = query(0x1000, 2, protocol, "open", buffer, ctypes.byref(size))
+    # ASSOCF_IS_PROTOCOL; ASSOCSTR_EXECUTABLE=2, PROGID=20 (Windows10+).
+    status = query(0x1000, kind, protocol, "open", buffer, ctypes.byref(size))
     return buffer.value if status == 0 else None
+
+
+def effective_handler(protocol):
+    return effective_association(protocol, 2)
 
 
 def notify_associations():
@@ -51,11 +56,11 @@ def notify_associations():
     shell.SHChangeNotify(0x08000000, 0, None, None)
 
 
-def tree_snapshot(reg, path, budget=None):
+def tree_snapshot(reg, path, budget=None, hive=None):
     if budget is None:
         budget = [64, 65536]
     try:
-        key = reg.OpenKey(reg.HKEY_CURRENT_USER, path, 0, reg.KEY_READ)
+        key = reg.OpenKey(reg.HKEY_CURRENT_USER if hive is None else hive, path, 0, reg.KEY_READ)
     except FileNotFoundError:
         return None
     with key:
@@ -77,23 +82,32 @@ def tree_snapshot(reg, path, budget=None):
         children = {}
         for i in range(subkeys):
             name = reg.EnumKey(key, i)
-            children[name] = tree_snapshot(reg, path + "\\" + name, budget)
+            children[name] = tree_snapshot(reg, path + "\\" + name, budget, hive)
         return {"values": sorted(items), "children": children}
 
 
 class ProtocolTransaction:
-    def __init__(self, reg):
+    def __init__(self, reg, use_effective_progid=False):
         self.reg = reg
         self.created = []
         self.values = []
-        self.before = {p: tree_snapshot(reg, CLASSES + "\\" + p) for p in PROTOCOLS}
         self.handlers = {p: effective_handler(p) for p in PROTOCOLS}
+        self.targets = {p: p for p in PROTOCOLS}
+        self.choices = {}
         # Never remove, rewrite or regenerate Windows' protected UserChoice.
         for protocol in PROTOCOLS:
             choice = (r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations"
                       + "\\" + protocol + r"\UserChoice")
-            if tree_snapshot(reg, choice) is not None:
+            self.choices[choice] = tree_snapshot(reg, choice)
+            if self.choices[choice] is not None and not use_effective_progid:
                 raise ValueError("existing UserChoice prevents this bounded protocol pilot")
+            if use_effective_progid:
+                progid = effective_association(protocol, 20)
+                if not progid or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", progid):
+                    raise ValueError("bounded current native ProgID required")
+                self.targets[protocol] = progid
+        self.before = {p: tree_snapshot(reg, CLASSES + "\\" + p)
+                       for p in set(self.targets.values())}
 
     def set_value(self, path, name, value, only_missing=False):
         reg = self.reg
@@ -116,16 +130,19 @@ class ProtocolTransaction:
             reg.SetValueEx(key, name, 0, reg.REG_SZ, value)
 
     def apply(self, executable):
-        for protocol in PROTOCOLS:
-            root = CLASSES + "\\" + protocol
+        for target in sorted(set(self.targets.values())):
+            root = CLASSES + "\\" + target
             command = root + r"\shell\open\command"
-            snapshot = tree_snapshot(self.reg, command)
+            snapshot = tree_snapshot(self.reg, target + r"\shell\open\command",
+                                     hive=self.reg.HKEY_CLASSES_ROOT)
             if snapshot and any(n.casefold() == "delegateexecute" and value
                                 for n, _, value in snapshot["values"]):
                 raise ValueError("existing delegated protocol handler cannot be replaced by this pilot")
-            if tree_snapshot(self.reg, root + r"\shell\open\ddeexec") is not None:
+            if tree_snapshot(self.reg, target + r"\shell\open\ddeexec",
+                             hive=self.reg.HKEY_CLASSES_ROOT) is not None:
                 raise ValueError("existing DDE protocol handler cannot be replaced by this pilot")
-            self.set_value(root, "URL Protocol", "", only_missing=True)
+            if target in PROTOCOLS:
+                self.set_value(root, "URL Protocol", "", only_missing=True)
             self.set_value(command, "", f'"{executable}" "%1"')
         notify_associations()
         for protocol in PROTOCOLS:
@@ -156,8 +173,11 @@ class ProtocolTransaction:
                     raise RuntimeError("new protocol key contains unexpected state; preserve evidence")
             reg.DeleteKey(reg.HKEY_CURRENT_USER, path)
         notify_associations()
-        if {p: tree_snapshot(reg, CLASSES + "\\" + p) for p in PROTOCOLS} != self.before:
+        if {p: tree_snapshot(reg, CLASSES + "\\" + p)
+            for p in set(self.targets.values())} != self.before:
             raise RuntimeError("original protocol registry values were not restored")
+        if {path: tree_snapshot(reg, path) for path in self.choices} != self.choices:
+            raise RuntimeError("protected UserChoice changed; preserve evidence")
         if {p: effective_handler(p) for p in PROTOCOLS} != self.handlers:
             raise RuntimeError("original effective protocol handlers were not restored")
 
@@ -225,6 +245,8 @@ def main():
     parser.add_argument("--cargo", default="cargo")
     parser.add_argument("--toolchain", required=True)
     parser.add_argument("--evidence-dir", required=True, type=Path)
+    parser.add_argument("--use-effective-progid", action="store_true",
+                        help="read current ProgID; shadow only its HKCU class command, never UserChoice")
     args = parser.parse_args()
     require_scope(args.evidence_dir, os.environ)
     import winreg
@@ -248,12 +270,18 @@ def main():
     report = {"verysync_core_executed": False, "user_choice_modified": False,
               "per_machine_association_modified": False, "opener_sha256": digest,
               "actual_owned_dispatches": 0, "registry_restored": False}
+    report["association_mode"] = "effective-progid" if args.use_effective_progid else "protocol"
+    report["effective_before"] = {p: {"progid": effective_association(p, 20),
+                                      "executable": effective_handler(p),
+                                      "delegate_execute": effective_association(p, 18)}
+                                  for p in PROTOCOLS}
+    print("Windows native association metadata: " + json.dumps(report["effective_before"]), flush=True)
     original_env = dict(os.environ)
     transaction = None
     try:
         # Exercise the actual restoration path after a controlled pre-dispatch
         # failure, then create a fresh transaction for the positive pilot.
-        transaction = ProtocolTransaction(winreg)
+        transaction = ProtocolTransaction(winreg, args.use_effective_progid)
         try:
             transaction.apply(executable)
             raise InterruptedError("intentional owned pre-dispatch pilot interruption")
@@ -265,7 +293,7 @@ def main():
             completed.restore()
             report["registry_restored"] = True
         report["injected_failure_registry_restored"] = True
-        transaction = ProtocolTransaction(winreg)
+        transaction = ProtocolTransaction(winreg, args.use_effective_progid)
         report["registry_restored"] = False
         transaction.apply(executable)
         os.environ["VERYSYNC_TEST_OPENER_CAPTURE_DIR"] = str(capture)

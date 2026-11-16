@@ -920,7 +920,8 @@ jobs:
         run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
 
   windows-browser-association-pilot:
-    if: github.event_name == 'workflow_dispatch' && inputs.windows_browser_pilot
+    # Dedicated opt-in research branches run this owned Windows-VM pilot.
+    if: (github.event_name == 'workflow_dispatch' && inputs.windows_browser_pilot) || (github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'test/windows-effective-progid-'))
     name: Windows protocol association pilot (${{ matrix.rust }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
@@ -952,6 +953,7 @@ jobs:
         run: >-
           python scripts/probe-windows-browser-associations.py --toolchain "$TEST_TOOLCHAIN"
           --evidence-dir "${{ runner.temp }}/vs-browser-association-pilot"
+          ${{ github.event_name == 'pull_request' && '--use-effective-progid' || '' }}
 
   host-watch-limit-positive:
     name: Explicit Linux host watch-limit effects (isolated VM only)
