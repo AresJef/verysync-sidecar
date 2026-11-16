@@ -592,6 +592,39 @@ jobs:
         if: always()
         run: python scripts/prepare-test-engine.py check-cleanup
 
+  windows-browser-association-pilot:
+    name: Windows protocol association pilot (${{ matrix.rust }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install Rust and fetch locked fixture dependencies
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Require controlled protocol dispatch and original association restoration
+        run: >-
+          python scripts/probe-windows-browser-associations.py --toolchain "$TEST_TOOLCHAIN"
+          --evidence-dir "${{ runner.temp }}/vs-browser-association-pilot"
+
   host-watch-limit-positive:
     name: Explicit Linux host watch-limit effects (isolated VM only)
     runs-on: ubuntu-24.04

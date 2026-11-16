@@ -460,6 +460,13 @@ execution of the new Linux cancellation case and the complete current-source
 platform gate remain pending.
 Windows native browser integration remains pending; its fallback uses
 `ShellExecute`, which the directory-opener fixture does not intercept.
+A standalone Windows CI protocol pilot first checks whether a temporary owned
+HTTP/HTTPS command can be selected and independently observed through the Shell.
+It preserves `UserChoice`, refuses delegated or unverifiable handlers before
+dispatch, and requires exact original registry values and effective handlers
+after restoration, including a pre-dispatch interruption. This pilot invokes
+only the owned capture executable; it does not execute VerySync or establish
+acceptance of the browser API.
 
 ```no_run
 # async fn example(core: &verysync_sidecar::ManagedInstance, helper: std::path::PathBuf) -> verysync_sidecar::Result<()> {
