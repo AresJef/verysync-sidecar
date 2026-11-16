@@ -5,6 +5,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import yaml
 
 SOURCE = Path(__file__).resolve().parents[1] / "host-test-cargo.py"
 SPEC = importlib.util.spec_from_file_location("host_cargo", SOURCE)
@@ -12,6 +13,22 @@ HELPER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HELPER)
 
 class HostTestElevationContracts(unittest.TestCase):
+    def test_privileged_effect_uses_both_native_linux_architectures(self):
+        workflow = SOURCE.parents[1] / ".github/workflows/engine-tests.yml"
+        job = yaml.safe_load(workflow.read_text())["jobs"]["host-watch-limit-positive"]
+        self.assertEqual(job["runs-on"], "${{ matrix.runner }}")
+        self.assertEqual(job["strategy"]["matrix"]["include"], [
+            {"runner": "ubuntu-24.04", "package": "linux-amd64-standard"},
+            {"runner": "ubuntu-24.04-arm", "package": "linux-arm64-standard"},
+        ])
+        self.assertFalse(job["strategy"]["fail-fast"])
+        self.assertEqual(job["env"]["VERYSYNC_TEST_ALLOW_HOST_CONFIGURATION"], HELPER.SCOPE)
+        commands = "\n".join(step.get("run", "") for step in job["steps"])
+        self.assertIn('--package "${{ matrix.package }}"', commands)
+        self.assertIn("host-test-cargo.py prepare", commands)
+        self.assertIn("--test-filter " + HELPER.CASE, commands)
+        self.assertIn("prepare-test-engine.py check-cleanup", commands)
+
     def fixture(self, root):
         artifact = root / "owned test executable"
         artifact.write_bytes(b"synthetic artifact; never executed")
