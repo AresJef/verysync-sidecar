@@ -137,6 +137,17 @@ impl LocalApiClient {
             )
         })
     }
+
+    pub(super) async fn control_response_locked(
+        &self,
+        request: RawRequest,
+        operation: &'static str,
+        _guard: &tokio::sync::MutexGuard<'_, ()>,
+    ) -> Result<RawResponse> {
+        self.system_status().await?;
+        let modifying = request.effect == RequestEffect::MayModify;
+        checked_control_response(operation, self.send_raw(request).await?, modifying)
+    }
 }
 
 pub(super) fn checked_control_response(

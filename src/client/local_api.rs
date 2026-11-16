@@ -6,8 +6,13 @@ use crate::{
     VersionPolicy, BASELINE_ENGINE_VERSION,
 };
 use std::{fmt, sync::Arc, time::Duration};
+mod actions;
 mod common;
 mod control;
+mod index_events;
+pub use actions::{
+    LocalApiExitAcknowledgement, LocalApiExitAction, LocalApiUpgradeAcknowledgement,
+};
 mod writes;
 pub use common::{
     LocalApiHardware, LocalApiHistoryFilter, LocalApiHistoryPage, LocalApiHistoryRecord,

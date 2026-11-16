@@ -10,10 +10,14 @@ use verysync_sidecar::{
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+#[path = "common/local_api_action_contracts.rs"]
+mod local_api_action_contracts;
 #[path = "common/local_api_common_contracts.rs"]
 mod local_api_common_contracts;
 #[path = "common/local_api_contracts.rs"]
 mod local_api_contracts;
+#[path = "common/local_api_event_contracts.rs"]
+mod local_api_event_contracts;
 #[path = "common/local_api_write_contracts.rs"]
 mod local_api_write_contracts;
 const KEY: &str = "synthetic-transport-key";

@@ -52,9 +52,10 @@ use crate::{
 };
 use crate::{RawRequest, RawResponse, RequestEffect};
 pub use local_api::{
-    LocalApiClient, LocalApiConnectOptions, LocalApiFolder, LocalApiFolderCollectionUpdate,
-    LocalApiHardware, LocalApiHistoryFilter, LocalApiHistoryPage, LocalApiHistoryRecord,
-    LocalApiPeer, LocalApiScanAcknowledgement,
+    LocalApiClient, LocalApiConnectOptions, LocalApiExitAcknowledgement, LocalApiExitAction,
+    LocalApiFolder, LocalApiFolderCollectionUpdate, LocalApiHardware, LocalApiHistoryFilter,
+    LocalApiHistoryPage, LocalApiHistoryRecord, LocalApiPeer, LocalApiScanAcknowledgement,
+    LocalApiUpgradeAcknowledgement,
 };
 
 /// The policy applied to an engine version during connection.
@@ -439,6 +440,11 @@ impl Client {
             match source {
                 crate::EventSource::Standard | crate::EventSource::Filtered(_) => "rest/events",
                 crate::EventSource::Disk => "rest/events/disk",
+                crate::EventSource::LocalIndex(_) => {
+                    return Err(Error::InvalidConfiguration {
+                        reason: "Local-API event cursors require a LocalApiClient",
+                    })
+                }
             },
             &query,
         )?;
