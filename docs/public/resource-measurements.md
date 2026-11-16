@@ -75,3 +75,13 @@ Each actual CI profile must complete both opposite preparation orders before its
 formal run starts. Preparation failures retain their typed errors and metrics;
 they never become formal samples. The Darwin timer flags follow
 [Apple's public event header](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/event.h).
+
+The v3 source identity includes explicit creator-owned state-lease release and
+uses psutil's per-snapshot `oneshot()` context to share underlying kernel reads.
+The live PID identity check remains outside and before each context; its cache is
+cleared before the next snapshot. Every counter, read boundary and the 5% read-cost
+limit remain required. This follows the pinned
+[psutil 7.2.2 contract](https://psutil.io/7.2/#psutil.Process.oneshot).
+The v2 macOS Intel pretrial exceeded that limit; its insufficient observation is
+retained. Every v3 profile requires fresh preparation and complete new formal and
+independent cycles. Earlier v1/v2 rows cannot supply v3 coverage.

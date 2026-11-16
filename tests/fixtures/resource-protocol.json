@@ -1,14 +1,14 @@
 {
-  "protocol_id": "VS045-native-resources-v2",
-  "version": 2,
+  "protocol_id": "VS045-native-resources-v3",
+  "version": 3,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "537c3dbcbc483b52c583724dbc1c3a37b8ebe250683c108b588cd79565a883f8",
+    "rust_sources_sha256": "b58af3b7cc2eb61b45da86c38cdc489b60cace30709dbf39c15bb90f24efda3c",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
-    "sampler_sha256": "1d63111d60dd62c6f6a48f48320155cb9bc2709b27cdabd44404baaadfbb2b46",
+    "sampler_sha256": "4810c22525f26efa7dc136934f70eac0fa9c412663da5cd87953c949612b2128",
     "wrapper_sha256": "aa14ab6c94b2d0f693047246c8286385710c5997a345bc2844f1ae0fab1f95f3"
   },
   "collector_sha256": "4e9dca6b3ffc8c3de5119e1747c80eda050593ed153271e1f2e7897adfe7ad55",
@@ -105,7 +105,8 @@
     "pretrial": "Two opposite complete orders,8 fresh controllers+engines,8/8 VALID in49.166s; observed max full case6.9003s",
     "project_resource_original_s": 10800,
     "reuse_scope": "N4 adds role/config/source validation and complete-group recording outside measurement. Rust workload, timing boundaries, sampling loop, metric reads and quality thresholds remain unchanged. Confirm updated collector dependencies before formal.",
-    "v2": "Each actual CI profile completes two opposite full pretrial orders using exact frozen source inputs before formal acquisition; prep is not formal evidence."
+    "v2": "Each actual CI profile completes two opposite full pretrial orders using exact frozen source inputs before formal acquisition; prep is not formal evidence.",
+    "v3": "Repeat calibration and two opposite full actual pretrial orders on each actual profile; v2 pretrial and accepted groups are not v3 samples."
   },
   "profiles": [
     "macos-amd64-standard",
@@ -117,11 +118,11 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "97f0b6231e3198c23c6c03552118732da412bc1859637a120fcdd36adaaba344",
-    "retained": "All v1 attempts, valid local/LinuxARM cycles and failed platform archives stay separate; none are v2 samples. Original project and phase budgets persist.",
-    "changes": "Small n32->128;large n4->8 from actual LinuxAMD duration0.24/0.46s. Darwin observer uses its owned kqueue NOTE_CRITICAL descriptor; native balanced sleep/critical calibration remains required evidence. Bounded self-CPU work resolves sub-tick calibration and typed initialization error receipts preserve future causes.",
-    "unchanged": "All quality thresholds including50ms maxgap, complete four-plus-two process cycle coverage,16MiB memory envelope/8MiB repeat span, group order/attempt limits, input file sizes and full-byte/cleanup checks.",
-    "windows_v1_root_cause": "Initialization failed without typed receipt; exact native cause is not established. Retain failure and evaluate new native calibration receipts and complete source results."
+    "previous_protocol_sha256": "350306cdad7ed1575258ad688bda99ed2f03bb27c63e0b14488c8ea99e200c7d",
+    "retained": "All v1/v2 attempts and accepted groups remain historical, never v3 members. Original project and phase budgets persist.",
+    "changes": "Creator-PID-bound state lease release changes Rust source identity. Per-snapshot psutil oneshot shares underlying kernel reads without caching between snapshots; explicit live PID identity check remains before each batch. macOS Intel v2 pretrial overhead0.057049806 exceeded unchanged0.05 limit.",
+    "unchanged": "Every workload, repeat count, timing boundary, CPU/RSS counter, quality threshold, sample interval, atomic full-group rule, attempt/deadline limit, four formal/two independent fresh-process cycles and memory/stability criterion.",
+    "source": "https://psutil.io/7.2/#psutil.Process.oneshot and psutil release-7.2.2 _psosx.py shared _get_pidtaskinfo cache"
   },
   "preflight_sha256": "4a13665bb438ce948c28aee13b992f329d5dbf4f62c3c282bbca114f4161d485"
 }
