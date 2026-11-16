@@ -135,6 +135,11 @@ required by applications using these streaming methods.
 
 ## Real disk-full boundary
 
+The interruption fixture performs large synthetic-file generation and independent
+hash verification on Tokio's blocking pool. These checks preserve the full byte
+and hash assertions while allowing the single-threaded test runtime to service
+the management connection before the final normal shutdown.
+
 The explicit CI driver `scripts/run-bounded-disk-full-tests.py` provisions a small owned filesystem only in the matching GitHub runner environment. It uses a private tmpfs on Linux, an owned disk image on macOS, and an owned VHD on Windows. Actual capacity is checked by both the driver and the Rust case before creating payloads. No physical disk is selected, and cleanup checks the exact mount or image identity. The driver is never invoked by Cargo builds or library calls.
 
 After verified detach, the driver removes only its exact mount-directory entry,
