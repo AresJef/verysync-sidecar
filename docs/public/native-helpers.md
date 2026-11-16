@@ -111,8 +111,8 @@ listener during startup; public listener settings and managed lifecycle remain
 separate controls. `patchVerysyncHandler` constructs the custom router and
 file-resource dispatcher; its name does not describe a PATCH request. The
 independent native `/rest/folder/downloadprogress` and `/rest/fs/path/writeable`
-endpoints retain separate pending implementation/effect records until their
-actual contracts are verified. The latter's native `attempt` input is not
+endpoints have distinct typed contracts and independent acceptance records.
+The latter's native `attempt` input is not
 silently treated as a filesystem-selector parameter.
 
 ## Native path-writeability snapshots
@@ -130,15 +130,19 @@ native bounded search of at most ten parents after a missing-path error.
 The fixed handler tests nonempty text, so raw literal `attempt=false` does not
 disable that branch. The typed method never sends that string.
 
-**Fixed-baseline limitation:** on the tested v2.33.2 macOS ARM64 core, a
-caller-verified writable directory, existing file and missing descendants all
-returned HTTP 200 with `writeable: false` and `error: {}`. Ancestor selection
-did not change these observations. The native call passes an empty filesystem
-type into its factory lookup. These results do not establish a reliable
+**Fixed-baseline limitation:** tested v2.33.2 macOS, Linux AMD64 and Windows
+AMD64/ARM64 cores returned `writeable: false` and `error: {}` even for independently
+verified writable directories. The macOS observations also cover an existing file
+and missing descendants, with and without ancestor selection. Static inspection
+of the macOS and Linux implementations finds an empty filesystem type passed to
+the factory lookup. These results do not establish a reliable
 writable/unwritable distinction. The empty error object is preserved without
 an invented explanation. Do not use this snapshot as a permission precondition
-or a guarantee of later write success. Positive native permission detection
-and current-source platform acceptance remain open.
+or a guarantee of later write success. For this fixed baseline, acceptance
+preserves complete native snapshots and their documented limitation on macOS,
+Linux and Windows. Actual file writes and all other path operations require their
+own evidence. Other architectures and complete current-source platform coverage
+remain separately recorded; this condition grants no unrelated capability.
 
 The native writable-directory helper contains permission adjustment and
 restoration code. Despite using GET, this operation conservatively serializes

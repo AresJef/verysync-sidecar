@@ -3,8 +3,8 @@ use crate::TargetPath;
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 
-/// One native path-writeability snapshot. The selected v2.33.2 macOS build
-/// returns false with an empty error object even for a writable directory.
+/// One native path-writeability snapshot. Tested v2.33.2 macOS, Linux and
+/// Windows builds return false/empty error even for a writable directory.
 /// This is not a reliable permission or future-write guarantee.
 #[derive(Clone)]
 pub struct NativePathWriteability {
