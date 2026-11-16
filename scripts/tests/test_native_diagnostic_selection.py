@@ -33,9 +33,18 @@ class DiagnosticSelection(unittest.TestCase):
                             "native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data"
                             for row in proxy))
 
+    def test_current_manifest_runs_nonempty_native_helpers_on_all_six_profiles(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        helpers = [row for row in actual if row.get("label") == "native-helper-effects"]
+        self.assertEqual(len(helpers), 6)
+        self.assertEqual(len({row["package"] for row in helpers}), 6)
+        self.assertTrue(all(row["target"] == "engine_control" and row["filter"] ==
+                            "actual_native_helpers_" for row in helpers))
+
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 78)
+        self.assertEqual(len(self.rows), 84)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):

@@ -38,8 +38,11 @@ proves possession of a peer certificate or registers a device.
 `lookup_target_ip(ip)` asks that engine for its IP-location data. It accepts an
 explicit `std::net::IpAddr`, checks the returned address, and preserves empty or
 localized native location strings. The target may consult its own services or
-network. The native test uses IPv4 and IPv6 loopback only; geographically accurate
-public-IP results have separate environment requirements.
+network. An isolated macOS ARM64 case checks IPv4/IPv6 loopback plus two explicit
+public addresses against independent native responses. One public lookup returns
+nonempty location text and the other retains an empty native snapshot. These are
+the fixed core's data, without a geographic-accuracy or complete-database claim.
+The corresponding six-profile and final integrated gates remain required.
 
 `native_random_number()` explicitly requests the native decimal number and
 decodes it as `u64`. This makes no cryptographic, uniqueness or distribution
@@ -73,9 +76,23 @@ string becomes `None`. Nonempty text is private, untrusted data and can contain
 sharing credentials. The SDK never opens/follows it, accepts a key, or registers
 a folder automatically. Delivery can consume native state, so the method uses
 conservative mutation semantics, with no retry on uncertain results. The native
-test currently verifies the empty-link case; nonempty transport and redaction
-have synthetic contract coverage, with actual native nonempty delivery still
-requiring its own effect evidence.
+test on macOS ARM64 supplies task-owned native inbox files, verifies exact
+nonempty percent/Unicode/opaque text, observes native removal of each input,
+and then receives an empty follow-up snapshot. A returned HTTP link is not
+followed, no folder is registered, and configuration, identity and caller data
+remain intact. The native command-line producer is a separate unverified path;
+the test writes only isolated input files. Other platforms and final integrated
+delivery remain required.
+
+An empty result means the native response contained no text. It also occurs
+when the native inbox cannot be read: a nonempty directory at that location
+returns an empty snapshot while remaining present. It therefore does not prove
+that no inbox exists, that a delivery succeeded, or that a read had no error.
+
+If the native inbox was consumed but its response is lost, the SDK reports
+`MutationOutcomeUnknown`. An isolated response-fault case verifies the actual
+consumption, exactly one consuming GET, no automatic retry, private diagnostics,
+and an empty explicit follow-up read with configuration and caller data retained.
 
 ```no_run
 # async fn example(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
@@ -530,7 +547,8 @@ and conditional responses have their own actual-effect checks in those bundles.
 Hardware results retain each platform's real data, error or empty snapshot.
 Writable-path snapshots keep the documented fixed-baseline limitation alongside
 an independent actual write. These results establish the stated controls and
-observations, with the original producer identity retained. Nonempty pending-link
-delivery, public-IP conditions, remaining helper/CLI behavior and complete current
-Windows SDK-browser execution retain separate gates. They do not establish a
-complete integrated release or every possible runtime state.
+observations, with the original producer identity retained. Additional isolated
+macOS ARM64 cases verify the stated nonempty native link consumption and public-IP
+snapshot conditions. Their six-profile coverage, remaining helper/CLI behavior
+and complete current Windows SDK-browser execution retain separate gates. They
+do not establish a complete integrated release or every possible runtime state.
