@@ -1,0 +1,118 @@
+{
+  "protocol_id": "VS045-native-resources-v1",
+  "version": 1,
+  "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
+  "engine_version": "v2.33.2",
+  "rust_release": "1.85.0",
+  "interval_ms": 10,
+  "source_inputs": {
+    "rust_sources_sha256": "b7174ba1f0f4d15271386d638ac807d950bff5d78114b69745b192fc17264759",
+    "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
+    "sampler_sha256": "efbf46f5db698b986e8f84029761930eb44e1842061db9cf56a1fa49c71b51c5",
+    "wrapper_sha256": "aa14ab6c94b2d0f693047246c8286385710c5997a345bc2844f1ae0fab1f95f3"
+  },
+  "collector_sha256": "4e9dca6b3ffc8c3de5119e1747c80eda050593ed153271e1f2e7897adfe7ad55",
+  "scenarios": {
+    "idle": {
+      "bytes_each": 8192,
+      "files": 1,
+      "repeats": 1
+    },
+    "stream-small": {
+      "bytes_each": 8388608,
+      "files": 1,
+      "repeats": 32
+    },
+    "stream-large": {
+      "bytes_each": 134217728,
+      "files": 1,
+      "repeats": 4
+    },
+    "many-small": {
+      "bytes_each": 8192,
+      "files": 256,
+      "repeats": 16
+    }
+  },
+  "quality": {
+    "minimum_elapsed_ns": 500000000,
+    "minimum_measured_snapshots": 25,
+    "maximum_sample_gap_ns": 50000000,
+    "maximum_boundary_overspan_fraction": 0.05,
+    "maximum_metric_read_fraction": 0.05
+  },
+  "formal_orders": [
+    [
+      "idle",
+      "stream-small",
+      "stream-large",
+      "many-small"
+    ],
+    [
+      "many-small",
+      "stream-large",
+      "stream-small",
+      "idle"
+    ],
+    [
+      "idle",
+      "stream-small",
+      "stream-large",
+      "many-small"
+    ],
+    [
+      "many-small",
+      "stream-large",
+      "stream-small",
+      "idle"
+    ]
+  ],
+  "independent_orders": [
+    [
+      "many-small",
+      "stream-large",
+      "stream-small",
+      "idle"
+    ],
+    [
+      "idle",
+      "stream-small",
+      "stream-large",
+      "many-small"
+    ]
+  ],
+  "maximum_group_attempts": 3,
+  "maximum_group_span_s": 180,
+  "acquisition_window_s": 900,
+  "estimated_complete_group_s": 120,
+  "save_reserve_s": 30,
+  "deadline_semantics": "Original per-profile acquisition stop boundary persists across stages and resume. Inflight bounded native work reaches safe cleanup; any overrun is retained, never excluded from project time. Setup/build and CI queues remain counted in the project ledger.",
+  "resource_contract": {
+    "controller_peak_large_minus_small_envelope_limit_bytes": 16777216,
+    "controller_rss_repeat_span_limit_bytes": 8388608,
+    "envelope": "max sampled large-file controller RSS across all accepted formal+independent cycles minus min sampled small-file controller RSS; no division by repetition count",
+    "required_stability": "controller sampled RSS range for each registered scenario <=8MiB across the four formal and two independent fresh-process cycles; operational repeatability screen, not a population confidence interval",
+    "target_scope": "Source-audited streamed path, observed8MiB..128MiB range; sampled RSS, no instantaneous peak or universal asymptotic claim",
+    "native_engine": "Report its independent RSS/CPU curve; no invented upstream efficiency threshold"
+  },
+  "latency": {
+    "relative_MAD_stability_screen": 0.2,
+    "role": "Descriptive absolute latency/CPU and operational variation, no baseline speedup or latency pass target"
+  },
+  "preparation": {
+    "correctness": "Four real workloads, complete bytes/state/normal tree exit",
+    "calibration": "1000 read-cost snapshots, monotonic clock,16MiB touched-memory units, CPU monotonicity,12 balanced short/long controls",
+    "pretrial": "Two opposite complete orders,8 fresh controllers+engines,8/8 VALID in49.166s; observed max full case6.9003s",
+    "project_resource_original_s": 10800,
+    "reuse_scope": "N4 adds role/config/source validation and complete-group recording outside measurement. Rust workload, timing boundaries, sampling loop, metric reads and quality thresholds remain unchanged. Confirm updated collector dependencies before formal."
+  },
+  "profiles": [
+    "macos-amd64-standard",
+    "macos-arm64-standard",
+    "linux-amd64-standard",
+    "linux-arm64-standard",
+    "windows-amd64-standard",
+    "windows-arm64-standard"
+  ],
+  "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts."
+}

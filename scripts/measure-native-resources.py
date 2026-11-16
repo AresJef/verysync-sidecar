@@ -123,7 +123,12 @@ def source_identity(cargo, toolchain):
             "sampler_sha256": digest(__file__),
             "wrapper_sha256": digest(Path(__file__).with_name("run-isolated-engine-tests.py")),
             "toolchain": toolchain, "cargo_version": subprocess.check_output(
-                [str(cargo), "+" + toolchain, "--version"], text=True).strip(), "profile": "release"}
+                [str(cargo), "+" + toolchain, "--version"], text=True).strip(),
+            "rustc_version": subprocess.check_output([str(cargo.parent / "rustc"), "+" + toolchain,
+                                                       "--version"], text=True).strip(),
+            "build_environment_sha256": {key: hashlib.sha256(os.environ.get(key, "").encode()).hexdigest()
+                for key in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTC_WRAPPER", "CARGO_PROFILE_RELEASE_OPT_LEVEL"]},
+            "profile": "release"}
 
 
 def summarize(report, rows, quality=QUALITY):
@@ -201,15 +206,16 @@ def main():
     parser.add_argument("--scenario", choices=["idle", "stream-small", "stream-large", "many-small"])
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--interval-ms", type=float, default=10)
-    parser.add_argument("--stage", choices=["calibration", "pilot"], required=True)
+    parser.add_argument("--stage", choices=["calibration", "pilot", "formal", "independent"], required=True)
+    parser.add_argument("--protocol", type=Path)
     args = parser.parse_args()
     if not args.evidence_dir.is_absolute() or args.evidence_dir.exists():
         raise ValueError("fresh absolute evidence directory required")
     if not 1 <= args.repeats <= 32 or not 1 <= args.interval_ms <= 100:
         raise ValueError("outside the explicit preparation parameter bounds")
     dependency()
-    if args.stage == "pilot" and (args.cargo is None or not args.cargo.is_absolute() or not args.cargo.is_file()):
-        raise ValueError("pilot requires an explicit absolute Cargo executable")
+    if args.stage != "calibration" and (args.cargo is None or not args.cargo.is_absolute() or not args.cargo.is_file()):
+        raise ValueError("native measurement requires an explicit absolute Cargo executable")
     args.evidence_dir.mkdir(parents=True, mode=0o700)
     report = {"stage": args.stage, "calibration": calibrate(), "formal_sample": False}
     if args.stage == "calibration":
@@ -232,6 +238,20 @@ def main():
     phase = "prepare"
     report.update(scenario=args.scenario, repeats=args.repeats, interval_ms=args.interval_ms,
                   events=[], identities=None, source=source_identity(args.cargo, args.toolchain))
+    if args.stage in {"formal", "independent"}:
+        if args.protocol is None:
+            raise ValueError("formal attempts require the frozen protocol")
+        protocol = json.loads(args.protocol.read_text())
+        if (protocol["scenarios"][args.scenario]["repeats"] != args.repeats
+                or protocol["interval_ms"] != args.interval_ms or protocol["quality"] != QUALITY):
+            raise ValueError("attempt differs from frozen measurement parameters")
+        for key, value in protocol["source_inputs"].items():
+            if report["source"].get(key) != value:
+                raise ValueError("frozen source input differs: "+key)
+        if not report["source"]["rustc_version"].startswith("rustc "+protocol["rust_release"]+" "):
+            raise ValueError("actual compiler differs from frozen release")
+        report.update(protocol_sha256=digest(args.protocol), formal_sample=True,
+                      acceptance="raw attempt only; requires a complete accepted group manifest")
     with (args.evidence_dir / "console.log").open("wb") as console, (args.evidence_dir / "samples.jsonl").open("w") as samples:
         child = subprocess.Popen(command, env=env, stdout=console, stderr=subprocess.STDOUT)
         try:
@@ -250,6 +270,8 @@ def main():
                             report["events"].append(value)
                             kind = value["kind"]
                             if kind == "ready":
+                                if args.stage in {"formal", "independent"} and value["engine_version"].lstrip("v") != protocol["engine_version"].lstrip("v"):
+                                    raise ValueError("actual engine version differs from frozen baseline")
                                 processes = owned_processes(value)
                                 report["identities"] = [snapshot(p) for p in processes]
                                 phase = "baseline"
@@ -287,7 +309,7 @@ def main():
     rows = [json.loads(line) for line in (args.evidence_dir / "samples.jsonl").read_text().splitlines()]
     result = summarize(report, rows)
     (args.evidence_dir / "quality-result.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(json.dumps({"exit_code": 0, "quality": result["status"], "scenario": args.scenario, "evidence": str(args.evidence_dir), "formal_sample": False}))
+    print(json.dumps({"exit_code": 0, "quality": result["status"], "scenario": args.scenario, "evidence": str(args.evidence_dir), "formal_sample": report["formal_sample"]}))
     return 0 if result["status"] == "VALID" else 2
 
 

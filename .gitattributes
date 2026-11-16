@@ -1,0 +1,6 @@
+# Keep the measured source bytes identical on every native checkout.
+*.rs text eol=lf
+Cargo.toml text eol=lf
+Cargo.lock text eol=lf
+scripts/*.py text eol=lf
+tests/fixtures/resource-protocol.json text eol=lf

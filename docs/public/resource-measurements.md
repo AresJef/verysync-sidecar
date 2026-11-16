@@ -28,9 +28,34 @@ Install the fixed optional measurement dependency only in your test environment:
 python -m pip install -r scripts/resource-test-requirements.txt
 ```
 
-Preparation currently supports explicit `--stage calibration` and `--stage pilot`
-runs with a fresh absolute `--evidence-dir`. A pilot also requires `--cargo`, the
-explicit fixed-program test environment, and a registered `--scenario`.
-Calibration and pilot samples are preparation evidence. Formal parameters,
-coverage, independent process repeats, quality, stability and resource conclusions
-remain pending. No speedup is claimed without an equivalent implementation baseline.
+Preparation supports explicit `--stage calibration` and `--stage pilot` runs with
+a fresh absolute `--evidence-dir`. A pilot also requires `--cargo`, the explicit
+fixed-program test environment, and a registered `--scenario`. Preparation is
+never mixed into formal samples.
+
+The frozen configuration is `tests/fixtures/resource-protocol.json`. After explicit
+fixed-core preparation and release compilation, collect with:
+
+```console
+python scripts/collect-native-resources.py --stage all \
+  --protocol tests/fixtures/resource-protocol.json \
+  --cargo /absolute/path/to/cargo --toolchain 1.85.0 \
+  --evidence-dir /absolute/fresh/evidence
+```
+
+Four formal cycles and two independent cycles use balanced opposite orders. Each
+cycle contains all four scenarios; each scenario starts a fresh real controller
+and owned native process. A complete cycle is accepted atomically only after all
+original-order members pass frozen quality, source, artifact and process identity
+checks. Failed and insufficient attempts remain recorded. An insufficient cycle
+retries its original order with a fixed attempt limit; errors stop collection.
+`--resume` preserves the saved deadline, attempts and immutable accepted groups.
+
+Collection coverage and resource conclusions are separate. The frozen controller
+memory criterion compares the conservative sampled RSS envelope for 8 MiB and
+128 MiB files, with a 16 MiB increase limit and an 8 MiB repeat-span screen. These
+are operational observations in that tested range, supported by the streamed
+implementation; they do not establish instantaneous peaks or universal asymptotic
+bounds. Engine RSS/CPU curves and absolute latency are reported separately, with
+no invented upstream efficiency target or baseline speedup. Formal results and
+the final resource report remain pending.
