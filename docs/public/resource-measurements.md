@@ -240,4 +240,21 @@ preparation members are never combined with Mac 26 members. Original observation
 limits, source bindings, native correctness and cleanup gates remain unchanged.
 The existing six-profile collection and native acceptance workflows still run
 their original jobs. Image-specific results do not prove a minimum supported OS
-or complete platform coverage; the environment check has no accepted result yet.
+or complete platform coverage.
+
+The [first Mac 26 environment run](https://github.com/AresJef/verysync-sidecar/actions/runs/43945972526)
+completed all eight native preparation cases on each architecture. Intel had
+zero `VALID` cases and ARM64 had three; neither completed a whole valid order,
+so formal and independent collection did not start. All native correctness and
+normal cleanup checks passed, but every rejected case exceeded the unchanged
+50 ms observation-coverage limit. The observation-read and boundary fractions
+met their separate limits. These are insufficient measurements, with no strict
+resource or performance acceptance.
+
+The largest observed internal gaps were usually dominated by the actual native
+timer wait; one Intel case also retained a 1.32-second gap dominated by journal
+polling. These recorded segments do not establish the underlying host scheduling
+or storage cause. The existing observer already used native Mach deadlines and
+observer-thread QoS without changing worker priority. This run keeps its own
+producer and unchanged v21 measured inputs; it is not combined with Mac 15
+trials or treated as evidence for another environment.
