@@ -83,19 +83,30 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 114)
+        self.assertEqual(len(self.rows), 116)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_current_manifest_requires_actual_temporary_expiry_on_six_profiles(self):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         actual = HELPER.select(self.rows, selection, draft=True)
         age = [row for row in actual if row.get("label") == "native-temporary-retention-policy"]
-        self.assertEqual(len(actual), 30)
+        self.assertEqual(len(actual), 32)
         self.assertEqual(len(age), 6)
         self.assertEqual(len({row["package"] for row in age}), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart"
                             for row in age))
+
+    def test_current_manifest_requires_actual_macos_sleep_assertion_effects(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        sleep = [row for row in actual if row.get("label") == "native-sleep-prevention-policy"]
+        self.assertEqual(len(sleep), 2)
+        self.assertEqual({row["package"] for row in sleep},
+                         {"macos-amd64-standard", "macos-arm64-standard"})
+        self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
+                            "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer"
+                            for row in sleep))
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

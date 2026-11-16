@@ -464,6 +464,28 @@ recovery of an interrupted real transfer, or removal of arbitrary caller files.
 The new case has local macOS ARM64 evidence; its six native platform gates and
 final integrated acceptance remain required.
 
+## Sleep prevention during native synchronization
+
+`GeneralOptionsPatch::disable_system_sleep_on_sync` selects whether the native
+program requests sleep prevention while synchronizing. It is a native policy
+selection, not a guarantee that the host will never sleep. The SDK does not
+change global power settings or run an independent sleep-prevention service.
+
+The isolated macOS case tests `false`, `true`, then explicit `false`, each after
+normal owned restarts. Every phase observes an incomplete real transfer and
+checks the receiver's owned process group. The enabled phase must have the
+system `caffeinate` executable and an actual `PreventUserIdleSystemSleep`
+assertion belonging to that helper. The two disabled phases require neither.
+Transfer completion must release both the helper and its assertion. All three
+payloads remain byte-identical at source and receiver, and identity, unrelated
+configuration, sentinel bytes and both normal owned exits are verified.
+
+This verifies an idle-system-sleep assertion during those transfers. It does
+not test physical host suspension, display sleep, every power policy, or an
+immediate policy change without restart. The new case has local macOS ARM64
+evidence; native Intel Mac execution, Linux/Windows effects and final integrated
+acceptance remain separate requirements.
+
 ## Diagnostic preferences
 
 `diagnostics_options()` reads actual crash settings and legacy usage information.
