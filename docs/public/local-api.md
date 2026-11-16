@@ -33,6 +33,33 @@ Declare `RequestEffect::MayModify` for state-changing routes, including GET rout
 whose native behavior changes state. Those calls serialize across client clones
 and check identity before sending.
 
+`folders()` and `folder()` return the native `LocalApiFolder` projection. It
+contains target-native paths, pause and optional scan/selective settings, plus
+identity/name peer projections. The native Local-API projection has no GUI label.
+Unmodeled fields, including share material, remain private explicit `extra` data.
+`devices()` returns the native identity/name projection, rather than full GUI
+device settings or a live connection report. Private peer names are omitted from
+ordinary debug output. Returned target paths are never treated as local paths.
+
+`request_scan(folder, scope)` accepts a folder root or a strictly relative path
+in the target's syntax. It checks the configured folder and pause setting, sends
+one POST and requires the fixed native `ok: scanning` acknowledgement. It does
+not retry or claim correlated scan completion. Changed/malformed acknowledgements
+are unknown mutation outcomes. A native macOS ARM64 case independently observed
+a newly written synthetic file in the index after this Local-API subpath request
+with automatic rescan/watching disabled, then verified root-scan acknowledgement,
+identity/private-share preservation, unchanged bytes and normal owned-tree exit.
+
+`browse_folder()` uses the native wrapper's fixed level-zero selective tree;
+`folder_need()` reads one explicit `ListPage`; `request_selection()` sends the
+explicit select/deselect/remove-from-all flags. The SDK validates target-relative
+scopes and sends no selection body. These methods preserve the Local-API license
+rejection observed as HTTP200 with native code3001 and a nonempty error string:
+`Error::LicenseRequired { code: 3001, .. }`. Raw requests retain that original
+status/body. Generic HTTP403 or future error codes do not invent this entitlement
+classification. A selection acknowledgement does not prove removal, download or
+all-peer completion. Licensed success/effects remain pending native acceptance.
+
 For a library-owned instance, `ManagedOptions::local_api_enabled(true)` explicitly
 sets the native startup flag. It requires an HTTP(S) management endpoint and
 grants no commercial entitlement. The default preserves Local-API settings.
