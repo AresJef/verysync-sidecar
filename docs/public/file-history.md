@@ -82,6 +82,28 @@ configuration and private diagnostics. Local Sync endpoint options are a
 different interface and are not translated here. URI configuration does not
 establish authentication, server identity or successful archival.
 
+For this fixed version's archive SFTP backend, the native `privateKey` query
+value is a **key-file path on the target machine**, not inline PEM text. Encode
+it as a URI query value; the SDK neither reads the key nor copies it to the
+target. This differs from the Local Sync endpoint's inline-key interface.
+An isolated macOS ARM64 key-only peer rejects a different valid private key,
+then authenticates the selected key without password fallback and verifies real
+archival, browsing, restoration, restart and retained remote archives. The test
+also uses a target key path containing Unicode, spaces and a literal percent.
+Corresponding native platform runs remain required.
+
+The fixed native parser accepts `parallelConnections` (default 1, maximum 32)
+and `sftpChannels` (default 5, maximum 256). Missing, invalid or nonpositive
+values use the native defaults; larger values are capped. Despite its name,
+`sftpChannels` is passed to the SFTP client's per-file concurrent-request limit.
+`connectTimeout` is parsed as positive integer seconds, with a native default
+of 30 seconds. These details come from the selected executable's parser and
+consumer; they are independent of management-request timeouts. The isolated
+key-only test observes one and then two actual authenticated SSH connections
+when changing `parallelConnections` from 1 to 2, and performs the data effects
+with `sftpChannels=2` and `connectTimeout=6`. It does not measure a concurrency
+or network-timeout bound, throughput improvement or verified server identity.
+
 An isolated macOS ARM64 SFTP case has verified real remote old bytes, native
 version browsing, restoration of a Unicode/percent filename, unchanged source
 data, normal restart with the remote location retained, resetting to the default

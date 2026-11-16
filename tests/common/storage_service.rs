@@ -25,7 +25,7 @@ impl Service {
         root: &Path,
         write_delay: Duration,
     ) -> TestResult<Self> {
-        Self::configured(protocol, root, write_delay, false, None, false)
+        Self::configured(protocol, root, write_delay, false, None, false, false)
     }
     #[allow(dead_code)] // Shared fixture modules are compiled by separate targets.
     pub fn start_https(root: &Path) -> TestResult<Self> {
@@ -35,6 +35,7 @@ impl Service {
             Duration::ZERO,
             true,
             None,
+            false,
             false,
         )
     }
@@ -50,6 +51,7 @@ impl Service {
             false,
             Some(mode),
             false,
+            false,
         )
     }
     #[allow(dead_code)] // Only the archive target requests FTP observations.
@@ -61,6 +63,19 @@ impl Service {
             false,
             None,
             true,
+            false,
+        )
+    }
+    #[allow(dead_code)] // Only the archive target requests this strict peer.
+    pub fn start_key_only_sftp(root: &Path) -> TestResult<Self> {
+        Self::configured(
+            StorageProtocol::Sftp,
+            root,
+            Duration::ZERO,
+            false,
+            None,
+            false,
+            true,
         )
     }
     fn configured(
@@ -70,6 +85,7 @@ impl Service {
         tls: bool,
         smb_auth: Option<&str>,
         record_ftp_events: bool,
+        sftp_key_only: bool,
     ) -> TestResult<Self> {
         if write_delay.as_millis() > 100 {
             return Err("bounded write delay is test-only".into());
@@ -123,6 +139,9 @@ impl Service {
         let mut configuration = serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis(),"tls":tls,"smb_auth":smb_auth});
         if record_ftp_events {
             configuration["record_ftp_events"] = true.into();
+        }
+        if sftp_key_only {
+            configuration["sftp_key_only"] = true.into();
         }
         serde_json::to_writer(&mut input, &configuration)?;
         input.write_all(b"\n")?;
