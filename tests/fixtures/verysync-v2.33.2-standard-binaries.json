@@ -1,0 +1,39 @@
+{
+  "version": "v2.33.2",
+  "derivation": "Executable SHA-256 derived from exact version-root extraction of the size/SHA-256-verified official archive; test metadata only, no vendor bytes.",
+  "source_run": 43914478575,
+  "actual_producer": "fd310c2e01ea06b11fc1cfebd471e42a7431cd0e",
+  "source_tree": "4e2bd7749692d4f895a4d9902529b48e8ef8da01",
+  "packages": [
+    {
+      "id": "linux-amd64-standard",
+      "archive_sha256": "8a4b347669cd33def98b3bf1888576c8dc786ed77485080901bba0101c4413bd",
+      "binary_sha256": "770324d3411bf6ff7d18109ba5fa1e5057056b5e93441f29185b50895f55693a"
+    },
+    {
+      "id": "linux-arm64-standard",
+      "archive_sha256": "708702fa19c321acb7e1aaa895a6f2cf8cb6189ab8ede6edf5049b61ad1f0ae0",
+      "binary_sha256": "7134a1d78cc45a47f6eb1455094ccd199b98a36eb05862b2ef95332538127b98"
+    },
+    {
+      "id": "macos-amd64-standard",
+      "archive_sha256": "530ce9dc326b9b259bb88f0225519ec273f1c26ec497e026daa19ff0b59872f9",
+      "binary_sha256": "531b6df93546b591080025007a141be51a4c63be94900bf86b50555db149c182"
+    },
+    {
+      "id": "macos-arm64-standard",
+      "archive_sha256": "7921321d2df082a03647388cd50e30f187d37f7af4439246797118f4f05478f4",
+      "binary_sha256": "f8e9bd67be3fb1b45eafea794008c4dfae24aec4e177617578b268598bf12274"
+    },
+    {
+      "id": "windows-amd64-standard",
+      "archive_sha256": "53d7363c1dc021dcdfaefeb27e1d7faf130a1dc83d6ebf0c04530eaa828839db",
+      "binary_sha256": "b1455da891a0723404c8c025ca77dc5ee8bc73632979edf4542c45d57fc73ea7"
+    },
+    {
+      "id": "windows-arm64-standard",
+      "archive_sha256": "37fb7edd64c7eab2c69f33c57c3e5d5e186abed944f785573bbaf6d7c291b37a",
+      "binary_sha256": "56ee421e3933e8d8bb164164f25cc0cf7626d13ba4ed30f8a2ee9b78b8d841fa"
+    }
+  ]
+}
