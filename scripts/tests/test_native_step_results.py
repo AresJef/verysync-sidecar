@@ -47,6 +47,16 @@ class NativeStepContracts(unittest.TestCase):
         steps["native_future_effect"] = {"outcome": "failure"}
         self.assertIn("native_future_effect", HELPER.failures("linux-arm64-standard", steps))
 
+    def test_disk_full_cannot_be_absent_skipped_or_failed_on_any_family(self):
+        for family in ["macos", "linux", "windows"]:
+            for outcome in [None, "skipped", "failure", "cancelled"]:
+                steps = self.successful_steps(family)
+                steps["native_browser_engine"] = {"outcome": "success"}
+                steps.pop("native_disk_full_engine")
+                if outcome is not None:
+                    steps["native_disk_full_engine"] = {"outcome": outcome}
+                self.assertIn("native_disk_full_engine", HELPER.failures(family + "-arm64-standard", steps))
+
 
 if __name__ == "__main__":
     unittest.main()

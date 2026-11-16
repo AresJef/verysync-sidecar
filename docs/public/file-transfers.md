@@ -132,3 +132,9 @@ These APIs are unreleased. Native effects are verified locally on macOS ARM64;
 the complete same-source multi-platform acceptance is pending. Archive decoding
 libraries used by the isolated tests are development dependencies and are not
 required by applications using these streaming methods.
+
+## Real disk-full boundary
+
+The explicit CI driver `scripts/run-bounded-disk-full-tests.py` provisions a small owned filesystem only in the matching GitHub runner environment. It uses a private tmpfs on Linux, an owned disk image on macOS, and an owned VHD on Windows. Actual capacity is checked by both the driver and the Rust case before creating payloads. No physical disk is selected, and cleanup checks the exact mount or image identity. The driver is never invoked by Cargo builds or library calls.
+
+The `disk_full_engine` case requires a real native disk-full local I/O error while streaming a 64 MiB resource to that filesystem. It verifies the nonempty retained prefix, source bytes, configuration, identity, and volume sentinel. Only the caller explicitly removes its partial output; a new 1 MiB download must then complete and match its hash. Engine state and source data remain outside the bounded filesystem. Native results on all six standard platform profiles are pending; compilation and fixture guard tests do not establish disk-full acceptance.
