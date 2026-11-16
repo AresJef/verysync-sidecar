@@ -886,13 +886,17 @@ fn requested_subset(expected: &serde_json::Value, actual: &serde_json::Value) ->
                     selected_job_setting_matches(key, v, Some(actual))
                 }
                 Some(actual) => requested_subset(v, actual),
-                // Verified v2.33.2 endpoint serialization omits disabled SSH
-                // compression. Only this known SFTP false default is equivalent;
-                // missing credentials, true values and null remain mismatches.
+                // Verified v2.33.2 SFTP serialization omits disabled compression
+                // and an empty password for explicit private-key authentication.
+                // Nonempty/missing key credentials and explicit null still fail.
                 None => {
-                    key == "enableCompression"
-                        && v == &serde_json::Value::Bool(false)
-                        && a.get("fsType").and_then(serde_json::Value::as_str) == Some("sftp")
+                    a.get("fsType").and_then(serde_json::Value::as_str) == Some("sftp")
+                        && ((key == "enableCompression" && v == &serde_json::Value::Bool(false))
+                            || (key == "password"
+                                && v.as_str() == Some("")
+                                && a.get("privateKey")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|key| !key.is_empty())))
                 }
             }
         }),
@@ -907,6 +911,32 @@ fn unknown(operation: &'static str, source: Error) -> Error {
 mod subset_contracts {
     use super::{requested_subset, selected_job_setting_matches};
     use serde_json::json;
+    #[test]
+    fn sftp_key_readback_only_equates_missing_empty_password_with_explicit_key() {
+        let expected = json!({"fsType":"sftp","privateKey":"private-pem","password":""});
+        assert!(requested_subset(
+            &expected,
+            &json!({"fsType":"sftp","privateKey":"private-pem"})
+        ));
+        for actual in [
+            json!({"fsType":"sftp"}),
+            json!({"fsType":"sftp","privateKey":"different"}),
+            json!({"fsType":"sftp","privateKey":"private-pem","password":null}),
+        ] {
+            assert!(!requested_subset(&expected, &actual));
+        }
+        for expected in [
+            json!({"fsType":"ftp","privateKey":"private-pem","password":""}),
+            json!({"fsType":"sftp","privateKey":"","password":""}),
+            json!({"fsType":"sftp","password":""}),
+            json!({"fsType":"sftp","privateKey":"private-pem","password":"required"}),
+        ] {
+            assert!(!requested_subset(
+                &expected,
+                &json!({"fsType":"sftp","privateKey":"private-pem"})
+            ));
+        }
+    }
     #[test]
     fn only_the_observed_sftp_compression_false_default_can_be_omitted() {
         assert!(selected_job_setting_matches(

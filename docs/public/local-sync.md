@@ -330,28 +330,48 @@ fault conditions remain independently required.
 
 ## SFTP key validation boundary
 
-`private_key_file(TargetPath)` requests the bundled GUI's native `privateKey`
-path field. It opens no controller key file. This selection is not evidence of
-successful native key authentication. The fixed v2.33.2 macOS ARM core rejected
-an existing, synthetically generated unencrypted RSA PEM path with a key-parser
-error before authentication. Literal and escaped inline PEM research also failed;
-an escaped-key registration was not accepted. Those attempts are failed protocol
-research, not successful key refusal, transfer or host-identity acceptance.
-Password data effects remain separate. Positive key and verified host identity
-conditions remain pending, with no implicit agent/password fallback or key-file
-upload added by the SDK.
+`private_key_pem(pem)` explicitly supplies private-key text for the fixed native
+Local Sync backend. The SDK encodes it for that consumer and opens no key file on
+the controller. Explicit serialization exposes this credential; ordinary Debug
+omits it. Supply a username and an empty password to select key authentication
+without password fallback. Empty-password omission in native readback is accepted
+only for an SFTP endpoint with an explicitly supplied nonempty private key;
+changed keys, nonempty passwords and explicit nulls remain mismatches.
 
-Static inspection of that exact macOS ARM core identifies conflicting native
-consumers. The Local Sync backend forwards the field as rclone's `key_pem`,
-whose inline-key branch first applies Go string unquoting. The native SFTP limits
-probe instead converts its input directly to bytes for `ssh.ParsePrivateKey`
-(or the passphrase variant), without reading a key file or unescaping the input.
-The separate native SFTP filesystem has a file-reading key parser. This explains
-why a valid key path or an encoding supported by one consumer does not establish
-support through the complete Local Sync path. No common encoding has passed the
-required actual registration, authentication and transfer conditions. This is
-evidence about the inspected build, not a claim that every platform or later
-VerySync version has the same behavior.
+```rust,no_run
+use verysync_sidecar::{StorageEndpoint, StorageProtocol};
+# fn example(pem: String) -> verysync_sidecar::Result<()> {
+let endpoint = StorageEndpoint::remote(StorageProtocol::Sftp, "sftp://127.0.0.1:12345/")?
+    .credentials("explicit-user", "")?
+    .private_key_pem(pem)?;
+# let _ = endpoint;
+# Ok(())
+# }
+```
+
+A fixed v2.33.2 macOS ARM64 public-API case observed actual wrong-key rejection,
+key-authenticated browsing, exact preview/run identities, complete transferred
+bytes, source/destination-only retention, unregister-without-deletion and normal
+owned-tree exit. Final current-source native platform coverage remains pending.
+Earlier escaped-key creation attempts were unknown outcomes because the SDK
+misclassified native omission of the empty password; those failed records remain
+historical evidence and are not rewritten as successful earlier tests.
+
+The native limits probe still rejects this valid backend encoding with HTTP500
+and its `SSH private key: ssh: no key found` error. The SDK preserves that actual
+failure; it does not invent capability flags, substitute a password probe or
+claim that a successful listing validates the limits interface. Static inspection
+shows that the backend applies Go string unquoting before key parsing, whereas
+the limits probe parses the same field directly. No encoding accepted by both
+consumers has been verified. This limitation is separate from actual key-based
+backend operations and verified host identity.
+
+`private_key_file(TargetPath)` retains the bundled GUI's native path-field
+selection. It opens no controller key file. The fixed macOS ARM64 Local Sync
+backend rejected a valid synthetic RSA key-file path before authentication; this
+path selection has no positive key-file acceptance. Inline private-key support
+adds neither implicit key-file upload nor SSH-agent/password fallback. Other
+platforms and later native versions require their own evidence.
 
 ## Per-protocol directional and selection evidence
 

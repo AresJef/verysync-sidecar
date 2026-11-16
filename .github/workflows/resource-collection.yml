@@ -91,14 +91,14 @@ jobs:
           python scripts/preflight-native-resources.py
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-resource-v11-pretrial"
+          --evidence-dir "${{ runner.temp }}/vs-resource-v12-pretrial"
       - name: Collect four formal and two independent original-order cycles
         if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
         run: >-
           python scripts/collect-native-resources.py --stage all
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v11"
+          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v12"
       - name: Require exact owned-program cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
@@ -110,20 +110,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
-            ${{ runner.temp }}/vs-frozen-resource-v11/**/collection-state.json
-            ${{ runner.temp }}/vs-frozen-resource-v11/**/frozen-protocol.json
-            ${{ runner.temp }}/vs-frozen-resource-v11/**/accepted-group.json
-            ${{ runner.temp }}/vs-frozen-resource-v11/**/attempt.json
-            ${{ runner.temp }}/vs-frozen-resource-v11/**/preparation-result.json
-            ${{ runner.temp }}/vs-frozen-resource-v11/**/quality-result.json
-            ${{ runner.temp }}/vs-frozen-resource-v11/**/samples.jsonl
-            ${{ runner.temp }}/vs-frozen-resource-v11/**/events.jsonl
-            ${{ runner.temp }}/vs-frozen-resource-v11/**/safe-error.json
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/collection-state.json
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/frozen-protocol.json
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/accepted-group.json
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/attempt.json
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/preparation-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/quality-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/samples.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/events.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/safe-error.json
             ${{ runner.temp }}/vs-resource-clock-calibration/calibration.json
             ${{ runner.temp }}/vs-resource-clock-calibration/safe-error.json
-            ${{ runner.temp }}/vs-resource-v11-pretrial/**/preparation-result.json
-            ${{ runner.temp }}/vs-resource-v11-pretrial/**/quality-result.json
-            ${{ runner.temp }}/vs-resource-v11-pretrial/**/samples.jsonl
-            ${{ runner.temp }}/vs-resource-v11-pretrial/**/events.jsonl
-            ${{ runner.temp }}/vs-resource-v11-pretrial/**/safe-error.json
-            ${{ runner.temp }}/vs-resource-v11-pretrial/pretrial-result.json
+            ${{ runner.temp }}/vs-resource-v12-pretrial/**/preparation-result.json
+            ${{ runner.temp }}/vs-resource-v12-pretrial/**/quality-result.json
+            ${{ runner.temp }}/vs-resource-v12-pretrial/**/samples.jsonl
+            ${{ runner.temp }}/vs-resource-v12-pretrial/**/events.jsonl
+            ${{ runner.temp }}/vs-resource-v12-pretrial/**/safe-error.json
+            ${{ runner.temp }}/vs-resource-v12-pretrial/pretrial-result.json

@@ -1,12 +1,12 @@
 {
-  "protocol_id": "VS045-native-resources-v11",
-  "version": 11,
+  "protocol_id": "VS045-native-resources-v12",
+  "version": 12,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "2255a1f408564073dc93a84db87828f2f2e1284a312ae887a1739ef4a68c8a14",
+    "rust_sources_sha256": "63b632e3023ac05200288eb5a0e4ad0bb921792b175a3d11ab4daf9d9d02b004",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
     "sampler_sha256": "c2021cd0c9927d74493e37ce7abe0d085ba2cdae26e9fc33b14cfd4cfd0ac819",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a"
@@ -120,9 +120,9 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "58959db0b1b5657b72b9cd86256ab6df3e8a66d4a4441f027c70c0e63761469d",
+    "previous_protocol_sha256": "fdc7bceec2af8dce21958eed61bd9c7b5154ada79dd9397386840fd833f44afa",
     "retained": "All prior source/protocol datasets and original attempts/deadlines retained separately, never v5 members.",
-    "changes": "Typed Local-API lifecycle/upgrade/cleanup and source-bound index stream reuse the existing bounded event worker. Rust source identity refreshed before new acquisition; sampler and every measurement criterion unchanged.",
+    "changes": "Explicit inline SFTP key encoding and narrowly verified empty-password omission during key-authenticated creation readback. Native probe failure stays faithful. New Rust source identity; sampler and all measurement thresholds/workloads/quotas unchanged.",
     "unchanged": "Every Rust workload and artifact input, repeat count, operation timestamp semantics, native byte/state/exit verification, all quality/memory/stability thresholds and complete four formal+two independent fresh-process cycles.",
     "diagnostic_policy": "Initial unobserved previous durations are null; diagnostics never replace required counters or become new acceptance gates."
   },
