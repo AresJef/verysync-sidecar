@@ -490,9 +490,16 @@ async fn actual_windows_native_browser_preserves_data_and_cancels_observed_owned
     let identity = core.client().instance().device_id.clone();
     let before = snapshot(&state)?;
     fs::write(state.join("caller-sentinel.bin"), b"primary caller bytes")?;
+    eprintln!("native Windows browser phase: primary_ready=true");
     let receipt = core
         .request_native_browser(&helper, true, Duration::from_secs(15))
         .await?;
+    eprintln!(
+        "native Windows browser phase: verified_command_returned=true code={:?} outcome={:?} captures={}",
+        receipt.code,
+        receipt.outcome,
+        capture.calls()?.len()
+    );
     assert_eq!(receipt.code, Some(0));
     assert_eq!(receipt.outcome, NativeBrowserOutcome::CommandSucceeded);
     assert!(
@@ -502,7 +509,10 @@ async fn actual_windows_native_browser_preserves_data_and_cancels_observed_owned
             && receipt.helper_state_released
     );
     assert_eq!(receipt.program.sha256, expected);
-    capture.after_result(0, &url).await?;
+    capture
+        .after_result(0, &url)
+        .await
+        .map_err(|error| format!("verified native command desktop observation failed: {error}"))?;
     let helper_before = snapshot(&helper)?;
     assert_ne!(helper_before[1], before[1]);
     assert_ne!(helper_before[2], before[2]);
@@ -523,6 +533,12 @@ async fn actual_windows_native_browser_preserves_data_and_cancels_observed_owned
     let unverified = core
         .request_native_browser(&helper, false, Duration::from_secs(15))
         .await?;
+    eprintln!(
+        "native Windows browser phase: unverified_command_returned=true code={:?} outcome={:?} captures={}",
+        unverified.code,
+        unverified.outcome,
+        capture.calls()?.len()
+    );
     assert_eq!(unverified.outcome, NativeBrowserOutcome::CommandSucceeded);
     assert!(!unverified.authenticated_identity_checked && !unverified.native_verify_requested);
     assert!(unverified.descendants_released && unverified.helper_state_released);
