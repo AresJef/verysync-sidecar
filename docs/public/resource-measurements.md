@@ -85,3 +85,30 @@ limit remain required. This follows the pinned
 The v2 macOS Intel pretrial exceeded that limit; its insufficient observation is
 retained. Every v3 profile requires fresh preparation and complete new formal and
 independent cycles. Earlier v1/v2 rows cannot supply v3 coverage.
+
+Revalidate downloaded evidence offline using the exact frozen validation helpers:
+
+```console
+python scripts/report-native-resources.py \
+  --protocol tests/fixtures/resource-protocol.json \
+  --profile macos-arm64-standard=/absolute/extracted-artifact \
+  --output /absolute/fresh/report-directory
+```
+
+Repeat `--profile registered-profile=directory` for all six registered profiles.
+Each artifact root must contain one matching all-stage collection and its own
+opposite-order preparation. For local evidence stored separately, add
+`--preparation registered-profile=/absolute/pretrial-directory`. The reporter
+never starts VerySync, compiles Rust, downloads files, or changes raw evidence.
+It writes JSON and Markdown, returns 0 only for complete strict PASS, 2 for
+INCONCLUSIVE, and 1 for failed criteria or invalid evidence. A partial profile
+report remains INCONCLUSIVE overall even if that profile's memory criterion passes.
+
+The reporter rehashes manifests and raw records, recomputes quality from all
+snapshots, checks the independent process and binary identities, and preserves
+all attempted-case counts. Its tables include all accepted slow and fast values;
+JSON retains per-observation provenance, formal/independent statistics, CPU and
+RSS curves, and the frozen memory envelope. RSS and CPU describe the controller
+and the engine root separately; engine descendants are not included in root
+counters. The latency relative-MAD screen is descriptive and does not introduce
+a new latency target or replace the required RSS repeatability criterion.
