@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add explicit inline SFTP private keys for native backend operations and correct
+  empty-password omission during key-authenticated job readback. Keep the native
+  limits-probe and verified-host-identity limitations explicit.
+
 - Add source-bound Local-API index event subscriptions, explicit restart/shutdown
   and server-selected upgrade requests, and guarded native temporary cleanup.
   Keep acknowledgements separate from real process, file and installation effects.

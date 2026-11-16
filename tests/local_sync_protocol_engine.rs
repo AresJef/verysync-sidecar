@@ -388,3 +388,103 @@ async fn public_smb_domain_ntlm_and_guest_selection_have_actual_peer_and_data_ef
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary() -> TestResult
+{
+    use verysync_sidecar::Error;
+    let root = tempfile::Builder::new()
+        .prefix("vs-sftp-inline-")
+        .tempdir()?
+        .keep();
+    let source = root.join("source");
+    std::fs::create_dir(&source)?;
+    let bytes = b"actual inline SFTP key authenticated payload";
+    std::fs::write(source.join("key-auth.bin"), bytes)?;
+    let mut peer = storage_service::Service::start(StorageProtocol::Sftp, &root, Duration::ZERO)?;
+    std::fs::write(
+        peer.share.join("sentinel.bin"),
+        b"retained destination bytes",
+    )?;
+    let user = peer.endpoint.extra()["user"]
+        .as_str()
+        .ok_or("synthetic user absent")?;
+    let base = peer.endpoint.clone().credentials(user, "")?;
+    let good = base.clone().private_key_pem(std::fs::read_to_string(
+        root.join("synthetic-client-key.pem"),
+    )?)?;
+    let wrong = base.private_key_pem(std::fs::read_to_string(
+        root.join("synthetic-host-key.pem"),
+    )?)?;
+    let mut core = ManagedInstance::start(
+        options(&root.join("core"))?.management_request_timeout(Duration::from_secs(30))?,
+    )
+    .await?;
+    let identity = core.client().instance().device_id.clone();
+    let started = std::time::Instant::now();
+    let bad = core
+        .client()
+        .browse_storage_endpoint(&wrong, "")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            bad,
+            Error::Api { .. } | Error::Http { .. } | Error::AccessDenied { .. }
+        ),
+        "wrong private key must be an actual native rejection"
+    );
+    let wrong_key_refusal_ms = started.elapsed().as_millis();
+    let probe = core
+        .client()
+        .probe_storage_endpoint(&good)
+        .await
+        .unwrap_err();
+    let Error::MutationOutcomeUnknown { source: cause, .. } = probe else {
+        return Err("expected native probe outcome boundary".into());
+    };
+    let response = match *cause {
+        Error::Api { response, .. } | Error::Http { response } => response,
+        _ => return Err("expected actual native probe error, not request timeout".into()),
+    };
+    let native: serde_json::Value = serde_json::from_slice(response.body_bytes())?;
+    assert_eq!(response.status(), 500);
+    assert!(native["error"]
+        .as_str()
+        .is_some_and(|s| s.contains("no key found")));
+    let listing = core.client().browse_storage_endpoint(&good, "").await?;
+    assert!(listing
+        .entries
+        .iter()
+        .any(|entry| entry.path == "sentinel.bin"));
+    let job = core
+        .client()
+        .create_local_sync_job(
+            &CreateLocalSyncJob::new(
+                "explicit inline key",
+                StorageEndpoint::local(TargetPath::local(&source))?,
+                good,
+                LocalSyncMode::MirrorAToB,
+            )?
+            .ignore_permissions(true),
+        )
+        .await?;
+    let run = execute(&core, &job.job_id).await?;
+    assert_eq!(run.summary.failed, 0);
+    assert_eq!(std::fs::read(peer.share.join("key-auth.bin"))?, bytes);
+    assert_eq!(std::fs::read(source.join("key-auth.bin"))?, bytes);
+    assert_eq!(
+        std::fs::read(peer.share.join("sentinel.bin"))?,
+        b"retained destination bytes"
+    );
+    core.client().delete_local_sync_job(&job.job_id).await?;
+    assert_eq!(std::fs::read(peer.share.join("key-auth.bin"))?, bytes);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let exit = core.shutdown(Duration::from_secs(15)).await?;
+    assert_eq!(exit.code, Some(0));
+    assert!(!exit.forced && exit.tree_stopped && exit.state_released);
+    peer.stop()?;
+    println!("native inline SFTP key wrong_key_actual_rejection_ms={wrong_key_refusal_ms} no_password_fallback=true key_authenticated_browse=true exact_preview_run=true all_file_bytes=true registration_removal_keeps_files=true identity_retained=true native_probe500_key_parser_boundary=true verified_host_identity_not_claimed=true normal_tree_exit=true");
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}

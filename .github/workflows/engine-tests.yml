@@ -562,6 +562,48 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+            target: local_sync_protocol_engine
+            label: inline-sftp-key
+            filter: public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary
+            trace: "0"
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+            target: local_sync_protocol_engine
+            label: inline-sftp-key
+            filter: public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary
+            trace: "0"
+          - package: linux-amd64-standard
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-gnu
+            target: local_sync_protocol_engine
+            label: inline-sftp-key
+            filter: public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary
+            trace: "0"
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+            target: local_sync_protocol_engine
+            label: inline-sftp-key
+            filter: public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary
+            trace: "0"
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+            target: local_sync_protocol_engine
+            label: inline-sftp-key
+            filter: public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary
+            trace: "0"
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+            target: local_sync_protocol_engine
+            label: inline-sftp-key
+            filter: public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary
+            trace: "0"
           - package: linux-arm64-standard
             runner: ubuntu-24.04-arm
             rust: aarch64-unknown-linux-gnu
@@ -774,6 +816,21 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
+      - name: Prepare the explicit x64 protocol-peer interpreter on Windows ARM
+        if: matrix.target == 'local_sync_protocol_engine' && matrix.package == 'windows-arm64-standard'
+        id: storage_tools_python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+          architecture: x64
+          update-environment: false
+      - name: Prepare private protocol-peer tools for the inline-key case
+        if: matrix.target == 'local_sync_protocol_engine'
+        env:
+          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
+        run: >-
+          python scripts/prepare-storage-test-environment.py
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
       - name: Require Cargo artifact and separate Winsock preflight contracts
         run: python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
       - name: Install the explicit Windows x86 assembly build prerequisite
