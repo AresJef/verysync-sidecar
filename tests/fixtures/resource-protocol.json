@@ -1,12 +1,12 @@
 {
-  "protocol_id": "VS045-native-resources-v20",
-  "version": 20,
+  "protocol_id": "VS045-native-resources-v21",
+  "version": 21,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "fa750389fc20b26043fd7be851588f7f91c086245eb2b5f4883911b084b39b84",
+    "rust_sources_sha256": "0e39cd5be80ce87e2373a5eb58e09a96f67b6c8a343fb299e61a4bdb3dbb42a0",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
     "sampler_sha256": "79a67943cb502bd4e9dc58e62faa754f6d89c45c0da206202ef41c094bd36e51",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a"
@@ -126,9 +126,9 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "5c7c5770916412b6fabfbc53f81d571bc55e5705ff836c3e3a51fd7374d1c9c4",
+    "previous_protocol_sha256": "41bac9128627e356a4f715de6e1726e34ee357eb821d8c50c886404fc4270598",
     "retained": "All previous datasets and original attempts/deadlines remain historical, not members of this source protocol. No project budget or prior overrun is reset.",
-    "changes": "Rust library now models explicit native FTP/SFTP version archive URIs. Resource worker routines, observer, counter, timing, workloads, quality, full-order quotas and deadlines are unchanged. Freeze the complete new measured Rust input; old version19 measurements retain their original identity and are not new formal members.",
+    "changes": "Native SOCKS5 preference now validates the host:port authority required by v2.33.2; owned direct-core startup reads the same persisted selection and passes ALL_PROXY/ALL_PROXY_NO_FALLBACK only to its child. Resource workloads, observer, counters, timing boundaries, all thresholds, complete orders, quotas, deadlines and attempt limits are unchanged. Each actual profile repeats source-bound preparation before new v21 formal/independent acquisition; all v20 results retain their original historical identity.",
     "unchanged": "Measured workloads, repeat counts, timing boundaries, native byte/state/exit checks, all quality/memory/stability thresholds and four formal plus two independent fresh-process cycles.",
     "diagnostic_policy": "Initial unobserved previous durations are null; diagnostics never replace required counters or become new acceptance gates."
   },

@@ -323,7 +323,7 @@ async fn native_system_preferences_write_real_event_audit_and_preserve_target_se
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     let address = listener.local_addr()?;
     assert_ne!(address.port(), 18886);
-    let proxy = format!("http://{address}");
+    let proxy = address.to_string();
     let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
     let before = core.client().configuration().await?;
     let update = core
@@ -908,5 +908,203 @@ async fn defaults_are_inherited_only_by_new_objects_and_survive_normal_restart()
         assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     }
     println!("configuration_defaults_effects=18");
+    Ok(())
+}
+
+#[path = "common/socks5_peer.rs"]
+mod socks5_peer;
+
+#[tokio::test]
+async fn native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data(
+) -> TestResult {
+    let root = tempfile::Builder::new().prefix("vpx-").tempdir()?.keep();
+    let env_names = [
+        "ALL_PROXY",
+        "ALL_PROXY_NO_FALLBACK",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+    ];
+    let inherited: Vec<_> = env_names.iter().map(std::env::var_os).collect();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let aid = a.client().instance().device_id.clone();
+    let bid = b.client().instance().device_id.clone();
+    let upstream = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            for status in b.client().listener_status().await?.into_values() {
+                for address in status.lan_addresses {
+                    if let Some(target) = address
+                        .strip_prefix("tcp://")
+                        .and_then(|v| v.parse::<std::net::SocketAddr>().ok())
+                        .filter(|v| {
+                            v.ip() == std::net::Ipv4Addr::LOCALHOST
+                                && !matches!(v.port(), 0 | 18886)
+                        })
+                    {
+                        return Ok::<_, Error>(target);
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let peer = socks5_peer::Socks5Peer::start(upstream).await?;
+    let keys = a.client().generate_share().await?;
+    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
+    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
+    let source = root.join("source");
+    let received = root.join("receiver");
+    std::fs::create_dir(&source)?;
+    let sample: Vec<u8> = (0..32768).map(|i| (i % 251) as u8).collect();
+    let name = "private 二 %.bin";
+    std::fs::write(source.join(name), &sample)?;
+    let af = a
+        .client()
+        .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(&source)).paused(true))
+        .await?;
+    let bf = b
+        .client()
+        .join_folder(&JoinFolderOptions::new(ro, TargetPath::local(&received)).paused(true))
+        .await?;
+    for (client, folder, id, addresses) in [
+        (
+            a.client(),
+            &af.configuration.id,
+            &bid,
+            vec!["tcp://198.51.100.17:22000".into()],
+        ),
+        (
+            b.client(),
+            &bf.configuration.id,
+            &aid,
+            vec!["dynamic".into()],
+        ),
+    ] {
+        client
+            .update_network_configuration(&NetworkPatch::default().reconnection_interval_seconds(5))
+            .await?;
+        client
+            .create_device(
+                &CreateDeviceOptions::new(id.clone()).settings(
+                    DevicePatch::default()
+                        .addresses(addresses)
+                        .allowed_transports(vec![DeviceTransport::Tcp])
+                        .advanced_configuration(
+                            DeviceAdvancedPatch::default().num_connections(1),
+                        )?,
+                ),
+            )
+            .await?;
+        client.share_folder_with(folder, id).await?;
+        client.resume_folder(folder).await?;
+    }
+    let wrong = SystemPreferencesPatch::default()
+        .proxy_enabled(true)
+        .proxy_address(peer.authority("wrong-private-password"));
+    assert!(!format!("{wrong:?}").contains("wrong-private-password"));
+    assert!(
+        a.client()
+            .update_system_preferences(&wrong)
+            .await?
+            .requested_fields_match
+    );
+    a.restart(Duration::from_secs(30)).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while peer.counts().0 == 0 {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?;
+    assert_eq!(peer.counts().1, 0);
+    assert_eq!(peer.counts().2, 0);
+    assert!(!a
+        .client()
+        .connections()
+        .await?
+        .connections
+        .get(&bid)
+        .is_some_and(|v| v.connected));
+    assert!(!received.join(name).try_exists()?);
+    let selected = peer.authority("private%40token");
+    let patch = SystemPreferencesPatch::default()
+        .proxy_enabled(true)
+        .proxy_address(selected.clone());
+    assert!(!format!("{patch:?}").contains("private%40token"));
+    let change = a.client().update_system_preferences(&patch).await?;
+    assert!(change.requested_fields_match);
+    assert!(!format!("{change:?}").contains("private%40token"));
+    a.restart(Duration::from_secs(30)).await?;
+    assert_eq!(
+        a.client().system_preferences().await?.proxy_address(),
+        selected
+    );
+    a.client().request_scan(&af.configuration.id).await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if std::fs::read(received.join(name)).ok().as_deref() == Some(sample.as_slice()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?;
+    assert!(peer.counts().1 > 0 && peer.counts().2 > 0);
+    assert!(a
+        .client()
+        .connections()
+        .await?
+        .connections
+        .get(&bid)
+        .is_some_and(|v| v.connected));
+    assert!(b
+        .client()
+        .connections()
+        .await?
+        .connections
+        .get(&aid)
+        .is_some_and(|v| v.connected));
+    assert_eq!(a.client().instance().device_id, aid);
+    assert_eq!(b.client().instance().device_id, bid);
+    let before_disable = peer.counts();
+    assert!(
+        a.client()
+            .update_system_preferences(
+                &SystemPreferencesPatch::default()
+                    .proxy_enabled(false)
+                    .proxy_address("")
+            )
+            .await?
+            .requested_fields_match
+    );
+    a.restart(Duration::from_secs(30)).await?;
+    // Include startup and the explicit five-second reconnect interval.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(peer.counts(), before_disable);
+    assert!(!a
+        .client()
+        .connections()
+        .await?
+        .connections
+        .get(&bid)
+        .is_some_and(|v| v.connected));
+    let cleared = a.client().system_preferences().await?;
+    assert!(!cleared.proxy_enabled && cleared.proxy_address().is_empty());
+    for core in [&mut a, &mut b] {
+        let exit = core.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    }
+    peer.close().await?;
+    assert_eq!(std::fs::read(source.join(name))?, sample);
+    assert_eq!(std::fs::read(received.join(name))?, sample);
+    assert_eq!(
+        env_names.iter().map(std::env::var_os).collect::<Vec<_>>(),
+        inherited
+    );
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "native SOCKS5 proxy evidence: {}",
+        serde_json::json!({"actual_wrong_credentials_refused":true,"actual_refusal_did_not_connect_or_transfer":true,"actual_percent_encoded_credentials_accepted":true,"actual_native_socks5_connect_to_fixed_synthetic_destination":true,"actual_only_owned_loopback_upstream_forwarded":true,"actual_bidirectional_native_device_connection":true,"actual_file_bytes_transferred_through_selected_proxy":true,"actual_selected_authority_retained_on_restart":true,"actual_disable_and_clear_stop_using_selected_peer":true,"actual_source_and_receiver_bytes_retained":true,"actual_identities_retained":true,"actual_parent_proxy_environment_unchanged":true,"actual_both_normal_owned_tree_and_state_exits":true})
+    );
     Ok(())
 }

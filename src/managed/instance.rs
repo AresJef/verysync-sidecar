@@ -378,6 +378,7 @@ fn owner_thread(
         &mut prepared.lease,
         options.lifetime,
         options.upgrade_checks,
+        prepared.outbound_proxy.as_deref(),
     );
     let (mut process, mut capture) = match spawned {
         Ok(pair) => pair,
@@ -470,6 +471,7 @@ fn spawn_core(
     lease: &mut super::state::StateLease,
     lifetime: super::ManagedLifetime,
     upgrade_checks: super::ManagedUpgradeChecks,
+    outbound_proxy: Option<&str>,
 ) -> Result<(OwnedProcess, File)> {
     let mut capture = super::native::open_private(&state.join(".verysync-sidecar-core.log"), false)
         .map_err(|e| io_error("open private core diagnostics", e))?;
@@ -489,6 +491,11 @@ fn spawn_core(
         command.arg("--no-upgrade");
     } else {
         command.env_remove("STNOUPGRADE");
+    }
+    if let Some(proxy) = outbound_proxy {
+        command
+            .env("ALL_PROXY", proxy)
+            .env("ALL_PROXY_NO_FALLBACK", "1");
     }
     lease.release_engine_lock_for_spawn();
     let retained = lifetime == super::ManagedLifetime::CallerOwned;

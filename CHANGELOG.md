@@ -2,6 +2,13 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Correct native SOCKS5 preferences to use the fixed core's host:port authority,
+  including percent-encoded credentials, instead of a full URI. On explicit
+  managed startup/restart, apply the persisted selection only to the owned core's
+  environment so direct-core mode retains native proxy initialization. Verify
+  actual authentication refusal, file transfer, disable and data preservation
+  separately from configuration readback; six-platform acceptance is pending.
+
 - Add explicit native FTP/SFTP archive URI selection while preserving version
   policy and unknown fields. Keep configuration acknowledgement separate from
   real archival; SFTP has an isolated remote restore case and FTP effects remain

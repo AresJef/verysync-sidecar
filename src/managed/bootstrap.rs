@@ -19,6 +19,7 @@ pub(super) struct Prepared {
     pub(super) info: ProgramInfo,
     pub(super) key: ApiKey,
     pub(super) identity: DeviceId,
+    pub(super) outbound_proxy: Option<String>,
 }
 
 pub(super) fn check_active(cancel: &Receiver<()>, deadline: Instant) -> Result<()> {
@@ -312,7 +313,7 @@ pub(super) fn prepare(
             return Err(Error::UnmanagedState);
         }
     }
-    let key = configure(state, options, first_configuration)?;
+    let (key, outbound_proxy) = configure(state, options, first_configuration)?;
     if first_configuration {
         native::create_private(&ready)
             .map_err(|e| io_error("record startup configuration", e))?
@@ -329,6 +330,7 @@ pub(super) fn prepare(
         },
         key,
         identity,
+        outbound_proxy,
     })
 }
 
@@ -634,10 +636,15 @@ pub(super) fn existing_connection(options: &ManagedOptions) -> Result<(ApiKey, D
     Ok((persisted_key(&root)?, identity))
 }
 
-fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiKey> {
+fn configure(
+    state: &Path,
+    options: &ManagedOptions,
+    fresh: bool,
+) -> Result<(ApiKey, Option<String>)> {
     let path = state.join("setting.dat");
     let mut root = read_configuration(state)?;
     let key = persisted_key(&root)?;
+    let outbound_proxy = native_outbound_proxy(&root)?;
     let address = management_address(options)?;
     for (key, value) in [("1", true), ("7", false), ("10", false)] {
         set(field_mut(&mut root, "4")?, key, Value::Boolean(value))?;
@@ -696,7 +703,24 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
     drop(output);
     fs::rename(&scratch.0, &path)
         .map_err(|e| io_error("atomically replace owned configuration", e))?;
-    Ok(key)
+    Ok((key, outbound_proxy))
+}
+
+fn native_outbound_proxy(root: &Value) -> Result<Option<String>> {
+    // Fixed schema 54 fields 77/78 are userProxyEnabled/userProxyAddress.
+    // The upstream monitor prepends socks5:// and disables direct fallback.
+    // Managed direct-core launches must apply the same child-only selection.
+    let enabled = root["5"]["77"].as_bool().ok_or(Error::ManagedFailure {
+        reason: "native proxy selection is not a baseline boolean",
+    })?;
+    if !enabled {
+        return Ok(None);
+    }
+    let address = root["5"]["78"].as_str().ok_or(Error::ManagedFailure {
+        reason: "native proxy address is not baseline text",
+    })?;
+    crate::system_preferences::validate_proxy_address(address)?;
+    Ok((!address.is_empty()).then(|| format!("socks5://{address}")))
 }
 
 #[cfg(test)]
