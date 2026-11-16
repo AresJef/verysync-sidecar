@@ -90,13 +90,19 @@ check cannot atomically pin a subsequent provider-selected upgrade.
 
 `UpgradeReleaseUnavailable` preserves the fixed kernel's known no-matching-release
 refusal. The [official v2.33.2 provider metadata](https://upgrades.verysync.cn/meta.json)
-observed on 2026-11-13 omits Windows ARM64,
+observed on 2026-11-13 and checked again on 2026-11-16 omits Windows ARM64,
 although that architecture has a fixed official download. Availability checks
 and provider-trigger requests therefore refuse that target. The absence is
 separately tested without claiming positive provider-mediated upgrading there.
 Explicit program selection, archive upload and CLI `FromUrl` remain separate
-paths with their own acceptance. Positive Windows ARM64 provider upgrading
-remains pending; this condition does not remove it from the project scope.
+paths with their own acceptance. For this fixed version and the observed feed,
+provider-mediated upgrading on Windows ARM64 is unavailable. The tested result
+is the native refusal, with the executable, configuration, identity, folder
+index and files retained; it is not a successful provider upgrade. Native CLI
+checks and provider commands likewise retain the known missing-release result.
+If the feed changes, check it again before assuming this boundary still holds.
+This does not relax positive upgrade requirements for other platforms or for
+the explicit archive and URL paths on Windows ARM64.
 
 `request_server_selected_upgrade` explicitly asks that provider to choose and
 install a release. It can overwrite the kernel executable and end the process.
