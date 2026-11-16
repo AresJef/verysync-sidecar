@@ -259,8 +259,15 @@ handshake, with no completed handshake or bind request. The owned core must
 retain the specific native missing-server-name error, API management, identity
 and caller bytes, then release its tree and state normally. This case rejects
 an unrelated authentication failure or unavailable peer as evidence of that
-specific limitation. Six native profile results remain required; preparing this
-case or compiling it does not establish the boundary on a platform.
+specific limitation. The two strict-certificate cases now have actual evidence on all six standard
+macOS/Linux/Windows AMD64/ARM64 profiles in
+[run 43959371005](https://github.com/AresJef/verysync-sidecar/actions/runs/43959371005)
+under producer `174ad5fbb293b72cbfd1a028d454cedf4f6437fb`, with the original
+source and input identities retained. Every profile passes the independent
+strict LDAPS contract and the specific native StartTLS refusal contract.
+This establishes the stated refusal boundary, with no successful strict
+StartTLS identity-verification or login claim. Other architectures and final
+integrated acceptance retain their own gates.
 
 
 
