@@ -127,9 +127,10 @@ pub use capabilities::{
 };
 pub use client::{
     Client, ConnectOptions, EngineVersion, InstanceInfo, LocalApiClient, LocalApiConnectOptions,
-    LocalApiFolder, LocalApiFolderCollectionUpdate, LocalApiHardware, LocalApiHistoryFilter,
-    LocalApiHistoryPage, LocalApiHistoryRecord, LocalApiPeer, LocalApiScanAcknowledgement,
-    VersionCompatibility, VersionPolicy,
+    LocalApiExitAcknowledgement, LocalApiExitAction, LocalApiFolder,
+    LocalApiFolderCollectionUpdate, LocalApiHardware, LocalApiHistoryFilter, LocalApiHistoryPage,
+    LocalApiHistoryRecord, LocalApiPeer, LocalApiScanAcknowledgement,
+    LocalApiUpgradeAcknowledgement, VersionCompatibility, VersionPolicy,
 };
 pub use configuration::{
     ConfigurationSectionUpdate, ConfigurationSnapshot, ConfigurationSyncState, ConfigurationUpdate,

@@ -125,6 +125,44 @@ rejection during a full-item preflight prevents that modifying request entirely.
 Licensed actual write effects remain pending; synthetic readbacks do not replace
 authorized native acceptance.
 
+`request_restart()` and `request_shutdown()` send one explicit native action and
+require their distinct text acknowledgements. The native handler flushes its
+response before a nonblocking exit request; an acknowledgement proves neither
+process exit nor automatic relaunch. For an owned instance, await
+`ManagedInstance::wait_for_exit()` with an explicit caller deadline, then choose
+whether to start another generation. A local macOS ARM64 native case observed
+actual restart exit3, a separately requested new generation with retained
+identity/shares/files, and actual shutdown exit0 with the owned tree stopped and
+state released. These are distinct observations from the HTTP acknowledgements.
+
+`request_server_selected_upgrade()` explicitly invokes the core's release
+provider and installer, which can replace its executable. Use a dedicated mutable
+program and backups. The SDK downloads/selects nothing itself and does not retry,
+relaunch or roll back. `restart_acknowledged: false` preserves the core's empty
+successful reply, distinct from its `restarting` marker. Neither is an installed
+version/hash receipt. Native Local-API upgrade effects remain pending acceptance;
+synthetic acknowledgement contracts do not establish an installation.
+
+`request_folder_temporary_cleanup(folder)` is an explicit destructive operation
+on a configured folder's `.verysync/*.tmp` and `*.sess` entries, including matching
+directories. The clone-shared mutation guard covers folder preflight and dispatch.
+The core can acknowledge success while logging an individual removal failure;
+verify required file effects independently. The local native case observed both
+a matching file and a matching directory removed, with ordinary bytes retained.
+It does not sweep other folders, retry removal or automatically request a scan.
+
+`subscribe_index_events(options)` and
+`subscribe_filtered_index_events(filter, options)` use the native licensed
+Local-API event buffer and the existing bounded event-stream behavior: consumed
+cursors, backpressure, explicit gaps, finite read recovery and explicit close.
+`EventSource::LocalIndex` binds each cursor to this source and its canonical
+filter; GUI, disk and other filter cursors are rejected before a request. Initial
+failure starts no background worker and is not retried. Native per-filter buffers
+are finite; a native limit can select the latest tail, so the stream does not
+promise durable history or gap-free replay. Local free-instance default and
+filtered subscription attempts both returned native license code3001. Licensed
+positive index events and final current-source platform coverage remain pending.
+
 For a library-owned instance, `ManagedOptions::local_api_enabled(true)` explicitly
 sets the native startup flag. It requires an HTTP(S) management endpoint and
 grants no commercial entitlement. The default preserves Local-API settings.

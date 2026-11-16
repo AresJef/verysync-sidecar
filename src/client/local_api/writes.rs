@@ -1,8 +1,8 @@
 //! Licensed native configuration proxy routes with guarded readbacks.
-use super::{control::checked_control_response, LocalApiClient};
+use super::LocalApiClient;
 use crate::{
     CreateFolderOptions, Error, FolderConfig, FolderDefaults, FolderId, FolderPatch, FolderRemoval,
-    FolderUpdate, RawMethod, RawRequest, RawResponse, RequestEffect, Result,
+    FolderUpdate, RawMethod, RawRequest, RequestEffect, Result,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,17 +30,6 @@ impl LocalApiClient {
             )
             .await?;
         wire.into_config(style)
-    }
-
-    async fn send_configuration_locked(
-        &self,
-        request: RawRequest,
-        operation: &'static str,
-        _guard: &tokio::sync::MutexGuard<'_, ()>,
-    ) -> Result<RawResponse> {
-        self.system_status().await?;
-        let response = self.send_raw(request).await?;
-        checked_control_response(operation, response, true)
     }
 
     /// Create one guarded folder using an explicit complete native template.
@@ -134,7 +123,7 @@ impl LocalApiClient {
                 });
             }
         }
-        self.send_configuration_locked(request, "create Local-API folder", &guard)
+        self.control_response_locked(request, "create Local-API folder", &guard)
             .await?;
         self.folder_configuration(&options.id)
             .await
@@ -156,7 +145,7 @@ impl LocalApiClient {
         )?;
         let guard = self.connection.mutation_lock.lock().await;
         self.folder_configuration(id).await?;
-        self.send_configuration_locked(request, "patch Local-API folder", &guard)
+        self.control_response_locked(request, "patch Local-API folder", &guard)
             .await?;
         let configuration = self
             .folder_configuration(id)
@@ -180,7 +169,7 @@ impl LocalApiClient {
             item(RawMethod::Put, &configuration.id, RequestEffect::MayModify)?.json_body(&body)?;
         let guard = self.connection.mutation_lock.lock().await;
         self.folder_configuration(&configuration.id).await?;
-        self.send_configuration_locked(request, "replace Local-API folder configuration", &guard)
+        self.control_response_locked(request, "replace Local-API folder configuration", &guard)
             .await?;
         let observed = self
             .folder_configuration(&configuration.id)
@@ -227,7 +216,7 @@ impl LocalApiClient {
         .json_body(&serde_json::Value::Array(body))?;
         let guard = self.connection.mutation_lock.lock().await;
         self.folders().await?;
-        self.send_configuration_locked(request, "replace Local-API folder collection", &guard)
+        self.control_response_locked(request, "replace Local-API folder collection", &guard)
             .await?;
         let projected = self
             .folders()
@@ -264,7 +253,7 @@ impl LocalApiClient {
         let request = item(RawMethod::Delete, id, RequestEffect::MayModify)?;
         let guard = self.connection.mutation_lock.lock().await;
         let previous_configuration = self.folder_configuration(id).await?;
-        self.send_configuration_locked(request, "unregister Local-API folder", &guard)
+        self.control_response_locked(request, "unregister Local-API folder", &guard)
             .await?;
         let observed = self
             .folders()

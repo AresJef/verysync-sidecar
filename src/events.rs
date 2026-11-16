@@ -22,6 +22,9 @@ pub enum EventSource {
     Disk,
     /// A canonical explicit name selection on `GET /rest/events`.
     Filtered(EventFilter),
+    /// Native Local-API index-event buffer; optional canonical filter. Cursors
+    /// are never interchangeable with GUI-key standard/disk/filtered sources.
+    LocalIndex(Option<EventFilter>),
 }
 
 /// A bounded, canonical selection of native event names.
@@ -122,7 +125,7 @@ impl<'de> Deserialize<'de> for EventFilter {
 pub struct EventCursor {
     /// Native buffer whose sequence IDs this cursor describes.
     pub source: EventSource,
-    /// Authenticated engine device identity.
+    /// Selected engine device identity.
     pub device_id: DeviceId,
     /// Reported engine start time, when available.
     pub engine_started_at: Option<String>,
@@ -441,7 +444,7 @@ pub(crate) fn validate_wire(events: &[WireEvent], limit: usize) -> bool {
         && events.windows(2).all(|pair| pair[0].id < pair[1].id)
 }
 
-async fn head(client: &Client, source: &EventSource) -> Result<EventCursor> {
+async fn head(client: &EventConnection, source: &EventSource) -> Result<EventCursor> {
     let status = client.system_status().await?;
     let latest = client.event_wire(source, 0, 1).await?;
     let after = client.system_status().await?;
@@ -508,40 +511,114 @@ impl Client {
         source: EventSource,
         options: EventOptions,
     ) -> Result<EventSubscription> {
-        tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
-            reason: "event subscriptions require a Tokio runtime with I/O and timers",
-        })?;
-        if let Some(cursor) = &options.cursor {
-            if cursor.source != source {
-                return Err(Error::InvalidConfiguration {
-                    reason: "event cursor belongs to another native event source",
-                });
-            }
-            if cursor.device_id != self.instance().device_id {
-                return Err(Error::IdentityMismatch {
-                    expected: cursor.device_id.clone(),
-                    actual: self.instance().device_id.clone(),
-                });
-            }
-        }
-        verify_version(self).await?;
-        let latest = head(self, &source).await?;
-        let cursor = options.cursor.clone().unwrap_or_else(|| latest.clone());
-        let (sender, receiver) = mpsc::channel(options.queue_capacity);
-        let worker_cursor = cursor.clone();
-        let client = self.clone();
-        let task = tokio::spawn(async move {
-            run(client, options, worker_cursor, latest, sender).await;
-        });
-        Ok(EventSubscription {
-            receiver,
-            task: Some(task),
-            cursor,
-        })
+        subscribe(EventConnection::Management(self.clone()), source, options).await
     }
 }
 
-async fn verify_version(client: &Client) -> Result<()> {
+impl crate::LocalApiClient {
+    /// Observe the native licensed Local-API index buffer using the same bounded
+    /// queue, source-bound cursor, explicit gap notifications and finite read
+    /// recovery as management streams. Initial failures start no task and are
+    /// not retried. This registers a native in-memory event subscription only;
+    /// it never enables licensing, manufactures an event or changes files.
+    pub async fn subscribe_index_events(&self, options: EventOptions) -> Result<EventSubscription> {
+        subscribe(
+            EventConnection::LocalApi(self.clone()),
+            EventSource::LocalIndex(None),
+            options,
+        )
+        .await
+    }
+    /// Observe one explicit canonical name filter on the Local-API index source.
+    /// Filtered/default and GUI-key cursors remain distinct. Unknown names are
+    /// sent explicitly, without claiming native recognition or reliable history.
+    pub async fn subscribe_filtered_index_events(
+        &self,
+        filter: EventFilter,
+        options: EventOptions,
+    ) -> Result<EventSubscription> {
+        subscribe(
+            EventConnection::LocalApi(self.clone()),
+            EventSource::LocalIndex(Some(filter)),
+            options,
+        )
+        .await
+    }
+}
+
+#[derive(Clone)]
+enum EventConnection {
+    Management(Client),
+    LocalApi(crate::LocalApiClient),
+}
+impl EventConnection {
+    fn instance(&self) -> &crate::InstanceInfo {
+        match self {
+            Self::Management(client) => client.instance(),
+            Self::LocalApi(client) => client.instance(),
+        }
+    }
+    async fn version(&self) -> Result<crate::EngineVersion> {
+        match self {
+            Self::Management(client) => client.version().await,
+            Self::LocalApi(client) => client.version().await,
+        }
+    }
+    async fn system_status(&self) -> Result<crate::SystemStatus> {
+        match self {
+            Self::Management(client) => client.system_status().await,
+            Self::LocalApi(client) => client.system_status().await,
+        }
+    }
+    async fn event_wire(
+        &self,
+        source: &EventSource,
+        since: u64,
+        limit: usize,
+    ) -> Result<Vec<WireEvent>> {
+        match self {
+            Self::Management(client) => client.event_wire(source, since, limit).await,
+            Self::LocalApi(client) => client.index_event_wire(source, since, limit).await,
+        }
+    }
+}
+async fn subscribe(
+    client: EventConnection,
+    source: EventSource,
+    options: EventOptions,
+) -> Result<EventSubscription> {
+    tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
+        reason: "event subscriptions require a Tokio runtime with I/O and timers",
+    })?;
+    if let Some(cursor) = &options.cursor {
+        if cursor.source != source {
+            return Err(Error::InvalidConfiguration {
+                reason: "event cursor belongs to another native event source",
+            });
+        }
+        if cursor.device_id != client.instance().device_id {
+            return Err(Error::IdentityMismatch {
+                expected: cursor.device_id.clone(),
+                actual: client.instance().device_id.clone(),
+            });
+        }
+    }
+    verify_version(&client).await?;
+    let latest = head(&client, &source).await?;
+    let cursor = options.cursor.clone().unwrap_or_else(|| latest.clone());
+    let (sender, receiver) = mpsc::channel(options.queue_capacity);
+    let worker_cursor = cursor.clone();
+    let task = tokio::spawn(async move {
+        run(client, options, worker_cursor, latest, sender).await;
+    });
+    Ok(EventSubscription {
+        receiver,
+        task: Some(task),
+        cursor,
+    })
+}
+
+async fn verify_version(client: &EventConnection) -> Result<()> {
     if client.version().await?.version != BASELINE_ENGINE_VERSION {
         return Err(Error::IncompatibleVersion {
             actual: "event engine is outside the fixed baseline".to_owned(),
@@ -569,7 +646,7 @@ async fn gap(
     .await
 }
 async fn batch(
-    client: &Client,
+    client: &EventConnection,
     options: &EventOptions,
     cursor: &mut EventCursor,
     latest: EventCursor,
@@ -630,7 +707,7 @@ fn invalid_batch() -> Error {
     }
 }
 async fn run(
-    client: Client,
+    client: EventConnection,
     options: EventOptions,
     mut cursor: EventCursor,
     initial: EventCursor,

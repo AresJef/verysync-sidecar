@@ -180,6 +180,21 @@ async fn native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_s
         assert!(matches!(error, Error::LicenseRequired { code: 3001, .. }));
     }
     assert!(!root.join("not-created").exists());
+    for error in [
+        local
+            .subscribe_index_events(EventOptions::default())
+            .await
+            .unwrap_err(),
+        local
+            .subscribe_filtered_index_events(
+                EventFilter::new([EventKind::Unknown("LocalIndexUpdated".to_owned())])?,
+                EventOptions::default(),
+            )
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(matches!(error, Error::LicenseRequired { code: 3001, .. }));
+    }
     assert_eq!(enabled.client().folder(&folder_id).await?.label, full.label);
     println!("native Local-API typed_configuration_proxy_license3001=true unchanged_existing_configuration=true new_folder_not_created=true no_license_activation=true");
     println!("native Local-API common history_snapshot=true history_total={} history_rows={:?} hardware_typed_data={} shared_controls_license3001=true no_activation=true",history.total,history.records.as_ref().map(Vec::len),hardware_data);
@@ -266,6 +281,26 @@ async fn native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_s
         .request_scan(&folder_id, &SelectiveScope::FolderRoot)
         .await?;
     assert_eq!(std::fs::read(subdirectory.join("after.txt"))?, payload);
+    let temporary = folder_path.join(".verysync");
+    std::fs::create_dir_all(temporary.join("owned.sess"))?;
+    std::fs::write(temporary.join("owned.tmp"), b"owned temporary")?;
+    std::fs::write(
+        temporary.join("owned.sess").join("nested.bin"),
+        b"owned session",
+    )?;
+    std::fs::write(temporary.join("keep.dat"), b"preserved ordinary bytes")?;
+    local.request_folder_temporary_cleanup(&folder_id).await?;
+    assert!(!temporary.join("owned.tmp").exists());
+    assert!(!temporary.join("owned.sess").exists());
+    assert_eq!(
+        std::fs::read(temporary.join("keep.dat"))?,
+        b"preserved ordinary bytes"
+    );
+    let restarted = local.request_restart().await?;
+    assert_eq!(restarted.action, LocalApiExitAction::Restart);
+    let exit = tokio::time::timeout(Duration::from_secs(15), enabled.wait_for_exit()).await??;
+    assert_eq!(exit.code, Some(3));
+    assert!(!exit.forced && exit.tree_stopped && exit.state_released);
     enabled.restart(Duration::from_secs(30)).await?;
     assert_eq!(local.system_status().await?.device_id, identity);
     let persisted = local.folder(&folder_id).await?;
@@ -285,9 +320,12 @@ async fn native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_s
         std::fs::read(&sentinel)?,
         b"caller bytes survive explicit native Local-API startup"
     );
-    let exit = enabled.shutdown(Duration::from_secs(15)).await?;
+    let stopped = local.request_shutdown().await?;
+    assert_eq!(stopped.action, LocalApiExitAction::Shutdown);
+    let exit = tokio::time::timeout(Duration::from_secs(15), enabled.wait_for_exit()).await??;
+    assert_eq!(exit.code, Some(0));
     assert!(!exit.forced && exit.tree_stopped && exit.state_released);
-    println!("native Local-API disabled404 enabled200 no_gui_key=true folder_projection=true license3001_distinct=true subpath_and_root_scan_ack=true actual_new_file_indexed=true identity_preserved=true restart_preserved=true sentinel_preserved=true commercial_entitlement_not_granted=true normal_tree_exit=true");
+    println!("native Local-API disabled404 enabled200 no_gui_key=true folder_projection=true license3001_distinct=true index_stream_license3001=true subpath_and_root_scan_ack=true actual_new_file_indexed=true temporary_file_and_directory_removed=true ordinary_bytes_preserved=true actual_restart_code3=true actual_shutdown_code0=true identity_preserved=true restart_preserved=true sentinel_preserved=true commercial_entitlement_not_granted=true normal_tree_exit=true");
     std::fs::remove_dir_all(&root)?;
     Ok(())
 }

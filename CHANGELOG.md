@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add source-bound Local-API index event subscriptions, explicit restart/shutdown
+  and server-selected upgrade requests, and guarded native temporary cleanup.
+  Keep acknowledgements separate from real process, file and installation effects.
+
 - Add licensed Local-API full folder configuration reads, guarded template-based
   creation, partial updates, full item/collection replacement and unregister
   requests, with clone serialization through readback and preserved uncertainty.
