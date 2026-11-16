@@ -1474,3 +1474,142 @@ async fn native_home_free_threshold_blocks_index_updates_and_explicit_reset_reco
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart(
+) -> TestResult {
+    use std::fs::{File, FileTimes};
+    use std::time::SystemTime;
+    let root = tempfile::Builder::new()
+        .prefix("vtempage-")
+        .tempdir()?
+        .keep();
+    let data = root.join("synthetic data");
+    std::fs::create_dir(&data)?;
+    let sentinel = root.join("caller-sentinel");
+    let ordinary = data.join("ordinary.tmp");
+    let retained = data.join("retained-二.txt");
+    let outside = root.join(".vs.outside.tmp");
+    let old = data.join(".vs.aged-native.tmp");
+    let fresh = data.join(".vs.fresh-native.tmp");
+    let bytes = b"isolated native retention fixture bytes";
+    let aged = SystemTime::now()
+        .checked_sub(Duration::from_secs(2 * 60 * 60))
+        .ok_or("synthetic file age underflow")?;
+    for path in [&sentinel, &ordinary, &retained, &outside, &old, &fresh] {
+        std::fs::write(path, bytes)?;
+    }
+    for path in [&ordinary, &outside, &old] {
+        File::options()
+            .write(true)
+            .open(path)?
+            .set_times(FileTimes::new().set_modified(aged))?;
+    }
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    assert!(
+        core.client()
+            .update_general_options(&GeneralOptionsPatch::default().keep_temporaries_hours(4))
+            .await?
+            .requested_fields_match
+    );
+    let folder = FolderId::parse("native-temporary-retention")?;
+    core.client()
+        .create_folder(
+            &CreateFolderOptions::new(folder.clone(), TargetPath::local(&data)).paused(true),
+        )
+        .await?;
+    core.client().resume_folder(&folder).await?;
+    core.client().request_scan(&folder).await?;
+    if let Err(error) = home_policy_index_ready(core.client(), &folder, 1).await {
+        let status = core.client().folder_status(&folder).await?;
+        eprintln!(
+            "native temporary retention initial state={:?} files={:?} native_error={:?}",
+            status.state,
+            status.local_files,
+            status.extra.get("error")
+        );
+        return Err(error);
+    }
+    assert_eq!(
+        core.client()
+            .index_file_info(&folder, &TargetPath::local("retained-二.txt"))
+            .await?
+            .local
+            .name,
+        "retained-二.txt"
+    );
+    assert!(
+        matches!(core.client().index_file_info(&folder,&TargetPath::local("ordinary.tmp")).await,
+        Err(Error::Http{response}) if response.status()==404)
+    );
+    assert_eq!(std::fs::read(&old)?, bytes);
+    assert_eq!(std::fs::read(&fresh)?, bytes);
+    assert!(
+        matches!(core.client().index_file_info(&folder,&TargetPath::local(".vs.aged-native.tmp")).await,
+        Err(Error::Http{response}) if response.status()==404)
+    );
+    let before = core.client().configuration().await?;
+    assert!(
+        core.client()
+            .update_general_options(&GeneralOptionsPatch::default().keep_temporaries_hours(1))
+            .await?
+            .requested_fields_match
+    );
+    core.client().request_scan(&folder).await?;
+    home_policy_index_ready(core.client(), &folder, 1).await?;
+    assert!(
+        !old.try_exists()?,
+        "selected one-hour retention did not expire the two-hour native input"
+    );
+    assert_eq!(std::fs::read(&fresh)?, bytes);
+    for path in [&sentinel, &ordinary, &retained, &outside] {
+        assert_eq!(std::fs::read(path)?, bytes);
+    }
+    let after = core.client().configuration().await?;
+    for section in ["gui", "devices", "folders", "defaults", "ldap"] {
+        assert!(before.native_document()[section] == after.native_document()[section]);
+    }
+    // A second aged input must be removed by a new scan after normal restart,
+    // while the fresh native input and ordinary aged file remain intact.
+    let restart_old = data.join(".vs.restart-aged.tmp");
+    std::fs::write(&restart_old, bytes)?;
+    File::options()
+        .write(true)
+        .open(&restart_old)?
+        .set_times(FileTimes::new().set_modified(aged))?;
+    core.restart(Duration::from_secs(30)).await?;
+    core.client().request_scan(&folder).await?;
+    home_policy_index_ready(core.client(), &folder, 1).await?;
+    assert!(!restart_old.try_exists()?);
+    assert_eq!(
+        core.client()
+            .general_options()
+            .await?
+            .keep_temporaries_hours,
+        1
+    );
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    assert_eq!(std::fs::read(&fresh)?, bytes);
+    for path in [&sentinel, &ordinary, &retained, &outside] {
+        assert_eq!(std::fs::read(path)?, bytes);
+    }
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "native temporary retention evidence: {}",
+        serde_json::json!({
+            "actual_four_hour_policy_preserved_two_hour_native_input":true,
+            "actual_one_hour_policy_expired_aged_native_input_on_scan":true,
+            "actual_fresh_native_input_retained":true,
+            "actual_native_temporary_input_excluded_from_index":true,
+            "actual_ordinary_aged_tmp_and_outside_native_named_file_retained":true,
+            "actual_normal_restart_and_persisted_policy_expired_new_aged_input":true,
+            "actual_unrelated_sections_identity_and_caller_bytes_retained":true,
+            "actual_normal_owned_tree_and_state_exit":true,
+            "host_clock_changed":false,"manual_temporary_cleanup_invoked":false
+        })
+    );
+    Ok(())
+}

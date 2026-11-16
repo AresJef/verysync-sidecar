@@ -33,13 +33,13 @@ class DiagnosticSelection(unittest.TestCase):
                             "native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data"
                             for row in proxy))
 
-    def test_current_manifest_requires_real_name_adoption_and_data_on_all_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_real_name_adoption_and_data_on_all_six_profiles(self):
+        selection = {"draft_labels": ["remote-device-name-policy"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         names = [row for row in actual if row.get("label") == "remote-device-name-policy"]
         self.assertEqual(len(names), 6)
         self.assertEqual(len({row["package"] for row in names}), 6)
-        self.assertEqual(len(actual), 30)
+        self.assertEqual(len(actual), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data"
                             for row in names))
@@ -83,8 +83,19 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 108)
+        self.assertEqual(len(self.rows), 114)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
+
+    def test_current_manifest_requires_actual_temporary_expiry_on_six_profiles(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        age = [row for row in actual if row.get("label") == "native-temporary-retention-policy"]
+        self.assertEqual(len(actual), 30)
+        self.assertEqual(len(age), 6)
+        self.assertEqual(len({row["package"] for row in age}), 6)
+        self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
+                            "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart"
+                            for row in age))
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
