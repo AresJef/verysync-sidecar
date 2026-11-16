@@ -1,6 +1,8 @@
 //! Actual file payloads through public APIs, independent of raw characterization.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/resource_faults.rs"]
+mod resource_faults;
 #[path = "common/resource_fixture.rs"]
 mod resource_fixture;
 use managed_fixture::{options, TestResult};
@@ -20,6 +22,110 @@ async fn mount(
 }
 fn digest(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
+}
+
+#[tokio::test]
+async fn public_owned_process_failure_retains_partial_download_and_recovers_explicitly(
+) -> TestResult {
+    let root = tempfile::Builder::new().prefix("vpf-").tempdir()?.keep();
+    let state = root.join("core");
+    let mut core = ManagedInstance::start(options(&state)?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let original_pid = core.process_id();
+    let config = std::fs::read(state.join("setting.dat"))?;
+    let (profile, volume, _) = mount(&core).await?;
+    let source = profile.join("owned-process-source.bin");
+    let total = 128 * 1024 * 1024;
+    let (pattern, expected) = resource_faults::write_pattern(&source, total)?;
+    let output = root.join("interrupted-download.bin");
+    let path = volume.child("owned-process-source.bin")?;
+    let client = core.client().clone();
+    let destination = output.clone();
+    let operation = ResourceTransferOptions {
+        max_bytes: total,
+        deadline: Duration::from_secs(30),
+    };
+    let limits = operation.clone();
+    let download = tokio::spawn(async move {
+        client
+            .download_resource(&path, &destination, None, &limits)
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(metadata) = tokio::fs::metadata(&output).await {
+                if metadata.len() > 0 {
+                    assert!(
+                        metadata.len() < total,
+                        "must inject a real inflight process failure"
+                    );
+                    break;
+                }
+            }
+            assert!(
+                !download.is_finished(),
+                "download completed before the failure boundary"
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await?;
+    let exit = core.force_stop(Duration::from_secs(10)).await?;
+    assert!(exit.forced && exit.tree_stopped && exit.state_released);
+    let result = tokio::time::timeout(Duration::from_secs(10), download).await??;
+    assert!(
+        matches!(
+            result,
+            Err(Error::Transport { .. }) | Err(Error::ResourceTransferRejected { .. })
+        ),
+        "a truncated native connection must remain a transport/integrity failure: {result:?}"
+    );
+    let (retained, _) = resource_faults::verify_pattern(&output, &pattern, total)?;
+    assert!(retained > 0 && retained < total);
+    assert_eq!(
+        resource_faults::verify_pattern(&source, &pattern, total)?,
+        (total, expected)
+    );
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
+    core.restart(Duration::from_secs(30)).await?;
+    assert_ne!(core.process_id(), original_pid);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let (_, volume, _) = mount(&core).await?;
+    let recovered = root.join("explicit-recovered-download.bin");
+    let receipt = core
+        .client()
+        .download_resource(
+            &volume.child("owned-process-source.bin")?,
+            &recovered,
+            None,
+            &operation,
+        )
+        .await?;
+    assert_eq!((receipt.bytes, receipt.sha256), (total, expected));
+    assert_eq!(
+        resource_faults::verify_pattern(&recovered, &pattern, total)?,
+        (total, expected)
+    );
+    assert_eq!(
+        resource_faults::verify_pattern(&output, &pattern, total)?.0,
+        retained
+    );
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
+    let normal = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(
+        normal.tree_stopped && normal.state_released && !normal.forced && normal.code == Some(0)
+    );
+    println!(
+        "native process failure recovery evidence: {}",
+        serde_json::json!({
+        "actual_nonempty_inflight_download":true,"actual_exact_owned_tree_force_stop":true,
+        "actual_truncated_connection_is_error":true,"retained_prefix_bytes":retained,"source_bytes":total,
+        "actual_source_and_configuration_unchanged":true,"explicit_restart_preserved_identity":true,
+        "actual_new_root_process":true,"explicit_new_destination_download_complete_and_hashed":true,
+        "old_partial_output_preserved":true,"actual_recovered_normal_tree_exit":true})
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
 }
 
 // Archive entry names are native output, never controller filesystem paths.

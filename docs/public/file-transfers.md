@@ -78,6 +78,14 @@ request timeout and buffered-response bound. Streamed payloads bypass the small
 management-body buffer without buffering the complete file. No throughput,
 process-memory or disk-durability guarantee is implied by these limits.
 
+Stopping the owned engine can interrupt a transfer independently of cancelling
+its Rust future. A native fault test explicitly force-stops the exact owned tree
+after a nonempty incomplete download, requires a connection/integrity error, and
+checks the retained bytes against the source prefix. It then explicitly restarts
+the same state, verifies identity and configuration, and downloads the complete
+source into a new destination without changing the old partial file. A local
+macOS run has passed; the current six-profile fault evidence remains required.
+
 Ordinary receive failures flush accepted local writes before returning. A
 deadline can interrupt this flush. On failure or cancellation, a new output can remain empty
 or partial. It is retained for explicit inspection/cleanup. Tokio filesystem
