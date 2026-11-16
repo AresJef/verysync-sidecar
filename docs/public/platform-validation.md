@@ -124,3 +124,21 @@ preparation are explicit CI operations; adding the Cargo dependency or compiling
 the crate performs neither. The test helper never installs the program's service
 or firewall examples. Native backend refusals, skipped tests and compile-only
 results are not positive runtime support evidence.
+
+## Focused native diagnostics
+
+The diagnostic catalog in `.github/native-diagnostic-matrix.json` retains the
+explicit profile, compiler target, native test filter and trace selection for
+every helper case. Ready-for-review and manually dispatched Engine workflows
+schedule the complete catalog. The independent six-profile complete native
+matrix, additional-platform acceptance and final outcome/cleanup gates remain
+required.
+
+An owned draft can select current investigation labels in
+`.github/native-diagnostic-selection.json`. The current selection carries both
+remote version archives and configured thumbnail-cache effects on all six
+standard profiles. Missing selection uses the whole catalog; empty, duplicate,
+unknown or unsafe selections fail before scheduling. Fork pull requests keep
+complete diagnostic coverage. Selection and cancellation of a superseded draft
+are scheduling decisions, never successful capability acceptance. Completed
+results retain their original producer and test identities.
