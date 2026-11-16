@@ -464,16 +464,18 @@ can contain private context. Configuration selection does not promise a log
 retention policy or every existing-file behavior.
 
 Thumbnail/cache configuration and actual preview/cache artifacts are separate.
-An isolated macOS ARM64 native case selects a fresh cache directory, restarts
-normally and requests previews for two distinct synthetic PNG images through
+An isolated native case on each of the six standard macOS, Linux and Windows
+AMD64/ARM64 profiles selects a fresh cache directory, restarts normally and
+requests previews for two distinct synthetic PNG images through
 `resource_thumbnail()`. Both returned image bodies appear as complete raster
 files in that initially empty directory. Their exact bytes survive another
 normal restart and a subsequent explicit disabled/default-cache selection;
 the source image bytes and instance identity remain unchanged. This establishes
 that selected cache path and retained artifacts for the tested instance. It does
 not promise a fixed preview encoding or dimensions, cache eviction, hot migration,
-or preview-handler refusal when the preference is disabled. Six-profile tests
-and final integrated acceptance remain required.
+or preview-handler refusal when the preference is disabled. These scoped results
+retain their [original six-profile CI producer](https://github.com/AresJef/verysync-sidecar/commit/fd310c2e01ea06b11fc1cfebd471e42a7431cd0e).
+Final integrated delivery acceptance remains required.
 
 The proxy field is an explicitly selected native HTTP(S)/SOCKS5 URI, possibly
 with credentials; it is not a verified connection or authentication receipt.
