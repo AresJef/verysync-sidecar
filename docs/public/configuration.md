@@ -522,3 +522,13 @@ including explicit endpoint adoption, real password login, old-key rejection and
 normal restart. Producer identities and relevant subsequent source changes are
 retained in the capability evidence. Other option effects, all remaining template
 controls, licensed capabilities and final integrated acceptance stay separate.
+
+
+The independent folder/device creation-default contract has native evidence on
+all six standard AMD64/ARM64 profiles in [run 43929620380](https://github.com/AresJef/verysync-sidecar/actions/runs/43929620380).
+New registrations inherit selected defaults; later default edits leave existing
+registrations intact. Normal restart preserves both, identity and sentinel bytes.
+The same run verifies all thirteen SOCKS5 authentication/connection/file/disable/
+retention observations on those six profiles. These scoped results do not certify
+the general runtime policies listed above or complete integrated acceptance;
+the Intel Mac FTP runtime failure in that run remains a failure.

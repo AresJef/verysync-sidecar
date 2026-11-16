@@ -249,3 +249,16 @@ as workflow artifacts. The [publisher's terms](https://github.com/Upinel/localho
 These are test requirements. A prepared certificate or passing fixture boundary
 contract is not native authentication acceptance; final source and platform
 results remain separate evidence.
+
+
+Independent API-key rotation and GUI password/session/logout contracts have
+actual native evidence on the six standard macOS/Linux/Windows AMD64/ARM64
+profiles in [run 43929620380](https://github.com/AresJef/verysync-sidecar/actions/runs/43929620380).
+They verify old-key and wrong-password refusal, explicit owner recovery, session
+logout, retained configuration/identity/files and normal owned shutdown/restart.
+The LDAP target in that run separately verifies strict public-CA LDAPS login,
+wrong-password/hostname refusal and cleanup on all six profiles. This does not
+extend certificate-identity claims to the documented native StartTLS limitation,
+licensed features or a successful official-account/remote-gateway session.
+The Unix-only socket-mode case is separate from Windows applicable coverage.
+Full final integration remains required; other native-suite failures are retained.
