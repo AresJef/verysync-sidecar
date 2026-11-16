@@ -38,6 +38,63 @@ def fixture():
 
 
 class ResourceQualityContracts(unittest.TestCase):
+    def test_timer_empty_return_and_native_error_are_distinct_failures_without_retry(self):
+        for events, reason in [([], "empty-return"),
+                               ([SimpleNamespace(ident=1, filter=-7, flags=0x4000,
+                                                 fflags=0, data=22)], "event-error")]:
+            timer = METRICS.SamplerTicker.__new__(METRICS.SamplerTicker)
+            timer.queue = Mock()
+            timer.queue.control.return_value = events
+            timer.backend = "darwin-kqueue-critical-nanoseconds"
+            with patch.dict("sys.modules", {"select": SimpleNamespace(KQ_EV_ERROR=0x4000)}):
+                with self.assertRaises(METRICS.TimerWaitError) as caught:
+                    timer.wait()
+            self.assertEqual(caught.exception.diagnostic["reason"], reason)
+            self.assertGreaterEqual(caught.exception.diagnostic["wait_ns"], 0)
+            self.assertEqual(len(caught.exception.diagnostic["events"]), len(events))
+            if events:
+                self.assertEqual(caught.exception.diagnostic["events"][0]["data"], 22)
+            timer.queue.control.assert_called_once_with(None, 1, 1)
+
+    def test_timer_syscall_failure_retains_errno_and_original_cause(self):
+        timer = METRICS.SamplerTicker.__new__(METRICS.SamplerTicker)
+        timer.queue = Mock()
+        original = OSError(9, "invalid owned descriptor")
+        timer.queue.control.side_effect = original
+        with patch.dict("sys.modules", {"select": SimpleNamespace(KQ_EV_ERROR=0x4000)}):
+            with self.assertRaises(METRICS.TimerWaitError) as caught:
+                timer.wait()
+        self.assertEqual(caught.exception.diagnostic["reason"], "syscall-error")
+        self.assertEqual(caught.exception.diagnostic["os_errno"], 9)
+        self.assertIs(caught.exception.__cause__, original)
+        timer.queue.control.assert_called_once_with(None, 1, 1)
+
+    def test_owned_cleanup_records_actual_exit_and_keeps_original_acquisition_failure(self):
+        import tempfile
+        import json
+        for cleanup_fails in [False, True]:
+            with tempfile.TemporaryDirectory() as root:
+                child, timer = Mock(), Mock()
+                child.poll.return_value = None
+                child.returncode = None
+                child.wait.side_effect = TimeoutError("owned cleanup deadline") if cleanup_fails else None
+                child.wait.return_value = 101
+                report = {"acquisition_error": {"phase": "measure", "type": "TimerWaitError",
+                                                "message": "empty-return"}}
+                if cleanup_fails:
+                    with self.assertRaisesRegex(TimeoutError, "owned cleanup deadline"):
+                        METRICS.finish_owned_observation(child, timer, report, Path(root))
+                else:
+                    METRICS.finish_owned_observation(child, timer, report, Path(root))
+                saved = json.loads((Path(root) / "preparation-result.json").read_text())
+                self.assertEqual(saved["acquisition_error"], report["acquisition_error"])
+                self.assertEqual(saved["exit_code"], None if cleanup_fails else 101)
+                self.assertEqual("cleanup_error" in saved, cleanup_fails)
+                self.assertEqual(json.loads((Path(root) / "safe-error.json").read_text()),
+                                 report["acquisition_error"])
+                self.assertNotIn("quality", saved)
+                timer.close.assert_called_once_with()
+
     def test_raw_sample_buffer_defers_io_and_preserves_every_row_on_failure(self):
         import tempfile
         import json
@@ -130,6 +187,12 @@ class ResourceQualityContracts(unittest.TestCase):
         result = METRICS.summarize(report, rows)
         self.assertEqual(result["status"], "VALID")
         self.assertEqual(result["engine"]["cpu_user_s"], 0)
+
+    def test_saved_observer_failure_cannot_be_revalidated_as_successful_native_data(self):
+        for key in ["acquisition_error", "cleanup_error"]:
+            report, rows = fixture()
+            report[key] = {"type": "TimerWaitError", "message": "recorded failure"}
+            self.assertEqual(METRICS.summarize(report, rows)["status"], "ERROR")
 
     def test_failed_native_correctness_and_wrong_workload_are_errors(self):
         original, rows = fixture()

@@ -156,3 +156,12 @@ explicitly dispatched. A green preparation-only job does not establish resource
 coverage or acceptance; all six complete formal/independent reports remain
 required. This keeps changing library sources from invalidating repeated formal
 collections before the implementation candidate is stable.
+
+The v15 observer distinguishes an empty kqueue return, an error event (including
+its flags and native error data), and a failed syscall. It records the failed
+wait interval and preserves the original acquisition error alongside the actual
+owned-worker exit result, even if bounded cleanup also fails. Saved acquisition
+or cleanup failures remain `ERROR` during offline revalidation. No failed wait is
+retried or converted into a sample. Sampling methods, workloads, quality limits,
+formal coverage and deadlines remain unchanged; earlier evidence keeps its
+original protocol identity.
