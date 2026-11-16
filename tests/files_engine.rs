@@ -125,6 +125,27 @@ async fn public_file_metadata_browses_owned_volume_and_hashes_actual_samples() -
 async fn public_native_thumbnails_read_actual_image_content_and_preserve_sources() -> TestResult {
     let root = tempfile::Builder::new().prefix("vft-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let selected_cache = root.join("selected thumbnail cache");
+    std::fs::create_dir(&selected_cache)?;
+    let selected = core
+        .client()
+        .update_system_preferences(
+            &verysync_sidecar::SystemPreferencesPatch::default()
+                .thumbnail_enabled(true)
+                .thumbnail_cache_directory(verysync_sidecar::NativePathSelection::Path(
+                    TargetPath::local(selected_cache.clone()),
+                )),
+        )
+        .await?;
+    assert!(selected.requested_fields_match);
+    core.restart(Duration::from_secs(30)).await?;
+    let selected_after_restart = core.client().system_preferences().await?;
+    assert!(selected_after_restart.thumbnail_enabled);
+    assert!(matches!(selected_after_restart.thumbnail_cache_directory,
+        verysync_sidecar::NativePathSelection::Path(ref path)
+            if path.to_protocol().ok() == selected_cache.to_str()));
+    assert!(thumbnail_cache_files(&selected_cache)?.is_empty());
     let profile = std::fs::canonicalize(core.state_directory().join("profile"))?;
     let volumes = core.client().resource_volumes().await?;
     let (_, mount, _) = resource_fixture::owned_base(&core, &volumes)?;
@@ -251,18 +272,91 @@ async fn public_native_thumbnails_read_actual_image_content_and_preserve_sources
         .resource_thumbnail(&base.child("absent.png")?)
         .await
         .is_err());
+    let cache_files = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let files = thumbnail_cache_files(&selected_cache)?;
+            if files.len() == previews.len()
+                && previews
+                    .iter()
+                    .all(|preview| files.iter().any(|(_, cached)| cached == preview))
+            {
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(files);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    for (_, bytes) in &cache_files {
+        assert_eq!(raster_dimensions(bytes)?, (128, 128));
+    }
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(thumbnail_cache_files(&selected_cache)?, cache_files);
+    let disabled = core
+        .client()
+        .update_system_preferences(
+            &verysync_sidecar::SystemPreferencesPatch::default()
+                .thumbnail_enabled(false)
+                .thumbnail_cache_directory(verysync_sidecar::NativePathSelection::Default),
+        )
+        .await?;
+    assert!(disabled.requested_fields_match);
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(thumbnail_cache_files(&selected_cache)?, cache_files);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    for (name, source) in [("red %.png", IMAGE_0), ("blue 二.png", IMAGE_1)] {
+        assert_eq!(std::fs::read(profile.join(name))?, source);
+    }
     let exit = core.shutdown(Duration::from_secs(10)).await?;
-    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
     println!(
         "public resource preview evidence: {}",
         serde_json::json!({
+        "actual_selected_thumbnail_directory_cold_before_requests":true,
+        "actual_selected_thumbnail_directory_contains_both_returned_previews":true,
+        "actual_cache_artifacts_are_complete_128px_rasters":true,
+        "actual_cache_bytes_retained_across_normal_restart":true,
+        "actual_cache_bytes_retained_after_disable_and_default_selection":true,
+        "actual_same_identity_after_explicit_restarts":true,
         "actual_png_source_previews_from_two_distinct_images":true,"actual_image_media_type_and_raster_dimensions":true,
         "actual_different_preview_content_for_different_pixels":true,"actual_all_original_image_bytes_retained":true,
         "actual_absent_preview_is_error":true,"private_preview_debug_redacted":true,"actual_normal_owned_tree_exit":true})
     );
     Ok(())
 }
+fn thumbnail_cache_files(root: &std::path::Path) -> TestResult<Vec<(std::path::PathBuf, Vec<u8>)>> {
+    use std::io::Read;
+    let mut pending = vec![root.to_owned()];
+    let mut files = Vec::new();
+    let mut examined = 0;
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            examined += 1;
+            if examined > 256 {
+                return Err("owned thumbnail cache exceeds observation entry bound".into());
+            }
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                let mut bytes = Vec::new();
+                std::fs::File::open(entry.path())?
+                    .take(256 * 1024 + 1)
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() > 256 * 1024 {
+                    return Err("owned thumbnail cache exceeds observation byte bound".into());
+                }
+                files.push((entry.path().strip_prefix(root)?.to_owned(), bytes));
+            } else {
+                return Err("owned thumbnail cache contains an unexpected entry type".into());
+            }
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(files)
+}
+
 fn raster_dimensions(bytes: &[u8]) -> TestResult<(u32, u32)> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 24 {
         return Ok((
