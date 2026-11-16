@@ -5,8 +5,10 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+#[cfg(unix)]
+use verysync_sidecar::Error;
 use verysync_sidecar::{
-    Error, LocalProgram, ManagedInstance, ManagedOptions, ManagementEndpoint, NativeBrowserOutcome,
+    LocalProgram, ManagedInstance, ManagedOptions, ManagementEndpoint, NativeBrowserOutcome,
 };
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -29,6 +31,8 @@ impl Capture {
             || std::env::var("VERYSYNC_TEST_BROWSER_ISOLATION").as_deref()
                 != Ok(if cfg!(target_os = "macos") {
                     "macos-seatbelt-fallback-v1"
+                } else if cfg!(windows) {
+                    "windows-effective-progid-v1"
                 } else {
                     "linux-private-mount-fallback-v1"
                 })
@@ -69,6 +73,8 @@ impl Capture {
             }
         })
         .await??;
+        #[cfg(windows)]
+        let actor = windows_native::actor(&call)?;
         fs::write(
             call.with_extension("after-root"),
             b"root result already received",
@@ -78,6 +84,8 @@ impl Capture {
         // successful root cleanup did not terminate desktop descendants.
         fs::write(call.with_extension("stop"), b"explicit test-owned stop")?;
         wait_file(&call.with_extension("finished")).await?;
+        #[cfg(windows)]
+        actor.wait_for_exit()?;
         Ok(())
     }
 }
@@ -103,10 +111,12 @@ async fn wait_file(path: &Path) -> TestResult {
     .await?;
     Ok(())
 }
+#[cfg(unix)]
 struct InvalidOwnedOpener {
     path: PathBuf,
     backup: PathBuf,
 }
+#[cfg(unix)]
 impl InvalidOwnedOpener {
     fn install() -> TestResult<Self> {
         let path = PathBuf::from(
@@ -124,6 +134,7 @@ impl InvalidOwnedOpener {
         Ok(guard)
     }
 }
+#[cfg(unix)]
 impl Drop for InvalidOwnedOpener {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
@@ -166,6 +177,7 @@ fn snapshot(state: &Path) -> TestResult<Vec<Vec<u8>>> {
     .collect()
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn actual_native_browser_preserves_primary_and_releases_only_successful_launcher(
 ) -> TestResult {
@@ -347,5 +359,237 @@ async fn actual_native_browser_preserves_primary_and_releases_only_successful_la
         drop(fence);
         eprintln!("native browser evidence: exact_owned_url_calls=3 successful_root_receipts=2 native_failed_opener_code=1 failure_never_releases_descendants=true cancellation_after_native_root_and_actor_started=true cancellation_lease_released=true cancelled_helper_bytes_preserved=true verify_live_identity=true verify_false_after_normal_stop=true desktop_actor_executed_after_each_success_result=true cancellation_native_root_exit_before_outer_cleanup_required=true cancellation_desktop_exit_is_platform_specific=true independent_helper_keys=true primary_config_keys_data_preserved=true helper_reused=true overlap_refused=true program_drift_refused=true real_desktop_opened=false");
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows_native {
+    use super::*;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
+        System::{
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+                TH32CS_SNAPPROCESS,
+            },
+            Threading::{
+                OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject,
+                PROCESS_QUERY_LIMITED_INFORMATION,
+            },
+        },
+    };
+    pub struct Watch {
+        pub pid: u32,
+        handle: HANDLE,
+    }
+    impl Drop for Watch {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+    impl Watch {
+        pub fn is_running(&self) -> bool {
+            unsafe { WaitForSingleObject(self.handle, 0) == 258 }
+        }
+        pub fn wait_for_exit(&self) -> TestResult {
+            if unsafe { WaitForSingleObject(self.handle, 3000) } != 0 {
+                return Err("exact owned process did not actually exit".into());
+            }
+            Ok(())
+        }
+        fn exact(pid: u32, selected: &Path) -> Option<Self> {
+            let handle =
+                unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | 0x0010_0000, 0, pid) };
+            if handle.is_null() {
+                return None;
+            }
+            let watch = Self { pid, handle };
+            if !watch.is_running() {
+                return None;
+            }
+            let mut image = vec![0u16; 32768];
+            let mut count = image.len() as u32;
+            if unsafe { QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut count) } == 0
+                || count as usize > image.len()
+            {
+                return None;
+            }
+            image.truncate(count as usize);
+            let actual = PathBuf::from(std::ffi::OsString::from_wide(&image));
+            if fs::canonicalize(actual).ok()? != fs::canonicalize(selected).ok()? {
+                return None;
+            }
+            Some(watch)
+        }
+    }
+    pub fn matching(selected: &Path) -> TestResult<Vec<Watch>> {
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let _snapshot = Watch {
+            pid: 0,
+            handle: snapshot,
+        };
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut result = Vec::new();
+        let mut present = unsafe { Process32FirstW(snapshot, &mut entry) };
+        while present != 0 {
+            if let Some(watch) = Watch::exact(entry.th32ProcessID, selected) {
+                result.push(watch);
+            }
+            present = unsafe { Process32NextW(snapshot, &mut entry) };
+        }
+        if result.len() > 16 {
+            return Err("too many processes with exact test-owned image".into());
+        }
+        Ok(result)
+    }
+    pub fn actor(call: &Path) -> TestResult<Watch> {
+        let pid = call
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or("actor PID absent")?
+            .parse()?;
+        let selected = PathBuf::from(
+            std::env::var_os("VERYSYNC_TEST_OPENER_EXECUTABLE").ok_or("owned image absent")?,
+        );
+        Watch::exact(pid, &selected).ok_or_else(|| "exact live owned actor not observed".into())
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn actual_windows_native_browser_preserves_data_and_cancels_observed_owned_root() -> TestResult
+{
+    let capture = Capture::new()?;
+    let root = tempfile::Builder::new()
+        .prefix("vbrowser-windows-")
+        .tempdir()?;
+    let (program, expected) = private_program(root.path())?;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    assert_ne!(listener.local_addr()?.port(), 18886);
+    let url = format!("http://{}/", listener.local_addr()?);
+    drop(listener);
+    let state = root.path().join("primary");
+    let helper = root.path().join("browser-helper");
+    let mut core = ManagedInstance::start(
+        ManagedOptions::new(
+            LocalProgram::new(&program)?.expected_sha256(expected),
+            &state,
+            ManagementEndpoint::http(&url)?,
+        )?
+        .startup_timeout(Duration::from_secs(25))?,
+    )
+    .await?;
+    let identity = core.client().instance().device_id.clone();
+    let before = snapshot(&state)?;
+    fs::write(state.join("caller-sentinel.bin"), b"primary caller bytes")?;
+    let receipt = core
+        .request_native_browser(&helper, true, Duration::from_secs(15))
+        .await?;
+    assert_eq!(receipt.code, Some(0));
+    assert_eq!(receipt.outcome, NativeBrowserOutcome::CommandSucceeded);
+    assert!(
+        receipt.native_verify_requested
+            && receipt.authenticated_identity_checked
+            && receipt.descendants_released
+            && receipt.helper_state_released
+    );
+    assert_eq!(receipt.program.sha256, expected);
+    capture.after_result(0, &url).await?;
+    let helper_before = snapshot(&helper)?;
+    assert_ne!(helper_before[1], before[1]);
+    assert_ne!(helper_before[2], before[2]);
+    assert_eq!(snapshot(&state)?, before);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let stopped = core.shutdown(Duration::from_secs(15)).await?;
+    assert_eq!(stopped.code, Some(0));
+    assert!(!stopped.forced && stopped.tree_stopped && stopped.state_released);
+    assert!(core
+        .request_native_browser(
+            root.path().join("unreachable"),
+            true,
+            Duration::from_secs(3)
+        )
+        .await
+        .is_err());
+    let prior = capture.calls()?.len();
+    let unverified = core
+        .request_native_browser(&helper, false, Duration::from_secs(15))
+        .await?;
+    assert_eq!(unverified.outcome, NativeBrowserOutcome::CommandSucceeded);
+    assert!(!unverified.authenticated_identity_checked && !unverified.native_verify_requested);
+    assert!(unverified.descendants_released && unverified.helper_state_released);
+    capture.after_result(prior, &url).await?;
+    assert_eq!(snapshot(&state)?, before);
+    assert_eq!(snapshot(&helper)?, helper_before);
+    assert_eq!(
+        fs::read(state.join("caller-sentinel.bin"))?,
+        b"primary caller bytes"
+    );
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let baseline: std::collections::BTreeSet<_> = windows_native::matching(&program)?
+        .into_iter()
+        .map(|p| p.pid)
+        .collect();
+    let cancelled_helper = root.path().join("cancelled-helper");
+    let mut request =
+        Box::pin(core.request_native_browser(&cancelled_helper, false, Duration::from_secs(15)));
+    let observed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            tokio::select! {
+                _ = &mut request => return Err::<windows_native::Watch, Box<dyn std::error::Error + Send + Sync>>("native root completed before actual running-process cancellation evidence".into()),
+                _ = tokio::time::sleep(Duration::from_millis(5)) => {
+                    // Fresh state gets this marker only after version/generate/
+                    // device-id CLI roots have exited. A later new live image
+                    // is the requested browser root, not a preparation probe.
+                    if cancelled_helper.join(".verysync-sidecar-configured").is_file() {
+                        if let Some(watch) = windows_native::matching(&program)?.into_iter().find(|p| !baseline.contains(&p.pid)) { return Ok(watch); }
+                    }
+                }
+            }
+        }
+    }).await??;
+    assert!(cancelled_helper.is_dir());
+    let canary = cancelled_helper.join("caller-canary.bin");
+    fs::write(&canary, b"preserve interrupted helper caller bytes")?;
+    assert!(
+        observed.is_running(),
+        "browser root ended before cancellation"
+    );
+    drop(request);
+    observed.wait_for_exit()?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let lease = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(cancelled_helper.join(".verysync-sidecar-lease"))?;
+            if fs2::FileExt::try_lock_exclusive(&lease).is_ok() {
+                fs2::FileExt::unlock(&lease)?;
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    assert_eq!(
+        fs::read(&canary)?,
+        b"preserve interrupted helper caller bytes"
+    );
+    assert_eq!(snapshot(&state)?, before);
+    assert_eq!(snapshot(&helper)?, helper_before);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let stopped = core.shutdown(Duration::from_secs(15)).await?;
+    assert_eq!(stopped.code, Some(0));
+    assert!(!stopped.forced && stopped.tree_stopped && stopped.state_released);
+    println!("native Windows browser evidence: actual_native_verify_and_unverified_dispatch=true exact_owned_url=true successful_actor_outlives_root_and_exact_exit_observed=true observed_exact_image_new_pid_before_cancel=true held_native_process_handle_exit_after_cancel=true cancellation_helper_lease_released=true primary_identity_and_config_and_caller_bytes_preserved=true separate_helper_keys=true helper_reused=true stopped_target_verify_refused=true normal_primary_tree_exit=true GUI_rollback_not_claimed=true");
     Ok(())
 }

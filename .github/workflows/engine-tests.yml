@@ -931,8 +931,10 @@ jobs:
         include:
           - runner: windows-2022
             rust: x86_64-pc-windows-msvc
+            package: windows-amd64-standard
           - runner: windows-11-arm
             rust: aarch64-pc-windows-msvc
+            package: windows-arm64-standard
     defaults:
       run:
         shell: bash
@@ -954,6 +956,29 @@ jobs:
           python scripts/probe-windows-browser-associations.py --toolchain "$TEST_TOOLCHAIN"
           --evidence-dir "${{ runner.temp }}/vs-browser-association-pilot"
           ${{ github.event_name == 'pull_request' && '--use-effective-progid' || '' }}
+
+      - name: Prepare the exact fixed private core for the SDK browser case
+        if: github.event_name == 'pull_request'
+        id: browser_fixed_core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require actual Windows SDK browser effects and native-root cancellation
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PYINNER'
+          import os, shutil, subprocess, sys
+          from pathlib import Path
+          cargo = shutil.which('cargo')
+          if cargo is None:
+              raise ValueError('explicit Cargo executable unavailable')
+          subprocess.run([sys.executable, 'scripts/run-windows-browser-tests.py', '--cargo', cargo,
+                          '--toolchain', os.environ['TEST_TOOLCHAIN'], '--evidence-dir',
+                          str(Path(os.environ['RUNNER_TEMP']) / 'vs-windows-sdk-browser')], check=True)
+          PYINNER
+      - name: Require exact fixed-core cleanup after the Windows browser result
+        if: always() && steps.browser_fixed_core.outcome == 'success'
+        run: python scripts/prepare-test-engine.py check-cleanup
 
   host-watch-limit-positive:
     name: Explicit Linux host watch-limit effects (isolated VM only)

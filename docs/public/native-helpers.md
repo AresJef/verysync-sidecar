@@ -497,3 +497,12 @@ Merged COM-delegated or DDE handlers are refused before dispatch. The pilot also
 verifies restoration after an injected pre-dispatch failure, then exact native
 HTTP/HTTPS arguments and process exit. This is test infrastructure, with actual
 Windows results tracked separately from SDK browser acceptance.
+
+A separate opt-in Windows SDK runner reuses the loopback-only proxy, exact owned
+opener and restored ProgID transaction. Its native case checks verified and
+unverified dispatch, exact URL/actor exit, primary/helper key separation and
+caller bytes. Cancellation must first observe a new live process with the exact
+owned program image after preparation completed, hold that native process handle,
+and then independently observe its exit and helper lease release. Desktop
+rollback is not inferred. Windows runtime acceptance remains pending these actual
+SDK results; compiling the case does not establish them.

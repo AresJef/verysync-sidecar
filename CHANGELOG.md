@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add a separate opt-in Windows SDK browser acceptance runner with restored
+  per-user dispatch, exact native process-handle cancellation and private data
+  retention checks. Actual Windows results remain required.
+
 - Extend the opt-in isolated Windows protocol pilot to query the current ProgID,
   retain protected UserChoice and refuse merged COM/DDE handlers before dispatch.
   Actual native results remain separate from SDK browser acceptance.
