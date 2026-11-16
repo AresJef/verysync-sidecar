@@ -2,6 +2,7 @@ name: Additional platform acceptance
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +17,7 @@ env:
 
 jobs:
   x86-compatibility:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     name: ${{ matrix.package }} (${{ matrix.execution }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
@@ -137,6 +139,7 @@ jobs:
           PY
 
   arm-emulated:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     name: ${{ matrix.package }} (QEMU user emulation)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -331,6 +334,7 @@ jobs:
           PY
 
   other-emulated:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     name: ${{ matrix.package }} (QEMU user emulation)
     runs-on: ubuntu-24.04
     timeout-minutes: 45

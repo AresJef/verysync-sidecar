@@ -485,7 +485,8 @@ def main():
     parser.add_argument("--cargo", default=shutil.which("cargo"))
     parser.add_argument("--evidence-dir", required=True, type=Path)
     suite = parser.add_mutually_exclusive_group(required=True)
-    suite.add_argument("--test-target", choices=["browser_engine", "managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine", "files_engine", "file_transfer_engine", "disk_full_engine", "file_history_engine", "maintenance_engine", "file_mutation_engine", "local_sync_engine", "local_sync_protocol_engine", "local_sync_advanced_engine", "local_sync_runtime_engine", "local_sync_automation_engine", "local_sync_repair_engine", "local_sync_protocol_advanced_engine", "local_sync_configuration_engine", "configuration_engine", "authentication_engine", "ldap_trusted_ca_engine", "wallpaper_engine", "host_control_engine"])
+    parser.add_argument("--release", action="store_true", help="explicit optimized test build")
+    suite.add_argument("--test-target", choices=["browser_engine", "managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine", "files_engine", "file_transfer_engine", "disk_full_engine", "resource_usage_engine", "file_history_engine", "maintenance_engine", "file_mutation_engine", "local_sync_engine", "local_sync_protocol_engine", "local_sync_advanced_engine", "local_sync_runtime_engine", "local_sync_automation_engine", "local_sync_repair_engine", "local_sync_protocol_advanced_engine", "local_sync_configuration_engine", "configuration_engine", "authentication_engine", "ldap_trusted_ca_engine", "wallpaper_engine", "host_control_engine"])
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
     parser.add_argument("--test-filter")
     parser.add_argument("--allow-private-discovery", action="store_true",
@@ -575,9 +576,11 @@ def main():
         log_path = args.evidence_dir / (label.replace("_", "-") + ".log")
         try:
             if args.test_target:
-                features = "engine-tests,download" if args.test_target in {"download_engine", "cache_engine", "file_transfer_engine", "disk_full_engine", "maintenance_engine"} else "engine-tests"
+                features = "engine-tests,download" if args.test_target in {"download_engine", "cache_engine", "file_transfer_engine", "disk_full_engine", "resource_usage_engine", "maintenance_engine"} else "engine-tests"
                 command = [args.cargo, f"+{args.toolchain}", "test", "--features", features,
                            "--test", args.test_target, "--offline", "--locked"]
+                if args.release:
+                    command += ["--release"]
                 if args.test_filter:
                     command += [args.test_filter]
                 command += ["--", "--test-threads=1", "--nocapture"]
