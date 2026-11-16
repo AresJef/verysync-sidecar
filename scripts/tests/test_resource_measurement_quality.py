@@ -1,7 +1,9 @@
 """Quality validation never turns failed, missing or invalid counters into data."""
 import copy
+from contextlib import contextmanager
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 SPEC = importlib.util.spec_from_file_location(
@@ -35,6 +37,48 @@ def fixture():
 
 
 class ResourceQualityContracts(unittest.TestCase):
+    def test_snapshot_batches_reads_without_reusing_a_previous_snapshot(self):
+        class Process:
+            pid = 7
+            generation = 0
+            active = False
+
+            def is_running(self):
+                if self.active:
+                    raise AssertionError("identity must be checked before batching")
+                return True
+
+            @contextmanager
+            def oneshot(self):
+                self.generation += 1
+                self.active = True
+                try:
+                    yield
+                finally:
+                    self.active = False
+
+            def memory_info(self):
+                return SimpleNamespace(rss=self.generation * 4096)
+
+            def cpu_times(self):
+                return SimpleNamespace(user=self.generation / 100, system=0)
+
+            def create_time(self):
+                return 100
+
+        process = Process()
+        first, second = METRICS.snapshot(process), METRICS.snapshot(process)
+        self.assertEqual((first["rss_bytes"], second["rss_bytes"]), (4096, 8192))
+        self.assertEqual((first["cpu_user_s"], second["cpu_user_s"]), (.01, .02))
+        self.assertEqual(first["creation_time"], second["creation_time"])
+        self.assertFalse(process.active)
+        self.assertLessEqual(first["read_end_ns"], second["read_start_ns"])
+
+    def test_snapshot_rejects_a_terminated_identity_before_reading_metrics(self):
+        process = SimpleNamespace(is_running=lambda: False)
+        with self.assertRaisesRegex(RuntimeError, "ended or was reused"):
+            METRICS.snapshot(process)
+
     def test_observed_idle_zero_cpu_is_retained_as_valid(self):
         report, rows = fixture()
         result = METRICS.summarize(report, rows)

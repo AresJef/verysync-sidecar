@@ -96,9 +96,13 @@ def snapshot(process):
     start = time.perf_counter_ns()
     if not process.is_running():
         raise RuntimeError("explicit process identity ended or was reused")
-    memory = process.memory_info()
-    cpu = process.cpu_times()
-    return {"pid": process.pid, "creation_time": process.create_time(),
+    # Share underlying kernel reads only inside this snapshot. Identity is checked
+    # first, and oneshot clears its cache on exit, including exceptional exits.
+    with process.oneshot():
+        memory = process.memory_info()
+        cpu = process.cpu_times()
+        creation_time = process.create_time()
+    return {"pid": process.pid, "creation_time": creation_time,
             "rss_bytes": memory.rss, "cpu_user_s": cpu.user, "cpu_system_s": cpu.system,
             "read_start_ns": start, "read_end_ns": time.perf_counter_ns()}
 
