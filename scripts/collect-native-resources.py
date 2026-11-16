@@ -16,13 +16,16 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def save(path, value):
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+def save_bytes(path, data):
+    with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent,
                                      prefix="owned-record-", delete=False) as file:
-        json.dump(value, file, indent=2)
-        file.write("\n"); file.flush(); os.fsync(file.fileno())
+        file.write(data); file.flush(); os.fsync(file.fileno())
         temporary = Path(file.name)
     temporary.replace(path)
+
+
+def save(path, value):
+    save_bytes(path, (json.dumps(value, indent=2)+"\n").encode("utf-8"))
 
 
 def metrics_module():
@@ -96,7 +99,11 @@ def main():
         state = {"protocol_sha256": protocol_hash, "stage": args.stage, "start_unix": time.time(),
                  "deadline_unix": args.deadline_unix or time.time()+protocol["acquisition_window_s"],
                  "accepted": {}, "attempts": {}, "status": "INCOMPLETE", "source": source}
-        save(directory / "frozen-protocol.json", protocol)
+        # Preserve the actual frozen bytes, including an explicitly supplied
+        # newline convention; JSON reserialization is a different fingerprint.
+        save_bytes(directory / "frozen-protocol.json", args.protocol.read_bytes())
+        if digest(directory / "frozen-protocol.json") != protocol_hash:
+            raise ValueError("durable frozen protocol byte identity changed")
         save(state_path, state)
     # The live coordinator lease prevents a second collector from resuming the
     # same stage. Locks release with this exact process, including on failure.

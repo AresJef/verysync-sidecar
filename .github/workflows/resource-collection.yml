@@ -89,13 +89,13 @@ jobs:
           python scripts/preflight-native-resources.py
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-resource-v3-pretrial"
+          --evidence-dir "${{ runner.temp }}/vs-resource-v4-pretrial"
       - name: Collect four formal and two independent original-order cycles
         run: >-
           python scripts/collect-native-resources.py --stage all
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v3"
+          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v4"
       - name: Require exact owned-program cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
@@ -107,20 +107,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
-            ${{ runner.temp }}/vs-frozen-resource-v3/**/collection-state.json
-            ${{ runner.temp }}/vs-frozen-resource-v3/**/frozen-protocol.json
-            ${{ runner.temp }}/vs-frozen-resource-v3/**/accepted-group.json
-            ${{ runner.temp }}/vs-frozen-resource-v3/**/attempt.json
-            ${{ runner.temp }}/vs-frozen-resource-v3/**/preparation-result.json
-            ${{ runner.temp }}/vs-frozen-resource-v3/**/quality-result.json
-            ${{ runner.temp }}/vs-frozen-resource-v3/**/samples.jsonl
-            ${{ runner.temp }}/vs-frozen-resource-v3/**/events.jsonl
-            ${{ runner.temp }}/vs-frozen-resource-v3/**/safe-error.json
+            ${{ runner.temp }}/vs-frozen-resource-v4/**/collection-state.json
+            ${{ runner.temp }}/vs-frozen-resource-v4/**/frozen-protocol.json
+            ${{ runner.temp }}/vs-frozen-resource-v4/**/accepted-group.json
+            ${{ runner.temp }}/vs-frozen-resource-v4/**/attempt.json
+            ${{ runner.temp }}/vs-frozen-resource-v4/**/preparation-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v4/**/quality-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v4/**/samples.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v4/**/events.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v4/**/safe-error.json
             ${{ runner.temp }}/vs-resource-clock-calibration/calibration.json
             ${{ runner.temp }}/vs-resource-clock-calibration/safe-error.json
-            ${{ runner.temp }}/vs-resource-v3-pretrial/**/preparation-result.json
-            ${{ runner.temp }}/vs-resource-v3-pretrial/**/quality-result.json
-            ${{ runner.temp }}/vs-resource-v3-pretrial/**/samples.jsonl
-            ${{ runner.temp }}/vs-resource-v3-pretrial/**/events.jsonl
-            ${{ runner.temp }}/vs-resource-v3-pretrial/**/safe-error.json
-            ${{ runner.temp }}/vs-resource-v3-pretrial/pretrial-result.json
+            ${{ runner.temp }}/vs-resource-v4-pretrial/**/preparation-result.json
+            ${{ runner.temp }}/vs-resource-v4-pretrial/**/quality-result.json
+            ${{ runner.temp }}/vs-resource-v4-pretrial/**/samples.jsonl
+            ${{ runner.temp }}/vs-resource-v4-pretrial/**/events.jsonl
+            ${{ runner.temp }}/vs-resource-v4-pretrial/**/safe-error.json
+            ${{ runner.temp }}/vs-resource-v4-pretrial/pretrial-result.json

@@ -112,3 +112,18 @@ RSS curves, and the frozen memory envelope. RSS and CPU describe the controller
 and the engine root separately; engine descendants are not included in root
 counters. The latency relative-MAD screen is descriptive and does not introduce
 a new latency target or replace the required RSS repeatability criterion.
+
+The v4 protocol keeps every quality, workload and memory criterion. Durable JSON
+records use explicit UTF-8/LF bytes, and each nested collector copies the exact
+frozen protocol bytes before checking its digest. The Windows v3 parent/child
+CRLF identity mismatch remains invalid evidence under its original identity.
+
+After both real worker processes are ready, the short-lived Darwin observer
+requests `QOS_CLASS_USER_INITIATED` only for its own current thread, retaining
+the requested and observed class. Workers are started before that assignment;
+the library, worker priorities and host-wide settings are unchanged. Other
+systems retain their existing policy. This follows
+[Apple's pthread QoS API](https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/PrioritizeWorkAtTheTaskLevel.html).
+The request offers no scheduling guarantee: a gap over 50 ms still rejects the
+whole original-order cycle. All v3 attempts, including the three insufficient
+macOS ARM64 cycles, remain separate from the new v4 acquisition.

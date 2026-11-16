@@ -13,6 +13,26 @@ COLLECT = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(COLLECT
 
 
 class ResourceCollectionContracts(unittest.TestCase):
+    def test_host_text_newlines_cannot_change_durable_record_bytes(self):
+        original = COLLECT.tempfile.NamedTemporaryFile
+        def windows_text_default(*args, **kwargs):
+            if "b" not in kwargs.get("mode", "w+b"):
+                kwargs.setdefault("newline", "\r\n")
+            return original(*args, **kwargs)
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "record.json"
+            value = {"frozen": "identity", "attempt": 1}
+            with patch.object(COLLECT.tempfile, "NamedTemporaryFile", side_effect=windows_text_default):
+                COLLECT.save(path, value)
+            self.assertEqual(path.read_bytes(), (json.dumps(value, indent=2)+"\n").encode())
+
+    def test_frozen_bytes_are_copied_without_reserializing_the_protocol(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "frozen.json"
+            original = b'{"frozen":"identity"}\r\n'
+            COLLECT.save_bytes(path, original)
+            self.assertEqual(path.read_bytes(), original)
+
     def test_missing_or_wrong_original_order_never_reaches_metric_acceptance(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); order = ["idle", "stream-small", "stream-large", "many-small"]

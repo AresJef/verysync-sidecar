@@ -36,8 +36,10 @@ def dataset(root, *, windows_paths=False, changed_source=False, reused_process=F
                       repeats=protocol["scenarios"][scenario]["repeats"], source=copy.deepcopy(source),
                       protocol_sha256=fingerprint,
                       calibration={"psutil": "7.2.2", "clock": {"monotonic": True, "adjustable": False},
+                                   "platform": "synthetic-Linux-test-only",
                                    "metric_reads": 1000, "cpu_observed_span_s": .1,
-                                   "rss_touched_bytes": 16777216, "rss_growth_bytes": 16777216})
+                                   "rss_touched_bytes": 16777216, "rss_growth_bytes": 16777216},
+                      observer_thread_policy={"policy": "unchanged", "scope": "observer-thread-only"})
         if changed:
             report["source"]["sampler_sha256"] = "wrong"
         report["identities"] = copy.deepcopy(report["before"])
@@ -124,6 +126,18 @@ class ResourceReportContracts(unittest.TestCase):
         for path in ["../outside", "..\\outside", "/absolute", "C:\\outside", "\\\\host\\share"]:
             with self.subTest(path=path), self.assertRaises(ValueError):
                 REPORT.record_path(Path("/synthetic"), path)
+
+    def test_darwin_observer_receipt_must_follow_worker_start(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); protocol, _ = dataset(root)
+            folder = next((root / "formal").rglob("preparation-result.json")).parent
+            report = REPORT.read(folder / "preparation-result.json")
+            report["calibration"]["platform"] = "macOS-synthetic-test-only"
+            report["observer_thread_policy"].update(requested=0x19, observed=0x19,
+                                                     worker_started_before_assignment=False)
+            save(folder / "preparation-result.json", report)
+            with self.assertRaisesRegex(ValueError, "observer scheduling policy"):
+                REPORT.check_attempt(folder, protocol, "formal", METRICS)
 
     def test_memory_stability_failure_and_insufficiency_remain_separate(self):
         protocol = REPORT.read(PROTOCOL)
