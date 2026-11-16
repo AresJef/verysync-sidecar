@@ -27,6 +27,10 @@ impl LdapService {
     pub fn start_public_tls(root: &Path, manifest: &Path) -> TestResult<Self> {
         Self::start_with_fixture(root, "tls", Some(manifest))
     }
+    #[allow(dead_code)] // Used by the separate strict public-CA native target.
+    pub fn start_public_starttls(root: &Path, manifest: &Path) -> TestResult<Self> {
+        Self::start_with_fixture(root, "starttls", Some(manifest))
+    }
     fn start_with_fixture(
         root: &Path,
         transport: &str,

@@ -39,7 +39,7 @@ class DiagnosticSelection(unittest.TestCase):
         names = [row for row in actual if row.get("label") == "remote-device-name-policy"]
         self.assertEqual(len(names), 6)
         self.assertEqual(len({row["package"] for row in names}), 6)
-        self.assertEqual(len(actual), 24)
+        self.assertEqual(len(actual), 30)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data"
                             for row in names))
@@ -62,9 +62,18 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "local_sync_runtime_engine" and row["filter"] ==
                             "public_ftp_" for row in ftp))
 
+    def test_current_manifest_requires_both_strict_ldap_transport_cases_on_six_profiles(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        ldap = [row for row in actual if row.get("label") == "ldap-verified-transport"]
+        self.assertEqual(len(ldap), 6)
+        self.assertEqual(len({row["package"] for row in ldap}), 6)
+        self.assertTrue(all(row["target"] == "ldap_trusted_ca_engine" and row["filter"] ==
+                            "native_trusted_ca_" for row in ldap))
+
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 96)
+        self.assertEqual(len(self.rows), 102)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):

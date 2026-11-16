@@ -587,7 +587,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Prepare the explicit x64 protocol-peer interpreter on Windows ARM
-        if: (matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine') && matrix.package == 'windows-arm64-standard'
+        if: (matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine') && matrix.package == 'windows-arm64-standard'
         id: storage_tools_python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -595,7 +595,7 @@ jobs:
           architecture: x64
           update-environment: false
       - name: Prepare private protocol-peer tools for inline-key and archive cases
-        if: matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine'
+        if: matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine'
         env:
           VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
         run: >-
@@ -625,6 +625,11 @@ jobs:
       - name: Explicitly prepare the matching fixed private core
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Prepare the pinned private certificate for both strict LDAP transport cases
+        if: matrix.target == 'ldap_trusted_ca_engine'
+        run: >-
+          python scripts/prepare-ldap-tls-fixture.py prepare
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
       - name: Prepare the pinned older source for the focused official-provider case
         if: matrix.target == 'upgrade_engine'
@@ -681,6 +686,9 @@ jobs:
         run: >-
           python scripts/run-bounded-disk-full-tests.py --toolchain "$TEST_TOOLCHAIN"
           --parent "${{ runner.temp }}" --evidence-dir "${{ runner.temp }}/vs-focused-disk-full"
+      - name: Remove only the exact prepared private LDAP certificate fixture
+        if: always() && matrix.target == 'ldap_trusted_ca_engine'
+        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "${{ runner.temp }}"
       - name: Require exact owned-executable cleanup after the original result
         if: always()
         run: python scripts/prepare-test-engine.py check-cleanup
