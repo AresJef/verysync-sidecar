@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Extend the opt-in isolated Windows protocol pilot to query the current ProgID,
+  retain protected UserChoice and refuse merged COM/DDE handlers before dispatch.
+  Actual native results remain separate from SDK browser acceptance.
+
 - Add explicit inline SFTP private keys for native backend operations and correct
   empty-password omission during key-authenticated job readback. Keep the native
   limits-probe and verified-host-identity limitations explicit.

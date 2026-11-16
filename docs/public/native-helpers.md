@@ -487,3 +487,13 @@ if receipt.outcome == NativeBrowserOutcome::CommandSucceeded {
 }
 # Ok(()) }
 ```
+
+## Windows protocol research pilot
+
+The opt-in isolated-CI pilot can query the current Windows ProgID and temporarily
+shadow its per-user class command with an exact owned capture program. Protected
+UserChoice values remain read-only and are checked unchanged after restoration.
+Merged COM-delegated or DDE handlers are refused before dispatch. The pilot also
+verifies restoration after an injected pre-dispatch failure, then exact native
+HTTP/HTTPS arguments and process exit. This is test infrastructure, with actual
+Windows results tracked separately from SDK browser acceptance.
