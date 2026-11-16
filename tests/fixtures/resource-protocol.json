@@ -1,12 +1,12 @@
 {
-  "protocol_id": "VS045-native-resources-v15",
-  "version": 15,
+  "protocol_id": "VS045-native-resources-v16",
+  "version": 16,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "48b53598f4859f954170fbe82a0e24cfa31b5d67745bfb90f9ee4ee1c73e2b5c",
+    "rust_sources_sha256": "4b2e9f34185e43dc4cd0b9584bcef96ae5e6fd2fd24821c55057140c3c736b19",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
     "sampler_sha256": "57521f36920817f42ffe11ecc74483bda4d4142b86631f3830c6bcc15867f3f0",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a"
@@ -111,7 +111,8 @@
     "v5": "Full actual8case opposite-order native pretrial on each profile validates diagnostic recording before new formal acquisition.",
     "v13": "Repeat actual source-bound calibration and two opposite complete pretrial orders on each profile before v13 formal and independent acquisition; earlier source data remains historical.",
     "v14": "Each actual profile repeats source-bound calibration and two complete opposite-order pretrials before v14 formal and independent acquisition. All earlier-source attempts remain historical.",
-    "v15": "Each actual profile repeats source-bound calibration and both complete opposite-order pretrials before v15 formal and independent acquisition. Diagnostic failure recording is verified separately; earlier attempts retain their original strict results."
+    "v15": "Each actual profile repeats source-bound calibration and both complete opposite-order pretrials before v15 formal and independent acquisition. Diagnostic failure recording is verified separately; earlier attempts retain their original strict results.",
+    "v16": "Each actual profile repeats source-bound calibration and both complete opposite-order pretrials before v16 formal and independent acquisition. Previous-source attempts stay historical."
   },
   "profiles": [
     "macos-amd64-standard",
@@ -123,9 +124,9 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "4fe1e13ebe96eb96cae3bd9b0ca61512c36335a120ddb5c8813888de5d7083ce",
+    "previous_protocol_sha256": "6a2b9fa4511dcec090dee3e4ed94704e2179d3f83edb510ea31a2b465ab5c9b6",
     "retained": "All previous datasets and original attempts/deadlines remain historical, not members of this source protocol. No project budget or prior overrun is reset.",
-    "changes": "Preserve exact failed kqueue return or syscall diagnostics, acquisition phase and actual bounded owned-worker cleanup outcome; reject saved observer errors in offline revalidation. No timer retry or metric provider change.",
+    "changes": "Typed native default-ignore GET/complete PUT and snapshot edits with retained private unknowns and explicit actual rule application. Rust source identity changes; observer v15 logic and all measurement parameters remain unchanged.",
     "unchanged": "Measured workloads, repeat counts, timing boundaries, native byte/state/exit checks, all quality/memory/stability thresholds and four formal plus two independent fresh-process cycles.",
     "diagnostic_policy": "Initial unobserved previous durations are null; diagnostics never replace required counters or become new acceptance gates."
   },

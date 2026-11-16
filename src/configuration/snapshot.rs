@@ -148,6 +148,19 @@ impl ConfigurationSnapshot {
     pub fn folder_defaults(&self) -> Result<FolderDefaults> {
         self.decode(&["defaults", "folder"])
     }
+    /// Read the global default-ignore template, separate from per-folder files.
+    pub fn default_ignore_patterns(&self) -> Result<crate::IgnoreDefaults> {
+        self.decode(&["defaults", "ignores"])
+    }
+    /// Edit only the ordered template lines, retaining unknown native values.
+    /// Saving or parsing this template does not alter existing ignore files.
+    pub fn set_default_ignore_patterns(&mut self, patterns: &crate::IgnorePatterns) -> Result<()> {
+        self.default_ignore_patterns()?;
+        self.merge(
+            &["defaults", "ignores"],
+            &serde_json::json!({"lines":patterns.patterns()}),
+        )
+    }
     /// Read the device creation template, independent of live peers.
     pub fn device_defaults(&self) -> Result<crate::DeviceDefaults> {
         self.decode(&["defaults", "device"])

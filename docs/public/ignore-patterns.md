@@ -52,3 +52,38 @@ invalid syntax and recovery using real default restoration. Indexed counts
 change independently of configuration acknowledgements; another folder's rules
 and index plus every synthetic file's bytes remain unchanged. Normal exit of
 the owned process tree is also required.
+
+Global default templates have their own native GET/PUT interface:
+
+```rust,no_run
+# async fn defaults(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+use verysync_sidecar::IgnorePatterns;
+let rules = IgnorePatterns::new(vec!["*.temporary".into()])?;
+let stored = client.set_default_ignore_patterns(&rules).await?;
+assert!(stored.requested_fields_match);
+let template = client.default_ignore_patterns().await?;
+// Explicitly choose a folder and apply these rules to its actual ignore file.
+let selected = IgnorePatterns::new(template.lines)?;
+let applied = client.set_ignore_patterns(folder, &selected).await?;
+assert!(applied.requested_patterns_match);
+# Ok(()) }
+```
+
+`IgnoreDefaults` preserves ordered lines and unknown native fields. A replacement
+holds the shared clone lock, authenticates the current identity, reads the actual
+template, sends one complete PUT retaining unknown values, and compares the full
+typed readback. Independent writers are not one transaction. A failed readback
+after a possible write is `MutationOutcomeUnknown`; no write is retried.
+`ConfigurationSnapshot::default_ignore_patterns` and
+`set_default_ignore_patterns` also support an explicit complete configuration
+save. Empty lines clear the template without rewriting existing ignore files.
+
+Saving a template does not establish parsing or automatic folder inheritance.
+The fixed v2.33.2 macOS ARM64 core stores and persists it, including invalid
+include syntax, but observed newly registered folders still use the vendor's
+rules. Other platform observations remain part of the native matrix. Select an
+existing folder and call `set_ignore_patterns` explicitly when applying the
+stored lines; inspect its parser result and actual indexing separately. Native
+tests retain existing ignore-file bytes, synthetic data and identity, demonstrate
+real index exclusion after explicit application, and require normal restart
+persistence and owned-tree exit.

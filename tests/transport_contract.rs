@@ -23,6 +23,8 @@ mod local_api_write_contracts;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
+#[path = "common/default_ignore_contracts.rs"]
+mod default_ignore_contracts;
 #[path = "common/default_versioning_contracts.rs"]
 mod default_versioning_contracts;
 #[path = "common/device_options_contracts.rs"]

@@ -1,6 +1,6 @@
 //! Exact engine ignore syntax, without host-path conversion or parser guesses.
 use crate::{Error, Result};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::{collections::BTreeMap, fmt};
 
 /// Ordered ignore-file lines, including comments and directives.
@@ -35,6 +35,24 @@ impl fmt::Debug for IgnorePatterns {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IgnorePatterns")
             .field("line_count", &self.0.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Global ordered default-ignore template. Reading it does not parse the rules
+/// or show that any existing folder's ignore file has changed.
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
+pub struct IgnoreDefaults {
+    /// Exact ordered template lines, including comments and directives.
+    pub lines: Vec<String>,
+    /// Unmodeled private native values, retained during complete replacement.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl fmt::Debug for IgnoreDefaults {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IgnoreDefaults")
+            .field("line_count", &self.lines.len())
             .finish_non_exhaustive()
     }
 }
