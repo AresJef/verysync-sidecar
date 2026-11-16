@@ -38,36 +38,70 @@ def fixture():
 
 
 class ResourceQualityContracts(unittest.TestCase):
-    def test_timer_empty_return_and_native_error_are_distinct_failures_without_retry(self):
-        for events, reason in [([], "empty-return"),
-                               ([SimpleNamespace(ident=1, filter=-7, flags=0x4000,
-                                                 fflags=0, data=22)], "event-error")]:
-            timer = METRICS.SamplerTicker.__new__(METRICS.SamplerTicker)
-            timer.queue = Mock()
-            timer.queue.control.return_value = events
-            timer.backend = "darwin-kqueue-critical-nanoseconds"
-            with patch.dict("sys.modules", {"select": SimpleNamespace(KQ_EV_ERROR=0x4000)}):
+    @staticmethod
+    def mach_library(numer=125, denom=3, status=0):
+        library = Mock()
+        def fill(pointer):
+            pointer._obj.numer = numer
+            pointer._obj.denom = denom
+            return status
+        library.mach_timebase_info.side_effect = fill
+        library.mach_wait_until.return_value = 0
+        return library
+
+    def test_absolute_timer_converts_native_units_and_skips_missed_deadlines_without_spinning(self):
+        for numer, denom in [(125, 3), (1, 1), (7, 3)]:
+            library = self.mach_library(numer, denom)
+            period = (10_000_000 * denom + numer - 1) // numer
+            first = 100 + period
+            library.mach_absolute_time.side_effect = [100, first+2*period+5, first+3*period]
+            with patch.object(METRICS.sys, "platform", "darwin"), patch("ctypes.CDLL", return_value=library):
+                timer = METRICS.SamplerTicker(10)
+                self.assertEqual(timer.backend, "darwin-mach-absolute-deadline")
+                self.assertEqual(timer.parameters["period_ticks"], period)
+                self.assertGreaterEqual(period*numer, 10_000_000*denom)
+                self.assertLess(period*numer, 10_000_000*denom+numer)
+                timer.wait()
+                self.assertEqual(timer.expirations, 3)
+                timer.wait()
+                self.assertEqual(timer.expirations, 1)
+                self.assertEqual([c.args[0] for c in library.mach_wait_until.call_args_list],
+                                 [first, first+3*period])
+                self.assertEqual(library.mach_absolute_time.call_count, 3)
+                timer.close()
+
+    def test_absolute_timer_native_failure_and_early_success_are_errors_without_retry(self):
+        for status, returned, reason in [(14, 100, "mach-wait-failed"),
+                                         (0, 100, "mach-wait-returned-early")]:
+            library = self.mach_library()
+            library.mach_absolute_time.side_effect = [100, returned]
+            library.mach_wait_until.return_value = status
+            with patch.object(METRICS.sys, "platform", "darwin"), patch("ctypes.CDLL", return_value=library):
+                timer = METRICS.SamplerTicker(10)
                 with self.assertRaises(METRICS.TimerWaitError) as caught:
                     timer.wait()
-            self.assertEqual(caught.exception.diagnostic["reason"], reason)
-            self.assertGreaterEqual(caught.exception.diagnostic["wait_ns"], 0)
-            self.assertEqual(len(caught.exception.diagnostic["events"]), len(events))
-            if events:
-                self.assertEqual(caught.exception.diagnostic["events"][0]["data"], 22)
-            timer.queue.control.assert_called_once_with(None, 1, 1)
+                self.assertEqual(caught.exception.diagnostic["reason"], reason)
+                self.assertEqual(caught.exception.diagnostic["native_details"]["kernel_return"], status)
+                self.assertEqual(library.mach_wait_until.call_count, 1)
 
-    def test_timer_syscall_failure_retains_errno_and_original_cause(self):
-        timer = METRICS.SamplerTicker.__new__(METRICS.SamplerTicker)
-        timer.queue = Mock()
-        original = OSError(9, "invalid owned descriptor")
-        timer.queue.control.side_effect = original
-        with patch.dict("sys.modules", {"select": SimpleNamespace(KQ_EV_ERROR=0x4000)}):
-            with self.assertRaises(METRICS.TimerWaitError) as caught:
+    def test_absolute_timer_rejects_invalid_timebase_and_unrepresentable_deadline_before_wait(self):
+        for numer, denom, status, clock in [(0, 3, 0, 100), (125, 0, 0, 100),
+                                           (125, 3, 5, 100), (125, 3, 0, 2**64-1)]:
+            library = self.mach_library(numer, denom, status)
+            library.mach_absolute_time.return_value = clock
+            with patch.object(METRICS.sys, "platform", "darwin"), patch("ctypes.CDLL", return_value=library):
+                with self.assertRaises(METRICS.TimerWaitError):
+                    METRICS.SamplerTicker(10)
+                library.mach_wait_until.assert_not_called()
+
+    def test_other_platform_timer_does_not_load_darwin_libraries_or_change_sleep(self):
+        for platform in ["linux", "win32"]:
+            with patch.object(METRICS.sys, "platform", platform), patch("ctypes.CDLL") as library, patch.object(METRICS.time, "sleep") as sleep:
+                timer = METRICS.SamplerTicker(10)
                 timer.wait()
-        self.assertEqual(caught.exception.diagnostic["reason"], "syscall-error")
-        self.assertEqual(caught.exception.diagnostic["os_errno"], 9)
-        self.assertIs(caught.exception.__cause__, original)
-        timer.queue.control.assert_called_once_with(None, 1, 1)
+                self.assertEqual(timer.backend, "monotonic-sleep")
+                library.assert_not_called()
+                sleep.assert_called_once_with(.01)
 
     def test_owned_cleanup_records_actual_exit_and_keeps_original_acquisition_failure(self):
         import tempfile

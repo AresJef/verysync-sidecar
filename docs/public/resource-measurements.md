@@ -62,7 +62,7 @@ the final resource report remain pending.
 
 The v2 protocol preserves all quality and memory thresholds. It increases the
 small/large batch repetitions to 128/8 after Linux AMD64 produced sub-500 ms
-windows. On Darwin, the observer owns a kqueue nanosecond timer with
+windows. The historical Darwin observer used a kqueue nanosecond timer with
 `NOTE_CRITICAL` to request minimal coalescing; it changes no global timer, power
 setting or process priority. A balanced sleep/critical-timer calibration retains
 actual wakeup gaps on each CI host. CPU calibration retains the original read-cost
@@ -165,3 +165,21 @@ or cleanup failures remain `ERROR` during offline revalidation. No failed wait i
 retried or converted into a sample. Sampling methods, workloads, quality limits,
 formal coverage and deadlines remain unchanged; earlier evidence keeps its
 original protocol identity.
+
+The current v17 Darwin observer uses one blocking `mach_wait_until` call for each
+absolute deadline. It obtains the architecture-specific conversion with
+`mach_timebase_info`, rounds the requested interval up to whole native ticks, and
+records that ratio and period. A delayed wakeup advances to the first future
+deadline; it never fills missed observations, spins, or adjusts recorded sample
+timestamps. Nonzero native returns, early returns and unrepresentable deadlines
+remain errors. Other platforms keep their existing wait method.
+
+The interface and conversion follow [Apple's Mach time header](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/osfmk/mach/mach_time.h)
+and its [archived unit-conversion explanation](https://developer.apple.com/library/archive/qa/qa1398/_index.html).
+This replaces the periodic kqueue mechanism after an actual Intel CI attempt
+returned no event after a one-second wait. It is a measurement candidate, not a
+scheduling guarantee or a claim that unrelated platform gaps are fixed. Both
+opposite preparation orders and complete new formal/independent evidence remain
+required on every profile. All original workloads, metric reads, timing
+boundaries, 50 ms coverage limit, other quality/resource criteria and acquisition
+deadlines remain unchanged; earlier failures and datasets retain their identities.
