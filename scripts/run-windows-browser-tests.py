@@ -22,6 +22,52 @@ def load(name, filename):
     return module
 
 
+def build_browser_test(cargo, toolchain, env):
+    """Compile before child-only browser lookup variables are selected."""
+    command = [str(cargo), "+" + toolchain, "test", "--features", "engine-tests",
+               "--test", "browser_engine", "--offline", "--locked", "--no-run",
+               "--message-format=json"]
+    result = subprocess.run(command, capture_output=True, text=True, env=env, timeout=180)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    if result.returncode:
+        raise subprocess.CalledProcessError(result.returncode, command)
+    artifacts = set()
+    for line in result.stdout.splitlines():
+        message = json.loads(line)
+        target = message.get("target", {})
+        if (message.get("reason") == "compiler-artifact"
+                and target.get("name") == "browser_engine"
+                and target.get("kind") == ["test"]
+                and message.get("profile", {}).get("test") is True
+                and message.get("executable")):
+            artifacts.add(Path(message["executable"]))
+    if len(artifacts) != 1:
+        raise ValueError("one exact Cargo browser integration-test artifact required")
+    executable = artifacts.pop()
+    if not executable.is_absolute() or executable.is_symlink() or not executable.is_file():
+        raise ValueError("exact regular browser integration-test artifact required")
+    return executable
+
+
+def private_browser_search_environment(evidence_dir, original):
+    """Hide installed Chrome candidates only from the isolated test child."""
+    env = original.copy()
+    roots = {"ProgramFiles": "program-files", "ProgramFiles(x86)": "program-files-x86",
+             "ProgramW6432": "program-files-w6432"}
+    controlled = {name.casefold() for name in roots} | {"lorcachrome"}
+    for name in list(env):
+        if name.casefold() in controlled:
+            env.pop(name)
+    directory = evidence_dir / "private-browser-search"
+    directory.mkdir(mode=0o700)
+    for name, component in roots.items():
+        path = directory / component
+        path.mkdir(mode=0o700)
+        env[name] = str(path)
+    return env
+
+
 def finish_actors(directory, executable):
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -280,11 +326,25 @@ def main():
             env["BROWSER"] = str(executable)
             env["VERYSYNC_TEST_BROWSER_HOLD"] = "1"
             env["VERYSYNC_TEST_BROWSER_ISOLATION"] = "windows-effective-progid-v1"
+            test_executable = build_browser_test(args.cargo, args.toolchain, env)
+            machine = helper.windows_pe_machine(test_executable)
+            if machine != helper.windows_pe_machine(executable):
+                raise ValueError("browser test and owned capture architectures differ")
+            report["test_artifact"] = {
+                "name": test_executable.name,
+                "sha256": hashlib.sha256(test_executable.read_bytes()).hexdigest(),
+                "pe_machine": hex(machine), "selected_from_cargo_json": True,
+            }
+            env = private_browser_search_environment(args.evidence_dir, env)
+            report["browser_lookup"] = {
+                "owned_empty_program_roots": 3, "caller_environment_modified": False,
+                "system_browser_files_modified": False,
+                "native_local_app_data": "managed private profile",
+            }
             transaction = pilot.ProtocolTransaction(winreg, use_effective_progid=True)
             transaction.apply(executable)
-            command = [str(args.cargo), "+" + args.toolchain, "test", "--features", "engine-tests",
-                       "--test", "browser_engine", "--offline", "--locked",
-                       "actual_windows_native_browser", "--", "--test-threads=1", "--nocapture"]
+            command = [str(test_executable), "actual_windows_native_browser",
+                       "--test-threads=1", "--nocapture"]
             report["native_sdk_command_started"] = True
             with (args.evidence_dir / "browser-engine.log").open("wb") as log:
                 run_bounded(command, env, log, report)
