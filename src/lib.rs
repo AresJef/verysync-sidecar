@@ -262,7 +262,7 @@ pub use sharing::{
     GeneratedShare, JoinFolderOptions, JoinFolderResult, JoinPeerObservation, ShareKey,
     SharePermission, ValidatedShare,
 };
-pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
+pub use status::{FolderId, FolderState, FolderStatus, SystemPing, SystemStatus};
 pub use sync_observation::{
     CompletionSnapshot, DeviceStatistics, FileDownloadProgress, FolderDownloadProgress,
     FolderErrorPage, FolderStatistics, FolderSyncError, IndexBrowseOptions, IndexFileAvailability,

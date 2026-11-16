@@ -50,6 +50,8 @@ mod index_browse_contracts;
 mod index_file_contracts;
 #[path = "common/management_transport_contracts.rs"]
 mod management_transport_contracts;
+#[path = "common/narrow_configuration_contracts.rs"]
+mod narrow_configuration_contracts;
 #[path = "common/native_helper_contracts.rs"]
 mod native_helper_contracts;
 #[path = "common/network_limits_contracts.rs"]

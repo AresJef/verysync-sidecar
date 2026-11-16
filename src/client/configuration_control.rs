@@ -7,6 +7,36 @@ use crate::{
 use serde::{de::DeserializeOwned, Serialize};
 
 impl Client {
+    /// Read the native `ping` marker through this authenticated connection.
+    /// No retries or identity/status query are implicit. Inspect `is_pong()`;
+    /// this marker alone does not establish current identity or sync health.
+    pub async fn ping(&self) -> Result<crate::SystemPing> {
+        self.connection
+            .get_json("read management ping", "rest/system/ping")
+            .await
+    }
+
+    /// Read the dedicated configured-folder collection without fetching the
+    /// complete configuration document and its unrelated credentials.
+    ///
+    /// This returns the same folder model as `folders()`, with target-side path
+    /// syntax and retained unknown fields. It opens no controller files, retries
+    /// no request, and does not establish sync readiness or current identity.
+    pub async fn folder_configurations(&self) -> Result<Vec<crate::FolderConfig>> {
+        let style = self.folder_path_style()?;
+        let folders: Vec<crate::folders::WireFolder> = self
+            .connection
+            .get_json(
+                "read folder configuration collection",
+                "rest/config/folders",
+            )
+            .await?;
+        folders
+            .into_iter()
+            .map(|folder| folder.into_config(style))
+            .collect()
+    }
+
     /// Read event-log, thumbnail and proxy selections using target path syntax.
     pub async fn system_preferences(&self) -> Result<crate::SystemPreferences> {
         let wire: crate::system_preferences::WireSystemPreferences = self

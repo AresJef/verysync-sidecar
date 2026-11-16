@@ -1,5 +1,33 @@
 # Creation defaults and configuration application
 
+`ping()` reads the native management marker without a status/identity request or
+retry. `SystemPing::is_pong()` recognizes only the exact `pong` marker; other
+strings and extension fields remain inspectable. A pong does not establish the
+current process identity, sync readiness, connected peers or transfer health.
+Missing and non-string markers produce a typed response error. Debug omits reply
+and extension values.
+
+`folder_configurations()` uses the dedicated `/rest/config/folders` collection
+route, avoiding transfer of the complete configuration and unrelated credentials.
+`folders()` remains the full-document convenience read. Both return target-side
+`FolderConfig` paths and retain unmodeled folder fields. Empty collections are
+valid; malformed collection/object schemas are errors, not invented empty lists.
+Neither method opens controller files or establishes sync completion. The
+legacy `/rest/system/config` GET alias can be requested explicitly with the raw
+API; the typed `configuration()` uses `/rest/config`. Native equality of those
+read aliases does not imply equal write semantics.
+
+```no_run
+# async fn read(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+let ping = client.ping().await?;
+let configured = client.folder_configurations().await?;
+if ping.is_pong() {
+    // The native management handler replied; file progress needs its own evidence.
+}
+# let _ = configured;
+# Ok(()) }
+```
+
 `folder_defaults()` and `device_defaults()` read the engine's current creation
 templates. `update_folder_defaults()` and `update_device_defaults()` PATCH only
 explicit fields. A change affects subsequent registrations through

@@ -7,6 +7,35 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{DeviceId, Error, Result};
 
+/// Native management ping marker, independent of identity or sync health.
+///
+/// Unknown replies and additional fields are retained. Ordinary Debug omits
+/// reply and extension values. A missing or non-string marker is an error.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct SystemPing {
+    /// Exact upstream `ping` value; only the known `pong` marker is recognized.
+    #[serde(rename = "ping")]
+    pub reply: String,
+    /// Remaining native values, available for explicit inspection.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+impl SystemPing {
+    /// Whether the native marker is exactly `pong`. This does not authenticate
+    /// the current process or prove that scanning, peers or transfers are healthy.
+    pub fn is_pong(&self) -> bool {
+        self.reply == "pong"
+    }
+}
+impl fmt::Debug for SystemPing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SystemPing")
+            .field("is_pong", &self.is_pong())
+            .field("extra_field_count", &self.extra.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// An opaque upstream folder identifier, preserved without normalization.
 ///
 /// Protocol requests encode this identifier as one query value or path segment.
