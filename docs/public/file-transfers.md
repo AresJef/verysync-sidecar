@@ -13,6 +13,25 @@ Content-Disposition filenames are never used. Existing parent directories must
 already exist and belong to a location the caller trusts. This is not a
 filesystem sandbox against a concurrent actor changing those directories.
 
+Local parent components and directory links retain the controller operating
+system's own path semantics. The SDK does not lexically collapse a link followed
+by `..` or assume that Windows and POSIX resolve that input identically. Remote
+`ResourcePath` components instead retain the connected target's syntax and
+reject parent traversal. Case sensitivity and Unicode filename equivalence are
+properties of the actual target filesystem; the SDK does not normalize or fold
+the names to infer those properties.
+
+A dedicated native test independently probes the filesystem before checking
+actual metadata/content/checksums and a download through a linked local parent.
+It exercises a real path exceeding 320 UTF-16 units, literal Chinese/percent/space
+names, case and Unicode-equivalent name pairs, and a remote directory link.
+Native paths that cannot be represented in the management protocol must return
+`PathEncoding` while preserving the complete native folder configuration. Local
+download destinations use native filesystem operations without that protocol
+conversion. A local macOS run has passed; complete
+current-source target evidence remains independently required. This test does
+not establish support beyond the target filesystem's own limits.
+
 ```rust,no_run
 # async fn transfer(client: &verysync_sidecar::Client,
 #     remote: &verysync_sidecar::ResourcePath,

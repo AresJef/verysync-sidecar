@@ -7,8 +7,9 @@ use managed_fixture::{options, TestResult};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Read, path::Path, time::Duration};
 use verysync_sidecar::{
-    ManagedInstance, ResourceArchiveFormat, ResourceByteRange, ResourcePath,
-    ResourceTransferOptions, ResourceUploadConflict, TargetPath,
+    CreateFolderOptions, Error, FolderId, ManagedInstance, ResourceArchiveFormat,
+    ResourceByteRange, ResourceChecksum, ResourcePath, ResourceTransferOptions,
+    ResourceUploadConflict, TargetPath,
 };
 
 async fn mount(
@@ -55,6 +56,268 @@ fn assert_directory_payloads(actual: BTreeMap<String, Vec<u8>>, relative: &Path)
     if actual != directory_relative {
         assert_eq!(actual, expected_selected_batch(relative));
     }
+}
+
+#[tokio::test]
+async fn public_native_paths_match_long_unicode_case_and_link_filesystem_effects() -> TestResult {
+    let root = tempfile::Builder::new().prefix("vpath-").tempdir()?.keep();
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let (profile, volume, _) = mount(&core).await?;
+    let directory = profile.join("paths \u{4e2d}\u{6587} %2e%2e +#");
+    std::fs::create_dir(&directory)?;
+    let remote = volume.clone().child("paths \u{4e2d}\u{6587} %2e%2e +#")?;
+    let payload = b"owned native path bytes: Unicode, percent, case and links";
+    std::fs::write(directory.join("source.txt"), payload)?;
+    let mut long_directory = directory.clone();
+    let mut long_remote = remote.clone();
+    for index in 0..8 {
+        let component = format!("s{index:02}_{}", "x".repeat(40));
+        long_directory.push(&component);
+        long_remote = long_remote.child(component)?;
+    }
+    std::fs::create_dir_all(&long_directory)?;
+    let leaf = "\u{4e2d}\u{6587} %2e%2e +#.txt";
+    let long_file = long_directory.join(leaf);
+    std::fs::write(&long_file, payload)?;
+    let path_units = long_file
+        .to_str()
+        .ok_or("synthetic UTF-8 path required")?
+        .encode_utf16()
+        .count();
+    assert!(
+        path_units > 320,
+        "fixture must actually exceed the legacy path length"
+    );
+    let native_long = core
+        .client()
+        .resource_info(&long_remote.child(leaf)?)
+        .await?;
+    assert_eq!(
+        native_long.content.as_deref(),
+        Some(std::str::from_utf8(payload)?)
+    );
+    assert_eq!(native_long.size, payload.len() as u64);
+
+    let mut equivalence = Vec::new();
+    for (first, second, label) in [
+        ("CaseProbe.txt", "caseprobe.txt", "case"),
+        ("\u{e9}.txt", "e\u{301}.txt", "unicode_normalization"),
+    ] {
+        std::fs::write(directory.join(first), b"first independent native file")?;
+        let equivalent = match std::fs::read(directory.join(second)) {
+            Ok(bytes) => {
+                assert_eq!(bytes, b"first independent native file");
+                true
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
+        if !equivalent {
+            std::fs::write(directory.join(second), b"second independent native file")?;
+        }
+        for (name, bytes) in [
+            (first, b"first independent native file".as_slice()),
+            (
+                second,
+                if equivalent {
+                    b"first independent native file".as_slice()
+                } else {
+                    b"second independent native file".as_slice()
+                },
+            ),
+        ] {
+            let actual = core
+                .client()
+                .resource_info(&remote.clone().child(name)?)
+                .await?;
+            assert_eq!(actual.content.as_deref(), Some(std::str::from_utf8(bytes)?));
+            let expected: String = Sha256::digest(bytes)
+                .iter()
+                .map(|v| format!("{v:02x}"))
+                .collect();
+            assert_eq!(
+                core.client()
+                    .resource_checksum(&remote.clone().child(name)?, ResourceChecksum::Sha256)
+                    .await?,
+                expected
+            );
+            assert_eq!(std::fs::read(directory.join(name))?, bytes);
+        }
+        equivalence.push(
+            serde_json::json!({"dimension": label, "native_names_equivalent": equivalent,
+            "actual_sdk_content_and_hash_match_native_files": true}),
+        );
+    }
+
+    let real_parent = root.join("native destination parent");
+    let branch = real_parent.join("branch");
+    std::fs::create_dir_all(&branch)?;
+    let alias = root.join("directory alias");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&branch, &alias)?;
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&branch, &alias)?;
+    // Ask the real OS first. Windows and POSIX can resolve parent components
+    // differently; the SDK must preserve that native behavior without guessing.
+    std::fs::write(
+        alias.join("..").join("oracle.txt"),
+        b"independent native path oracle",
+    )?;
+    let uses_real_parent = real_parent.join("oracle.txt").is_file();
+    let uses_lexical_parent = root.join("oracle.txt").is_file();
+    assert_ne!(uses_real_parent, uses_lexical_parent);
+    let destination = alias.join("..").join("received \u{4e8c} %.txt");
+    let expected_destination = if uses_real_parent {
+        &real_parent
+    } else {
+        &root
+    }
+    .join("received \u{4e8c} %.txt");
+    let unused_destination = if uses_real_parent {
+        &root
+    } else {
+        &real_parent
+    }
+    .join("received \u{4e8c} %.txt");
+    let receipt = core
+        .client()
+        .download_resource(
+            &remote.clone().child("source.txt")?,
+            &destination,
+            None,
+            &ResourceTransferOptions {
+                max_bytes: 1024,
+                deadline: Duration::from_secs(20),
+            },
+        )
+        .await?;
+    assert_eq!(receipt.bytes, payload.len() as u64);
+    assert_eq!(receipt.sha256, digest(payload));
+    assert_eq!(std::fs::read(&expected_destination)?, payload);
+    assert!(
+        !unused_destination.exists(),
+        "SDK must not choose different parent semantics"
+    );
+    assert!(std::fs::symlink_metadata(&alias)?.file_type().is_symlink());
+
+    // A remote directory alias is interpreted by the target, not normalized
+    // using the controller's filesystem syntax.
+    let remote_alias = profile.join("resource directory alias");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&directory, &remote_alias)?;
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&directory, &remote_alias)?;
+    let linked = volume
+        .clone()
+        .child("resource directory alias")?
+        .child("source.txt")?;
+    assert_eq!(
+        core.client()
+            .resource_info(&linked)
+            .await?
+            .content
+            .as_deref(),
+        Some(std::str::from_utf8(payload)?)
+    );
+    assert_eq!(std::fs::read(remote_alias.join("source.txt"))?, payload);
+
+    #[cfg(unix)]
+    let invalid_name = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![b'n', 0xff])
+    };
+    #[cfg(windows)]
+    let invalid_name = {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[b'n' as u16, 0xd800])
+    };
+    let before = core.client().configuration().await?.native_document()["folders"].clone();
+    assert!(before.is_array());
+    let invalid = root.join(&invalid_name);
+    let native_encoding_error =
+        match std::fs::write(&invalid, b"independent native encoding oracle") {
+            Ok(()) => None,
+            Err(error) => {
+                #[cfg(unix)]
+                assert!(matches!(
+                    error.raw_os_error(),
+                    Some(libc::EINVAL | libc::EILSEQ)
+                ));
+                #[cfg(windows)]
+                assert_eq!(
+                    error.raw_os_error(),
+                    Some(windows_sys::Win32::Foundation::ERROR_INVALID_NAME as i32)
+                );
+                Some(
+                    error
+                        .raw_os_error()
+                        .ok_or("native encoding error code missing")?,
+                )
+            }
+        };
+    let mut native_destination_name = invalid_name;
+    native_destination_name.push("-received");
+    let native_destination = root.join(native_destination_name);
+    let native_output = core
+        .client()
+        .download_resource(
+            &remote.clone().child("source.txt")?,
+            &native_destination,
+            None,
+            &ResourceTransferOptions {
+                max_bytes: 1024,
+                deadline: Duration::from_secs(20),
+            },
+        )
+        .await;
+    if let Some(expected) = native_encoding_error {
+        assert!(matches!(native_output, Err(Error::LocalIo { source, .. }) if source.raw_os_error()==Some(expected)),
+            "local native filesystem encoding error must not be converted to a protocol error or replacement filename");
+    } else {
+        assert_eq!(native_output?.sha256, digest(payload));
+        assert_eq!(std::fs::read(&native_destination)?, payload);
+        assert_eq!(
+            std::fs::read(&invalid)?,
+            b"independent native encoding oracle"
+        );
+    }
+    let result = core
+        .client()
+        .create_folder(
+            &CreateFolderOptions::new(
+                FolderId::parse("invalid-native-encoding")?,
+                TargetPath::local(invalid),
+            )
+            .paused(true),
+        )
+        .await;
+    assert!(matches!(result, Err(Error::PathEncoding)));
+    assert!(
+        core.client().configuration().await?.native_document()["folders"] == before,
+        "invalid encoding must leave the complete native folder configuration unchanged"
+    );
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    assert_eq!(std::fs::read(&long_file)?, payload);
+    assert_eq!(std::fs::read(directory.join("source.txt"))?, payload);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(&root)?;
+    println!(
+        "native path boundary evidence: {}",
+        serde_json::json!({
+        "actual_long_native_path_utf16_units": path_units, "actual_long_file_content_and_size": true,
+        "unicode_percent_space_and_plus_are_literal_data": true, "equivalence": equivalence,
+        "native_parent_resolves_through_link": uses_real_parent,
+        "actual_sdk_download_destination_matches_native_oracle": true, "other_parent_destination_absent": true,
+        "actual_remote_directory_alias_content_matches": true, "local_alias_retained": true,
+        "nonrepresentable_native_path_typed_rejection_and_unchanged_registration": true,
+        "native_local_destination_encoding_matches_independent_filesystem_oracle": true,
+        "native_local_encoding_supported": native_encoding_error.is_none(),
+        "synthetic_source_and_received_bytes_retained_until_explicit_cleanup": true,
+        "same_identity_and_normal_owned_tree_exit": true})
+    );
+    Ok(())
 }
 
 #[tokio::test]
