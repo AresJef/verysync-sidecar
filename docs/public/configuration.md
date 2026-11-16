@@ -469,3 +469,19 @@ with credentials; it is not a verified connection or authentication receipt.
 The isolated refusing proxy observed no request during its bounded startup
 probe, so no actual proxy transfer is claimed. Per-platform full-source, actual
 thumbnail-cache and proxy-routing conditions remain required evidence.
+
+## Verification scope
+
+The complete-document save contract has native evidence on the six standard
+macOS, Windows and Linux AMD64/ARM64 profiles in [run 43841446004](https://github.com/AresJef/verysync-sidecar/actions/runs/43841446004).
+Each profile passed the nine configuration cases, including full-document stale
+protection, retained sections and files, application-state observation and normal
+restart persistence. Separate online-upgrade failures in that run remain failures;
+these configuration results do not establish a complete integrated run.
+
+Complete options and GUI replacement have their own two-case, six-profile
+[evidence run](https://github.com/AresJef/verysync-sidecar/actions/runs/43867522394),
+including explicit endpoint adoption, real password login, old-key rejection and
+normal restart. Producer identities and relevant subsequent source changes are
+retained in the capability evidence. Other option effects, all remaining template
+controls, licensed capabilities and final integrated acceptance stay separate.
