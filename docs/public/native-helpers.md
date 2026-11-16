@@ -502,9 +502,10 @@ before any outer cleanup. Because the native Linux opener can create a separate
 process group, the outer observer separately records whether its exact owned
 opener and actor survive that root, then explicitly stops those test fixtures.
 Survival is not reported as library cleanup or graphical rollback. A run with
-no cancellation journals reports unknown cancellation observations. Native
-execution of the new Linux cancellation case and the complete current-source
-platform gate remain pending.
+no cancellation journals reports unknown cancellation observations. Both native
+Linux architectures in run 43977006777 require actual root exit before outer
+cleanup and separately observe the detached opener and actor outliving it.
+The complete final-candidate platform gate remains separate.
 Actual isolated Windows AMD64 and ARM64 SDK cases verified the controlled native
 fallback, both verified and unverified requests, exact URLs, actor execution after
 successful root return, and exact actor exit. Cancellation independently held an
@@ -570,6 +571,24 @@ Hardware results retain each platform's real data, error or empty snapshot.
 Writable-path snapshots keep the documented fixed-baseline limitation alongside
 an independent actual write. These results establish the stated controls and
 observations, with the original producer identity retained.
+[Run 43929620380](https://github.com/AresJef/verysync-sidecar/actions/runs/43929620380)
+also verifies all nine stopped-CLI storage-path fields, restart identity and
+retained state on the six standard native profiles. Both completion actions
+produce native instruction text on the Unix profiles and the precise native
+unsupported-COMSPEC failure on Windows. Neither result is shell installation.
+The ordinary host-watch case separately verifies Linux no-op and unprivileged
+write refusal, or the native unsupported-host result on macOS/Windows, while
+retaining private state and normal owned exit.
+
+[Run 43977006777](https://github.com/AresJef/verysync-sidecar/actions/runs/43977006777)
+verifies native browser fallback dispatch, failure and cancellation on all six
+profiles, including independent actor/native-root observations and Windows
+registry restoration. It also verifies a real Linux AMD64 kernel watch-limit
+increase by one and independent restoration of the exact original value in a
+disposable VM. The added native ARM64 privileged gate remains pending; AMD64
+evidence is not an ARM64 result. The SDK does not perform implicit elevation,
+kernel rollback, persistent configuration, or graphical rollback.
+
 [Run 43957189957](https://github.com/AresJef/verysync-sidecar/actions/runs/43957189957)
 adds three actual helper cases on every standard native profile: nonempty link
 consumption and native read-error ambiguity, exact public-IP snapshot equality,

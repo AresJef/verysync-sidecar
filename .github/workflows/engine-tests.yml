@@ -756,8 +756,16 @@ jobs:
         run: python scripts/prepare-test-engine.py check-cleanup
 
   host-watch-limit-positive:
-    name: Explicit Linux host watch-limit effects (isolated VM only)
-    runs-on: ubuntu-24.04
+    name: Explicit Linux host watch-limit effects (${{ matrix.package }}; isolated VM only)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            package: linux-amd64-standard
+          - runner: ubuntu-24.04-arm
+            package: linux-arm64-standard
     timeout-minutes: 20
     defaults:
       run:
@@ -778,7 +786,7 @@ jobs:
           cargo +"$TEST_TOOLCHAIN" fetch --locked
       - name: Explicitly prepare fixed private Linux core
         run: >-
-          python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
       - name: Compile and identify the exact host test as the normal runner
         run: >-
