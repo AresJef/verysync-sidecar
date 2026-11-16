@@ -27,8 +27,8 @@ if transport not in ("plain", "tls", "starttls"):
 tls_context = None
 public_manifest = config.get("public_tls_manifest")
 if public_manifest is not None:
-    if transport != "tls":
-        raise ValueError("public CA fixture requires explicit strict TLS selection")
+    if transport not in ("tls", "starttls"):
+        raise ValueError("public CA fixture requires explicit encrypted transport selection")
     import ldap_tls_fixture
     ldap_tls_fixture.check_dns()
     _, certificate, private_key = ldap_tls_fixture.load_manifest(public_manifest)

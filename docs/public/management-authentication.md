@@ -224,8 +224,9 @@ certificate before bind. The pinned program's StartTLS path instead fails before
 TLS negotiation with `either ServerName or InsecureSkipVerify must be specified
 in the tls.Config`; it does not reach certificate validation in this case. The
 library preserves this native limitation and performs no automatic downgrade or
-bypass. A trusted-certificate positive path, further directory conditions and full
-same-source platform evidence remain required before broad support claims.
+bypass. Strict public-CA LDAPS has separate native evidence below. It does not establish
+strict StartTLS success; further directory conditions and final same-source
+integration remain separate.
 
 The separate `ldap_trusted_ca_engine` target selects an explicitly prepared,
 pinned public-CA certificate for the synthetic `ldap.localhost.direct` peer.
@@ -249,6 +250,18 @@ as workflow artifacts. The [publisher's terms](https://github.com/Upinel/localho
 These are test requirements. A prepared certificate or passing fixture boundary
 contract is not native authentication acceptance; final source and platform
 results remain separate evidence.
+
+The additional strict StartTLS boundary case first logs in over LDAPS with the
+same pinned certificate, matching hostname and verification enabled. It then
+selects StartTLS explicitly, retains verification, and requires the server to
+observe a successful StartTLS extended operation followed by a rejected TLS
+handshake, with no completed handshake or bind request. The owned core must
+retain the specific native missing-server-name error, API management, identity
+and caller bytes, then release its tree and state normally. This case rejects
+an unrelated authentication failure or unavailable peer as evidence of that
+specific limitation. Six native profile results remain required; preparing this
+case or compiling it does not establish the boundary on a platform.
+
 
 
 Independent API-key rotation and GUI password/session/logout contracts have

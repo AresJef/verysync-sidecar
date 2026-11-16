@@ -3,6 +3,7 @@
     "remote-device-name-policy",
     "native-helper-effects",
     "remote-version-archives",
-    "ftp-disconnect-recovery"
+    "ftp-disconnect-recovery",
+    "ldap-verified-transport"
   ]
 }
