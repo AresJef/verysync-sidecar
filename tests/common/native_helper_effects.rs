@@ -1538,3 +1538,127 @@ async fn actual_native_helpers_preserve_uncertainty_after_consuming_link_respons
     println!("native pending link lost-response evidence: actual_native_inbox_consumed_before_response_loss=true mutation_outcome_unknown=true actual_consuming_get_count=1 automatic_retry=false explicit_followup_empty=true actual_error_debug_redacted=true configuration_identity_and_caller_bytes_retained=true native_normal_exit=true");
     Ok(())
 }
+
+#[tokio::test]
+async fn actual_native_helpers_consume_official_add_url_before_existing_instance_refusal(
+) -> TestResult {
+    use std::process::{Child, Command, Stdio};
+    struct Producer(Child);
+    impl Drop for Producer {
+        fn drop(&mut self) {
+            if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+    let root = tempfile::Builder::new().prefix("vslcli-").tempdir()?.keep();
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let address = listener.local_addr()?;
+    assert_ne!(address.port(), 18886);
+    listener.set_nonblocking(true)?;
+    let sentinel = root.join("caller-sentinel");
+    std::fs::write(&sentinel, b"official link producer keeps caller bytes")?;
+    let mut owner = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let id = owner.client().instance().device_id.clone();
+    let document = owner
+        .client()
+        .configuration()
+        .await?
+        .native_document()
+        .clone();
+    for (index, link) in [
+        format!("http://{address}/owned/%E4%BA%8C?private=native-cli-private-query#untrusted"),
+        "verysync://synthetic-二/%2e%2e?private=native-cli-private-query".into(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(!owner.state_directory().join("add-url").try_exists()?);
+        let state = owner.state_directory();
+        let stdout = root.join(format!("private-producer-{index}.stdout"));
+        let stderr = root.join(format!("private-producer-{index}.stderr"));
+        let mut command = Command::new(owner.selected_program().path());
+        command
+            .arg("serve")
+            .arg("--home")
+            .arg(state)
+            .args(["--no-browser", "--no-restart", "--no-upgrade", "--add-url"])
+            .arg(&link)
+            .current_dir(state)
+            .env("VSHOMEDIR", state)
+            .env_remove("VSCONFDIR")
+            .env_remove("VSDATADIR")
+            .env("TMPDIR", state.join("tmp"))
+            .stdin(Stdio::null())
+            .stdout(std::fs::File::create(&stdout)?)
+            .stderr(std::fs::File::create(&stderr)?);
+        #[cfg(unix)]
+        command
+            .env("HOME", state.join("profile"))
+            .env("XDG_CONFIG_HOME", state.join("roaming"))
+            .env("XDG_CACHE_HOME", state.join("local"))
+            .env("XDG_DATA_HOME", state.join("profile").join("data"));
+        #[cfg(windows)]
+        command
+            .env("APPDATA", state.join("roaming"))
+            .env("LOCALAPPDATA", state.join("local"))
+            .env("USERPROFILE", state.join("profile"))
+            .env("TEMP", state.join("tmp"))
+            .env("TMP", state.join("tmp"));
+        let mut producer = Producer(command.spawn()?);
+        let status = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(status) = producer.0.try_wait()? {
+                    return Ok::<_, std::io::Error>(status);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await??;
+        // The official command writes its input before refusing a second
+        // serving instance. Preserve that refusal; it is not CLI start success.
+        assert_eq!(status.code(), Some(1));
+        assert!(std::fs::metadata(&stdout)?.len() <= 8192);
+        assert!(std::fs::metadata(&stderr)?.len() <= 8192);
+        let output = [std::fs::read(&stdout)?, std::fs::read(&stderr)?].concat();
+        assert!(String::from_utf8_lossy(&output)
+            .contains("Failed to acquire lock: is another Verysync instance already running?"));
+        let pending = owner.client().pending_native_link().await?;
+        assert_eq!(pending.link(), Some(link.as_str()));
+        assert!(!format!("{pending:?}").contains("native-cli-private-query"));
+        assert!(!owner.state_directory().join("add-url").try_exists()?);
+        assert!(owner.client().pending_native_link().await?.link().is_none());
+        assert!(owner.client().folders().await?.is_empty());
+        assert_eq!(
+            owner.client().configuration().await?.native_document(),
+            &document
+        );
+        assert_eq!(owner.client().system_status().await?.device_id, id);
+        assert!(
+            matches!(listener.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock)
+        );
+    }
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    assert_eq!(
+        std::fs::read(sentinel)?,
+        b"official link producer keeps caller bytes"
+    );
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "native official link producer evidence: {}",
+        serde_json::json!({
+            "actual_official_add_url_writes_consumable_input":true,
+            "actual_http_and_protocol_links_retained":true,
+            "actual_native_file_consumed_once_and_followup_empty":true,
+            "no_link_follow_or_folder_registration":true,
+            "configuration_identity_and_caller_bytes_retained":true,
+            "normal_owned_tree_and_state_exit":true,
+            "native_cli_producer_verified":true,
+        "native_existing_instance_lock_refusal_preserved":true,
+        "native_cli_exit_code":1,"native_cli_start_success_claimed":false
+        })
+    );
+    Ok(())
+}
