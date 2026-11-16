@@ -18,8 +18,15 @@ job logs keep their original source identities; cancellation adds no acceptance.
 The helper uses the repository job's narrowly scoped Actions token and never
 reads a developer credential.
 
-The Windows protocol-association pilot is research with its own explicit
-`windows_browser_pilot` dispatch option. It is not part of normal draft runs or
-Windows browser API acceptance. A guarded refusal, including an existing user
-protocol choice, remains an unverified native browser control path rather than
-a successful browser test. The full Windows browser boundary remains pending.
+The Windows native-browser acceptance job is required on ordinary pull requests
+and manual runs for both AMD64 and ARM64. It first verifies owned protocol
+capture and exact restoration of the current effective per-user association,
+then runs the public Rust SDK browser case against a fixed private core. Both
+steps must succeed; neither is enabled by a research-branch prefix or optional
+manual flag. The case checks actual verified/unverified dispatch, continuing
+owned actors, observed native-root cancellation, preserved caller data and
+identity, normal owned process exit and final exact-program cleanup. Existing
+UserChoice values and installed browser files remain untouched. A guarded refusal
+or skipped/incomplete execution does not establish native browser support. The
+original opt-in observations retain their actual source identity; complete current
+Windows execution remains required for final acceptance.

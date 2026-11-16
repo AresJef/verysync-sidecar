@@ -4,11 +4,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
-    inputs:
-      windows_browser_pilot:
-        description: Explicitly run the isolated Windows protocol research pilot
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -694,10 +689,9 @@ jobs:
         if: always() && matrix.target == 'upgrade_engine'
         run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
 
-  windows-browser-association-pilot:
-    # Dedicated opt-in research branches run this owned Windows-VM pilot.
-    if: (github.event_name == 'workflow_dispatch' && inputs.windows_browser_pilot) || (github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'test/windows-effective-progid-'))
-    name: Windows protocol association pilot (${{ matrix.rust }})
+  windows-native-browser-acceptance:
+    # Both native Windows SDK cases are required on ordinary PR and manual runs.
+    name: Windows native browser acceptance (${{ matrix.rust }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     strategy:
@@ -730,16 +724,14 @@ jobs:
         run: >-
           python scripts/probe-windows-browser-associations.py --toolchain "$TEST_TOOLCHAIN"
           --evidence-dir "${{ runner.temp }}/vs-browser-association-pilot"
-          ${{ github.event_name == 'pull_request' && '--use-effective-progid' || '' }}
+          --use-effective-progid
 
       - name: Prepare the exact fixed private core for the SDK browser case
-        if: github.event_name == 'pull_request'
         id: browser_fixed_core
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
       - name: Require actual Windows SDK browser effects and native-root cancellation
-        if: github.event_name == 'pull_request'
         run: |
           python - <<'PYINNER'
           import os, shutil, subprocess, sys

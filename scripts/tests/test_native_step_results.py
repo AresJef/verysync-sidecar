@@ -58,5 +58,34 @@ class NativeStepContracts(unittest.TestCase):
                 self.assertIn("native_disk_full_engine", HELPER.failures(family + "-arm64-standard", steps))
 
 
+class WindowsBrowserWorkflowContracts(unittest.TestCase):
+    def job(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/engine-tests.yml").read_text()
+        marker = "  windows-native-browser-acceptance:\n"
+        self.assertTrue(marker in workflow, "required Windows native-browser CI job is absent")
+        return workflow.split(marker, 1)[1].split("\n  host-watch-limit-positive:", 1)[0]
+
+    def test_windows_sdk_acceptance_is_not_a_branch_or_manual_opt_in(self):
+        job = self.job()
+        self.assertNotIn("\n    if:", job)
+        self.assertNotIn("continue-on-error:", job)
+        for runner, target in [("windows-2022", "x86_64-pc-windows-msvc"),
+                               ("windows-11-arm", "aarch64-pc-windows-msvc")]:
+            self.assertIn("runner: " + runner, job)
+            self.assertIn("rust: " + target, job)
+        self.assertIn("--use-effective-progid", job)
+
+    def test_manual_and_ready_runs_require_actual_sdk_execution_and_exact_cleanup(self):
+        job = self.job()
+        for name in ["Prepare the exact fixed private core for the SDK browser case",
+                     "Require actual Windows SDK browser effects and native-root cancellation"]:
+            step = job.split("      - name: " + name + "\n", 1)[1].split("      - name:", 1)[0]
+            self.assertNotIn("        if:", step)
+        self.assertIn("scripts/run-windows-browser-tests.py", job)
+        self.assertIn("check=True", job)
+        self.assertIn("if: always() && steps.browser_fixed_core.outcome == 'success'", job)
+        self.assertIn("scripts/prepare-test-engine.py check-cleanup", job)
+
+
 if __name__ == "__main__":
     unittest.main()

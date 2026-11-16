@@ -15,6 +15,8 @@ pub struct Service {
     pub endpoint: StorageEndpoint,
     pub bad_endpoint: StorageEndpoint,
     pub share: PathBuf,
+    #[allow(dead_code)] // Only the opt-in archive target reads peer observations.
+    pub observation_log: PathBuf,
     pub python_platform: String,
 }
 impl Service {
@@ -23,11 +25,18 @@ impl Service {
         root: &Path,
         write_delay: Duration,
     ) -> TestResult<Self> {
-        Self::configured(protocol, root, write_delay, false, None)
+        Self::configured(protocol, root, write_delay, false, None, false)
     }
     #[allow(dead_code)] // Shared fixture modules are compiled by separate targets.
     pub fn start_https(root: &Path) -> TestResult<Self> {
-        Self::configured(StorageProtocol::WebDav, root, Duration::ZERO, true, None)
+        Self::configured(
+            StorageProtocol::WebDav,
+            root,
+            Duration::ZERO,
+            true,
+            None,
+            false,
+        )
     }
     #[allow(dead_code)] // Shared fixture module, separate native test targets.
     pub fn start_smb_auth(root: &Path, mode: &str) -> TestResult<Self> {
@@ -40,6 +49,18 @@ impl Service {
             Duration::ZERO,
             false,
             Some(mode),
+            false,
+        )
+    }
+    #[allow(dead_code)] // Only the archive target requests FTP observations.
+    pub fn start_observed_ftp(root: &Path) -> TestResult<Self> {
+        Self::configured(
+            StorageProtocol::Ftp,
+            root,
+            Duration::ZERO,
+            false,
+            None,
+            true,
         )
     }
     fn configured(
@@ -48,6 +69,7 @@ impl Service {
         write_delay: Duration,
         tls: bool,
         smb_auth: Option<&str>,
+        record_ftp_events: bool,
     ) -> TestResult<Self> {
         if write_delay.as_millis() > 100 {
             return Err("bounded write delay is test-only".into());
@@ -77,18 +99,20 @@ impl Service {
                 }
             ),
         )?;
+        let observation_log = root.join("private-service.log");
         let child = Command::new(python)
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/storage-test-services.py"))
             .args(["--protocol", name])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(File::create(root.join("private-service.log"))?)
+            .stderr(File::create(&observation_log)?)
             .spawn()?;
         let mut service = Self {
             child: Some(child),
             endpoint: placeholder.clone(),
             bad_endpoint: placeholder,
             share,
+            observation_log,
             python_platform: String::new(),
         };
         let child = service
@@ -96,10 +120,11 @@ impl Service {
             .as_mut()
             .ok_or("private service owner absent")?;
         let mut input = child.stdin.take().ok_or("private service stdin absent")?;
-        serde_json::to_writer(
-            &mut input,
-            &serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis(),"tls":tls,"smb_auth":smb_auth}),
-        )?;
+        let mut configuration = serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis(),"tls":tls,"smb_auth":smb_auth});
+        if record_ftp_events {
+            configuration["record_ftp_events"] = true.into();
+        }
+        serde_json::to_writer(&mut input, &configuration)?;
         input.write_all(b"\n")?;
         drop(input);
         let output = child.stdout.take().ok_or("private service stdout absent")?;
