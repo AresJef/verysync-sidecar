@@ -566,6 +566,48 @@ jobs:
             runner: macos-15-intel
             rust: x86_64-apple-darwin
             target: configuration_engine
+            label: whole-section-replacement
+            filter: native_whole_section
+            trace: "0"
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+            target: configuration_engine
+            label: whole-section-replacement
+            filter: native_whole_section
+            trace: "0"
+          - package: linux-amd64-standard
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-gnu
+            target: configuration_engine
+            label: whole-section-replacement
+            filter: native_whole_section
+            trace: "0"
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+            target: configuration_engine
+            label: whole-section-replacement
+            filter: native_whole_section
+            trace: "0"
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+            target: configuration_engine
+            label: whole-section-replacement
+            filter: native_whole_section
+            trace: "0"
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+            target: configuration_engine
+            label: whole-section-replacement
+            filter: native_whole_section
+            trace: "0"
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+            target: configuration_engine
             label: narrow-config-reads
             filter: native_narrow_configuration_reads_preserve_identity_folders_and_state
             trace: "0"

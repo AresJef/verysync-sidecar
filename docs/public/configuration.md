@@ -74,6 +74,64 @@ The library does not roll back configuration or implicitly restart an instance.
 These methods do not change management credentials, start an official account
 session, or acquire a commercial entitlement.
 
+## Complete options and GUI replacement
+
+`replace_options_configuration(&snapshot)` sends one complete
+`PUT /rest/config/options`. Edit a fresh identity-bound `ConfigurationSnapshot`
+with the typed general, network, transport, system-preference or crash-report
+setters. Every unedited native value remains in the document. The options section
+must still match its original snapshot before dispatch; changes to other sections
+are retained. The result contains actual options readback, and
+`requested_fields_match` compares the entire submitted section, including unknown
+values. Configuration application and stable-storage durability are separate.
+
+`replace_gui_configuration(&snapshot)` sends one complete `PUT /rest/config/gui`.
+Snapshot setters can select GUI preferences, the listener, local credentials,
+authentication mode and an explicit replacement API key. Because these changes
+can invalidate the current endpoint, key or trust selection, this operation
+returns `GuiConfigurationReplacement`: the prior GUI configuration and the native
+acknowledgement. It performs no automatic endpoint discovery, reconnect, readback,
+retry, rollback, certificate installation or process restart. An acknowledgement
+does not establish the resulting listener or successful authentication. The
+fixed-baseline GUI hot-disable limitation still applies.
+
+Retain intended credentials and connection/trust settings before writing. Use
+`Client::connect` or `ManagedInstance::reconnect_management` explicitly with the
+intended endpoint and expected original identity, then read configuration and
+verify the selected behavior. Successful owned-instance adoption also selects
+that endpoint and trust policy for later owned starts. After an unknown write
+outcome, reconcile rather than replaying the PUT. A stored password or key is
+independent of actual login and old-key rejection.
+
+Both replacements reject snapshots from another identity or target path syntax.
+Client clones serialize mutations, and a fresh original-section comparison rejects
+stale edits before PUT. This is not server-side compare-and-swap; independent
+writers must coordinate. Unknown/private values remain explicit snapshot data
+and are omitted from ordinary Debug.
+
+```no_run
+use verysync_sidecar::{Client, GeneralOptionsPatch, GuiPreferencesPatch};
+
+async fn save_sections(client: &Client) -> verysync_sidecar::Result<()> {
+    let mut options = client.configuration().await?;
+    options.set_general_options(
+        &GeneralOptionsPatch::default().keep_temporaries_hours(48),
+    )?;
+    let observed = client.replace_options_configuration(&options).await?;
+    if !observed.requested_fields_match {
+        return Ok(()); // Reconcile with the actual returned section.
+    }
+
+    let mut gui = client.configuration().await?;
+    gui.set_gui_preferences(&GuiPreferencesPatch::default().theme("dark"))?;
+    let receipt = client.replace_gui_configuration(&gui).await?;
+    // Retain this acknowledgement; explicitly read after the GUI reload.
+    // If changing address/key/trust, connect using those intended selections.
+    let _ = receipt.acknowledgement.status();
+    Ok(())
+}
+```
+
 ## Advanced folder selections and template inheritance
 
 `folder_advanced_configuration(&id)` and

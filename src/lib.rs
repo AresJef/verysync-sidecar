@@ -135,7 +135,7 @@ pub use client::{
 pub use configuration::{
     ConfigurationSectionUpdate, ConfigurationSnapshot, ConfigurationSyncState, ConfigurationUpdate,
     DiskFreeRequirement, DiskSpaceUnit, FolderDefaults, FolderDefaultsPatch, GeneralOptions,
-    GeneralOptionsPatch,
+    GeneralOptionsPatch, GuiConfigurationReplacement,
 };
 pub use device_options::{DeviceAdvancedConfig, DeviceAdvancedPatch, IntroductionSource};
 pub use devices::{

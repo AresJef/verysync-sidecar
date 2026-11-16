@@ -12,7 +12,7 @@ use std::fmt;
 #[derive(Clone)]
 pub struct ConfigurationSnapshot {
     pub(crate) identity: DeviceId,
-    style: PathStyle,
+    pub(crate) style: PathStyle,
     version: u64,
     pub(crate) original: Value,
     pub(crate) document: Value,
@@ -88,6 +88,61 @@ impl ConfigurationSnapshot {
     pub fn set_crash_reporting(&mut self, patch: &crate::CrashReportingPatch) -> Result<()> {
         patch.validate()?;
         self.merge(&["options"], patch)
+    }
+    /// Edit explicit discovery/listener options without establishing reachability.
+    pub fn set_network_configuration(&mut self, patch: &crate::NetworkPatch) -> Result<()> {
+        patch.validate()?;
+        self.merge(&["options"], patch)
+    }
+    /// Edit explicit transport options without establishing NAT or peer effects.
+    pub fn set_transport_configuration(&mut self, patch: &crate::TransportPatch) -> Result<()> {
+        patch.validate()?;
+        self.merge(&["options"], patch)
+    }
+    /// Edit only the selected GUI preferences, retaining credentials and listener.
+    /// Saving this document can reload the native GUI handler.
+    pub fn set_gui_preferences(&mut self, patch: &crate::GuiPreferencesPatch) -> Result<()> {
+        patch.validate()?;
+        self.merge(&["gui"], patch)
+    }
+    /// Edit explicit GUI listener selections using this snapshot's target syntax.
+    /// A save can invalidate the current endpoint; prepare its replacement first.
+    pub fn set_gui_listener(&mut self, patch: &crate::GuiListenerPatch) -> Result<()> {
+        self.merge(&["gui"], &patch.body(self.style)?)
+    }
+    /// Select local GUI credentials in the document. Saving submits the password
+    /// to native hashing; a stored password is not proof of a successful login.
+    pub fn set_gui_credentials(&mut self, credentials: &crate::GuiCredentials) -> Result<()> {
+        self.merge(
+            &["gui"],
+            &serde_json::json!({
+                "user":credentials.username,"password":credentials.password,"authMode":"static"
+            }),
+        )
+    }
+    /// Select a known GUI authentication mode. LDAP configuration and actual
+    /// login verification remain separate operations.
+    pub fn set_gui_auth_mode(&mut self, mode: &crate::GuiAuthMode) -> Result<()> {
+        if matches!(mode, crate::GuiAuthMode::Unknown(_)) {
+            return Err(Error::InvalidConfiguration {
+                reason: "unknown GUI authentication mode cannot be submitted",
+            });
+        }
+        self.merge(&["gui"], &serde_json::json!({"authMode":mode}))
+    }
+    /// Select an explicit key with at least 20 ASCII bytes. Retain it before
+    /// saving; existing clients keep their old key and do not reconnect implicitly.
+    pub fn set_gui_api_key(&mut self, key: &crate::ApiKey) -> Result<()> {
+        let header = key.header();
+        if header.as_bytes().len() < 20 {
+            return Err(Error::InvalidCredential {
+                reason: "replacement API key must contain at least 20 ASCII bytes",
+            });
+        }
+        let value = header.to_str().map_err(|_| Error::InvalidCredential {
+            reason: "replacement key cannot be encoded",
+        })?;
+        self.merge(&["gui"], &serde_json::json!({"apiKey":value}))
     }
     /// Read the folder creation template, including possibly empty ID/path fields.
     pub fn folder_defaults(&self) -> Result<FolderDefaults> {
@@ -203,4 +258,15 @@ pub struct ConfigurationUpdate {
     pub requested_fields_match: bool,
     /// Independent native application status; not a stable-storage receipt.
     pub application_state: super::ConfigurationSyncState,
+}
+
+/// Acknowledgement of one complete GUI PUT, without following a changed endpoint
+/// or guessing replacement credentials. This does not establish stored readback,
+/// listener state, GUI visibility or successful authentication.
+#[derive(Debug)]
+pub struct GuiConfigurationReplacement {
+    /// Actual GUI configuration observed immediately before dispatch.
+    pub previous_configuration: crate::GuiAuthenticationConfig,
+    /// Native HTTP acknowledgement. Debug omits potentially private body values.
+    pub acknowledgement: crate::ResponseDiagnostic,
 }

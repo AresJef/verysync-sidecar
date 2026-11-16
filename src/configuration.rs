@@ -3,7 +3,7 @@ mod disk_space;
 mod snapshot;
 pub use disk_space::{DiskFreeRequirement, DiskSpaceUnit};
 use serde::{Deserialize, Serialize};
-pub use snapshot::{ConfigurationSnapshot, ConfigurationUpdate};
+pub use snapshot::{ConfigurationSnapshot, ConfigurationUpdate, GuiConfigurationReplacement};
 use std::{collections::BTreeMap, fmt};
 
 /// Current creation template. It is independent of existing folder settings.

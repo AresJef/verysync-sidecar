@@ -16,6 +16,225 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn native_whole_section_gui_migration_changes_credentials_and_adopts_explicit_endpoint(
+) -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-full-gui-migration-")
+        .tempdir()?
+        .keep();
+    std::fs::write(root.join("caller-sentinel"), b"GUI migration caller data")?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let before = core.client().configuration().await?;
+    let old_key = core.client().gui_authentication().await?.api_key()?;
+    let key = ApiKey::generate()?;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let address = listener.local_addr()?;
+    assert_ne!(address.port(), 18886);
+    drop(listener);
+    let endpoint = ManagementEndpoint::http(&format!("http://{address}/"))?;
+    let credentials = GuiCredentials::new("whole-gui-new-user", "whole-gui-new-password")?;
+    let mut desired = before.clone();
+    desired.set_gui_listener(
+        &GuiListenerPatch::default().address(GuiListenAddress::tcp(&address.to_string())?),
+    )?;
+    desired.set_gui_credentials(&credentials)?;
+    desired.set_gui_auth_mode(&GuiAuthMode::Static)?;
+    desired.set_gui_api_key(&key)?;
+    let acknowledged = match core.client().replace_gui_configuration(&desired).await {
+        Ok(value) => {
+            assert_eq!(value.acknowledgement.status(), 200);
+            true
+        }
+        Err(Error::MutationOutcomeUnknown { .. }) => false,
+        Err(error) => return Err(error.into()),
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let selected = ConnectOptions::new(endpoint.clone(), key.clone())
+                .expected_device_id(identity.clone())
+                .request_timeout(Duration::from_secs(1))?;
+            match core.reconnect_management(selected).await {
+                Ok(()) => return Ok(()),
+                Err(
+                    Error::Transport { .. } | Error::Timeout { .. } | Error::Authentication { .. },
+                ) => tokio::time::sleep(Duration::from_millis(50)).await,
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await??;
+    let adopted = core.client().configuration().await?;
+    let stored_key_matches =
+        adopted.native_document()["gui"]["apiKey"] == desired.native_document()["gui"]["apiKey"];
+    assert!(
+        stored_key_matches,
+        "complete GUI PUT did not retain the selected API key"
+    );
+    let denied = Client::connect(
+        ConnectOptions::new(endpoint.clone(), old_key)
+            .expected_device_id(identity.clone())
+            .request_timeout(Duration::from_secs(2))?,
+    )
+    .await;
+    let previous_key_outcome = match &denied {
+        Ok(_) => "accepted",
+        Err(Error::Authentication { .. }) => "authentication_rejected",
+        Err(Error::AccessDenied { .. }) => "access_denied_403",
+        Err(Error::Transport { .. }) => "transport",
+        Err(Error::Timeout { .. }) => "timeout",
+        Err(_) => "other_error",
+    };
+    eprintln!("native full GUI migration boundary: stored_key_matches={stored_key_matches} previous_key_outcome={previous_key_outcome} gui_user_matches={} password_present={} application_in_sync={}",
+        adopted.native_document()["gui"]["user"]=="whole-gui-new-user",
+        core.client().gui_authentication().await?.password_is_set(),
+        core.client().configuration_sync_state().await?.config_in_sync);
+    assert!(
+        matches!(
+            denied,
+            Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+        ),
+        "old management key was not rejected at the new endpoint"
+    );
+    let session = GuiSession::login(
+        GuiLoginOptions::new(endpoint.clone(), credentials).expected_device_id(identity.clone()),
+    )
+    .await?;
+    assert_eq!(session.system_status().await?.device_id, identity);
+    session.logout().await?;
+    let actual = core.client().configuration().await?;
+    assert!(actual.native_document()["gui"]["password"]
+        .as_str()
+        .is_some_and(|p| !p.is_empty() && p != "whole-gui-new-password"));
+    for section in [
+        "options",
+        "devices",
+        "folders",
+        "defaults",
+        "ldap",
+        "relayServer",
+        "remoteIgnoredDevices",
+        "version",
+    ] {
+        assert!(
+            actual.native_document()[section] == before.native_document()[section],
+            "GUI replacement changed an unrelated section"
+        );
+    }
+    core.restart(Duration::from_secs(30)).await?;
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let persisted = core.client().gui_listener().await?;
+    assert_eq!(
+        persisted.address.tcp_authority(),
+        Some(address.to_string().as_str())
+    );
+    assert_eq!(
+        std::fs::read(root.join("caller-sentinel"))?,
+        b"GUI migration caller data"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    println!("native_full_gui_migration=true write_acknowledged={acknowledged} explicit_endpoint_and_key_adoption=true old_key_rejected_at_new_endpoint=true real_new_password_login=true stored_password_not_plaintext=true unrelated_sections_retained=true normal_restart_same_identity_and_endpoint=true caller_bytes_retained=true normal_owned_tree_exit=true");
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_whole_section_replacements_preserve_credentials_other_sections_and_files(
+) -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("vs-whole-sections-")
+        .tempdir()?
+        .keep();
+    let data = root.join("caller data");
+    std::fs::create_dir(&data)?;
+    std::fs::write(data.join("sentinel"), b"whole section caller bytes")?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    core.client()
+        .create_folder(
+            &CreateFolderOptions::new(
+                FolderId::parse("whole-section-folder")?,
+                TargetPath::local(data.clone()),
+            )
+            .paused(true),
+        )
+        .await?;
+    core.client()
+        .set_local_gui_credentials(
+            &GuiCredentials::new("synthetic-section-user", "synthetic-section-password")?,
+            Duration::from_secs(10),
+        )
+        .await?;
+    let identity = core.client().instance().device_id.clone();
+    let before = core.client().configuration().await?;
+    assert!(before.native_document()["gui"]["password"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty()));
+    let mut expected = before.native_document().clone();
+    let hours = before
+        .general_options()?
+        .keep_temporaries_hours
+        .checked_add(1)
+        .ok_or("synthetic temporary retention overflow")?;
+    for section in ["options", "gui"] {
+        let mut desired = core.client().configuration().await?;
+        if section == "options" {
+            expected[section]["keepTemporariesH"] = hours.into();
+            expected[section]["reconnectionIntervalS"] = 67.into();
+            expected[section]["natLeaseMinutes"] = 7.into();
+            desired.set_general_options(
+                &GeneralOptionsPatch::default().keep_temporaries_hours(hours),
+            )?;
+            desired.set_network_configuration(
+                &NetworkPatch::default().reconnection_interval_seconds(67),
+            )?;
+            desired.set_transport_configuration(&TransportPatch::default().nat_lease_minutes(7))?;
+            let readback = core
+                .client()
+                .replace_options_configuration(&desired)
+                .await?;
+            assert!(readback.requested_fields_match);
+            assert_eq!(readback.configuration.keep_temporaries_hours, hours);
+        } else {
+            expected[section]["theme"] = "dark".into();
+            desired.set_gui_preferences(&GuiPreferencesPatch::default().theme("dark"))?;
+            let receipt = core.client().replace_gui_configuration(&desired).await?;
+            assert_eq!(receipt.acknowledgement.status(), 200);
+            assert!(receipt.previous_configuration.password_is_set());
+        }
+        let observed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match core.client().configuration().await {
+                    Ok(value) => return Ok(value),
+                    Err(Error::Transport { .. } | Error::Timeout { .. }) => {
+                        tokio::time::sleep(Duration::from_millis(50)).await
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        })
+        .await??;
+        assert!(
+            observed.native_document() == &expected,
+            "whole-section PUT changed unexpected native values"
+        );
+        assert_eq!(core.client().system_status().await?.device_id, identity);
+    }
+    core.restart(Duration::from_secs(30)).await?;
+    assert!(
+        core.client().configuration().await?.native_document() == &expected,
+        "whole-section values were not retained across normal restart"
+    );
+    assert_eq!(
+        std::fs::read(data.join("sentinel"))?,
+        b"whole section caller bytes"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    println!("native_whole_section_put=2 existing_gui_credentials_and_unknown_values_preserved=true other_sections_and_files_preserved=true normal_restart_persistence=true same_identity=true normal_owned_tree_exit=true");
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_narrow_configuration_reads_preserve_identity_folders_and_state() -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("vs-narrow-configuration-")

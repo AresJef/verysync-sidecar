@@ -60,6 +60,8 @@ mod network_limits_contracts;
 mod system_actions_contracts;
 #[path = "common/target_directory_contracts.rs"]
 mod target_directory_contracts;
+#[path = "common/whole_section_configuration_contracts.rs"]
+mod whole_section_configuration_contracts;
 
 #[tokio::test]
 async fn remote_tunnel_connection_preserves_prefix_and_requires_target_identity() -> TestResult {

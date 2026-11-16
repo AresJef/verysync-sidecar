@@ -117,12 +117,7 @@ impl Client {
         &self,
         desired: &crate::ConfigurationSnapshot,
     ) -> Result<crate::ConfigurationUpdate> {
-        if desired.identity != self.instance.device_id {
-            return Err(Error::IdentityMismatch {
-                expected: self.instance.device_id.clone(),
-                actual: desired.identity.clone(),
-            });
-        }
+        self.require_snapshot_scope(desired)?;
         let _guard = self.connection.mutation_lock.lock().await;
         let fresh = self.configuration().await?;
         if fresh.document != desired.original {
@@ -149,6 +144,111 @@ impl Client {
             requested_fields_match,
             application_state,
         })
+    }
+
+    /// PUT the complete options section from an identity-bound snapshot.
+    ///
+    /// A fresh options section must match the snapshot's original options;
+    /// unrelated section changes do not cause an overwrite or stale refusal.
+    /// Clones serialize mutations, but independent writers must coordinate:
+    /// this is not server-side compare-and-swap. Only one PUT is sent. Actual
+    /// complete readback is returned; application and durability remain separate.
+    pub async fn replace_options_configuration(
+        &self,
+        desired: &crate::ConfigurationSnapshot,
+    ) -> Result<ConfigurationSectionUpdate<crate::GeneralOptions>> {
+        self.require_snapshot_scope(desired)?;
+        let body = desired
+            .document
+            .get("options")
+            .filter(|v| v.is_object())
+            .ok_or(Error::InvalidConfiguration {
+                reason: "complete options section is absent",
+            })?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        let fresh = self.configuration().await?;
+        if fresh.document.get("options") != desired.original.get("options") {
+            return Err(Error::ConfigurationChanged);
+        }
+        self.connection
+            .request_bytes(
+                "replace complete options configuration",
+                reqwest::Method::PUT,
+                self.connection.management_url("rest/config/options", &[])?,
+                Some(body),
+                true,
+            )
+            .await?;
+        let actual = self.configuration().await.map_err(section_unknown)?;
+        Ok(ConfigurationSectionUpdate {
+            requested_fields_match: actual.document.get("options") == Some(body),
+            configuration: actual.general_options().map_err(section_unknown)?,
+        })
+    }
+
+    /// PUT the complete GUI section from an identity-bound snapshot once.
+    ///
+    /// The original GUI section must still match a fresh authenticated snapshot.
+    /// This is a coordinated stale check, not server-side compare-and-swap.
+    /// Listener, protocol, password, mode and key can change together, so no
+    /// endpoint discovery, reconnect, readback, retry or rollback is implicit.
+    /// Retain intended credentials/trust and explicitly connect to the selected
+    /// endpoint to reconcile configuration and actual effects. An acknowledgement
+    /// alone proves neither them nor a reliable GUI hot-disable.
+    pub async fn replace_gui_configuration(
+        &self,
+        desired: &crate::ConfigurationSnapshot,
+    ) -> Result<crate::GuiConfigurationReplacement> {
+        self.require_snapshot_scope(desired)?;
+        let body = desired
+            .document
+            .get("gui")
+            .filter(|v| v.is_object())
+            .ok_or(Error::InvalidConfiguration {
+                reason: "complete GUI section is absent",
+            })?;
+        let _: crate::GuiAuthenticationConfig =
+            serde_json::from_value(body.clone()).map_err(|_| Error::InvalidConfiguration {
+                reason: "complete GUI section does not match the required native schema",
+            })?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        let fresh = self.configuration().await?;
+        if fresh.document.get("gui") != desired.original.get("gui") {
+            return Err(Error::ConfigurationChanged);
+        }
+        let previous_configuration = serde_json::from_value(fresh.document["gui"].clone())
+            .map_err(|_| Error::InvalidConfiguration {
+                reason: "current GUI section does not match the required native schema",
+            })?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                "replace complete GUI configuration",
+                reqwest::Method::PUT,
+                self.connection.management_url("rest/config/gui", &[])?,
+                Some(body),
+                true,
+            )
+            .await?;
+        Ok(crate::GuiConfigurationReplacement {
+            previous_configuration,
+            acknowledgement: crate::ResponseDiagnostic::new(status, bytes),
+        })
+    }
+
+    fn require_snapshot_scope(&self, desired: &crate::ConfigurationSnapshot) -> Result<()> {
+        if desired.identity != self.instance.device_id {
+            return Err(Error::IdentityMismatch {
+                expected: self.instance.device_id.clone(),
+                actual: desired.identity.clone(),
+            });
+        }
+        if desired.style != self.folder_path_style()? {
+            return Err(Error::InvalidPath {
+                reason: "configuration snapshot belongs to different target path syntax",
+            });
+        }
+        Ok(())
     }
 
     /// Read general options without changing settings or resource policy.
