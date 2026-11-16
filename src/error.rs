@@ -236,7 +236,7 @@ pub enum Error {
     /// The fixed engine rejected a typed operation with its known commercial
     /// feature-license envelope, even if HTTP status was successful.
     LicenseRequired {
-        /// Actual engine rejection code; currently verified as 3000 for Pro.
+        /// Actual engine rejection code: 3000 for Pro or 3001 for Local-API.
         code: i64,
         /// Original bounded response, hidden from ordinary formatting.
         response: ResponseDiagnostic,

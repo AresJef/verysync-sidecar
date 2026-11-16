@@ -51,7 +51,10 @@ use crate::{
     Result, SystemStatus, BASELINE_ENGINE_VERSION,
 };
 use crate::{RawRequest, RawResponse, RequestEffect};
-pub use local_api::{LocalApiClient, LocalApiConnectOptions};
+pub use local_api::{
+    LocalApiClient, LocalApiConnectOptions, LocalApiFolder, LocalApiPeer,
+    LocalApiScanAcknowledgement,
+};
 
 /// The policy applied to an engine version during connection.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

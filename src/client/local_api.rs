@@ -6,6 +6,8 @@ use crate::{
     VersionPolicy, BASELINE_ENGINE_VERSION,
 };
 use std::{fmt, sync::Arc, time::Duration};
+mod control;
+pub use control::{LocalApiFolder, LocalApiPeer, LocalApiScanAcknowledgement};
 
 #[derive(Clone)]
 struct NativeLocalPolicy;

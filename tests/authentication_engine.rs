@@ -58,8 +58,138 @@ async fn native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_s
         .await?;
     assert_eq!(folders.status(), 200);
     assert!(serde_json::from_slice::<serde_json::Value>(folders.body_bytes())?.is_array());
+    let folder_path = root.join("samples");
+    std::fs::create_dir(&folder_path)?;
+    std::fs::write(
+        folder_path.join("before.txt"),
+        b"native Local-API scan sample",
+    )?;
+    let folder_id = FolderId::parse("localapi-scan")?;
+    enabled
+        .client()
+        .create_folder(
+            &CreateFolderOptions::new(folder_id.clone(), TargetPath::local(&folder_path))
+                .label("isolated-localapi"),
+        )
+        .await?;
+    let raw = local
+        .raw(RawRequest::new(
+            RawMethod::Get,
+            ["config", "folders"],
+            RequestEffect::ReadOnly,
+        )?)
+        .await?;
+    let value: serde_json::Value = serde_json::from_slice(raw.body_bytes())?;
+    let first = value
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(serde_json::Value::as_object)
+        .ok_or("missing native Local-API folder")?;
+    println!(
+        "native Local-API folder keys={:?}",
+        first.keys().collect::<Vec<_>>()
+    );
+    let projected = local.folder(&folder_id).await?;
+    assert_eq!(projected.id, folder_id);
+    assert!(local
+        .devices()
+        .await?
+        .iter()
+        .any(|device| device.device_id == identity));
+    assert!(projected.rescan_interval_seconds.is_some());
+    assert!(projected.scan_progress_interval_seconds.is_some());
+    assert!(projected.selective_enabled.is_some());
+    assert!(projected.path.local_path().is_none());
+    assert!(!projected.extra.contains_key("label"));
+    assert!(matches!(
+        local
+            .browse_folder(&folder_id, &SelectiveScope::FolderRoot)
+            .await,
+        Err(Error::LicenseRequired { code: 3001, .. })
+    ));
+    assert!(matches!(
+        local.folder_need(&folder_id, ListPage::new(1, 25)?).await,
+        Err(Error::LicenseRequired { code: 3001, .. })
+    ));
+    assert!(matches!(
+        local
+            .request_selection(
+                &folder_id,
+                &SelectiveScope::FolderRoot,
+                SelectiveAction::Select
+            )
+            .await,
+        Err(Error::LicenseRequired { code: 3001, .. })
+    ));
+    let scheduling = enabled
+        .client()
+        .update_folder_scan_configuration(
+            &folder_id,
+            &FolderScanPatch::default()
+                .watcher(false)
+                .rescan_interval_seconds(0),
+        )
+        .await?;
+    assert!(scheduling.requested_fields_match);
+    // Start a fresh generation with automatic watching/rescanning disabled;
+    // persisted flags alone do not prove the previous watcher has stopped.
+    enabled.restart(Duration::from_secs(30)).await?;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let status = enabled.client().folder_status(&folder_id).await?;
+            if status.state == Some(FolderState::Idle) && status.local_files == Some(1) {
+                return Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    let subdirectory = folder_path.join("nested");
+    std::fs::create_dir(&subdirectory)?;
+    let payload = b"new sample indexed through explicit Local-API scan";
+    std::fs::write(subdirectory.join("after.txt"), payload)?;
+    let relative = TargetPath::local(std::path::Path::new("nested").join("after.txt"));
+    let before_scan = enabled
+        .client()
+        .index_file_info(&folder_id, &relative)
+        .await;
+    match before_scan {
+        Ok(info) => assert!(
+            info.local.name.is_empty(),
+            "new sample was already indexed before explicit scan"
+        ),
+        Err(Error::Http { response }) if response.status() == 404 => {}
+        Err(error) => return Err(error.into()),
+    }
+    let scan = local
+        .request_scan(&folder_id, &SelectiveScope::Path(relative.clone()))
+        .await?;
+    assert_eq!(scan.response.status(), 200);
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let info = enabled
+                .client()
+                .index_file_info(&folder_id, &relative)
+                .await?;
+            if info.local.name.ends_with("after.txt") && info.local.size == payload.len() as u64 {
+                return Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    local
+        .request_scan(&folder_id, &SelectiveScope::FolderRoot)
+        .await?;
+    assert_eq!(std::fs::read(subdirectory.join("after.txt"))?, payload);
     enabled.restart(Duration::from_secs(30)).await?;
     assert_eq!(local.system_status().await?.device_id, identity);
+    let persisted = local.folder(&folder_id).await?;
+    assert_eq!(persisted.id, projected.id);
+    assert!(
+        persisted.extra.get("readWriteSecret") == projected.extra.get("readWriteSecret"),
+        "private share material changed across restart"
+    );
     assert_eq!(enabled.client().system_status().await?.device_id, identity);
     assert!(enabled
         .client()
@@ -73,7 +203,7 @@ async fn native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_s
     );
     let exit = enabled.shutdown(Duration::from_secs(15)).await?;
     assert!(!exit.forced && exit.tree_stopped && exit.state_released);
-    println!("native Local-API disabled404 enabled200 no_gui_key=true identity_preserved=true restart_preserved=true sentinel_preserved=true commercial_entitlement_not_granted=true normal_tree_exit=true");
+    println!("native Local-API disabled404 enabled200 no_gui_key=true folder_projection=true license3001_distinct=true subpath_and_root_scan_ack=true actual_new_file_indexed=true identity_preserved=true restart_preserved=true sentinel_preserved=true commercial_entitlement_not_granted=true normal_tree_exit=true");
     std::fs::remove_dir_all(&root)?;
     Ok(())
 }

@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add typed native Local-API folder/device projections, target-scoped scanning,
+  selective browse/need/selection requests and distinct native code3001 license
+  errors. Preserve the separate Local-API schema and licensed-effect gates.
+
 - Add a separate explicit Local-API connection with typed version/status reads,
   bounded scoped raw requests and an opt-in owned startup flag. Correct the
   generated native app settings root without replacing arbitrary caller settings.
