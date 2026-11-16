@@ -389,6 +389,30 @@ remote-name replacement, packet QoS or a performance improvement. Network,
 bandwidth, upgrade and audit settings retain their separate typed APIs and
 verification boundaries. Full same-source platform acceptance remains separate.
 
+## Remote device-name adoption
+
+The global `GeneralOptionsPatch::overwrite_remote_device_names_on_connect`
+selection governs whether this tested native connection adopts the other
+participant's advertised name. A separate
+`DeviceAdvancedPatch::overwrite_remote_device_names_on_connect` selection is
+stored for one device. Both setters report actual configuration readback;
+readback alone does not establish name replacement.
+
+The isolated native test exercises all four combinations of the two booleans.
+After explicitly restarting the first core and establishing a fresh direct TCP
+connection, global `false` keeps the caller-selected remote name and global
+`true` adopts the other core's advertised name, with either peer-specific value.
+The per-device flag does not independently override that global selection in
+this direct shared-key scenario. Its behavior in other device-introduction or
+connection contexts is unverified.
+
+Each combination transfers new synthetic file bytes after reconnection and
+retains source, receiver, unrelated sentinel and device identities. Both owned
+process trees and state leases exit normally. This verifies the name effect
+under an explicit restart and new connection; it does not establish immediate
+renaming of an already connected peer. The six native platform gates and final
+integrated acceptance remain required.
+
 ## Diagnostic preferences
 
 `diagnostics_options()` reads actual crash settings and legacy usage information.
@@ -522,3 +546,13 @@ including explicit endpoint adoption, real password login, old-key rejection and
 normal restart. Producer identities and relevant subsequent source changes are
 retained in the capability evidence. Other option effects, all remaining template
 controls, licensed capabilities and final integrated acceptance stay separate.
+
+
+The independent folder/device creation-default contract has native evidence on
+all six standard AMD64/ARM64 profiles in [run 43929620380](https://github.com/AresJef/verysync-sidecar/actions/runs/43929620380).
+New registrations inherit selected defaults; later default edits leave existing
+registrations intact. Normal restart preserves both, identity and sentinel bytes.
+The same run verifies all thirteen SOCKS5 authentication/connection/file/disable/
+retention observations on those six profiles. These scoped results do not certify
+the general runtime policies listed above or complete integrated acceptance;
+the Intel Mac FTP runtime failure in that run remains a failure.

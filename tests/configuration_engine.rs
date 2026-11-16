@@ -1108,3 +1108,215 @@ async fn native_socks5_proxy_authentication_transfer_and_explicit_disable_preser
     );
     Ok(())
 }
+
+async fn name_policy_connection_pair(
+    a: &ManagedInstance,
+    b: &ManagedInstance,
+    wanted: bool,
+) -> TestResult {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let aa = a.client().connections().await?;
+            let bb = b.client().connections().await?;
+            if aa
+                .connections
+                .get(&b.client().instance().device_id)
+                .is_some_and(|v| v.connected == wanted)
+                && bb
+                    .connections
+                    .get(&a.client().instance().device_id)
+                    .is_some_and(|v| v.connected == wanted)
+            {
+                return Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_remote_device_name_policy_uses_global_selection_and_preserves_real_data(
+) -> TestResult {
+    let root = tempfile::Builder::new().prefix("vname-").tempdir()?.keep();
+    let sentinel = root.join("unrelated sentinel.bin");
+    std::fs::write(
+        &sentinel,
+        b"unrelated caller bytes retained across name-policy changes",
+    )?;
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let aid = a.client().instance().device_id.clone();
+    let bid = b.client().instance().device_id.clone();
+    let own_name = b.client().device(&bid).await?.name;
+    let selected_name = "synthetic caller-selected remote name";
+    assert!(!own_name.is_empty() && own_name != selected_name);
+    let address = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            for status in b.client().listener_status().await?.into_values() {
+                for text in status.lan_addresses {
+                    if let Some(address) = text
+                        .strip_prefix("tcp://")
+                        .and_then(|v| v.parse::<std::net::SocketAddr>().ok())
+                        .filter(|v| {
+                            v.ip() == std::net::Ipv4Addr::LOCALHOST
+                                && !matches!(v.port(), 0 | 18886)
+                        })
+                    {
+                        return Ok::<_, Error>(address);
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    for client in [a.client(), b.client()] {
+        assert!(
+            client
+                .update_general_options(
+                    &GeneralOptionsPatch::default().overwrite_remote_device_names_on_connect(false)
+                )
+                .await?
+                .requested_fields_match
+        );
+        assert!(
+            client
+                .update_network_configuration(
+                    &NetworkPatch::default().reconnection_interval_seconds(5)
+                )
+                .await?
+                .requested_fields_match
+        );
+    }
+    a.client()
+        .create_device(
+            &CreateDeviceOptions::new(bid.clone()).settings(
+                DevicePatch::default()
+                    .name(selected_name)
+                    .paused(true)
+                    .addresses(vec![format!("tcp://{address}")])
+                    .allowed_transports(vec![DeviceTransport::Tcp])
+                    .advanced_configuration(
+                        DeviceAdvancedPatch::default()
+                            .overwrite_remote_device_names_on_connect(false),
+                    )?,
+            ),
+        )
+        .await?;
+    b.client()
+        .create_device(
+            &CreateDeviceOptions::new(aid.clone()).settings(
+                DevicePatch::default()
+                    .name("synthetic source configuration")
+                    .addresses(vec!["dynamic".into()])
+                    .allowed_transports(vec![DeviceTransport::Tcp]),
+            ),
+        )
+        .await?;
+    let source = root.join("source");
+    let received = root.join("received");
+    std::fs::create_dir(&source)?;
+    let file = "name policy 二 %.bin";
+    std::fs::write(source.join(file), vec![0x21; 32768])?;
+    let keys = a.client().generate_share().await?;
+    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
+    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
+    let af = a
+        .client()
+        .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(&source)).paused(true))
+        .await?;
+    let bf = b
+        .client()
+        .join_folder(&JoinFolderOptions::new(ro, TargetPath::local(&received)).paused(true))
+        .await?;
+    a.client()
+        .share_folder_with(&af.configuration.id, &bid)
+        .await?;
+    b.client()
+        .share_folder_with(&bf.configuration.id, &aid)
+        .await?;
+    a.client().resume_folder(&af.configuration.id).await?;
+    b.client().resume_folder(&bf.configuration.id).await?;
+    for (index, (global, peer)) in [(false, false), (true, false), (false, true), (true, true)]
+        .into_iter()
+        .enumerate()
+    {
+        if index > 0 {
+            assert!(a.client().pause_device(&bid).await?.requested_fields_match);
+            name_policy_connection_pair(&a, &b, false).await?;
+        }
+        assert!(
+            a.client()
+                .update_device(
+                    &bid,
+                    &DevicePatch::default()
+                        .name(selected_name)
+                        .advanced_configuration(
+                            DeviceAdvancedPatch::default()
+                                .overwrite_remote_device_names_on_connect(peer)
+                        )?
+                )
+                .await?
+                .requested_fields_match
+        );
+        assert!(
+            a.client()
+                .update_general_options(
+                    &GeneralOptionsPatch::default()
+                        .overwrite_remote_device_names_on_connect(global)
+                )
+                .await?
+                .requested_fields_match
+        );
+        a.restart(Duration::from_secs(30)).await?;
+        assert_eq!(a.client().instance().device_id, aid);
+        assert!(a.client().resume_device(&bid).await?.requested_fields_match);
+        name_policy_connection_pair(&a, &b, true).await?;
+        let bytes = vec![0x30 + index as u8; 32768];
+        std::fs::write(source.join(file), &bytes)?;
+        a.client().request_scan(&af.configuration.id).await?;
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if std::fs::read(received.join(file)).is_ok_and(|v| v == bytes) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await?;
+        let observed = a.client().device(&bid).await?;
+        assert!(
+            observed.name
+                == if global {
+                    own_name.as_str()
+                } else {
+                    selected_name
+                },
+            "native remote name must match the reviewed global adoption policy"
+        );
+        println!(
+            "native remote-name policy evidence: {}",
+            serde_json::json!({"global":global,"peer":peer,
+            "actual_custom_name_retained":observed.name==selected_name,"actual_sender_name_adopted":observed.name==own_name,
+            "actual_new_payload_after_reconnect":true,"actual_global_policy_matches_adoption":true,"peer_flag_independent_adoption_not_claimed":true})
+        );
+        assert_eq!(std::fs::read(source.join(file))?, bytes);
+        assert_eq!(
+            std::fs::read(&sentinel)?,
+            b"unrelated caller bytes retained across name-policy changes"
+        );
+    }
+    assert_eq!(b.client().instance().device_id, bid);
+    for core in [&mut a, &mut b] {
+        let exit = core.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    }
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "native remote-name policy cleanup evidence: {}",
+        serde_json::json!({"four_global_and_peer_combinations":true,"actual_new_bytes_after_each_fresh_connection":true,"actual_source_and_receiver_bytes_retained":true,"actual_unrelated_sentinel_retained":true,"actual_both_device_identities_retained":true,"actual_both_normal_tree_and_state_exits":true})
+    );
+    Ok(())
+}
