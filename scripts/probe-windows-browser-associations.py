@@ -148,7 +148,7 @@ class ProtocolTransaction:
         for protocol in PROTOCOLS:
             handler = effective_handler(protocol)
             if not handler or not os.path.samefile(handler, executable):
-                raise ValueError("effective protocol executable is not the exact owned capture; no dispatch allowed")
+                raise ValueError(f"effective protocol executable is not the exact owned capture; no dispatch allowed: protocol={protocol!r}, observed={handler!r}, expected={str(executable)!r}")
 
     def restore(self):
         reg = self.reg

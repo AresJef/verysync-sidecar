@@ -226,6 +226,18 @@ def main():
         try:
             opener = helper.prepare_native_opener(str(args.cargo), args.toolchain, args.evidence_dir, env)
             executable = Path(env["VERYSYNC_TEST_OPENER_EXECUTABLE"])
+            # The shared directory fixture uses the special rundll32 filename.
+            # Browser associations use the ordinary capture name already proven
+            # by the standalone protocol pilot; no directory interception needed.
+            browser_capture = executable.with_name("owned browser capture \u03b2.exe")
+            executable.rename(browser_capture)
+            executable = browser_capture
+            if hashlib.sha256(executable.read_bytes()).hexdigest() != opener["sha256"]:
+                raise ValueError("browser capture bytes differ from the built artifact")
+            report["browser_capture"] = {"name": executable.name,
+                                         "sha256": opener["sha256"],
+                                         "same_built_bytes_verified": True}
+            env["VERYSYNC_TEST_OPENER_EXECUTABLE"] = str(executable)
             env["BROWSER"] = str(executable)
             env["VERYSYNC_TEST_BROWSER_HOLD"] = "1"
             env["VERYSYNC_TEST_BROWSER_ISOLATION"] = "windows-effective-progid-v1"
