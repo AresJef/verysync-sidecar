@@ -39,7 +39,7 @@ fn event(file: &mut File, value: serde_json::Value) -> TestResult {
 async fn explicit_native_resource_workload() -> TestResult {
     let scenario = std::env::var("VERYSYNC_RESOURCE_SCENARIO")?;
     let repeats: u32 = std::env::var("VERYSYNC_RESOURCE_REPEATS")?.parse()?;
-    assert!((1..=32).contains(&repeats));
+    assert!((1..=128).contains(&repeats));
     let bytes = match scenario.as_str() {
         "idle" => 8192,
         "stream-small" => 8 * 1024 * 1024,

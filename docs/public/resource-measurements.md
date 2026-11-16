@@ -59,3 +59,19 @@ implementation; they do not establish instantaneous peaks or universal asymptoti
 bounds. Engine RSS/CPU curves and absolute latency are reported separately, with
 no invented upstream efficiency target or baseline speedup. Formal results and
 the final resource report remain pending.
+
+The v2 protocol preserves all quality and memory thresholds. It increases the
+small/large batch repetitions to 128/8 after Linux AMD64 produced sub-500 ms
+windows. On Darwin, the observer owns a kqueue nanosecond timer with
+`NOTE_CRITICAL` to request minimal coalescing; it changes no global timer, power
+setting or process priority. A balanced sleep/critical-timer calibration retains
+actual wakeup gaps on each CI host. CPU calibration retains the original read-cost
+window and adds bounded self-process work before native startup so a sub-tick
+window cannot be mistaken for a valid zero counter. Typed calibration errors are
+retained. All v1 evidence and failures remain separate; new source dependencies
+require complete new formal and independent cycles.
+
+Each actual CI profile must complete both opposite preparation orders before its
+formal run starts. Preparation failures retain their typed errors and metrics;
+they never become formal samples. The Darwin timer flags follow
+[Apple's public event header](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/event.h).

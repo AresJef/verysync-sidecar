@@ -1,14 +1,14 @@
 {
-  "protocol_id": "VS045-native-resources-v1",
-  "version": 1,
+  "protocol_id": "VS045-native-resources-v2",
+  "version": 2,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "b7174ba1f0f4d15271386d638ac807d950bff5d78114b69745b192fc17264759",
+    "rust_sources_sha256": "537c3dbcbc483b52c583724dbc1c3a37b8ebe250683c108b588cd79565a883f8",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
-    "sampler_sha256": "efbf46f5db698b986e8f84029761930eb44e1842061db9cf56a1fa49c71b51c5",
+    "sampler_sha256": "1d63111d60dd62c6f6a48f48320155cb9bc2709b27cdabd44404baaadfbb2b46",
     "wrapper_sha256": "aa14ab6c94b2d0f693047246c8286385710c5997a345bc2844f1ae0fab1f95f3"
   },
   "collector_sha256": "4e9dca6b3ffc8c3de5119e1747c80eda050593ed153271e1f2e7897adfe7ad55",
@@ -21,12 +21,12 @@
     "stream-small": {
       "bytes_each": 8388608,
       "files": 1,
-      "repeats": 32
+      "repeats": 128
     },
     "stream-large": {
       "bytes_each": 134217728,
       "files": 1,
-      "repeats": 4
+      "repeats": 8
     },
     "many-small": {
       "bytes_each": 8192,
@@ -104,7 +104,8 @@
     "calibration": "1000 read-cost snapshots, monotonic clock,16MiB touched-memory units, CPU monotonicity,12 balanced short/long controls",
     "pretrial": "Two opposite complete orders,8 fresh controllers+engines,8/8 VALID in49.166s; observed max full case6.9003s",
     "project_resource_original_s": 10800,
-    "reuse_scope": "N4 adds role/config/source validation and complete-group recording outside measurement. Rust workload, timing boundaries, sampling loop, metric reads and quality thresholds remain unchanged. Confirm updated collector dependencies before formal."
+    "reuse_scope": "N4 adds role/config/source validation and complete-group recording outside measurement. Rust workload, timing boundaries, sampling loop, metric reads and quality thresholds remain unchanged. Confirm updated collector dependencies before formal.",
+    "v2": "Each actual CI profile completes two opposite full pretrial orders using exact frozen source inputs before formal acquisition; prep is not formal evidence."
   },
   "profiles": [
     "macos-amd64-standard",
@@ -114,5 +115,13 @@
     "windows-amd64-standard",
     "windows-arm64-standard"
   ],
-  "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts."
+  "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
+  "revision": {
+    "previous_protocol_sha256": "97f0b6231e3198c23c6c03552118732da412bc1859637a120fcdd36adaaba344",
+    "retained": "All v1 attempts, valid local/LinuxARM cycles and failed platform archives stay separate; none are v2 samples. Original project and phase budgets persist.",
+    "changes": "Small n32->128;large n4->8 from actual LinuxAMD duration0.24/0.46s. Darwin observer uses its owned kqueue NOTE_CRITICAL descriptor; native balanced sleep/critical calibration remains required evidence. Bounded self-CPU work resolves sub-tick calibration and typed initialization error receipts preserve future causes.",
+    "unchanged": "All quality thresholds including50ms maxgap, complete four-plus-two process cycle coverage,16MiB memory envelope/8MiB repeat span, group order/attempt limits, input file sizes and full-byte/cleanup checks.",
+    "windows_v1_root_cause": "Initialization failed without typed receipt; exact native cause is not established. Retain failure and evaluate new native calibration receipts and complete source results."
+  },
+  "preflight_sha256": "4a13665bb438ce948c28aee13b992f329d5dbf4f62c3c282bbca114f4161d485"
 }
