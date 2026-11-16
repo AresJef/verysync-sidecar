@@ -1,6 +1,8 @@
 //! Actual version retention and restoration through public Rust APIs.
 #[path = "common/storage_service.rs"]
 mod archive_storage_service;
+#[path = "common/ftp_archive_scope.rs"]
+mod ftp_archive_scope;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 use managed_fixture::{options, TestResult};
@@ -120,18 +122,20 @@ async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> Tes
     tokio::time::sleep(Duration::from_millis(1100)).await;
     std::fs::write(source.join(name), new)?;
     a.client().request_scan(&af.id).await?;
-    // Source161 reproduced this exact refusal on all six standard64-bit
-    // profiles. Other architectures retain the positive archival requirement;
-    // this branch requires the specific native error, authentication and data.
-    if cfg!(all(
-        any(
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "windows"
-        ),
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    )) && protocol == verysync_sidecar::StorageProtocol::Ftp
-    {
+    // Only the six observed standard artifacts qualify. Same-width legacy,
+    // unknown or unproven artifacts keep the original positive requirement.
+    let standard_package = if protocol == verysync_sidecar::StorageProtocol::Ftp {
+        match (
+            ftp_archive_scope::observed_standard_package(&a),
+            ftp_archive_scope::observed_standard_package(&b),
+        ) {
+            (Some(first), Some(second)) if first == second => Some(first),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if protocol == verysync_sidecar::StorageProtocol::Ftp && standard_package.is_some() {
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let errors = b
@@ -184,6 +188,7 @@ async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> Tes
             "actual_no_upload_command_in_observed_window":true,
             "actual_peer_observation_credentials_redacted":true,
             "native_target_os":std::env::consts::OS,"native_target_arch":std::env::consts::ARCH,
+            "verified_standard_package":standard_package,"actual_fixed_archive_and_binary_fingerprints_matched":true,
             "observed_command_names":commands,
             "actual_typed_location_readback":true,"actual_native_archive_not_found_error":true,
             "actual_nonzero_pull_error_counter":true,"actual_receiver_old_bytes_retained":true,

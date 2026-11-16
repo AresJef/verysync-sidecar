@@ -104,8 +104,14 @@ server command handler. The new Mac observed case passes; the corresponding new
 cross-platform strict cases remain pending.
 
 This is a faithful native-refusal contract, not positive FTP archival. The
-underlying cause remains unresolved. Other unobserved architectures retain positive FTP archival/restoration
-requirements. Other FTP servers,
+underlying cause remains unresolved. Acceptance tests apply this exception only
+with the fixed standard
+package's verified preparation receipt, catalog archive SHA-256 and known official
+executable fingerprint, matched to both actual owned cores. Matching the system
+and architecture alone is insufficient. The explicit test preparation helper
+creates this receipt; missing, invalid or mismatched proof keeps the positive
+archival requirement. Same-width legacy packages and all other unobserved
+packages retain positive FTP archival/restoration requirements. Other FTP servers,
 authentication methods and native URI query selections have independent gates.
 
 Changing location preserves policy parameters and unknown fields. The SDK does
