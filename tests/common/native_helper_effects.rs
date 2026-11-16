@@ -1540,8 +1540,8 @@ async fn actual_native_helpers_preserve_uncertainty_after_consuming_link_respons
 }
 
 #[tokio::test]
-async fn actual_native_helpers_consume_official_add_url_before_existing_instance_refusal(
-) -> TestResult {
+async fn actual_native_helpers_consume_official_add_url_before_native_start_refusal() -> TestResult
+{
     use std::process::{Child, Command, Stdio};
     struct Producer(Child);
     impl Drop for Producer {
@@ -1619,8 +1619,8 @@ async fn actual_native_helpers_consume_official_add_url_before_existing_instance
             }
         })
         .await??;
-        // The official command writes its input before refusing a second
-        // serving instance. Preserve that refusal; it is not CLI start success.
+        // The official command writes its input before its platform-specific
+        // startup refusal. Neither observed refusal is CLI start success.
         assert_eq!(status.code(), Some(1));
         assert!(std::fs::metadata(&stdout)?.len() <= 8192);
         assert!(std::fs::metadata(&stderr)?.len() <= 8192);
@@ -1640,8 +1640,13 @@ async fn actual_native_helpers_consume_official_add_url_before_existing_instance
         ]
         .concat();
         let observed = String::from_utf8_lossy(&output);
+        #[cfg(not(windows))]
         let exact_refusal = observed
             .contains("Failed to acquire lock: is another Verysync instance already running?");
+        #[cfg(windows)]
+        let exact_refusal = observed.contains("Failed allocConsole")
+            && observed.contains("fixConsole")
+            && observed.contains("Access is denied.");
         if !exact_refusal {
             // Only this owned synthetic producer, with URLs/paths and opaque
             // credential-shaped runs removed before publishing CI diagnostics.
@@ -1714,7 +1719,9 @@ async fn actual_native_helpers_consume_official_add_url_before_existing_instance
             "configuration_identity_and_caller_bytes_retained":true,
             "normal_owned_tree_and_state_exit":true,
             "native_cli_producer_verified":true,
-        "native_existing_instance_lock_refusal_preserved":true,
+        "native_platform_start_refusal_preserved":true,
+        "native_existing_instance_lock_refusal_observed":!cfg!(windows),
+        "native_windows_console_access_denied_observed":cfg!(windows),
         "native_cli_exit_code":1,"native_cli_start_success_claimed":false
         })
     );
