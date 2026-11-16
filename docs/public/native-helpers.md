@@ -506,3 +506,10 @@ owned program image after preparation completed, hold that native process handle
 and then independently observe its exit and helper lease release. Desktop
 rollback is not inferred. Windows runtime acceptance remains pending these actual
 SDK results; compiling the case does not establish them.
+
+The Windows SDK runner uses an ordinary distinct browser-capture filename while
+retaining the built artifact's exact bytes. This keeps its protocol association
+separate from the shared directory fixture's `rundll32` role. The same-file
+handler check remains mandatory and a refusal records observed/expected paths.
+Two earlier SDK attempts stopped at that check and restored their handlers before
+running the native test; they establish no SDK browser result.
