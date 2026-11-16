@@ -39,7 +39,10 @@ async fn public_owned_process_failure_retains_partial_download_and_recovers_expl
     println!("native process fault phase: native_resources_mounted");
     let source = profile.join("owned-process-source.bin");
     let total = 128 * 1024 * 1024;
-    let (pattern, expected) = resource_faults::write_pattern(&source, total)?;
+    let generated = source.clone();
+    let (pattern, expected) =
+        tokio::task::spawn_blocking(move || resource_faults::write_pattern(&generated, total))
+            .await??;
     println!("native process fault phase: synthetic_source_ready");
     let output = root.join("interrupted-download.bin");
     let path = volume.child("owned-process-source.bin")?;
@@ -85,10 +88,10 @@ async fn public_owned_process_failure_retains_partial_download_and_recovers_expl
         ),
         "a truncated native connection must remain a transport/integrity failure: {result:?}"
     );
-    let (retained, _) = resource_faults::verify_pattern(&output, &pattern, total)?;
+    let (retained, _) = verify_fault_pattern(&output, &pattern, total).await?;
     assert!(retained > 0 && retained < total);
     assert_eq!(
-        resource_faults::verify_pattern(&source, &pattern, total)?,
+        verify_fault_pattern(&source, &pattern, total).await?,
         (total, expected)
     );
     assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
@@ -112,11 +115,11 @@ async fn public_owned_process_failure_retains_partial_download_and_recovers_expl
     assert_eq!((receipt.bytes, receipt.sha256), (total, expected));
     println!("native process fault phase: recovered_download_receipt_verified");
     assert_eq!(
-        resource_faults::verify_pattern(&recovered, &pattern, total)?,
+        verify_fault_pattern(&recovered, &pattern, total).await?,
         (total, expected)
     );
     assert_eq!(
-        resource_faults::verify_pattern(&output, &pattern, total)?.0,
+        verify_fault_pattern(&output, &pattern, total).await?.0,
         retained
     );
     assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
@@ -136,6 +139,18 @@ async fn public_owned_process_failure_retains_partial_download_and_recovers_expl
     );
     std::fs::remove_dir_all(root)?;
     Ok(())
+}
+
+// Large independent byte oracles must not starve the management HTTP reactor.
+async fn verify_fault_pattern(
+    path: &Path,
+    pattern: &[u8],
+    limit: u64,
+) -> TestResult<(u64, [u8; 32])> {
+    let path = path.to_path_buf();
+    let pattern = pattern.to_vec();
+    tokio::task::spawn_blocking(move || resource_faults::verify_pattern(&path, &pattern, limit))
+        .await?
 }
 
 // Archive entry names are native output, never controller filesystem paths.

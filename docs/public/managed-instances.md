@@ -48,6 +48,10 @@ protected owner/SYSTEM DACL on Windows. The program's identity, GUI/API credenti
 folders and unrelated settings persist across subsequent starts. Fresh state
 disables discovery, trackers, relays, NAT, TCP punching, automatic upgrades and tray/browser
 startup; explicitly configured later networking settings are retained.
+The creating process explicitly unlocks its library lease when ownership ends.
+An incidental duplicate file descriptor does not extend that lifetime; an
+inherited owner value in another process must not unlock the creating process's
+lease. Process-tree exit remains a separate shutdown requirement.
 Unix child processes also receive state-local HOME and XDG profile/cache paths;
 the caller's environment is not changed. Windows retains its dedicated
 APPDATA/LOCALAPPDATA/USERPROFILE and temporary paths.
