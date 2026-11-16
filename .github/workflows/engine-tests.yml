@@ -757,6 +757,13 @@ jobs:
           from pathlib import Path
           spec = importlib.util.spec_from_file_location('owned_opener_guard', 'scripts/run-isolated-engine-tests.py')
           helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
+          query = ctypes.WinDLL('kernel32', use_last_error=True).GetSystemWow64DirectoryW
+          query.argtypes = [ctypes.POINTER(ctypes.c_wchar), ctypes.c_uint]; query.restype = ctypes.c_uint
+          for capacity in [260, 32768]:
+              buffer = ctypes.create_unicode_buffer(capacity); returned = query(buffer, capacity)
+              print('native WOW64 buffer control: '+json.dumps({'capacity': capacity,
+                    'returned': returned, 'filled_utf16_units': len(buffer.value.encode('utf-16-le', 'surrogatepass'))//2,
+                    'metadata_only': True}), flush=True)
           paths = [('host-system32', Path(os.environ['SYSTEMROOT']) / 'System32' / 'mswsock.dll'),
                    ('queried-wow64', helper.windows_wow64_directory() / 'mswsock.dll')]
           for label, path in paths:

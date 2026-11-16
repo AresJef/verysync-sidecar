@@ -1,6 +1,6 @@
 {
-  "protocol_id": "VS045-native-resources-v4",
-  "version": 4,
+  "protocol_id": "VS045-native-resources-v5",
+  "version": 5,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
@@ -8,8 +8,8 @@
   "source_inputs": {
     "rust_sources_sha256": "b58af3b7cc2eb61b45da86c38cdc489b60cace30709dbf39c15bb90f24efda3c",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
-    "sampler_sha256": "6f231c3e3c3e0f9cdf53365d28e3682ff669186209fc55b29674cc46a17a3bda",
-    "wrapper_sha256": "aa14ab6c94b2d0f693047246c8286385710c5997a345bc2844f1ae0fab1f95f3"
+    "sampler_sha256": "614d22cd3e8ce9009ccce9f2e3828a92421be038bd71864d37bed70c8b9933e5",
+    "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a"
   },
   "collector_sha256": "bbdec05319ce82d2e001d96598cf50bf50405e2d56e68c13e5b7d64bde3ec6e8",
   "scenarios": {
@@ -107,7 +107,8 @@
     "reuse_scope": "N4 adds role/config/source validation and complete-group recording outside measurement. Rust workload, timing boundaries, sampling loop, metric reads and quality thresholds remain unchanged. Confirm updated collector dependencies before formal.",
     "v2": "Each actual CI profile completes two opposite full pretrial orders using exact frozen source inputs before formal acquisition; prep is not formal evidence.",
     "v3": "Repeat calibration and two opposite full actual pretrial orders on each actual profile; v2 pretrial and accepted groups are not v3 samples.",
-    "v4": "New counter/timer calibration and8actualfresh pretrial cases per actual profile before complete new formal and independent acquisition."
+    "v4": "New counter/timer calibration and8actualfresh pretrial cases per actual profile before complete new formal and independent acquisition.",
+    "v5": "Full actual8case opposite-order native pretrial on each profile validates diagnostic recording before new formal acquisition."
   },
   "profiles": [
     "macos-amd64-standard",
@@ -119,11 +120,11 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "9c3b56a9e5a4b2cf20850c908c2fd8cda8341ece3d5c2d8bf897bdde1bbe3e84",
-    "retained": "All v1-v3 observations and failures retain original bytes, attempts, source identities and budgets; no old row is a v4 sample.",
-    "changes": "Atomic binary writes preserve exact frozen protocol bytes onWindows; canonical LF JSON records. Darwin observer self-threadQoS set only after worker ready; borrowed scheduling intervals do not change metric quality gates.",
-    "cause": "Windows outer9c3b.. vs nestedb97c.. from128CRLF substitutions; MacARM three attempts had66.158/94.935/107.706ms gaps with6/10timerexpirations and<0.3ms metric reads. Exact delay cause beyond observer interval unresolved.",
-    "unchanged": "Rust sources/artifacts, every input/repeat/workload, operation boundaries, all quality/memory/stability thresholds, four formal+two independent fresh-process cycles, attempt limits and original project/phase budgets."
+    "previous_protocol_sha256": "33349e751bc1641d62f20b7dd19ff0a6803b2bd095d87b9bd2d9deaee59f1aae",
+    "retained": "All prior source/protocol datasets and original attempts/deadlines retained separately, never v5 members.",
+    "changes": "Bounded mutable WOW64 path query checks actual UTF16 output instead of accepting empty result; common wrapper digest updated. Sampler records journal-poll and previous raw-write/timer-wait durations as diagnostics to locate remaining observer gaps.",
+    "unchanged": "Every Rust workload and artifact input, repeat count, operation timestamp semantics, native byte/state/exit verification, all quality/memory/stability thresholds and complete four formal+two independent fresh-process cycles.",
+    "diagnostic_policy": "Initial unobserved previous durations are null; diagnostics never replace required counters or become new acceptance gates."
   },
   "preflight_sha256": "4a13665bb438ce948c28aee13b992f329d5dbf4f62c3c282bbca114f4161d485",
   "observer_policy": {

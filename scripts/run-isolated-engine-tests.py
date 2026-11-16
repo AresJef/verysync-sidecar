@@ -47,14 +47,23 @@ def windows_pe_machine(path):
 
 def windows_wow64_directory():
     import ctypes
-    buffer = ctypes.create_unicode_buffer(32768)
     query = ctypes.WinDLL("kernel32", use_last_error=True).GetSystemWow64DirectoryW
-    query.argtypes = [ctypes.c_wchar_p, ctypes.c_uint]
+    query.argtypes = [ctypes.POINTER(ctypes.c_wchar), ctypes.c_uint]
     query.restype = ctypes.c_uint
-    size = query(buffer, len(buffer))
-    if not 0 < size < len(buffer):
-        raise OSError("actual x86 Windows system directory query failed")
-    return Path(buffer.value)
+    capacity = 260
+    for _ in range(2):
+        buffer = ctypes.create_unicode_buffer(capacity)
+        size = query(buffer, len(buffer))
+        if not 0 < size < 32767:
+            raise OSError("bounded x86 Windows system directory query failed")
+        if size >= capacity:
+            capacity = size+1
+            continue
+        value = buffer.value
+        if not value or len(value.encode("utf-16-le", "surrogatepass"))//2 != size:
+            raise OSError("x86 Windows system directory output is empty or incomplete")
+        return Path(value)
+    raise OSError("x86 Windows system directory output changed during bounded sizing")
 
 
 def windows_socket_provider(executable):

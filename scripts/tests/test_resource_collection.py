@@ -89,6 +89,7 @@ class ResourceCollectionContracts(unittest.TestCase):
         config = json.loads((root / "tests/fixtures/resource-protocol.json").read_text())
         self.assertEqual(config["collector_sha256"], COLLECT.digest(SPEC.origin))
         self.assertEqual(config["source_inputs"]["sampler_sha256"], COLLECT.digest(root / "scripts/measure-native-resources.py"))
+        self.assertEqual(config["source_inputs"]["wrapper_sha256"], COLLECT.digest(root / "scripts/run-isolated-engine-tests.py"))
         self.assertEqual(len(config["formal_orders"]), 4)
         self.assertEqual(len(config["independent_orders"]), 2)
 
