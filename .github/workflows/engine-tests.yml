@@ -522,13 +522,55 @@ jobs:
         run: python scripts/prepare-test-engine.py check-cleanup
 
   windows-folder-opener-diagnosis:
-    name: Native helper diagnosis (${{ matrix.package }} / ${{ matrix.target }})
+    name: Native helper diagnosis (${{ matrix.package }} / ${{ matrix.label || matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+            target: file_transfer_engine
+            label: process-failure-recovery
+            filter: public_owned_process_failure_retains_partial_download_and_recovers_explicitly
+            trace: "0"
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+            target: file_transfer_engine
+            label: process-failure-recovery
+            filter: public_owned_process_failure_retains_partial_download_and_recovers_explicitly
+            trace: "0"
+          - package: linux-amd64-standard
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-gnu
+            target: file_transfer_engine
+            label: process-failure-recovery
+            filter: public_owned_process_failure_retains_partial_download_and_recovers_explicitly
+            trace: "0"
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+            target: file_transfer_engine
+            label: process-failure-recovery
+            filter: public_owned_process_failure_retains_partial_download_and_recovers_explicitly
+            trace: "0"
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+            target: file_transfer_engine
+            label: process-failure-recovery
+            filter: public_owned_process_failure_retains_partial_download_and_recovers_explicitly
+            trace: "0"
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+            target: file_transfer_engine
+            label: process-failure-recovery
+            filter: public_owned_process_failure_retains_partial_download_and_recovers_explicitly
+            trace: "0"
           - package: macos-amd64-standard
             runner: macos-15-intel
             rust: x86_64-apple-darwin
