@@ -96,6 +96,35 @@ invalid-key errors can be JSON objects and remain private bounded
 read-only validation cannot acquire a read/write credential. Real licensed
 generation/validation effects remain pending authorized acceptance.
 
+The licensed configuration item routes use the native management configuration
+schema, rather than the Local-API projection. `folder_configuration()` reads one
+full `FolderConfig`. `create_folder(template, options)` requires an explicitly
+supplied complete `FolderDefaults` template; the Local-API router registers no
+defaults-reading route, and this method never fetches through another channel or
+invents a native template. Explicit ID/path/label/pause selections override that
+template, retaining its other native fields. Template origin/version and sharing
+material remain the caller's explicit responsibility.
+
+`update_folder()` sends only selected label/pause fields.
+`replace_folder_configuration()` sends the caller's complete snapshot.
+`replace_folder_configurations()` explicitly replaces the entire collection and
+can remove omitted IDs. The latter reads full items in the observed projection
+order; matching flags compare exact IDs and complete per-ID bodies. A successful
+acknowledgement with different native readback remains a mismatch.
+`remove_folder_keep_files()` sends a single configuration DELETE without file
+flags/body and reports actual subsequent configuration absence. File retention,
+runtime application and peer effects retain their separate real acceptance gates.
+
+Writes retain the clone-shared mutation lock through preflight, request and
+readback. Create refuses an already configured ID and, unless explicitly allowed,
+an identical target path string. Independent controllers still need coordination:
+the native POST is an upsert and these separate requests are not an atomic
+transaction. No aliases are resolved on the controller's filesystem. Failed
+post-write reads remain unknown outcomes and are never retried. Native license
+rejection during a full-item preflight prevents that modifying request entirely.
+Licensed actual write effects remain pending; synthetic readbacks do not replace
+authorized native acceptance.
+
 For a library-owned instance, `ManagedOptions::local_api_enabled(true)` explicitly
 sets the native startup flag. It requires an HTTP(S) management endpoint and
 grants no commercial entitlement. The default preserves Local-API settings.

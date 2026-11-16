@@ -14,6 +14,8 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 mod local_api_common_contracts;
 #[path = "common/local_api_contracts.rs"]
 mod local_api_contracts;
+#[path = "common/local_api_write_contracts.rs"]
+mod local_api_write_contracts;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
