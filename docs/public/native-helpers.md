@@ -84,11 +84,16 @@ followed, no folder is registered, and configuration, identity and caller data
 remain intact. These six-profile results establish the consumer with isolated
 input files; final integrated delivery remains required.
 
-A separate macOS ARM64 native case invokes the official `serve --add-url` path
+A separate native case invokes the official `serve --add-url` path
 against the already owned state with explicit `--no-browser`, `--no-restart`
-and `--no-upgrade`. The official command writes the input before refusing to
-start a second instance: it returns exit code 1 and its actual existing-instance
-lock error. The Rust consumer then receives the exact HTTP or protocol link,
+and `--no-upgrade`. The official command writes the input before its native
+startup refusal and returns exit code 1. The observed macOS/Linux path reports
+the existing-instance lock error. On the standard hosted Windows AMD64 and
+ARM64 runners, it instead reports `Failed allocConsole`, `fixConsole` and
+`Access is denied.` after writing the input; that result does not establish
+that the lock check was reached. The strict test requires the specific observed
+refusal for its platform, followed by actual consumption and data checks.
+The Rust consumer receives the exact HTTP or protocol link,
 consumes it once and observes an empty follow-up, with no HTTP connection,
 folder registration or changes to the existing core's configuration, identity
 and caller bytes. This verifies native production and consumption together;
