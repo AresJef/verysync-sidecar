@@ -29,14 +29,18 @@ async fn public_owned_process_failure_retains_partial_download_and_recovers_expl
 ) -> TestResult {
     let root = tempfile::Builder::new().prefix("vpf-").tempdir()?.keep();
     let state = root.join("core");
+    println!("native process fault phase: before_initial_start");
     let mut core = ManagedInstance::start(options(&state)?).await?;
+    println!("native process fault phase: initial_ready");
     let identity = core.client().instance().device_id.clone();
     let original_pid = core.process_id();
     let config = std::fs::read(state.join("setting.dat"))?;
     let (profile, volume, _) = mount(&core).await?;
+    println!("native process fault phase: native_resources_mounted");
     let source = profile.join("owned-process-source.bin");
     let total = 128 * 1024 * 1024;
     let (pattern, expected) = resource_faults::write_pattern(&source, total)?;
+    println!("native process fault phase: synthetic_source_ready");
     let output = root.join("interrupted-download.bin");
     let path = volume.child("owned-process-source.bin")?;
     let client = core.client().clone();
@@ -72,6 +76,7 @@ async fn public_owned_process_failure_retains_partial_download_and_recovers_expl
     .await?;
     let exit = core.force_stop(Duration::from_secs(10)).await?;
     assert!(exit.forced && exit.tree_stopped && exit.state_released);
+    println!("native process fault phase: actual_owned_force_stop_verified");
     let result = tokio::time::timeout(Duration::from_secs(10), download).await??;
     assert!(
         matches!(
@@ -87,9 +92,12 @@ async fn public_owned_process_failure_retains_partial_download_and_recovers_expl
         (total, expected)
     );
     assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
+    println!("native process fault phase: before_explicit_restart");
     core.restart(Duration::from_secs(30)).await?;
+    println!("native process fault phase: explicit_restart_returned_ready");
     assert_ne!(core.process_id(), original_pid);
     assert_eq!(core.client().system_status().await?.device_id, identity);
+    println!("native process fault phase: restarted_identity_verified");
     let (_, volume, _) = mount(&core).await?;
     let recovered = root.join("explicit-recovered-download.bin");
     let receipt = core
@@ -102,6 +110,7 @@ async fn public_owned_process_failure_retains_partial_download_and_recovers_expl
         )
         .await?;
     assert_eq!((receipt.bytes, receipt.sha256), (total, expected));
+    println!("native process fault phase: recovered_download_receipt_verified");
     assert_eq!(
         resource_faults::verify_pattern(&recovered, &pattern, total)?,
         (total, expected)
@@ -111,6 +120,7 @@ async fn public_owned_process_failure_retains_partial_download_and_recovers_expl
         retained
     );
     assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
+    println!("native process fault phase: before_recovered_normal_shutdown");
     let normal = core.shutdown(Duration::from_secs(10)).await?;
     assert!(
         normal.tree_stopped && normal.state_released && !normal.forced && normal.code == Some(0)
