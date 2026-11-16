@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from test_resource_measurement_quality import fixture
 
@@ -17,7 +18,7 @@ PROTOCOL = Path(__file__).resolve().parents[2] / "tests/fixtures/resource-protoc
 
 def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2)+"\n")
+    path.write_bytes((json.dumps(value, indent=2)+"\n").encode("utf-8"))
 
 
 def dataset(root, *, windows_paths=False, changed_source=False, reused_process=False):
@@ -97,6 +98,15 @@ class ResourceReportContracts(unittest.TestCase):
             self.assertEqual(result["accepted_native_cases"], 24)
             self.assertEqual(result["fresh_formal_and_independent_processes"], 48)
             self.assertEqual(result["attempted_cases"], 24)
+
+    def test_windows_text_defaults_do_not_rewrite_synthetic_frozen_identity(self):
+        original = Path.write_text
+        def windows_default(path, data, *args, **kwargs):
+            kwargs.setdefault("newline", "\r\n")
+            return original(path, data, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as name, patch.object(Path, "write_text", windows_default):
+            root = Path(name); protocol, fingerprint = dataset(root, windows_paths=True)
+            self.assertEqual(self.report(root, protocol, fingerprint)["performance"], "PASS")
 
     def test_changed_raw_bytes_are_never_accepted(self):
         with tempfile.TemporaryDirectory() as name:
