@@ -297,19 +297,24 @@ async fn runtime(protocol: StorageProtocol) -> TestResult {
 
 #[tokio::test]
 async fn public_ftp_disconnect_has_explicit_owned_recovery_and_exact_data() -> TestResult {
-    disconnected(StorageProtocol::Ftp).await
+    disconnected(StorageProtocol::Ftp, false).await
+}
+#[tokio::test]
+async fn public_ftp_disconnect_finished_operation_refuses_stop_and_recovers_exact_data(
+) -> TestResult {
+    disconnected(StorageProtocol::Ftp, true).await
 }
 #[tokio::test]
 async fn public_sftp_disconnect_has_explicit_owned_recovery_and_exact_data() -> TestResult {
-    disconnected(StorageProtocol::Sftp).await
+    disconnected(StorageProtocol::Sftp, false).await
 }
 #[tokio::test]
 async fn public_smb_disconnect_has_explicit_owned_recovery_and_exact_data() -> TestResult {
-    disconnected(StorageProtocol::Smb).await
+    disconnected(StorageProtocol::Smb, false).await
 }
 #[tokio::test]
 async fn public_webdav_disconnect_has_explicit_owned_recovery_and_exact_data() -> TestResult {
-    disconnected(StorageProtocol::WebDav).await
+    disconnected(StorageProtocol::WebDav, false).await
 }
 async fn ready_preview(
     core: &ManagedInstance,
@@ -358,7 +363,36 @@ async fn finished_run(
     }
     result?
 }
-async fn disconnected(protocol: StorageProtocol) -> TestResult {
+fn completed_stop_reply(status: u16, body: &[u8]) -> bool {
+    status == 404
+        && serde_json::from_slice::<serde_json::Value>(body)
+            .is_ok_and(|value| value == serde_json::json!({"error":"job not found","result":{}}))
+}
+fn completed_stop_error(error: &Error) -> bool {
+    matches!(error, Error::MutationOutcomeUnknown { source, .. }
+        if matches!(source.as_ref(), Error::Http { response }
+            if completed_stop_reply(response.status(), response.body_bytes())))
+}
+#[test]
+fn completed_stop_refusal_does_not_accept_unrelated_errors_or_acknowledgements() {
+    let actual = br#"{"error":"job not found","result":{}}"#;
+    assert!(completed_stop_reply(404, actual));
+    for status in [200, 400, 401, 409, 500] {
+        assert!(!completed_stop_reply(status, actual));
+    }
+    for body in [
+        br#"{}"#.as_slice(),
+        br#"{"error":"different","result":null}"#,
+        br#"{"error":"job not found"}"#,
+        br#"{"error":"job not found","result":null}"#,
+        br#"{"error":"job not found","result":null,"unknown":true}"#,
+        b"invalid",
+    ] {
+        assert!(!completed_stop_reply(404, body));
+    }
+}
+
+async fn disconnected(protocol: StorageProtocol, terminal_before_stop: bool) -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("vls-disconnect-")
         .tempdir()?
@@ -417,12 +451,42 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
         "running"
     );
     peer.stop()?;
+    if terminal_before_stop {
+        // Explicitly finish this owned interrupted run before probing its
+        // terminal control boundary; this is not a retry after uncertainty.
+        let current = core.client().local_sync_status(&job.job_id).await?;
+        let operation = current
+            .operation_id
+            .ok_or("owned interrupted operation absent")?;
+        if current.state != "error" {
+            if let Err(error) = core
+                .client()
+                .control_local_sync_operation(
+                    &job.job_id,
+                    &operation,
+                    LocalSyncOperationControl::Stop,
+                )
+                .await
+            {
+                if !completed_stop_error(&error) {
+                    return Err(error.into());
+                }
+            }
+        }
+        let failed = finished_run(&core, &job.job_id, &receipt.id).await?;
+        assert!(failed.summary.completed > 0 && failed.summary.failed > 0);
+        assert!(failed
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.is_empty()));
+    }
     let interrupted = core.client().local_sync_status(&job.job_id).await?;
     let operation = interrupted
         .operation_id
         .ok_or("interrupted operation absent")?;
     let saved_results;
     let observed_old_cancellation;
+    let mut terminal_stop_refused = false;
     let recovered_by_force = if protocol == StorageProtocol::Ftp {
         let stop_started = std::time::Instant::now();
         eprintln!(
@@ -435,6 +499,10 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
             .await;
         match stopped {
             Ok(observed) => {
+                assert!(
+                    !terminal_before_stop,
+                    "completed run must retain its actual native Stop refusal"
+                );
                 eprintln!(
                     "ftp-disconnect-stop-end elapsed_ms={} outcome=receipt operation_matches={} post_state_running={} post_state_idle={} post_state_canceling={}",
                     stop_started.elapsed().as_millis(),
@@ -445,63 +513,31 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
                 );
             }
             Err(error) => {
-                // Error Debug is credential-safe. Unwrap only the SDK's typed
-                // uncertainty, never arbitrary transport source strings/URLs.
-                let mut cause = &error;
-                for _ in 0..4 {
-                    match cause {
-                        Error::MutationOutcomeUnknown { source, .. } => cause = source.as_ref(),
-                        _ => break,
-                    }
+                if !completed_stop_error(&error) {
+                    return Err(error.into());
                 }
-                eprintln!(
-                    "ftp-disconnect-stop-end elapsed_ms={} outcome=error safe_cause={cause:?}",
-                    stop_started.elapsed().as_millis()
+                // A 404 alone could also mean a missing job. Independently
+                // reconcile the exact existing job, operation and finished run;
+                // this is caller-side recovery, never a successful Stop receipt.
+                let status = core.client().local_sync_status(&job.job_id).await?;
+                let failed = core.client().local_sync_run(&job.job_id).await?;
+                assert_eq!(
+                    core.client().local_sync_job(&job.job_id).await?.job_id,
+                    job.job_id
                 );
-                match cause {
-                    Error::Http { response }
-                    | Error::Api { response, .. }
-                    | Error::InvalidResponse { response, .. } => {
-                        eprintln!("ftp-disconnect-stop-failure safe_response={response:?}");
-                    }
-                    _ => {}
-                }
-                let diagnostic = tokio::time::timeout(Duration::from_secs(2), async {
-                    tokio::join!(
-                        core.client().local_sync_status(&job.job_id),
-                        core.client().local_sync_run(&job.job_id),
-                    )
-                })
-                .await;
-                match diagnostic {
-                    Ok((status, run)) => {
-                        if let Ok(status) = status {
-                            eprintln!(
-                                "ftp-disconnect-stop-failure-status operation_present={} operation_matches={} state_running={} state_idle={} state_canceling={} error_present={}",
-                                status.operation_id.is_some(),
-                                status.operation_id.as_ref() == Some(&operation),
-                                status.state == "running", status.state == "idle", status.state == "canceling",
-                                status.last_error.as_deref().is_some_and(|e| !e.is_empty())
-                            );
-                        } else {
-                            eprintln!("ftp-disconnect-stop-failure-status read_failed=true");
-                        }
-                        if let Ok(run) = run {
-                            eprintln!(
-                                "ftp-disconnect-stop-failure-run exact_run={} exact_job={} finished={} completed={} failed={} cancelled={:?} error_present={}",
-                                run.id == receipt.id, run.job_id == job.job_id,
-                                !run.finished.starts_with("0001-"),
-                                run.summary.completed, run.summary.failed, run.cancelled,
-                                run.error.as_deref().is_some_and(|e| !e.is_empty())
-                            );
-                        } else {
-                            eprintln!("ftp-disconnect-stop-failure-run read_failed=true");
-                        }
-                    }
-                    Err(_) => eprintln!("ftp-disconnect-stop-failure-observation deadline_s=2"),
-                }
-                // Observations never rescue the failed Stop or retry it.
-                return Err(error.into());
+                assert_eq!(status.operation_id.as_ref(), Some(&operation));
+                assert_eq!(status.state, "error");
+                assert!(status
+                    .last_error
+                    .as_deref()
+                    .is_some_and(|text| !text.is_empty()));
+                assert_eq!(failed.id, receipt.id);
+                assert_eq!(failed.job_id, job.job_id);
+                assert!(!failed.finished.starts_with("0001-"));
+                assert!(failed.summary.completed > 0 && failed.summary.failed > 0);
+                assert!(failed.error.as_deref().is_some_and(|text| !text.is_empty()));
+                terminal_stop_refused = true;
+                eprintln!("ftp-disconnect-stop-end elapsed_ms={} outcome=native404_refusal existing_job_exact_finished_failed_run=true sdk_error_preserved=true automatic_retry=false", stop_started.elapsed().as_millis());
             }
         }
         let failed = finished_run(&core, &job.job_id, &receipt.id).await?;
@@ -655,7 +691,7 @@ async fn disconnected(protocol: StorageProtocol) -> TestResult {
     recovered_peer.stop()?;
     println!(
         "public protocol disconnect recovery evidence: {}",
-        serde_json::json!({"protocol":format!("{protocol:?}"),"actual_inflight_copy_before_owned_peer_stop":true,"actual_explicit_owned_recovery":true,"actual_prior_run_receipt_retained":true,"actual_completed_partial_files_retained":true,"actual_full_partial_snapshot_stable_without_retry":true,"actual_source_and_sentinel_preserved":true,"actual_explicit_new_endpoint_readback":true,"actual_new_preview_has_remaining_actions_without_copy":true,"actual_separate_explicit_new_run":true,"actual_all_sixteen_exact_destination_payloads":true,"actual_stale_result_identity_refused":true,"actual_same_identity_and_final_normal_owned_exit":true,"partial_complete_files":partial_count,"explicit_force_before_restart":recovered_by_force,"observed_old_run_cancelled":observed_old_cancellation,"old_native_completion_claimed":false})
+        serde_json::json!({"protocol":format!("{protocol:?}"),"actual_inflight_copy_before_owned_peer_stop":true,"actual_explicit_owned_recovery":true,"actual_prior_run_receipt_retained":true,"actual_completed_partial_files_retained":true,"actual_full_partial_snapshot_stable_without_retry":true,"actual_source_and_sentinel_preserved":true,"actual_explicit_new_endpoint_readback":true,"actual_new_preview_has_remaining_actions_without_copy":true,"actual_separate_explicit_new_run":true,"actual_all_sixteen_exact_destination_payloads":true,"actual_stale_result_identity_refused":true,"actual_same_identity_and_final_normal_owned_exit":true,"partial_complete_files":partial_count,"explicit_force_before_restart":recovered_by_force,"observed_old_run_cancelled":observed_old_cancellation,"old_native_completion_claimed":false,"actual_native_terminal_stop_refusal":terminal_stop_refused,"terminal_boundary_explicitly_prepared":terminal_before_stop})
     );
     std::fs::remove_dir_all(root)?;
     Ok(())

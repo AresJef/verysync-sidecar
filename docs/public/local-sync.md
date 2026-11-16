@@ -181,6 +181,16 @@ Private recovery cases distinguish FTP's failed run and saved action errors from
 deliberately chosen owned termination for the other protocols. A peer failure can
 finish before a separate stop request arrives, so the optional native `cancelled`
 flag is preserved as observed; an acknowledged stop never fabricates cancellation.
+The last operation ID can remain in status after its failed run has finished.
+For the fixed native FTP case, a later Stop then returns HTTP 404 with
+`job not found`, although the registered job still exists. The SDK retains its
+mutation-uncertainty error and performs no retry or automatic recovery. A caller
+must separately reconcile the exact existing job, operation, finished failed run
+and actual partial files before deciding to update an endpoint, review a new
+preview and start a different run. A generic 404, timeout or unrelated error is
+not a successful Stop or evidence that recovery is safe. The controlled terminal
+case checks this specific refusal and all data effects separately from successful
+in-flight pause/resume/stop controls.
 Each still requires unchanged source/sentinel, retained partial files, a fresh
 preview without copying, separate execution and sixteen exact completed payloads.
 An interrupted old run is never relabelled successful. Local effects and the
