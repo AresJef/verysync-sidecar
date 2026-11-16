@@ -1,4 +1,6 @@
 //! Actual version retention and restoration through public Rust APIs.
+#[path = "common/storage_service.rs"]
+mod archive_storage_service;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 use managed_fixture::{options, TestResult};
@@ -7,6 +9,134 @@ use verysync_sidecar::{
     CreateDeviceOptions, DevicePatch, DeviceTransport, FileVersionRestore, FolderVersioningPolicy,
     JoinFolderOptions, ManagedInstance, TargetPath,
 };
+
+#[tokio::test]
+async fn public_remote_sftp_archive_location_retains_and_restores_versions() -> TestResult {
+    let protocol = verysync_sidecar::StorageProtocol::Sftp;
+    use verysync_sidecar::VersionArchiveLocation;
+    let root = tempfile::Builder::new().prefix("varc-").tempdir()?.keep();
+    let mut peer =
+        archive_storage_service::Service::start(protocol, &root.join("peer"), Duration::ZERO)?;
+    let archive = peer.share.join("archive");
+    std::fs::create_dir(&archive)?;
+    let mut uri = url::Url::parse(peer.endpoint.uri())?;
+    uri.set_username(peer.endpoint.extra()["user"].as_str().ok_or("peer user")?)
+        .map_err(|_| "synthetic URI user")?;
+    uri.set_password(peer.endpoint.extra()["password"].as_str())
+        .map_err(|_| "synthetic URI password")?;
+    uri.set_path("/archive");
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let source = root.join("source");
+    let receive = root.join("receive");
+    std::fs::create_dir(&source)?;
+    let name = "archive 二 %.txt";
+    let old = b"retained original archive bytes";
+    let new = b"new remote content with a different length";
+    std::fs::write(source.join(name), old)?;
+    let (af, bf) = register(&a, &b, &source, &receive).await?;
+    b.client()
+        .set_folder_versioning(
+            &bf.id,
+            FolderVersioningPolicy::Simple {
+                keep: 3,
+                cleanout_days: 0,
+                cleanup_interval_seconds: 3600,
+            },
+        )
+        .await?;
+    let prior = b.client().folder_versioning(&bf.id).await?;
+    let location = VersionArchiveLocation::remote_uri(uri.as_str())?;
+    assert!(!format!("{location:?}").contains(uri.as_str()));
+    let changed = b
+        .client()
+        .set_version_archive_location(&bf.id, &location)
+        .await?;
+    assert!(changed.requested_fields_match);
+    let observed = b.client().folder_versioning(&bf.id).await?;
+    assert_eq!(observed.filesystem_type, peer.endpoint.filesystem_type());
+    assert_eq!(observed.filesystem_path, uri.as_str());
+    assert_eq!(observed.params, prior.params);
+    assert_eq!(
+        observed.cleanup_interval_seconds,
+        prior.cleanup_interval_seconds
+    );
+    eprintln!("private SFTP archive stage: configured");
+    a.client().resume_folder(&af.id).await?;
+    b.client().resume_folder(&bf.id).await?;
+    a.client().request_scan(&af.id).await?;
+    data(&receive.join(name), old).await?;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    std::fs::write(source.join(name), new)?;
+    a.client().request_scan(&af.id).await?;
+    data(&receive.join(name), new).await?;
+    let files = std::fs::read_dir(&archive)?
+        .map(|x| x.map(|v| v.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(files
+        .iter()
+        .any(|p| std::fs::read(p).ok().as_deref() == Some(old.as_slice())));
+    let history = b.client().folder_versions(&bf.id, None).await?;
+    let stamp = history
+        .0
+        .get(name)
+        .and_then(|v| v.first())
+        .ok_or("native SFTP archive not listed")?
+        .version_time
+        .clone();
+    eprintln!("private SFTP archive stage: real bytes archived and listed");
+    let exit = a.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    past_archive_generation(&b, &stamp).await?;
+    let report = b
+        .client()
+        .restore_file_versions(
+            &bf.id,
+            &[FileVersionRestore::new(
+                TargetPath::local(Path::new(name)),
+                stamp,
+            )?],
+        )
+        .await?;
+    assert_eq!(report.error_count(), 0);
+    data(&receive.join(name), old).await?;
+    assert_eq!(std::fs::read(source.join(name))?, new);
+    let exit = b.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    b.restart(Duration::from_secs(30)).await?;
+    assert_eq!(
+        b.client().folder_versioning(&bf.id).await?.filesystem_path,
+        uri.as_str()
+    );
+    assert!(!b.client().folder_versions(&bf.id, None).await?.0.is_empty());
+    data(&receive.join(name), old).await?;
+    let retained = std::fs::read_dir(&archive)?
+        .map(|x| x.and_then(|v| std::fs::read(v.path()).map(|bytes| (v.file_name(), bytes))))
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    let changed = b
+        .client()
+        .set_version_archive_location(&bf.id, &VersionArchiveLocation::FolderDefault)
+        .await?;
+    assert!(changed.requested_fields_match);
+    let unchanged = std::fs::read_dir(&archive)?
+        .map(|x| x.and_then(|v| std::fs::read(v.path()).map(|bytes| (v.file_name(), bytes))))
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    assert_eq!(retained, unchanged);
+    let exit = b.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    peer.stop()?;
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public remote SFTP version archive evidence: {}",
+        serde_json::json!({
+        "actual_typed_remote_archive_location":true,"actual_original_policy_preserved":true,
+        "actual_old_bytes_archived_on_remote_peer":true,"actual_native_version_browse":true,
+        "actual_restored_old_bytes":true,"actual_source_new_bytes_retained":true,
+        "actual_unicode_percent_filename":true,"actual_normal_restart_keeps_remote_location":true,
+        "actual_reset_default_preserves_remote_archives":true,"actual_both_normal_owned_tree_exits":true})
+    );
+    Ok(())
+}
 
 fn history_result<T>(
     stage: &'static str,
