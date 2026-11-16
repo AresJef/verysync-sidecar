@@ -410,8 +410,11 @@ Each combination transfers new synthetic file bytes after reconnection and
 retains source, receiver, unrelated sentinel and device identities. Both owned
 process trees and state leases exit normally. This verifies the name effect
 under an explicit restart and new connection; it does not establish immediate
-renaming of an already connected peer. The six native platform gates and final
-integrated acceptance remain required.
+renaming of an already connected peer.
+[Run 43971513435](https://github.com/AresJef/verysync-sidecar/actions/runs/43971513435)
+verifies all four combinations, new transferred bytes and both normal owned
+exits on all six standard native AMD64/ARM64 profiles. Final integrated
+acceptance remains required.
 
 ## Configuration-volume free-space policy
 
@@ -430,9 +433,36 @@ and verifies that both files are indexed and the folder is idle. A normal
 restart retains that policy, index, identity and unrelated configuration.
 This proves the selected free-space guard and explicit recovery in the tested
 scenario. It does not turn an arbitrary failed scan into a no-effects result,
-exhaust physical storage, or establish disk-write throughput. The new case has
-local macOS ARM64 evidence; six native profiles and final integration remain
-required.
+exhaust physical storage, or establish disk-write throughput.
+[Run 43971513435](https://github.com/AresJef/verysync-sidecar/actions/runs/43971513435)
+verifies these effects on all six standard native AMD64/ARM64 profiles, with
+the actual producer identity and original raw logs retained. Final integration
+remains required.
+
+## Temporary-file retention during scans
+
+`GeneralOptionsPatch::keep_temporaries_hours` selects the native temporary-file
+retention interval in hours. The fixed engine's scanner recognizes its `.vs.`
+temporary basenames and checks their modification time during a scan. This
+setting is separate from the explicit folder temporary/session cleanup command;
+configuration readback alone does not establish expiration.
+
+The isolated native case sets a four-hour interval and verifies that a two-hour
+old synthetic native temporary survives a completed scan. Selecting one hour
+and requesting another scan removes that aged input while retaining a fresh
+native temporary, an ordinary aged `.tmp` file, indexed Unicode-named caller
+data and a native-named file outside the registered folder. The ordinary `.tmp`
+control also remains absent from the native index in this observation. A normal
+restart retains the one-hour policy, and another scan expires a newly prepared
+aged native input while preserving the same controls and instance identity.
+
+Only the owned synthetic files' modification times are changed. The host clock
+and global settings are preserved, and manual temporary cleanup is not invoked.
+This proves the selected scan-age behavior for the tested inputs. It does not
+promise an exact wall-clock deletion deadline, a background cleanup schedule,
+recovery of an interrupted real transfer, or removal of arbitrary caller files.
+The new case has local macOS ARM64 evidence; its six native platform gates and
+final integrated acceptance remain required.
 
 ## Diagnostic preferences
 
