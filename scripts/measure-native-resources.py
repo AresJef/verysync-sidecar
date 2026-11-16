@@ -361,8 +361,10 @@ def main():
                       acceptance="raw attempt only; requires a complete accepted group manifest")
     with (args.evidence_dir / "console.log").open("wb") as console, (args.evidence_dir / "samples.jsonl").open("w") as samples:
         child = subprocess.Popen(command, env=env, stdout=console, stderr=subprocess.STDOUT)
+        previous_record_ns = previous_wait_ns = None
         try:
             while True:
+                journal_poll_start = time.perf_counter_ns()
                 if events.exists():
                     with events.open("rb") as journal:
                         journal.seek(journal_offset)
@@ -398,15 +400,22 @@ def main():
                                 phase = "after"
                             elif kind == "complete":
                                 phase = "complete"
+                journal_poll_ns = time.perf_counter_ns()-journal_poll_start
                 if processes is not None and phase in {"baseline", "measure"}:
                     row = {"phase": phase, "start_ns": time.perf_counter_ns(),
                            "controller": snapshot(processes[0]), "engine": snapshot(processes[1]),
-                           "end_ns": time.perf_counter_ns(), "previous_timer_expirations": ticker.expirations}
+                           "end_ns": time.perf_counter_ns(), "previous_timer_expirations": ticker.expirations,
+                           "journal_poll_ns": journal_poll_ns, "previous_record_write_ns": previous_record_ns,
+                           "previous_timer_wait_ns": previous_wait_ns}
+                    record_start = time.perf_counter_ns()
                     samples.write(json.dumps(row) + "\n")
+                    previous_record_ns = time.perf_counter_ns()-record_start
                 if child.poll() is not None:
                     break
                 if ticker is not None:
+                    wait_start = time.perf_counter_ns()
                     ticker.wait()
+                    previous_wait_ns = time.perf_counter_ns()-wait_start
                 else:
                     time.sleep(args.interval_ms / 1000)
             report["exit_code"] = child.wait()

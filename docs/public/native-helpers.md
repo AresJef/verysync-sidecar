@@ -196,6 +196,10 @@ PE architecture, including x86 under WOW64. Its runtime preflight executes that
 same owned target executable and requires a successful loopback bind with the
 matching architecture and pointer width. A host Python socket check cannot
 establish that a different target architecture can initialize Winsock.
+The WOW64 directory query uses a bounded writable buffer, one permitted resize,
+and the actual copied UTF-16 length. A positive native count with empty or
+incomplete output is an error; it cannot become a current-directory DLL lookup.
+This follows [Microsoft's return-value contract](https://learn.microsoft.com/en-us/windows/win32/api/wow64apiset/nf-wow64apiset-getsystemwow64directoryw).
 
 ```no_run
 # async fn example(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {

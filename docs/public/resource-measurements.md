@@ -127,3 +127,18 @@ systems retain their existing policy. This follows
 The request offers no scheduling guarantee: a gap over 50 ms still rejects the
 whole original-order cycle. All v3 attempts, including the three insufficient
 macOS ARM64 cycles, remain separate from the new v4 acquisition.
+
+The v5 identity includes the corrected bounded WOW64 helper query. It also
+retains diagnostic durations for journal polling, the preceding raw-record write
+and timer wait, so an observer gap can be investigated from its original trace.
+An unobserved preceding interval is null. These diagnostics do not replace a
+required counter, alter an operation timestamp, or relax the sampling-gap check.
+Actual preparation must validate the extra recording before new formal data;
+v1-v4 samples retain their own identities.
+
+Draft pull requests run actual calibration and both full preparation orders.
+Formal/independent collection runs when the candidate is ready for review or is
+explicitly dispatched. A green preparation-only job does not establish resource
+coverage or acceptance; all six complete formal/independent reports remain
+required. This keeps changing library sources from invalidating repeated formal
+collections before the implementation candidate is stable.

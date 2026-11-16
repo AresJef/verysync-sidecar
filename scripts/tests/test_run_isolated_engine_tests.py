@@ -265,6 +265,47 @@ class ProxyContracts(unittest.TestCase):
 
 
 class NativeOpenerContracts(unittest.TestCase):
+    def test_wow64_directory_query_requires_actual_populated_native_output(self):
+        import ctypes
+        value = str(Path("C:/Windows/SysWOW64"))
+        calls = []
+        def native(buffer, size):
+            calls.append(size)
+            # Reproduce a positive required length with no copied characters.
+            if size == 32768 or size <= len(value):
+                return len(value)+1
+            buffer.value = value
+            return len(value)
+        library = MagicMock(); library.GetSystemWow64DirectoryW.side_effect = native
+        with patch.object(ctypes, "WinDLL", return_value=library, create=True):
+            self.assertEqual(HELPER.windows_wow64_directory(), Path(value))
+            self.assertNotIn(32768, calls)
+
+    def test_wow64_empty_output_is_not_a_current_directory_fallback(self):
+        import ctypes
+        library = MagicMock(); library.GetSystemWow64DirectoryW.return_value = 17
+        with patch.object(ctypes, "WinDLL", return_value=library, create=True):
+            with self.assertRaisesRegex(OSError, "output"):
+                HELPER.windows_wow64_directory()
+
+    def test_wow64_query_grows_once_and_counts_native_utf16_units(self):
+        import ctypes
+        value = "C:/"+"x"*260+"/\U0001f4c1/SysWOW64"
+        units = len(value.encode("utf-16-le"))//2
+        calls = []
+        def native(buffer, size):
+            calls.append(size)
+            if size <= units:
+                return units+1
+            buffer.value = value
+            return units
+        library = MagicMock(); library.GetSystemWow64DirectoryW.side_effect = native
+        with patch.object(ctypes, "WinDLL", return_value=library, create=True):
+            self.assertEqual(HELPER.windows_wow64_directory(), Path(value))
+            self.assertEqual(len(calls), 2)
+            self.assertGreater(calls[1], units)
+
+
     @staticmethod
     def pe_fixture(path, machine):
         data = bytearray(134)
