@@ -6,7 +6,11 @@ use crate::{
     VersionPolicy, BASELINE_ENGINE_VERSION,
 };
 use std::{fmt, sync::Arc, time::Duration};
+mod common;
 mod control;
+pub use common::{
+    LocalApiHardware, LocalApiHistoryFilter, LocalApiHistoryPage, LocalApiHistoryRecord,
+};
 pub use control::{LocalApiFolder, LocalApiPeer, LocalApiScanAcknowledgement};
 
 #[derive(Clone)]

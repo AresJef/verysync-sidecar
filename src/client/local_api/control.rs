@@ -106,7 +106,7 @@ impl LocalApiClient {
         }
     }
 
-    async fn control_response(
+    pub(super) async fn control_response(
         &self,
         request: RawRequest,
         operation: &'static str,
@@ -144,7 +144,7 @@ impl LocalApiClient {
         crate::client::checked_response(operation, response, modifying)
     }
 
-    async fn control_json<T: DeserializeOwned>(
+    pub(super) async fn control_json<T: DeserializeOwned>(
         &self,
         request: RawRequest,
         operation: &'static str,

@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add native Local-API history filters/records, hardware error-preserving reads,
+  typed shared statistics/progress snapshots and licensed share generation/key
+  checks, keeping source schemas and positive authorization gates explicit.
+
 - Add typed native Local-API folder/device projections, target-scoped scanning,
   selective browse/need/selection requests and distinct native code3001 license
   errors. Preserve the separate Local-API schema and licensed-effect gates.

@@ -99,6 +99,58 @@ async fn native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_s
     assert!(projected.rescan_interval_seconds.is_some());
     assert!(projected.scan_progress_interval_seconds.is_some());
     assert!(projected.selective_enabled.is_some());
+    let history = local
+        .folder_history(
+            ListPage::new(1, 100)?,
+            &LocalApiHistoryFilter {
+                folder: Some(folder_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert!(history.total >= 0);
+    let hardware_data = match local.hardware().await {
+        Ok(snapshot) => {
+            assert!(snapshot.cpu.total_threads > 0);
+            true
+        }
+        Err(Error::Api { response, .. }) => {
+            let value: serde_json::Value = serde_json::from_slice(response.body_bytes())?;
+            let sections: Vec<_> = ["cpu", "memory", "network"]
+                .into_iter()
+                .filter(|name| {
+                    value
+                        .get(*name)
+                        .and_then(|v| v.get("error"))
+                        .is_some_and(|v| !v.is_null())
+                })
+                .collect();
+            println!(
+                "native Local-API hardware_error_sections={sections:?} status={}",
+                response.status()
+            );
+            false
+        }
+        Err(error) => return Err(error.into()),
+    };
+    for error in [
+        local.generate_share().await.unwrap_err(),
+        local
+            .validate_share_key(&ShareKey::new("synthetic-invalid-local-api-key")?)
+            .await
+            .unwrap_err(),
+        local.folder_summaries().await.unwrap_err(),
+        local.connections().await.unwrap_err(),
+        local.folder_statistics().await.unwrap_err(),
+        local
+            .folder_download_progress(&folder_id)
+            .await
+            .unwrap_err(),
+        local.folder_completions(&folder_id).await.unwrap_err(),
+    ] {
+        assert!(matches!(error, Error::LicenseRequired { code: 3001, .. }));
+    }
+    println!("native Local-API common history_snapshot=true history_total={} history_rows={:?} hardware_typed_data={} shared_controls_license3001=true no_activation=true",history.total,history.records.as_ref().map(Vec::len),hardware_data);
     assert!(projected.path.local_path().is_none());
     assert!(!projected.extra.contains_key("label"));
     assert!(matches!(

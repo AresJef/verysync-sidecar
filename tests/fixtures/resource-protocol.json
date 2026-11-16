@@ -1,12 +1,12 @@
 {
-  "protocol_id": "VS045-native-resources-v8",
-  "version": 8,
+  "protocol_id": "VS045-native-resources-v9",
+  "version": 9,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "26113458057c1dcd0959c48f59f605d371a77855328ffb86abd7cc86acf72599",
+    "rust_sources_sha256": "53070be16710a57bbffb445014a0a4544b2bcaf8179a7a8115c06ef8dca8fc73",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
     "sampler_sha256": "c2021cd0c9927d74493e37ce7abe0d085ba2cdae26e9fc33b14cfd4cfd0ac819",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a"
