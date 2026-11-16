@@ -79,9 +79,10 @@ after a possible write is `MutationOutcomeUnknown`; no write is retried.
 save. Empty lines clear the template without rewriting existing ignore files.
 
 Saving a template does not establish parsing or automatic folder inheritance.
-The fixed v2.33.2 macOS ARM64 core stores and persists it, including invalid
-include syntax, but observed newly registered folders still use the vendor's
-rules. Other platform observations remain part of the native matrix. Select an
+On the six tested native v2.33.2 macOS, Windows and Linux AMD64/ARM64 profiles,
+the core stores and persists it, including invalid include syntax, but folders
+newly registered through `Client::create_folder` still use the vendor's rules.
+Other targets and final integrated acceptance retain their separate gates. Select an
 existing folder and call `set_ignore_patterns` explicitly when applying the
 stored lines; inspect its parser result and actual indexing separately. Native
 tests retain existing ignore-file bytes, synthetic data and identity, demonstrate

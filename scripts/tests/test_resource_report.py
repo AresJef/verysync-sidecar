@@ -1,5 +1,6 @@
 """Synthetic offline contracts are not native runtime evidence."""
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -21,9 +22,13 @@ def save(path, value):
     path.write_bytes((json.dumps(value, indent=2)+"\n").encode("utf-8"))
 
 
-def dataset(root, *, windows_paths=False, changed_source=False, reused_process=False):
+def dataset(root, *, windows_paths=False, changed_source=False, reused_process=False, readiness=None):
     protocol = REPORT.read(PROTOCOL)
-    fingerprint = REPORT.digest(PROTOCOL)
+    if readiness is False:
+        protocol.pop("preparation_readiness", None)
+    elif readiness is not None:
+        protocol["preparation_readiness"] = readiness
+    fingerprint = hashlib.sha256((json.dumps(protocol, indent=2)+"\n").encode()).hexdigest()
     source = {**protocol["source_inputs"], "profile": "release", "rustc_version": "rustc 1.85.0 (synthetic)",
               "source_commit": "SYNTHETIC-TEST-ONLY", "source_tree": "SYNTHETIC-TEST-ONLY"}
     next_case = 0
