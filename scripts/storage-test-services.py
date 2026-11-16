@@ -26,6 +26,23 @@ def ready(protocol, port, tls=False):
                       "python_platform": sysconfig.get_platform()}), flush=True)
 
 
+FTP_OBSERVED_COMMANDS = {
+    "USER", "PASS", "EPSV", "EPRT", "PASV", "PORT", "TYPE", "OPTS", "SYST",
+    "FEAT", "PWD", "CWD", "CDUP", "SIZE", "MDTM", "MLSD", "MLST", "LIST",
+    "NLST", "DELE", "RMD", "MKD", "STOR", "APPE", "RETR", "RNFR", "RNTO",
+    "QUIT", "NOOP", "ABOR", "SITE",
+}
+
+
+def ftp_observation(event, command=None):
+    value = {"owned_ftp_event": event}
+    if event == "command":
+        value["command"] = command if command in FTP_OBSERVED_COMMANDS else "OTHER"
+    elif event != "authenticated":
+        raise ValueError("unknown owned FTP observation")
+    print(json.dumps(value), file=sys.stderr, flush=True)
+
+
 def ftp(config, root):
     from pyftpdlib.authorizers import DummyAuthorizer
     from pyftpdlib.handlers import FTPHandler, DTPHandler
@@ -43,6 +60,18 @@ def ftp(config, root):
 
     handler = type("OwnedFTPHandler", (FTPHandler,),
                    {"authorizer": authorizer, "dtp_handler": OwnedDataHandler})
+    if config.get("record_ftp_events", False):
+        class ObservedFTPHandler(handler):
+            def pre_process_command(self, line, cmd, arg):
+                # Observe command names only; preserve the exact original call.
+                ftp_observation("command", cmd)
+                return super().pre_process_command(line, cmd, arg)
+
+            def on_login(self, _username):
+                # pyftpdlib invokes this only after230 and accepted credentials.
+                ftp_observation("authenticated")
+
+        handler = ObservedFTPHandler
     server = FTPServer(("127.0.0.1", 0), handler)
     server.max_cons = 32
     server.max_cons_per_ip = 32
@@ -504,6 +533,9 @@ def main():
     delay = config.get("write_delay_ms", 0)
     if not isinstance(delay, int) or not 0 <= delay <= 100:
         raise ValueError("invalid explicit test-only write delay")
+    if (type(config.get("record_ftp_events", False)) is not bool
+            or (config.get("record_ftp_events", False) and args.protocol != "ftp")):
+        raise ValueError("explicit FTP-only observation flag required")
     logging.basicConfig(level=logging.ERROR)
     {"ftp": ftp, "sftp": sftp, "webdav": webdav, "smb": smb}[args.protocol](config, root)
 

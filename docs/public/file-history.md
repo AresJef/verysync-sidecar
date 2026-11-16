@@ -83,19 +83,30 @@ different interface and are not translated here. URI configuration does not
 establish authentication, server identity or successful archival.
 
 An isolated macOS ARM64 SFTP case has verified real remote old bytes, native
-version browsing, restoration of a Unicode/percent filename, unchanged stopped
-source data, normal restart with the remote location retained, resetting to the
-default location without deleting remote archives, and normal owned exits.
-Native FTP URI readback succeeded, but remote archiving failed in the tested
-macOS ARM64 cases with both ASCII and Unicode filenames. A private protocol trace
-confirmed login and existing-directory listing, followed by deletion of an
-absent first-generation archive target and a native not-found error, without
-an upload. The macOS ARM64 regression requires that exact reported error, a nonzero
-pull-error count, retained old receiver and new source bytes, an empty remote
-archive, and normal owned exits. This is an observed native refusal, not positive
-FTP archival. The underlying implementation cause remains unresolved. Other
-platforms still require actual positive FTP archival/restoration; their outcomes
-and other authentication/selector combinations are independently verified.
+version browsing, restoration of a Unicode/percent filename, unchanged source
+data, normal restart with the remote location retained, resetting to the default
+location without deleting remote archives, and normal owned exits. Four separate
+standard Linux/Windows AMD64/ARM64 cases in [run 43914478575](https://github.com/AresJef/verysync-sidecar/actions/runs/43914478575)
+verify those same SFTP effects.
+
+FTP URI readback succeeds, but the first remote generation fails with the exact
+native `simple versioner: archive: file does not exist` error on all six standard
+macOS/Linux/Windows AMD64/ARM64 profiles using the dedicated pyftpdlib2.2.0
+peer. Original positive-case failures retain old receiver bytes, new source bytes
+and an empty remote archive. The initial Mac protocol trace confirms authentication,
+existing-directory listing and deletion of an absent destination without upload.
+The regression for these reproduced targets now requires accepted peer
+authentication, observed USER/PASS commands, no upload command in that observation
+window, the exact native error and a nonzero pull-error counter, retained files,
+an empty archive, and normal owned-tree/state release. The observer is opt-in,
+records command names without arguments or credentials, and preserves the original
+server command handler. The new Mac observed case passes; the corresponding new
+cross-platform strict cases remain pending.
+
+This is a faithful native-refusal contract, not positive FTP archival. The
+underlying cause remains unresolved. Other unobserved architectures retain positive FTP archival/restoration
+requirements. Other FTP servers,
+authentication methods and native URI query selections have independent gates.
 
 Changing location preserves policy parameters and unknown fields. The SDK does
 not migrate existing archives; native retention can clean the selected location.
