@@ -521,3 +521,14 @@ command completion from desktop observation; they never change the timeout or
 cleanup requirements. Job-image diagnostics follow Microsoft's
 [process-list layout](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_process_id_list)
 and [handle-based membership check](https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob).
+The next diagnostic observed successful native command receipts followed by
+owned Chrome processes on both Windows profiles, with no protocol capture. The
+test now builds and identifies the exact integration-test artifact before
+selecting private, empty ProgramFiles lookup roots for that test child. Native
+helper LocalAppData remains its managed private profile; an ambient LORCACHROME
+override is removed from the child snapshot. Caller environment, installed
+browser files and protected UserChoice values are preserved. This selection is
+based on the [upstream Chrome lookup candidates](https://github.com/zserge/lorca/blob/master/locate.go);
+only actual native dispatch/cancellation evidence can establish that the pinned
+core followed the controlled fallback. The original deadlines and cleanup gates
+still apply.

@@ -1,6 +1,7 @@
 """Native browser acceptance may only mutate an explicitly owned hosted VM."""
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -17,6 +18,38 @@ SPEC.loader.exec_module(RUNNER)
 
 
 class ScopeContracts(unittest.TestCase):
+    def test_browser_lookup_is_child_only_and_removes_case_duplicate_overrides(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            original = {"PROGRAMFILES": "host-programs", "programfiles(x86)": "host-x86",
+                        "PROGRAMW6432": "host64", "LoRcAcHrOmE": "host-browser",
+                        "SYSTEMROOT": "host-system", "PATH": "host-tool-path"}
+            before = original.copy()
+            env = RUNNER.private_browser_search_environment(root, original)
+            self.assertEqual(original, before)
+            self.assertFalse(any(k.casefold() == "lorcachrome" for k in env))
+            self.assertEqual(env["SYSTEMROOT"], "host-system")
+            self.assertEqual(env["PATH"], "host-tool-path")
+            for name in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+                self.assertEqual(sum(k.casefold() == name.casefold() for k in env), 1)
+                path = Path(env[name])
+                self.assertTrue(path.is_relative_to(root))
+                self.assertEqual(list(path.iterdir()), [])
+
+    def test_examples_and_non_test_profiles_cannot_substitute_for_browser_test(self):
+        with tempfile.TemporaryDirectory() as root:
+            executable = Path(root) / "wrong-artifact.exe"
+            executable.write_bytes(b"synthetic contract only")
+            for kind, name, test in [("example", "browser_engine", True),
+                                     ("test", "different_test", True),
+                                     ("test", "browser_engine", False)]:
+                message = {"reason": "compiler-artifact", "target": {"name": name, "kind": [kind]},
+                           "profile": {"test": test}, "executable": str(executable)}
+                result = subprocess.CompletedProcess([], 0, json.dumps(message) + "\n", "")
+                with patch.object(RUNNER.subprocess, "run", return_value=result):
+                    with self.assertRaisesRegex(ValueError, "one exact Cargo"):
+                        RUNNER.build_browser_test(Path(sys.executable), "synthetic", {})
+
     def test_silent_child_timeout_terminates_and_reaps_before_reporting_stopped(self):
         released = threading.Event()
         class SilentOutput:
