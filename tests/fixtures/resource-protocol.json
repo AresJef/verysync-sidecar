@@ -1,6 +1,6 @@
 {
-  "protocol_id": "VS045-native-resources-v17",
-  "version": 17,
+  "protocol_id": "VS045-native-resources-v18",
+  "version": 18,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
@@ -113,7 +113,8 @@
     "v14": "Each actual profile repeats source-bound calibration and two complete opposite-order pretrials before v14 formal and independent acquisition. All earlier-source attempts remain historical.",
     "v15": "Each actual profile repeats source-bound calibration and both complete opposite-order pretrials before v15 formal and independent acquisition. Diagnostic failure recording is verified separately; earlier attempts retain their original strict results.",
     "v16": "Each actual profile repeats source-bound calibration and both complete opposite-order pretrials before v16 formal and independent acquisition. Previous-source attempts stay historical.",
-    "v17": "Each actual profile repeats source-bound clock/counter/native-wait calibration and both complete opposite-order pretrials before v17 formal and independent acquisition. Local prototype and prior-source attempts are not formal members."
+    "v17": "Each actual profile repeats source-bound clock/counter/native-wait calibration and both complete opposite-order pretrials before v17 formal and independent acquisition. Local prototype and prior-source attempts are not formal members.",
+    "v18": "All eight native-correct/source-bound/calibrated cases execute in the original two opposite orders. At least one entire VALID order establishes readiness; the other order may retain INSUFFICIENT cases but never native/source/counter/acquisition errors. No preparation data enters formal groups. Formal coverage, every quality/resource criterion, deadlines and attempt limits unchanged."
   },
   "profiles": [
     "macos-amd64-standard",
@@ -125,13 +126,13 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "19321552a5a553f6ecd0486a4c7b973db8efb465a28297a19a05942e68f47c10",
+    "previous_protocol_sha256": "9a47ec1079c08446e2fc0e2ab8ded8eebfa0547c89607631bce35adf389a3747",
     "retained": "All previous datasets and original attempts/deadlines remain historical, not members of this source protocol. No project budget or prior overrun is reset.",
-    "changes": "Darwin observer uses blocking absolute mach_wait_until deadlines with architecture-specific tick conversion and exact native error/early-return diagnostics. Delayed waits skip expired deadlines without fabricating metric rows; other-platform waits and every metric/workload/quality/resource/coverage/deadline condition remain unchanged.",
+    "changes": "Preparation continues after a recomputed native-correct INSUFFICIENT case under the explicit whole-order readiness policy. Offline revalidation independently recomputes all eight cases and records readiness rejection counts. Formal/independent validation remains strictly VALID-only, and legacy preparation stays strict. Preflight and reporter source hashes bind the new protocol; product and sampler inputs unchanged.",
     "unchanged": "Measured workloads, repeat counts, timing boundaries, native byte/state/exit checks, all quality/memory/stability thresholds and four formal plus two independent fresh-process cycles.",
     "diagnostic_policy": "Initial unobserved previous durations are null; diagnostics never replace required counters or become new acceptance gates."
   },
-  "preflight_sha256": "4a13665bb438ce948c28aee13b992f329d5dbf4f62c3c282bbca114f4161d485",
+  "preflight_sha256": "d0df504754e28fa52d54831f0d1a8fb2b62ea22679dc60c1262460ce82aacc47",
   "observer_policy": {
     "darwin": "Request QOS_CLASS_USER_INITIATED0x19 only on the short-lived observer thread after the real controller and engine are ready; retain requested/observed receipt. No worker or global priority changes.",
     "other_systems": "unchanged",
@@ -149,5 +150,13 @@
     "other_platforms": "Existing monotonic-sleep wait unchanged.",
     "calibration": "Two sleep controls and two native-deadline windows in original balanced order; all actual intervals and native conversion retained. Private old-kqueue/new-Mach ABBA is calibration only.",
     "limits": "No scheduling guarantee, jitter exclusion, changed timestamps or relaxed quality limits."
-  }
+  },
+  "preparation_readiness": {
+    "mode": "one_complete_valid_order",
+    "orders": 2,
+    "minimum_valid_orders": 1,
+    "retain_quality_rejections": true,
+    "formal_samples_from_preparation": 0
+  },
+  "reporter_sha256": "b45c1fe11c4f131df43dc5793469625a1b3decd94c97310a77edcd84ccab6b39"
 }

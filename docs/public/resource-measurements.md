@@ -72,8 +72,9 @@ retained. All v1 evidence and failures remain separate; new source dependencies
 require complete new formal and independent cycles.
 
 Each actual CI profile must complete both opposite preparation orders before its
-formal run starts. Preparation failures retain their typed errors and metrics;
-they never become formal samples. The Darwin timer flags follow
+formal run starts, using the frozen readiness policy described below. Preparation
+failures retain their typed errors and metrics; they never become formal samples.
+The historical Darwin timer flags follow
 [Apple's public event header](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/event.h).
 
 The v3 source identity includes explicit creator-owned state-lease release and
@@ -166,7 +167,7 @@ retried or converted into a sample. Sampling methods, workloads, quality limits,
 formal coverage and deadlines remain unchanged; earlier evidence keeps its
 original protocol identity.
 
-The current v17 Darwin observer uses one blocking `mach_wait_until` call for each
+The v17 Darwin observer uses one blocking `mach_wait_until` call for each
 absolute deadline. It obtains the architecture-specific conversion with
 `mach_timebase_info`, rounds the requested interval up to whole native ticks, and
 records that ratio and period. A delayed wakeup advances to the first future
@@ -183,3 +184,23 @@ opposite preparation orders and complete new formal/independent evidence remain
 required on every profile. All original workloads, metric reads, timing
 boundaries, 50 ms coverage limit, other quality/resource criteria and acquisition
 deadlines remain unchanged; earlier failures and datasets retain their identities.
+
+Protocol v18 retains the v17 observer and every formal quality/resource rule. It
+changes preparation admission: execute all eight cases in the two original
+opposite orders, require native correctness/source/calibration for every case,
+and require at least one entire order with four `VALID` cases. A coverage or other
+mechanical `INSUFFICIENT` case in the other order remains a recorded rejection;
+it is never a formal member. Any native, identity, counter, source or acquisition
+error still stops preparation immediately. Neither order may be reconstructed
+from selected members of the two trials.
+
+This distinguishes a bounded readiness trial from the final evidence. Formal
+collection still requires four complete original-order cycles and two complete
+independent cycles, with every accepted member satisfying the original 50 ms,
+5% and all other frozen checks. Its original deadlines and retry limits remain.
+The offline reporter recomputes readiness from all eight raw trials and shows
+their valid/insufficient counts separately from formal attempts. No qualifying
+preparation order means incomplete readiness and `INCONCLUSIVE`, even when formal
+data is otherwise complete. Protocols without this policy retain the old strict
+preparation rule. Old rejected trials and all earlier datasets keep their original
+identities; v18 binds both the changed preflight and offline reporter hashes.

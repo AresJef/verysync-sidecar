@@ -10,6 +10,17 @@ from pathlib import Path, PurePosixPath
 import statistics
 import sys
 
+PREPARATION_READINESS = {"mode": "one_complete_valid_order", "orders": 2,
+                         "minimum_valid_orders": 1, "retain_quality_rejections": True,
+                         "formal_samples_from_preparation": 0}
+
+
+def preparation_policy(protocol):
+    policy = protocol.get("preparation_readiness")
+    if policy is not None and policy != PREPARATION_READINESS:
+        raise ValueError("unrecognized preparation readiness policy")
+    return policy
+
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -64,7 +75,10 @@ def check_attempt(folder, protocol, stage, metrics):
     report = read(folder / "preparation-result.json")
     rows = [json.loads(line) for line in (folder / "samples.jsonl").read_text().splitlines()]
     quality = metrics.summarize(report, rows, protocol["quality"])
-    if quality != read(folder / "quality-result.json") or quality["status"] != "VALID":
+    allowed = {"VALID"}
+    if stage == "pilot" and preparation_policy(protocol) is not None:
+        allowed.add("INSUFFICIENT")
+    if quality != read(folder / "quality-result.json") or quality["status"] not in allowed:
         raise ValueError("accepted raw metrics differ or no longer validate")
     if report["stage"] != stage or report["formal_sample"] != (stage != "pilot"):
         raise ValueError("preparation and formal roles must not be mixed")
@@ -100,6 +114,34 @@ def check_attempt(folder, protocol, stage, metrics):
     if source["profile"] != "release" or not source["rustc_version"].startswith("rustc "+protocol["rust_release"]+" "):
         raise ValueError("frozen compiler/profile differs")
     return report, quality
+
+
+def check_preparation_orders(root, attempts, protocol, metrics):
+    policy = preparation_policy(protocol)
+    orders = protocol["formal_orders"][:2]
+    if (len(orders) != 2 or orders[1] != list(reversed(orders[0]))
+            or any(len(o) != len(protocol["scenarios"]) or set(o) != set(protocol["scenarios"]) for o in orders)):
+        raise ValueError("two complete opposite preparation orders required")
+    expected = [(c, s, name) for c, order in enumerate(orders) for s, name in enumerate(order)]
+    if [(a["cycle"], a["slot"], a["scenario"]) for a in attempts] != expected:
+        raise ValueError("opposite-order native preparation incomplete or changed")
+    reports, identities, binaries, sources, statuses = [], [], set(), [], {}
+    counts = {"VALID": 0, "INSUFFICIENT": 0}
+    for attempt, (cycle, slot, scenario) in zip(attempts, expected):
+        report, quality = check_attempt(root / f"cycle-{cycle}-slot-{slot}-{scenario}", protocol, "pilot", metrics)
+        if (report["scenario"] != scenario or report["repeats"] != protocol["scenarios"][scenario]["repeats"]
+                or attempt["exit_code"] != (0 if quality["status"] == "VALID" else 2)):
+            raise ValueError("preparation workload or exit classification differs")
+        reports.append(report); sources.append(report["source"])
+        identities.extend((v["pid"], v["creation_time"]) for v in report["identities"])
+        binaries.add((bytes(report["events"][0]["controller_sha256"]).hex(), report["events"][0]["engine_sha256"]))
+        statuses[(cycle, slot)] = quality["status"]; counts[quality["status"]] += 1
+    if len(set(identities)) != len(identities) or len(binaries) != 1 or any(s != sources[0] for s in sources):
+        raise ValueError("preparation reused processes or changed artifacts/source")
+    valid = [c for c, order in enumerate(orders) if all(statuses[(c, s)] == "VALID" for s in range(len(order)))]
+    summary = {"ready": len(valid) >= (1 if policy else 2), "complete_native_cases": len(reports),
+               "complete_valid_orders": valid, "quality_counts": counts}
+    return reports, summary
 
 
 def find_collection(root, fingerprint):
@@ -155,24 +197,27 @@ def profile_report(label, root, protocol, fingerprint, collector, metrics, prepa
     prep_root = preparation or root
     pretrials = list(prep_root.rglob("pretrial-result.json"))
     prepared = False
+    prep_summary = None
     if len(pretrials) > 1:
         raise ValueError("ambiguous preparation evidence")
     if len(pretrials) == 1:
         p = pretrials[0]; trial = read(p)
-        expected = [(cycle, slot, scenario) for cycle, order in enumerate(protocol["formal_orders"][:2])
-                    for slot, scenario in enumerate(order)]
-        actual = [(a["cycle"], a["slot"], a["scenario"]) for a in trial["attempts"]]
-        if trial.get("status") != "PREPARATION_COMPLETE" or trial["protocol_sha256"] != fingerprint or actual != expected:
+        states = {"PREPARATION_COMPLETE"}
+        if preparation_policy(protocol):
+            states.add("PREPARATION_INSUFFICIENT")
+        if trial.get("status") not in states or trial["protocol_sha256"] != fingerprint:
             raise ValueError("opposite-order native preparation incomplete or changed")
-        for cycle, slot, scenario in expected:
-            report, _ = check_attempt(p.parent / f"cycle-{cycle}-slot-{slot}-{scenario}", protocol, "pilot", metrics)
+        reports, prep_summary = check_preparation_orders(p.parent, trial["attempts"], protocol, metrics)
+        if (trial["status"] == "PREPARATION_COMPLETE") != prep_summary["ready"] or trial.get("readiness", prep_summary) != prep_summary:
+            raise ValueError("preparation readiness differs from its complete raw orders")
+        for report in reports:
             identities.extend((v["pid"], v["creation_time"]) for v in report["identities"])
             if (bytes(report["events"][0]["controller_sha256"]).hex() not in artifacts
                     or report["events"][0]["engine_sha256"] not in engine_hashes):
                 raise ValueError("preparation executed different binaries")
         if len(set(identities)) != len(identities):
             raise ValueError("preparation reused an accepted process")
-        prepared = True
+        prepared = prep_summary["ready"]
     scenarios = {name: [x for x in observations if x["scenario"] == name] for name in protocol["scenarios"]}
     if any(len(rows) != 6 for rows in scenarios.values()):
         raise ValueError("four formal and two independent observations per scenario required")
@@ -196,7 +241,7 @@ def profile_report(label, root, protocol, fingerprint, collector, metrics, prepa
     denominator = [slot for attempt in attempts for slot in attempt["slots"]]
     return {"profile": label, "coverage": "COMPLETE", "quality": "VALID", "accepted_cycles": accepted,
             "accepted_native_cases": len(observations), "fresh_formal_and_independent_processes": len(observations)*2,
-            "preparation": "COMPLETE" if prepared else "INCOMPLETE", "source": sources[0],
+            "preparation": "COMPLETE" if prepared else "INCOMPLETE", "preparation_readiness": prep_summary, "source": sources[0],
             "controller_artifact_sha256": sorted(artifacts), "engine_sha256": sorted(engine_hashes),
             "attempted_cases": len(denominator), "attempt_quality_counts":
                 {s: sum(x["quality"]["status"] == s for x in denominator) for s in ["VALID", "INSUFFICIENT", "ERROR"]},
@@ -215,7 +260,11 @@ def markdown(report):
              "| Profile | Coverage | Preparation | RSS stability | Memory envelope (bytes) | Conclusion |",
              "| --- | --- | --- | --- | ---: | --- |"]
     for p in report["profiles"]:
-        lines.append(f"| {p['profile']} | {p['coverage']} | {p.get('preparation', 'MISSING')} | "
+        preparation = p.get("preparation", "MISSING")
+        if p.get("preparation_readiness"):
+            counts = p["preparation_readiness"]["quality_counts"]
+            preparation += f" ({counts['VALID']} valid / {counts['INSUFFICIENT']} insufficient)"
+        lines.append(f"| {p['profile']} | {p['coverage']} | {preparation} | "
                      f"{p.get('stability', 'UNRESOLVED')} | {p.get('conservative_large_minus_small_bytes', '')} | {p['performance']} |")
     for p in report["profiles"]:
         lines += ["", "## "+p["profile"], ""]
@@ -259,7 +308,8 @@ def main():
     protocol, fingerprint = read(args.protocol), digest(args.protocol)
     collector, metrics = module("resource_collector", "collect-native-resources.py"), module("resource_metrics", "measure-native-resources.py")
     if (digest(Path(collector.__file__)) != protocol["collector_sha256"]
-            or digest(Path(metrics.__file__)) != protocol["source_inputs"]["sampler_sha256"]):
+            or digest(Path(metrics.__file__)) != protocol["source_inputs"]["sampler_sha256"]
+            or ("reporter_sha256" in protocol and digest(__file__) != protocol["reporter_sha256"])):
         raise ValueError("use the exact frozen offline validation helpers")
     def inputs(values):
         result = {}
