@@ -36,7 +36,7 @@ class ProxyContracts(unittest.TestCase):
             binary.write_bytes(b"synthetic helper input; never executed")
             argv = [str(SOURCE), "--toolchain", "synthetic", "--cargo",
                     str(Path(sys.executable).resolve()), "--test-target",
-                    "engine_control", "--evidence-dir", str(evidence)]
+                    "engine_control", "--release", "--evidence-dir", str(evidence)]
             def prepare_opener(*args):
                 directory = evidence / "owned-native-opener"
                 (directory / "captured").mkdir(parents=True)
@@ -50,6 +50,9 @@ class ProxyContracts(unittest.TestCase):
                     patch.object(HELPER.subprocess, "Popen", return_value=process), \
                     patch.object(HELPER, "prepare_native_opener", side_effect=prepare_opener):
                 self.assertEqual(HELPER.main(), 7)
+                launched = HELPER.subprocess.Popen.call_args.args[0]
+                self.assertIn("--release", launched)
+                self.assertIn("engine_control", launched)
                 console.flush()
                 self.assertEqual(console_bytes.getvalue().decode("utf-8").splitlines()[0],
                                  output.rstrip("\n"))

@@ -211,6 +211,11 @@ path = "tests/disk_full_engine.rs"
 required-features = ["engine-tests", "download"]
 
 [[test]]
+name = "resource_usage_engine"
+path = "tests/resource_usage_engine.rs"
+required-features = ["engine-tests", "download"]
+
+[[test]]
 name = "file_history_engine"
 path = "tests/file_history_engine.rs"
 required-features = ["engine-tests"]
