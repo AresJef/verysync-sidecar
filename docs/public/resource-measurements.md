@@ -136,6 +136,20 @@ required counter, alter an operation timestamp, or relax the sampling-gap check.
 Actual preparation must validate the extra recording before new formal data;
 v1-v4 samples retain their own identities.
 
+The v7 observer retains every raw metric row in a bounded in-memory buffer and
+persists the complete UTF-8/LF journal after its owned workers have stopped.
+The 32,768-row bound fails an attempt on overflow and preserves the recorded
+prefix; it never drops observations to satisfy coverage. The observer's memory
+is separate from the measured controller and engine processes. The preceding
+buffer-append duration is recorded as `previous_record_buffer_ns`.
+
+This change follows a v5 macOS Intel observation where a 125.3 ms sampling gap
+contained 124.7 ms of record writing. It does not fix or excuse scheduler/timer
+gaps: separate v5 macOS ARM64 and Windows ARM64 gaps remained above 50 ms, and
+the first local v7 preparation also remained insufficient. Native correctness
+and complete measurement-quality acceptance remain separate. Earlier attempts
+retain their original source/protocol identities and strict results.
+
 Draft pull requests run actual calibration and both full preparation orders.
 Formal/independent collection runs when the candidate is ready for review or is
 explicitly dispatched. A green preparation-only job does not establish resource

@@ -1,6 +1,6 @@
 {
-  "protocol_id": "VS045-native-resources-v6",
-  "version": 6,
+  "protocol_id": "VS045-native-resources-v7",
+  "version": 7,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
@@ -8,7 +8,7 @@
   "source_inputs": {
     "rust_sources_sha256": "eb78a05c0e772ec318cba4e748eafed1faa430699de75ce9c28f937e1cbe0c0d",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
-    "sampler_sha256": "614d22cd3e8ce9009ccce9f2e3828a92421be038bd71864d37bed70c8b9933e5",
+    "sampler_sha256": "c2021cd0c9927d74493e37ce7abe0d085ba2cdae26e9fc33b14cfd4cfd0ac819",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a"
   },
   "collector_sha256": "bbdec05319ce82d2e001d96598cf50bf50405e2d56e68c13e5b7d64bde3ec6e8",
@@ -131,5 +131,12 @@
     "darwin": "Request QOS_CLASS_USER_INITIATED0x19 only on the short-lived observer thread after the real controller and engine are ready; retain requested/observed receipt. No worker or global priority changes.",
     "other_systems": "unchanged",
     "scope": "Measurement observer, not library runtime; no timing-quality relaxation or scheduling guarantee."
+  },
+  "raw_observation_recording": {
+    "mode": "bounded-in-memory-until-owned-worker-cleanup",
+    "maximum_rows": 32768,
+    "overflow": "ERROR; preserve existing raw prefix; never drop observations",
+    "previous_record_diagnostic": "previous_record_buffer_ns",
+    "persistence": "all retained rows encoded UTF-8 LF, flushed and fsynced after owned worker cleanup"
   }
 }
