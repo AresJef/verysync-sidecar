@@ -38,11 +38,12 @@ proves possession of a peer certificate or registers a device.
 `lookup_target_ip(ip)` asks that engine for its IP-location data. It accepts an
 explicit `std::net::IpAddr`, checks the returned address, and preserves empty or
 localized native location strings. The target may consult its own services or
-network. An isolated macOS ARM64 case checks IPv4/IPv6 loopback plus two explicit
-public addresses against independent native responses. One public lookup returns
+network. The six standard native AMD64/ARM64 profiles check IPv4/IPv6 loopback
+plus two explicit public addresses against independent native responses in
+[run 43957189957](https://github.com/AresJef/verysync-sidecar/actions/runs/43957189957). One public lookup returns
 nonempty location text and the other retains an empty native snapshot. These are
 the fixed core's data, without a geographic-accuracy or complete-database claim.
-The corresponding six-profile and final integrated gates remain required.
+Final integrated acceptance remains required.
 
 `native_random_number()` explicitly requests the native decimal number and
 decodes it as `u64`. This makes no cryptographic, uniqueness or distribution
@@ -76,13 +77,23 @@ string becomes `None`. Nonempty text is private, untrusted data and can contain
 sharing credentials. The SDK never opens/follows it, accepts a key, or registers
 a folder automatically. Delivery can consume native state, so the method uses
 conservative mutation semantics, with no retry on uncertain results. The native
-test on macOS ARM64 supplies task-owned native inbox files, verifies exact
+six-profile native test supplies task-owned native inbox files, verifies exact
 nonempty percent/Unicode/opaque text, observes native removal of each input,
 and then receives an empty follow-up snapshot. A returned HTTP link is not
 followed, no folder is registered, and configuration, identity and caller data
-remain intact. The native command-line producer is a separate unverified path;
-the test writes only isolated input files. Other platforms and final integrated
-delivery remain required.
+remain intact. These six-profile results establish the consumer with isolated
+input files; final integrated delivery remains required.
+
+A separate macOS ARM64 native case invokes the official `serve --add-url` path
+against the already owned state with explicit `--no-browser`, `--no-restart`
+and `--no-upgrade`. The official command writes the input before refusing to
+start a second instance: it returns exit code 1 and its actual existing-instance
+lock error. The Rust consumer then receives the exact HTTP or protocol link,
+consumes it once and observes an empty follow-up, with no HTTP connection,
+folder registration or changes to the existing core's configuration, identity
+and caller bytes. This verifies native production and consumption together;
+it does not report the failed CLI start as success or install an OS protocol
+handler. The added producer case still requires its six native platform gates.
 
 An empty result means the native response contained no text. It also occurs
 when the native inbox cannot be read: a nonempty directory at that location
@@ -547,8 +558,12 @@ and conditional responses have their own actual-effect checks in those bundles.
 Hardware results retain each platform's real data, error or empty snapshot.
 Writable-path snapshots keep the documented fixed-baseline limitation alongside
 an independent actual write. These results establish the stated controls and
-observations, with the original producer identity retained. Additional isolated
-macOS ARM64 cases verify the stated nonempty native link consumption and public-IP
-snapshot conditions. Their six-profile coverage, remaining helper/CLI behavior
-and complete current Windows SDK-browser execution retain separate gates. They
+observations, with the original producer identity retained.
+[Run 43957189957](https://github.com/AresJef/verysync-sidecar/actions/runs/43957189957)
+adds three actual helper cases on every standard native profile: nonempty link
+consumption and native read-error ambiguity, exact public-IP snapshot equality,
+and response loss after actual link consumption with one GET and no retry.
+The separate official CLI producer case has local macOS ARM64 evidence;
+its six-profile coverage, remaining helper/CLI behavior and complete current
+Windows SDK-browser execution retain separate gates. They
 do not establish a complete integrated release or every possible runtime state.
