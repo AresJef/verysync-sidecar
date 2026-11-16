@@ -23,8 +23,8 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertEqual(len([r for r in actual if r.get("label") == label]), 6)
         self.assertTrue(all(r in self.rows for r in actual))
 
-    def test_current_manifest_runs_socks5_auth_transfer_on_all_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_socks5_auth_transfer_on_all_six_profiles(self):
+        selection = {"draft_labels": ["native-socks5-proxy"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         proxy = [row for row in actual if row.get("label") == "native-socks5-proxy"]
         self.assertEqual(len(proxy), 6)
@@ -32,6 +32,17 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data"
                             for row in proxy))
+
+    def test_current_manifest_requires_real_name_adoption_and_data_on_all_six_profiles(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        names = [row for row in actual if row.get("label") == "remote-device-name-policy"]
+        self.assertEqual(len(names), 6)
+        self.assertEqual(len({row["package"] for row in names}), 6)
+        self.assertEqual(len(actual), 24)
+        self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
+                            "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data"
+                            for row in names))
 
     def test_current_manifest_runs_nonempty_native_helpers_on_all_six_profiles(self):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
@@ -53,7 +64,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 90)
+        self.assertEqual(len(self.rows), 96)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
