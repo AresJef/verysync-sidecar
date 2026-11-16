@@ -1621,6 +1621,7 @@ async fn actual_native_helpers_consume_official_add_url_before_native_start_refu
         .await??;
         // The official command writes its input before its platform-specific
         // startup refusal. Neither observed refusal is CLI start success.
+        eprintln!("native official producer stage: input={index} child_exited");
         assert_eq!(status.code(), Some(1));
         assert!(std::fs::metadata(&stdout)?.len() <= 8192);
         assert!(std::fs::metadata(&stderr)?.len() <= 8192);
@@ -1687,11 +1688,13 @@ async fn actual_native_helpers_consume_official_add_url_before_native_start_refu
             exact_refusal,
             "the specific native refusal remains required"
         );
+        eprintln!("native official producer stage: input={index} specific_refusal_captured");
         let pending = owner.client().pending_native_link().await?;
         assert_eq!(pending.link(), Some(link.as_str()));
         assert!(!format!("{pending:?}").contains("native-cli-private-query"));
         assert!(!owner.state_directory().join("add-url").try_exists()?);
         assert!(owner.client().pending_native_link().await?.link().is_none());
+        eprintln!("native official producer stage: input={index} exact_link_consumed_once");
         assert!(owner.client().folders().await?.is_empty());
         assert_eq!(
             owner.client().configuration().await?.native_document(),
@@ -1702,13 +1705,16 @@ async fn actual_native_helpers_consume_official_add_url_before_native_start_refu
             matches!(listener.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock)
         );
     }
+    eprintln!("native official producer stage: both_inputs_and_primary_preserved");
     let exit = owner.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    eprintln!("native official producer stage: normal_owned_tree_and_state_exit");
     assert_eq!(
         std::fs::read(sentinel)?,
         b"official link producer keeps caller bytes"
     );
-    std::fs::remove_dir_all(root)?;
+    std::fs::remove_dir_all(root)
+        .map_err(|error| format!("owned official producer fixture removal: {error}"))?;
     println!(
         "native official link producer evidence: {}",
         serde_json::json!({
