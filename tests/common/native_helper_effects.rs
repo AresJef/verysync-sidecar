@@ -917,6 +917,41 @@ async fn actual_native_helpers_normalize_ids_collect_reports_and_preserve_explic
             lookup.province.is_empty() && lookup.city.is_empty() && lookup.description.is_empty()
         );
     }
+    let mut nonempty_public_ip_snapshots = 0;
+    for ip in [
+        IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+        IpAddr::V4(Ipv4Addr::new(114, 114, 114, 114)),
+    ] {
+        let lookup = owner.client().lookup_target_ip(ip).await?;
+        let native = owner
+            .client()
+            .raw_request(
+                &verysync_sidecar::RawRequest::new(
+                    verysync_sidecar::RawMethod::Get,
+                    ["rest", "svc", "ip", "lookup"],
+                    verysync_sidecar::RequestEffect::ReadOnly,
+                )?
+                .query("ip", ip.to_string()),
+            )
+            .await?;
+        assert_eq!(native.status(), 200);
+        let actual: serde_json::Value = serde_json::from_slice(native.body_bytes())?;
+        assert_eq!(lookup.ip, ip);
+        assert_eq!(actual["ip"].as_str(), Some(ip.to_string().as_str()));
+        assert_eq!(actual["pro"].as_str(), Some(lookup.province.as_str()));
+        assert_eq!(actual["city"].as_str(), Some(lookup.city.as_str()));
+        assert_eq!(actual["addr"].as_str(), Some(lookup.description.as_str()));
+        if !lookup.province.is_empty() || !lookup.city.is_empty() || !lookup.description.is_empty()
+        {
+            nonempty_public_ip_snapshots += 1;
+        }
+        assert!(!format!("{lookup:?}").contains(&ip.to_string()));
+    }
+    println!("native_public_ip_snapshots_requested=2 nonempty_native_snapshots={nonempty_public_ip_snapshots} typed_matches_direct_native=true empty_unknown_locations_preserved=true no_geographic_accuracy_claim=true");
+    assert!(
+        nonempty_public_ip_snapshots > 0,
+        "no nonempty public-IP native snapshot observed"
+    );
     let before = owner.client().diagnostics_options().await?;
     let health = owner.client().native_health().await?;
     assert!(matches!(
@@ -1385,5 +1420,121 @@ async fn actual_native_folder_open_requests_capture_exact_owned_target_dispatch(
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
     println!("native_folder_open_normal_and_trash_arguments_captured=true caller_desktop_never_opened=true native_ack_not_window_success=true synthetic_bytes_identity_and_archive_preserved=true normal_owned_tree_exit=true");
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_native_helpers_consume_nonempty_link_inbox_without_following_or_registering(
+) -> TestResult {
+    let root = tempfile::Builder::new().prefix("vslink-").tempdir()?.keep();
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let address = listener.local_addr()?;
+    assert_ne!(address.port(), 18886);
+    listener.set_nonblocking(true)?;
+    let sentinel = root.join("caller-sentinel");
+    std::fs::write(&sentinel, b"native link caller bytes")?;
+    let mut owner = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = owner.client().instance().device_id.clone();
+    let config = owner
+        .client()
+        .configuration()
+        .await?
+        .native_document()
+        .clone();
+    let inbox = owner.state_directory().join("add-url");
+    assert!(!inbox.try_exists()?);
+    for value in [
+        format!("http://{address}/owned/%E4%BA%8C?private=synthetic-link-secret#untrusted"),
+        "verysync://synthetic-二/%2e%2e?private=synthetic-link-secret\nopaque text".into(),
+    ] {
+        // This creates the fixed core's task-owned input, not a CLI-producer claim.
+        std::fs::write(&inbox, value.as_bytes())?;
+        let pending = owner.client().pending_native_link().await?;
+        assert_eq!(pending.link(), Some(value.as_str()));
+        assert!(!format!("{pending:?}").contains("synthetic-link-secret"));
+        assert!(!format!("{pending:?}").contains(&value));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while inbox.try_exists()? {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<_, std::io::Error>(())
+        })
+        .await??;
+        assert!(owner.client().pending_native_link().await?.link().is_none());
+    }
+    // A native read error also becomes an empty string; it does not establish
+    // that no inbox exists. Preserve the nonempty directory after failed remove.
+    std::fs::create_dir(&inbox)?;
+    std::fs::write(inbox.join("retained"), b"unreadable-as-file inbox")?;
+    assert!(owner.client().pending_native_link().await?.link().is_none());
+    assert_eq!(
+        std::fs::read(inbox.join("retained"))?,
+        b"unreadable-as-file inbox"
+    );
+    assert!(matches!(listener.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock));
+    assert!(owner.client().folders().await?.is_empty());
+    assert_eq!(
+        owner.client().configuration().await?.native_document(),
+        &config
+    );
+    assert_eq!(owner.client().system_status().await?.device_id, identity);
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    assert_eq!(std::fs::read(&sentinel)?, b"native link caller bytes");
+    assert_eq!(
+        std::fs::read(inbox.join("retained"))?,
+        b"unreadable-as-file inbox"
+    );
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "native pending link evidence: {}",
+        serde_json::json!({"actual_nonempty_native_file_inbox_read":true,"actual_percent_unicode_and_opaque_text_retained":true,"actual_native_inbox_consumed_after_read":true,"actual_followup_snapshot_empty":true,"actual_native_read_error_also_returns_empty":true,"actual_nonempty_directory_not_removed":true,"actual_returned_http_link_not_followed":true,"actual_no_folder_auto_registration":true,"actual_private_debug_redacted":true,"actual_configuration_identity_and_caller_bytes_retained":true,"actual_normal_owned_tree_and_state_exit":true,"fixture_producer":"task-owned native input file","native_cli_producer_verified":false})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_native_helpers_preserve_uncertainty_after_consuming_link_response_loss(
+) -> TestResult {
+    use super::engine_fixture::EngineFixture;
+    use super::response_proxy::{ResponseFault, ResponseProxy};
+    use verysync_sidecar::{ApiKey, Client, ConnectOptions, DeviceId};
+    let mut instance = EngineFixture::start().await?;
+    let proxy = ResponseProxy::start_native_link(&instance, ResponseFault::DropAfterApply).await?;
+    let options = |endpoint| -> verysync_sidecar::Result<ConnectOptions> {
+        ConnectOptions::new(endpoint, ApiKey::new(instance.api_key())?)
+            .expected_device_id(DeviceId::parse(instance.device_id())?)
+            .request_timeout(Duration::from_secs(3))
+    };
+    let client = Client::connect(options(proxy.endpoint())?).await?;
+    let before = client.configuration().await?.native_document().clone();
+    let inbox = instance.state_dir().join("add-url");
+    let sentinel = instance.state_dir().join("caller-link-sentinel");
+    std::fs::write(&sentinel, b"retained after native link response loss")?;
+    std::fs::write(&inbox, b"verysync://synthetic-private-response-loss-secret")?;
+    let result = client.pending_native_link().await;
+    let error = result.err().ok_or("lost native response became success")?;
+    assert!(matches!(&error, Error::MutationOutcomeUnknown { .. }));
+    let diagnostic = format!("{error:?} {error}");
+    assert!(!diagnostic.contains(instance.api_key()));
+    assert!(!diagnostic.contains("synthetic-private-response-loss-secret"));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while inbox.try_exists()? {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok::<_, std::io::Error>(())
+    })
+    .await??;
+    assert_eq!(proxy.mutation_count(), 1);
+    let direct = Client::connect(options(super::endpoint(&instance)?)?).await?;
+    assert!(direct.pending_native_link().await?.link().is_none());
+    assert_eq!(direct.configuration().await?.native_document(), &before);
+    assert_eq!(
+        std::fs::read(&sentinel)?,
+        b"retained after native link response loss"
+    );
+    proxy.finish().await?;
+    assert!(instance.shutdown().await?.success());
+    println!("native pending link lost-response evidence: actual_native_inbox_consumed_before_response_loss=true mutation_outcome_unknown=true actual_consuming_get_count=1 automatic_retry=false explicit_followup_empty=true actual_error_debug_redacted=true configuration_identity_and_caller_bytes_retained=true native_normal_exit=true");
     Ok(())
 }

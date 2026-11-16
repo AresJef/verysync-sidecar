@@ -29,7 +29,23 @@ pub struct ResponseProxy {
 
 impl ResponseProxy {
     pub async fn start(instance: &EngineFixture, fault: ResponseFault) -> TestResult<Self> {
+        Self::start_for(instance, fault, false).await
+    }
+    pub async fn start_native_link(
+        instance: &EngineFixture,
+        fault: ResponseFault,
+    ) -> TestResult<Self> {
+        Self::start_for(instance, fault, true).await
+    }
+    async fn start_for(
+        instance: &EngineFixture,
+        fault: ResponseFault,
+        native_link: bool,
+    ) -> TestResult<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        if listener.local_addr()?.port() == 18886 {
+            return Err("reserved live-instance port refused".into());
+        }
         let endpoint = ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?;
         let builder = reqwest::Client::builder()
             .no_proxy()
@@ -91,14 +107,17 @@ impl ResponseProxy {
                     .split_whitespace();
                 let method = first.next().ok_or("missing method")?.to_owned();
                 let route = first.next().ok_or("missing route")?.to_owned();
-                if !matches!(
+                let approved_route = matches!(
                     route.as_str(),
                     "/rest/system/version"
                         | "/rest/system/status"
                         | "/rest/config"
                         | "/rest/config/defaults/folder"
                         | "/rest/config/folders"
-                ) || !matches!(method.as_str(), "GET" | "POST")
+                ) || (native_link && route == "/rest/svc/link/await");
+                if !approved_route
+                    || (native_link && method != "GET")
+                    || (!native_link && !matches!(method.as_str(), "GET" | "POST"))
                 {
                     return Err("fault proxy received an unapproved fixture route".into());
                 }
@@ -121,7 +140,11 @@ impl ResponseProxy {
                     }
                     bytes.extend_from_slice(&buffer[..n]);
                 }
-                let mutation = method == "POST" && route == "/rest/config/folders";
+                let mutation = if native_link {
+                    method == "GET" && route == "/rest/svc/link/await"
+                } else {
+                    method == "POST" && route == "/rest/config/folders"
+                };
                 if mutation {
                     count.fetch_add(1, Ordering::SeqCst);
                 }
@@ -187,6 +210,9 @@ impl ResponseProxy {
         self.release.notify_one();
     }
     pub fn post_count(&self) -> usize {
+        self.posts.load(Ordering::SeqCst)
+    }
+    pub fn mutation_count(&self) -> usize {
         self.posts.load(Ordering::SeqCst)
     }
     pub async fn finish(mut self) -> TestResult<()> {
