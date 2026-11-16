@@ -971,6 +971,48 @@ jobs:
             filter: public_real_disk_full_retains_prefix_and_recovers_after_explicit_release
             label: real-disk-full
             trace: "0"
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+            target: file_history_engine
+            filter: public_remote_
+            label: remote-version-archives
+            trace: "0"
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+            target: file_history_engine
+            filter: public_remote_
+            label: remote-version-archives
+            trace: "0"
+          - package: linux-amd64-standard
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-gnu
+            target: file_history_engine
+            filter: public_remote_
+            label: remote-version-archives
+            trace: "0"
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+            target: file_history_engine
+            filter: public_remote_
+            label: remote-version-archives
+            trace: "0"
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+            target: file_history_engine
+            filter: public_remote_
+            label: remote-version-archives
+            trace: "0"
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+            target: file_history_engine
+            filter: public_remote_
+            label: remote-version-archives
+            trace: "0"
     defaults:
       run:
         shell: bash
@@ -985,15 +1027,15 @@ jobs:
         with:
           python-version: '3.13'
       - name: Prepare the explicit x64 protocol-peer interpreter on Windows ARM
-        if: matrix.target == 'local_sync_protocol_engine' && matrix.package == 'windows-arm64-standard'
+        if: (matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine') && matrix.package == 'windows-arm64-standard'
         id: storage_tools_python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
           architecture: x64
           update-environment: false
-      - name: Prepare private protocol-peer tools for the inline-key case
-        if: matrix.target == 'local_sync_protocol_engine'
+      - name: Prepare private protocol-peer tools for inline-key and archive cases
+        if: matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine'
         env:
           VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
         run: >-

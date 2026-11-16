@@ -87,9 +87,15 @@ version browsing, restoration of a Unicode/percent filename, unchanged stopped
 source data, normal restart with the remote location retained, resetting to the
 default location without deleting remote archives, and normal owned exits.
 Native FTP URI readback succeeded, but remote archiving failed in the tested
-macOS cases with both ASCII and Unicode filenames; FTP archival and its cause
-remain unverified. Other platforms and authentication/selector combinations
-retain separate native acceptance requirements.
+macOS ARM64 cases with both ASCII and Unicode filenames. A private protocol trace
+confirmed login and existing-directory listing, followed by deletion of an
+absent first-generation archive target and a native not-found error, without
+an upload. The macOS ARM64 regression requires that exact reported error, a nonzero
+pull-error count, retained old receiver and new source bytes, an empty remote
+archive, and normal owned exits. This is an observed native refusal, not positive
+FTP archival. The underlying implementation cause remains unresolved. Other
+platforms still require actual positive FTP archival/restoration; their outcomes
+and other authentication/selector combinations are independently verified.
 
 Changing location preserves policy parameters and unknown fields. The SDK does
 not migrate existing archives; native retention can clean the selected location.
