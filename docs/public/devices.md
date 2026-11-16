@@ -90,8 +90,12 @@ wrapper. Callers must reconcile state before retrying.
 This explicit operation does not revoke shared keys or promise the peer remains
 disconnected after deletion. The original `remove_device()` remains a single
 DELETE without an implicit pause or rejection policy. Native acceptance of these
-two semantics is recorded separately; a passing explicit disconnect case does
-not turn the single-DELETE disconnect regression into a pass.
+two semantics is recorded separately. The disconnect requirement belongs to the
+explicit operation and still requires actual connection observation and retained
+file bytes. The single-DELETE case requires its removal-time snapshot and retained
+files, then separately observes native shared-key readmission and transfer of a
+new canary. Previous single-DELETE disconnect failures remain historical negative
+evidence; deletion alone is not a promise of disconnection or key revocation.
 
 ## Additional peer and default selections
 

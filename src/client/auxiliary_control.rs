@@ -13,8 +13,8 @@ impl Client {
     /// code can search at most ten parents after a missing-path error.
     /// No controller filesystem I/O or path traversal occurs.
     ///
-    /// The v2.33.2 macOS probe returns false with an empty error object even
-    /// for a writable directory. Inspect the native result; neither HTTP
+    /// Tested v2.33.2 macOS/Linux/Windows probes return false with an empty
+    /// error object even for a writable directory. Inspect the native result; neither HTTP
     /// success nor this flag reliably proves permissions or future writes.
     ///
     /// Native writable-directory code can temporarily adjust permissions.

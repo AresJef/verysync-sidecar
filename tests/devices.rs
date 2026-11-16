@@ -6,7 +6,7 @@ mod managed_fixture;
 #[path = "common/private_redial.rs"]
 mod private_redial;
 use managed_fixture::{options, TestResult};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::time::Duration;
 use verysync_sidecar::{
     Client, CreateDeviceOptions, DeviceCompression, DeviceId, DevicePatch, Error,
@@ -366,8 +366,7 @@ async fn actual_peer_defaults_creation_patch_conflicts_and_self_protection() -> 
 }
 
 #[tokio::test]
-async fn actual_device_pause_disconnects_resume_reconnects_and_removal_preserves_files(
-) -> TestResult {
+async fn actual_single_delete_preserves_files_and_allows_share_key_readmission() -> TestResult {
     device_control_effects(false).await
 }
 
@@ -475,7 +474,7 @@ async fn device_control_effects(explicit_disconnect: bool) -> TestResult {
     );
     let a_before = connected(a.client(), &b_id, true).await?;
     let b_before = connected(b.client(), &a_id, true).await?;
-    println!("synthetic device effect stage: remove registration and observe remote disconnect");
+    println!("synthetic device effect stage: perform explicitly selected removal semantics");
     let removal_started = std::time::SystemTime::now();
     let removed = if explicit_disconnect {
         a.client()
@@ -485,7 +484,52 @@ async fn device_control_effects(explicit_disconnect: bool) -> TestResult {
         a.client().remove_device(&b_id).await?
     };
     assert!(removed.configuration_absent && removed.remaining_folder_associations.is_empty());
-    let disconnect = removal_disconnect(b.client(), &a_id, b_since, removal_started).await;
+    let disconnect = if explicit_disconnect {
+        Some(removal_disconnect(b.client(), &a_id, b_since, removal_started).await)
+    } else {
+        None
+    };
+    if !explicit_disconnect {
+        // A single DELETE does not revoke the shared folder key. Prove actual
+        // native readmission and delivery of NEW bytes, not just a stale row.
+        let canary = b"new post-DELETE bytes transferred under the retained shared key";
+        std::fs::write(a_path.join("post-removal-canary.txt"), canary)?;
+        tokio::time::timeout(Duration::from_secs(20), async {
+            a.client().request_scan(&af.id).await?;
+            connected(a.client(), &b_id, true).await?;
+            connected(b.client(), &a_id, true).await?;
+            loop {
+                let folder = a.client().folder(&af.id).await?;
+                let associated = folder
+                    .extra
+                    .get("devices")
+                    .and_then(Value::as_array)
+                    .is_some_and(|values| {
+                        values
+                            .iter()
+                            .any(|value| value["deviceID"] == b_id.as_str())
+                    });
+                if a.client().device(&b_id).await.is_ok()
+                    && associated
+                    && std::fs::read(b_path.join("post-removal-canary.txt"))
+                        .is_ok_and(|bytes| bytes == canary)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        })
+        .await??;
+        assert_eq!(
+            std::fs::read(a_path.join("post-removal-canary.txt"))?,
+            canary
+        );
+        assert_eq!(
+            std::fs::read(b_path.join("post-removal-canary.txt"))?,
+            canary
+        );
+    }
     // Diagnose native lifecycle state without extending the original 20s
     // deadline, retrying removal, or exposing IDs/addresses. A reconnect cannot
     // erase the exact remote peer's native disconnect event after this DELETE.
@@ -541,14 +585,17 @@ async fn device_control_effects(explicit_disconnect: bool) -> TestResult {
     };
     tokio::join!(source_diagnostic, receiver_diagnostic);
     println!(
-        "synthetic original removal disconnect condition passed={}",
-        disconnect.is_ok()
+        "synthetic explicit removal disconnect condition passed={:?}",
+        disconnect.as_ref().map(Result::is_ok)
     );
     println!(
         "synthetic removal disconnect evidence: {}",
-        disconnect.as_ref().copied().unwrap_or("not_observed")
+        disconnect
+            .as_ref()
+            .map(|result| result.as_ref().copied().unwrap_or("not_observed"))
+            .unwrap_or("not_required_for_single_delete")
     );
-    let disconnect_observed = disconnect.is_ok();
+    let disconnect_observed = disconnect.as_ref().map(Result::is_ok);
     assert_eq!(std::fs::read(a_path.join("sample.bin"))?, sample);
     assert_eq!(std::fs::read(b_path.join("sample.bin"))?, sample);
     assert_eq!(a.client().folder(&af.id).await?.id, af.id);
@@ -561,8 +608,10 @@ async fn device_control_effects(explicit_disconnect: bool) -> TestResult {
     std::fs::remove_dir_all(root)?;
     println!(
         "public device live effect evidence: {}",
-        json!({"both_real_private_peers_connected":true,"actual_synthetic_file_transferred":true,"device_pause_disconnected_both_sides":true,"folder_pause_layer_unchanged":true,"device_resume_reconnected_both_sides":true,"device_removal_observed_absent":true,"actual_folder_association_detached":true,"removal_disconnected_remote":disconnect_observed,"source_bytes_preserved":true,"received_bytes_preserved":true,"folder_registrations_preserved":true,"remote_device_configuration_preserved":true,"both_actual_normal_tree_exits":true})
+        json!({"both_real_private_peers_connected":true,"actual_synthetic_file_transferred":true,"device_pause_disconnected_both_sides":true,"folder_pause_layer_unchanged":true,"device_resume_reconnected_both_sides":true,"device_removal_observed_absent":true,"actual_folder_association_detached":true,"removal_disconnected_remote":disconnect_observed,"shared_key_readmission_and_new_bytes_observed":(!explicit_disconnect).then_some(true),"source_bytes_preserved":true,"received_bytes_preserved":true,"folder_registrations_preserved":true,"remote_device_configuration_preserved":true,"both_actual_normal_tree_exits":true})
     );
-    disconnect?;
+    if let Some(result) = disconnect {
+        result?;
+    }
     Ok(())
 }
