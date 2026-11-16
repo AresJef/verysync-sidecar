@@ -105,7 +105,12 @@ def check_attempt(folder, protocol, stage, metrics):
         if observer["scope"] != "observer-thread-only":
             raise ValueError("observer policy scope differs")
         if calibration["platform"].startswith("macOS"):
-            if (observer.get("observed") != 0x19 or observer.get("requested") != 0x19
+            expected = protocol["observer_policy"].get("darwin_qos_class", 0x19)
+            if type(expected) is not int or expected not in {0x19, 0x21}:
+                raise ValueError("unrecognized Darwin observer scheduling policy")
+            policy = "darwin-user-interactive" if expected == 0x21 else "darwin-user-initiated"
+            if (observer.get("observed") != expected or observer.get("requested") != expected
+                    or observer.get("policy") != policy
                     or observer.get("worker_started_before_assignment") is not True):
                 raise ValueError("Darwin observer scheduling policy differs")
         elif observer["policy"] != "unchanged":

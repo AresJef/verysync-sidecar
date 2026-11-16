@@ -163,12 +163,17 @@ class ResourceQualityContracts(unittest.TestCase):
 
     def test_observer_qos_is_self_only_and_native_failure_is_not_silenced(self):
         library = Mock()
-        library.qos_class_self.side_effect = [0x15, 0x19]
+        library.qos_class_self.side_effect = [0x15, 0x21]
         library.pthread_set_qos_class_self_np.return_value = 0
         with patch.object(METRICS.sys, "platform", "darwin"), patch("ctypes.CDLL", return_value=library):
-            receipt = METRICS.observer_thread_policy()
-            self.assertEqual(receipt["observed"], 0x19)
-            library.pthread_set_qos_class_self_np.assert_called_once_with(0x19, 0)
+            receipt = METRICS.observer_thread_policy(worker_started=True)
+            self.assertEqual(receipt["observed"], 0x21)
+            self.assertEqual(receipt["policy"], "darwin-user-interactive")
+            self.assertTrue(receipt["worker_started_before_assignment"])
+            library.pthread_set_qos_class_self_np.assert_called_once_with(0x21, 0)
+            library.qos_class_self.side_effect = [0x15, 0x19]
+            with self.assertRaisesRegex(RuntimeError, "QoS request failed"):
+                METRICS.observer_thread_policy()
             library.qos_class_self.side_effect = [0x15, 0x15]
             library.pthread_set_qos_class_self_np.return_value = 1
             with self.assertRaisesRegex(RuntimeError, "QoS request failed"):
