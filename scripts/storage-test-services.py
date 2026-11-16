@@ -7,6 +7,7 @@ ready-output values. No system service, user account or SSH configuration change
 """
 import argparse
 import errno
+import itertools
 import json
 import logging
 import os
@@ -155,6 +156,15 @@ def webdav(config, root):
     server.serve()
 
 
+def sftp_authentication_allowed(config, username, credential, client_key, method):
+    if username != config["user"]:
+        return False
+    if method == "publickey":
+        return credential == client_key
+    return (method == "password" and not config.get("sftp_key_only", False)
+            and credential == config["password"])
+
+
 def sftp(config, root):
     import paramiko
 
@@ -171,18 +181,32 @@ def sftp(config, root):
     client_key = retained_key("synthetic-client-key.pem")
 
     class Auth(paramiko.ServerInterface):
+        def __init__(self, connection_id):
+            super().__init__()
+            self.connection_id = connection_id
+
+        def observed(self, method, accepted):
+            if config.get("sftp_key_only", False):
+                print(json.dumps({"owned_sftp_auth": method, "accepted": accepted}),
+                      file=sys.stderr, flush=True)
+            return paramiko.AUTH_SUCCESSFUL if accepted else paramiko.AUTH_FAILED
+
         def check_auth_password(self, username, password):
-            return (paramiko.AUTH_SUCCESSFUL if username == config["user"]
-                    and password == config["password"] else paramiko.AUTH_FAILED)
+            return self.observed("password", sftp_authentication_allowed(
+                config, username, password, client_key, "password"))
 
         def check_auth_publickey(self, username, key):
-            return (paramiko.AUTH_SUCCESSFUL if username == config["user"]
-                    and key == client_key else paramiko.AUTH_FAILED)
+            return self.observed("publickey", sftp_authentication_allowed(
+                config, username, key, client_key, "publickey"))
 
         def get_allowed_auths(self, username):
-            return "password,publickey"
+            return "publickey" if config.get("sftp_key_only", False) else "password,publickey"
 
         def check_channel_request(self, kind, channel_id):
+            if kind == "session" and config.get("sftp_key_only", False):
+                print(json.dumps({"owned_sftp_session": True,
+                                  "connection_id": self.connection_id,
+                                  "channel_id": channel_id}), file=sys.stderr, flush=True)
             return (paramiko.OPEN_SUCCEEDED if kind == "session"
                     else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED)
 
@@ -295,7 +319,7 @@ def sftp(config, root):
             except OSError:
                 return "/"
 
-    def connection(sock):
+    def connection(sock, connection_id):
         transport = paramiko.Transport(sock)
         transport.banner_timeout = 5
         transport.auth_timeout = 5
@@ -303,7 +327,7 @@ def sftp(config, root):
         try:
             transport.add_server_key(host_key)
             transport.set_subsystem_handler("sftp", paramiko.SFTPServer, Files)
-            transport.start_server(server=Auth())
+            transport.start_server(server=Auth(connection_id))
             channels = []
             while transport.is_active():
                 channel = transport.accept(timeout=0.2)
@@ -319,9 +343,10 @@ def sftp(config, root):
     listener.bind(("127.0.0.1", 0))
     listener.listen(16)
     ready("sftp", listener.getsockname()[1])
+    connection_ids = itertools.count(1)
     while True:
         sock, _ = listener.accept()
-        threading.Thread(target=connection, args=(sock,), daemon=True).start()
+        threading.Thread(target=connection, args=(sock, next(connection_ids)), daemon=True).start()
 
 
 def windows_smb_open_sharing(root):
@@ -536,6 +561,9 @@ def main():
     if (type(config.get("record_ftp_events", False)) is not bool
             or (config.get("record_ftp_events", False) and args.protocol != "ftp")):
         raise ValueError("explicit FTP-only observation flag required")
+    if (type(config.get("sftp_key_only", False)) is not bool
+            or (config.get("sftp_key_only", False) and args.protocol != "sftp")):
+        raise ValueError("explicit SFTP-only key authentication flag required")
     logging.basicConfig(level=logging.ERROR)
     {"ftp": ftp, "sftp": sftp, "webdav": webdav, "smb": smb}[args.protocol](config, root)
 

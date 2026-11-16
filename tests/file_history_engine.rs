@@ -14,11 +14,16 @@ use verysync_sidecar::{
 
 #[tokio::test]
 async fn public_remote_sftp_archive_location_retains_and_restores_versions() -> TestResult {
-    remote_archive_case(verysync_sidecar::StorageProtocol::Sftp).await
+    remote_archive_case(verysync_sidecar::StorageProtocol::Sftp, false).await
+}
+#[tokio::test]
+async fn public_remote_sftp_key_file_archive_authenticates_without_password_fallback() -> TestResult
+{
+    remote_archive_case(verysync_sidecar::StorageProtocol::Sftp, true).await
 }
 #[tokio::test]
 async fn public_remote_ftp_archive_location_checks_first_generation_boundary() -> TestResult {
-    remote_archive_case(verysync_sidecar::StorageProtocol::Ftp).await
+    remote_archive_case(verysync_sidecar::StorageProtocol::Ftp, false).await
 }
 fn ftp_peer_events(peer: &archive_storage_service::Service) -> TestResult<(bool, Vec<String>)> {
     use std::io::Read;
@@ -57,23 +62,101 @@ fn ftp_peer_events(peer: &archive_storage_service::Service) -> TestResult<(bool,
     Ok((authenticated, commands))
 }
 
-async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> TestResult {
+fn sftp_peer_auth(
+    peer: &archive_storage_service::Service,
+) -> TestResult<(usize, usize, std::collections::BTreeSet<u64>)> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&peer.observation_log)?
+        .take(65537)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 65536 {
+        return Err("owned SFTP observation exceeds bound".into());
+    }
+    let text = std::str::from_utf8(&bytes)?;
+    for field in ["user", "password"] {
+        let credential = peer.endpoint.extra()[field]
+            .as_str()
+            .ok_or("synthetic SFTP credential")?;
+        assert!(
+            !text.contains(credential),
+            "peer observation must omit credentials"
+        );
+    }
+    assert!(!text.contains("PRIVATE KEY"));
+    let mut accepted = 0;
+    let mut rejected = 0;
+    let mut sessions = std::collections::BTreeSet::new();
+    for line in text.lines() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+            if value["owned_sftp_auth"] == "publickey" {
+                if value["accepted"] == true {
+                    accepted += 1;
+                } else if value["accepted"] == false {
+                    rejected += 1;
+                }
+            } else if value["owned_sftp_auth"] == "password" {
+                assert_eq!(
+                    value["accepted"], false,
+                    "key-only peer cannot accept password fallback"
+                );
+            } else if value["owned_sftp_session"] == true {
+                sessions.insert(
+                    value["connection_id"]
+                        .as_u64()
+                        .ok_or("bounded peer connection identity")?,
+                );
+            }
+        }
+    }
+    Ok((accepted, rejected, sessions))
+}
+
+async fn remote_archive_case(
+    protocol: verysync_sidecar::StorageProtocol,
+    key_auth: bool,
+) -> TestResult {
     use verysync_sidecar::VersionArchiveLocation;
     let root = tempfile::Builder::new().prefix("varc-").tempdir()?.keep();
-    let mut peer = if protocol == verysync_sidecar::StorageProtocol::Ftp {
+    let mut peer = if key_auth {
+        archive_storage_service::Service::start_key_only_sftp(&root.join("peer"))?
+    } else if protocol == verysync_sidecar::StorageProtocol::Ftp {
         archive_storage_service::Service::start_observed_ftp(&root.join("peer"))?
     } else {
         archive_storage_service::Service::start(protocol, &root.join("peer"), Duration::ZERO)?
     };
     let archive = peer.share.join("archive");
+    let key_file = root.join("peer").join("key 路径 %.pem");
+    let mut key_bytes = None;
+    if key_auth {
+        std::fs::copy(
+            root.join("peer").join("synthetic-client-key.pem"),
+            &key_file,
+        )?;
+        key_bytes = Some(std::fs::read(&key_file)?);
+    }
     std::fs::create_dir(&archive)?;
     assert_eq!(std::fs::read_dir(&archive)?.count(), 0);
     let mut uri = url::Url::parse(peer.endpoint.uri())?;
     uri.set_username(peer.endpoint.extra()["user"].as_str().ok_or("peer user")?)
         .map_err(|_| "synthetic URI user")?;
-    uri.set_password(peer.endpoint.extra()["password"].as_str())
-        .map_err(|_| "synthetic URI password")?;
+    uri.set_password(if key_auth {
+        None
+    } else {
+        peer.endpoint.extra()["password"].as_str()
+    })
+    .map_err(|_| "synthetic URI password")?;
     uri.set_path("/archive");
+    if key_auth {
+        uri.query_pairs_mut().append_pair(
+            "privateKey",
+            key_file.to_str().ok_or("synthetic UTF-8 key path")?,
+        );
+        uri.query_pairs_mut()
+            .append_pair("parallelConnections", "1")
+            .append_pair("sftpChannels", "2")
+            .append_pair("connectTimeout", "6");
+    }
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
     let source = root.join("source");
@@ -99,6 +182,45 @@ async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> Tes
         )
         .await?;
     let prior = b.client().folder_versioning(&bf.id).await?;
+    if key_auth {
+        let mut wrong = uri.clone();
+        wrong.set_query(None);
+        wrong.query_pairs_mut().append_pair(
+            "privateKey",
+            root.join("peer")
+                .join("synthetic-host-key.pem")
+                .to_str()
+                .ok_or("synthetic UTF-8 wrong key path")?,
+        );
+        let update = b
+            .client()
+            .set_version_archive_location(
+                &bf.id,
+                &VersionArchiveLocation::remote_uri(wrong.as_str())?,
+            )
+            .await?;
+        assert!(update.requested_fields_match);
+        let error = b.client().folder_versions(&bf.id, None).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                verysync_sidecar::Error::Http { .. }
+                    | verysync_sidecar::Error::Api { .. }
+                    | verysync_sidecar::Error::AccessDenied { .. }
+            ),
+            "wrong key requires an actual native response, not a timeout"
+        );
+        let (accepted, rejected, sessions) = sftp_peer_auth(&peer)?;
+        assert_eq!(accepted, 0);
+        assert!(sessions.is_empty());
+        assert!(
+            rejected > 0,
+            "peer must observe actual wrong public key rejection"
+        );
+        assert_eq!(std::fs::read_dir(&archive)?.count(), 0);
+        assert_eq!(std::fs::read(source.join(name))?, old);
+        eprintln!("private remote archive stage: wrong key rejected by actual key-only peer");
+    }
     let location = VersionArchiveLocation::remote_uri(uri.as_str())?;
     assert!(!format!("{location:?}").contains(uri.as_str()));
     let changed = b
@@ -107,6 +229,15 @@ async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> Tes
         .await?;
     assert!(changed.requested_fields_match);
     let observed = b.client().folder_versioning(&bf.id).await?;
+    if key_auth {
+        let debug = format!("{location:?} {observed:?}");
+        for secret in [
+            peer.endpoint.extra()["user"].as_str().ok_or("peer user")?,
+            key_file.to_str().ok_or("synthetic UTF-8 key path")?,
+        ] {
+            assert!(!debug.contains(secret));
+        }
+    }
     assert_eq!(observed.filesystem_type, peer.endpoint.filesystem_type());
     assert_eq!(observed.filesystem_path, uri.as_str());
     assert_eq!(observed.params, prior.params);
@@ -115,6 +246,39 @@ async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> Tes
         prior.cleanup_interval_seconds
     );
     eprintln!("private remote archive stage: configured");
+    if key_auth {
+        assert!(b.client().folder_versions(&bf.id, None).await?.0.is_empty());
+        let (_, _, one_connection) = sftp_peer_auth(&peer)?;
+        assert_eq!(
+            one_connection.len(),
+            1,
+            "explicit one-connection pool must be observed at peer"
+        );
+        uri.query_pairs_mut()
+            .clear()
+            .append_pair(
+                "privateKey",
+                key_file.to_str().ok_or("synthetic UTF-8 key path")?,
+            )
+            .append_pair("parallelConnections", "2")
+            .append_pair("sftpChannels", "2")
+            .append_pair("connectTimeout", "6");
+        let update = b
+            .client()
+            .set_version_archive_location(
+                &bf.id,
+                &VersionArchiveLocation::remote_uri(uri.as_str())?,
+            )
+            .await?;
+        assert!(update.requested_fields_match);
+        assert!(b.client().folder_versions(&bf.id, None).await?.0.is_empty());
+        let (_, _, two_connections) = sftp_peer_auth(&peer)?;
+        assert_eq!(
+            two_connections.difference(&one_connection).count(),
+            2,
+            "explicit two-connection pool must create two real authenticated peer sessions"
+        );
+    }
     a.client().resume_folder(&af.id).await?;
     b.client().resume_folder(&bf.id).await?;
     a.client().request_scan(&af.id).await?;
@@ -236,7 +400,7 @@ async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> Tes
         .clone();
     eprintln!("private remote archive stage: real bytes archived and listed");
     let exit = a.shutdown(Duration::from_secs(10)).await?;
-    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     past_archive_generation(&b, &stamp).await?;
     let report = b
         .client()
@@ -251,8 +415,12 @@ async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> Tes
     assert_eq!(report.error_count(), 0);
     data(&receive.join(name), old).await?;
     assert_eq!(std::fs::read(source.join(name))?, new);
+    if key_auth {
+        let (accepted, rejected, _) = sftp_peer_auth(&peer)?;
+        assert!(accepted > 0 && rejected > 0);
+    }
     let exit = b.shutdown(Duration::from_secs(10)).await?;
-    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     b.restart(Duration::from_secs(30)).await?;
     assert_eq!(
         b.client().folder_versioning(&bf.id).await?.filesystem_path,
@@ -273,7 +441,10 @@ async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> Tes
         .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
     assert_eq!(retained, unchanged);
     let exit = b.shutdown(Duration::from_secs(10)).await?;
-    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    if let Some(bytes) = key_bytes {
+        assert_eq!(std::fs::read(&key_file)?, bytes);
+    }
     peer.stop()?;
     std::fs::remove_dir_all(root)?;
     println!(
@@ -284,7 +455,15 @@ async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> Tes
         "actual_restored_old_bytes":true,"actual_source_new_bytes_retained":true,
         "actual_selected_filename_restored":true,"protocol":peer.endpoint.filesystem_type(),
         "filename_kind":if protocol == verysync_sidecar::StorageProtocol::Sftp { "unicode-percent" } else { "ascii" },"actual_normal_restart_keeps_remote_location":true,
-        "actual_reset_default_preserves_remote_archives":true,"actual_both_normal_owned_tree_exits":true})
+        "actual_reset_default_preserves_remote_archives":true,"actual_both_normal_owned_tree_exits":true,
+        "actual_key_only_peer":key_auth,"actual_target_key_file_consumed":key_auth,
+        "actual_wrong_key_native_response_and_peer_rejection":key_auth,"actual_no_password_fallback":key_auth,
+        "actual_private_peer_auth_observation":key_auth,
+        "actual_unicode_percent_target_key_path":key_auth,"actual_key_file_bytes_retained":key_auth,
+        "actual_one_then_two_authenticated_connections":key_auth,"actual_private_uri_debug":key_auth,
+        "explicit_sftp_request_concurrency_selection":if key_auth { Some(2) } else { None },
+        "explicit_connect_timeout_seconds":if key_auth { Some(6) } else { None },
+        "request_concurrency_or_timeout_bound_measured":false,"server_host_identity_verified":false})
     );
     Ok(())
 }

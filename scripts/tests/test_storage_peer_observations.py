@@ -80,5 +80,19 @@ class FtpObservationContracts(unittest.TestCase):
             self.assertEqual(bool(stderr.getvalue()), observed)
 
 
+class SftpKeyOnlyContracts(unittest.TestCase):
+    def test_key_only_peer_refuses_password_and_wrong_key_without_affecting_default(self):
+        config = {"user": "owned-user", "password": "owned-password", "sftp_key_only": True}
+        key = object()
+        self.assertTrue(PEER.sftp_authentication_allowed(config, "owned-user", key, key, "publickey"))
+        self.assertFalse(PEER.sftp_authentication_allowed(config, "owned-user", object(), key, "publickey"))
+        self.assertFalse(PEER.sftp_authentication_allowed(config, "other-user", key, key, "publickey"))
+        self.assertFalse(PEER.sftp_authentication_allowed(config, "owned-user", "owned-password", key, "password"))
+        self.assertFalse(PEER.sftp_authentication_allowed(config, "owned-user", key, key, "unknown"))
+        config.pop("sftp_key_only")
+        self.assertTrue(PEER.sftp_authentication_allowed(config, "owned-user", "owned-password", key, "password"))
+        self.assertFalse(PEER.sftp_authentication_allowed(config, "owned-user", "wrong-password", key, "password"))
+
+
 if __name__ == "__main__":
     unittest.main()
