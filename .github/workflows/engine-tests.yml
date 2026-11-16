@@ -749,6 +749,30 @@ jobs:
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe actual Windows x86 socket-provider guard inputs without changing them
+        if: matrix.package == 'windows-386-standard'
+        run: |
+          python - <<'PY'
+          import ctypes, importlib.util, json, os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('owned_opener_guard', 'scripts/run-isolated-engine-tests.py')
+          helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
+          paths = [('host-system32', Path(os.environ['SYSTEMROOT']) / 'System32' / 'mswsock.dll'),
+                   ('queried-wow64', helper.windows_wow64_directory() / 'mswsock.dll')]
+          for label, path in paths:
+              row = {'label': label, 'path': str(path), 'absolute': path.is_absolute(),
+                     'exists': path.exists(), 'is_file': path.is_file(),
+                     'is_symlink': path.is_symlink(), 'is_junction': path.is_junction(),
+                     'host_python_pointer_bits': ctypes.sizeof(ctypes.c_void_p)*8,
+                     'metadata_only': True, 'guard_overridden': False}
+              try:
+                  row.update(resolved_path=str(path.resolve(strict=True)),
+                             pe_machine=hex(helper.windows_pe_machine(path)))
+                  if path.is_symlink(): row['link_target'] = os.readlink(path)
+              except OSError as error:
+                  row.update(error_type=type(error).__name__, error=str(error)[:240])
+              print('native socket-provider guard metadata: '+json.dumps(row), flush=True)
+          PY
       - name: Preserve original native effects, strict predicates and deadlines
         if: matrix.target != 'disk_full_engine'
         run: >-
