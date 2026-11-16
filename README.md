@@ -375,3 +375,8 @@ Unreleased [core maintenance](docs/public/core-maintenance.md) exposes native er
 Unreleased [resource mutations](docs/public/file-mutations.md) provide explicit native directory creation, file copy/move, text replacement and scoped deletion. Copy/move are confined to one logical volume; native directory failures on Windows retain separate pending positive acceptance and explicit partial-data diagnostics.
 
 Unreleased [Local Sync controls](docs/public/local-sync.md) expose explicit basic storage endpoints, native job registrations, analysis and separate all-action execution, actual state/result/history observations and scoped updates that preserve unselected settings. Per-protocol data effects and the remaining native task controls retain separate pending acceptance.
+
+Unreleased [native Local-API connections](docs/public/local-api.md) provide separate
+typed version/status reads, bounded scoped raw requests and explicit owned startup
+configuration. Basic reads do not establish commercial entitlement; licensed
+operations and final cross-platform runtime acceptance remain separate gates.

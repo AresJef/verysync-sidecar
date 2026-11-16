@@ -126,7 +126,8 @@ pub use capabilities::{
     InstanceObservation, LibraryCapability, TargetSnapshot, TargetValidation, VerificationStatus,
 };
 pub use client::{
-    Client, ConnectOptions, EngineVersion, InstanceInfo, VersionCompatibility, VersionPolicy,
+    Client, ConnectOptions, EngineVersion, InstanceInfo, LocalApiClient, LocalApiConnectOptions,
+    VersionCompatibility, VersionPolicy,
 };
 pub use configuration::{
     ConfigurationSectionUpdate, ConfigurationSnapshot, ConfigurationSyncState, ConfigurationUpdate,

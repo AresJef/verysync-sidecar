@@ -13,6 +13,72 @@ use std::time::Duration;
 use verysync_sidecar::*;
 
 #[tokio::test]
+async fn native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_state() -> TestResult
+{
+    let root = tempfile::Builder::new()
+        .prefix("vs-localapi-")
+        .tempdir()?
+        .keep();
+    let state = root.join("state");
+    let sentinel = root.join("sentinel.bin");
+    std::fs::write(
+        &sentinel,
+        b"caller bytes survive explicit native Local-API startup",
+    )?;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let address = listener.local_addr()?;
+    assert_ne!(address.port(), 18886);
+    drop(listener);
+    let endpoint = ManagementEndpoint::http(&format!("http://{address}/"))?;
+    let program = options(&state)?.program().clone();
+    let selected = ManagedOptions::new(program, &state, endpoint.clone())?
+        .startup_timeout(Duration::from_secs(25))?;
+    let mut disabled = ManagedInstance::start(selected.clone().local_api_enabled(false)?).await?;
+    let identity = disabled.client().instance().device_id.clone();
+    let denied = LocalApiClient::connect(LocalApiConnectOptions::new(endpoint.clone())?)
+        .await
+        .unwrap_err();
+    assert!(matches!(denied, Error::Http { response } if response.status() == 404));
+    let exit = disabled.shutdown(Duration::from_secs(15)).await?;
+    assert!(!exit.forced && exit.tree_stopped && exit.state_released);
+    drop(disabled);
+    let mut enabled = ManagedInstance::start(selected.local_api_enabled(true)?).await?;
+    let local = LocalApiClient::connect(
+        LocalApiConnectOptions::new(endpoint)?.expected_device_id(identity.clone()),
+    )
+    .await?;
+    assert_eq!(local.version().await?.version, BASELINE_ENGINE_VERSION);
+    assert_eq!(local.system_status().await?.device_id, identity);
+    let folders = local
+        .raw(RawRequest::new(
+            RawMethod::Get,
+            ["config", "folders"],
+            RequestEffect::ReadOnly,
+        )?)
+        .await?;
+    assert_eq!(folders.status(), 200);
+    assert!(serde_json::from_slice::<serde_json::Value>(folders.body_bytes())?.is_array());
+    enabled.restart(Duration::from_secs(30)).await?;
+    assert_eq!(local.system_status().await?.device_id, identity);
+    assert_eq!(enabled.client().system_status().await?.device_id, identity);
+    assert!(enabled
+        .client()
+        .license_status()
+        .await?
+        .licenses()
+        .is_none());
+    assert_eq!(
+        std::fs::read(&sentinel)?,
+        b"caller bytes survive explicit native Local-API startup"
+    );
+    let exit = enabled.shutdown(Duration::from_secs(15)).await?;
+    assert!(!exit.forced && exit.tree_stopped && exit.state_released);
+    println!("native Local-API disabled404 enabled200 no_gui_key=true identity_preserved=true restart_preserved=true sentinel_preserved=true commercial_entitlement_not_granted=true normal_tree_exit=true");
+    std::fs::remove_dir_all(&root)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_tunnel_permissions_negative_probe_and_restart_preserve_owned_data() -> TestResult {
     fn loopback(v: &serde_json::Value) -> Option<String> {
         match v {

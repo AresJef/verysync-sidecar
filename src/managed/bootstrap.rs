@@ -73,6 +73,68 @@ fn persisted_file(state: &Path, name: &str) -> Result<bool> {
     }
 }
 
+const APP_DISABLED: &str = "verysync:\n  auto_startup: false\n";
+const APP_LOCAL_DISABLED: &str = "verysync:\n  auto_startup: false\n  local_api_enabled: false\n";
+const APP_LOCAL_ENABLED: &str = "verysync:\n  auto_startup: false\n  local_api_enabled: true\n";
+
+fn prepare_app_settings(state: &Path, local_api: Option<bool>) -> Result<()> {
+    if local_api.is_none() && !cfg!(windows) {
+        return Ok(());
+    }
+    let path = state.join("appconf.yaml");
+    let existing = if persisted_file(state, "appconf.yaml")? {
+        let mut text = String::new();
+        native::open_private(&path, true)
+            .map_err(|e| io_error("read app settings", e))?
+            .take(4097)
+            .read_to_string(&mut text)
+            .map_err(|e| io_error("read app settings", e))?;
+        if !matches!(
+            text.as_str(),
+            "auto_startup: false\n" | APP_DISABLED | APP_LOCAL_DISABLED | APP_LOCAL_ENABLED
+        ) {
+            return Err(Error::ManagedFailure {
+                reason:
+                    "app settings are not a known library-generated file; they were not replaced",
+            });
+        }
+        Some(text)
+    } else {
+        None
+    };
+    let desired = match local_api {
+        Some(true) => APP_LOCAL_ENABLED,
+        Some(false) => APP_LOCAL_DISABLED,
+        None => match existing.as_deref() {
+            Some(APP_LOCAL_ENABLED) => APP_LOCAL_ENABLED,
+            Some(APP_LOCAL_DISABLED) => APP_LOCAL_DISABLED,
+            _ => APP_DISABLED,
+        },
+    };
+    if existing.as_deref() == Some(desired) {
+        return Ok(());
+    }
+    // Only the exact legacy SDK file is migrated. Unknown/native license data
+    // never enter this replacement path. StateLease excludes another SDK owner.
+    let mut entropy = [0; 16];
+    getrandom::fill(&mut entropy).map_err(|_| Error::ManagedFailure {
+        reason: "app settings temporary identity failed",
+    })?;
+    let nonce: String = entropy.iter().map(|byte| format!("{byte:02x}")).collect();
+    let scratch = Scratch(state.join(format!(".verysync-sidecar-appconf-{nonce}.tmp")));
+    let mut output = native::create_private(&scratch.0)
+        .map_err(|e| io_error("create private app settings", e))?;
+    output
+        .write_all(desired.as_bytes())
+        .map_err(|e| io_error("write app settings", e))?;
+    output
+        .sync_all()
+        .map_err(|e| io_error("persist app settings", e))?;
+    drop(output);
+    fs::rename(&scratch.0, &path).map_err(|e| io_error("replace owned app settings", e))?;
+    Ok(())
+}
+
 pub(super) fn prepare(
     options: &ManagedOptions,
     cancel: &Receiver<()>,
@@ -121,32 +183,7 @@ pub(super) fn prepare(
                 .map_err(|e| io_error("create private subdirectory", e))?;
         }
     }
-    #[cfg(windows)]
-    {
-        let path = state.join("appconf.yaml");
-        if path
-            .try_exists()
-            .map_err(|e| io_error("inspect app settings", e))?
-        {
-            let mut text = String::new();
-            native::open_private(&path, true)
-                .map_err(|e| io_error("read app settings", e))?
-                .take(1024)
-                .read_to_string(&mut text)
-                .map_err(|e| io_error("read app settings", e))?;
-            if text != "auto_startup: false\n" {
-                return Err(Error::ManagedFailure {
-                    reason:
-                        "owned startup settings changed; automatic startup must remain disabled",
-                });
-            }
-        } else {
-            native::create_private(&path)
-                .map_err(|e| io_error("create app settings", e))?
-                .write_all(b"auto_startup: false\n")
-                .map_err(|e| io_error("persist app settings", e))?;
-        }
-    }
+    prepare_app_settings(state, options.local_api_enabled)?;
     #[cfg(windows)]
     let resolved = dunce::canonicalize(&options.program.path);
     #[cfg(not(windows))]
@@ -665,6 +702,34 @@ fn configure(state: &Path, options: &ManagedOptions, fresh: bool) -> Result<ApiK
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_api_app_settings_migrate_only_known_files_and_preserve_custom_bytes() -> Result<()> {
+        let root = tempfile::tempdir().map_err(|e| io_error("create test root", e))?;
+        let lease = StateLease::acquire(&root.path().join("state"))?;
+        let path = lease.path().join("appconf.yaml");
+        native::create_private(&path)
+            .map_err(|e| io_error("create legacy app settings", e))?
+            .write_all(b"auto_startup: false\n")
+            .map_err(|e| io_error("write legacy app settings", e))?;
+        prepare_app_settings(lease.path(), Some(true))?;
+        assert_eq!(
+            fs::read_to_string(&path).map_err(|e| io_error("read app settings", e))?,
+            APP_LOCAL_ENABLED
+        );
+        prepare_app_settings(lease.path(), Some(false))?;
+        assert_eq!(
+            fs::read_to_string(&path).map_err(|e| io_error("read app settings", e))?,
+            APP_LOCAL_DISABLED
+        );
+        let custom = b"verysync:\n  local_api_enabled: true\n  caller_owned_setting: preserve-me\n";
+        fs::write(&path, custom).map_err(|e| io_error("write custom app settings", e))?;
+        assert!(prepare_app_settings(lease.path(), Some(false)).is_err());
+        assert_eq!(
+            fs::read(&path).map_err(|e| io_error("read custom app settings", e))?,
+            custom
+        );
+        Ok(())
+    }
     #[test]
     fn malformed_sections_fail_without_replacing_configuration() -> Result<()> {
         let root = tempfile::tempdir().map_err(|e| io_error("create test root", e))?;

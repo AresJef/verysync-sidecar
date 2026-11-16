@@ -222,7 +222,10 @@ impl EngineFixture {
         binary.verify()?;
         let state = tempfile::Builder::new().prefix("vs-test-").tempdir()?;
         protect_directory(state.path())?;
-        fs::write(state.path().join("appconf.yaml"), "auto_startup: false\n")?;
+        fs::write(
+            state.path().join("appconf.yaml"),
+            "verysync:\n  auto_startup: false\n",
+        )?;
         protect_file(&state.path().join("appconf.yaml"))?;
         for directory in ["roaming", "local", "profile", "tmp"] {
             fs::create_dir(state.path().join(directory))?;

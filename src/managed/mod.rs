@@ -84,6 +84,7 @@ pub struct ManagedOptions {
     pub(crate) version_policy: VersionPolicy,
     pub(crate) upgrade_checks: ManagedUpgradeChecks,
     pub(crate) transport: crate::ManagementTransport,
+    pub(crate) local_api_enabled: Option<bool>,
 }
 
 impl ManagedOptions {
@@ -156,6 +157,7 @@ impl ManagedOptions {
             version_policy: VersionPolicy::ValidatedOnly,
             upgrade_checks: ManagedUpgradeChecks::Disabled,
             transport: crate::ManagementTransport::default(),
+            local_api_enabled: None,
         })
     }
 
@@ -186,6 +188,22 @@ impl ManagedOptions {
     pub fn upgrade_checks(mut self, checks: ManagedUpgradeChecks) -> Self {
         self.upgrade_checks = checks;
         self
+    }
+
+    /// Explicitly set native Local-API availability before owned startup.
+    ///
+    /// This grants no commercial entitlement. The default preserves existing
+    /// Local-API settings. Only known library-generated app settings may be
+    /// replaced; arbitrary caller settings are rejected without modification.
+    /// Local-API requires an HTTP(S) management endpoint in the fixed core.
+    pub fn local_api_enabled(mut self, enabled: bool) -> Result<Self> {
+        if enabled && self.endpoint.http_url().is_none() {
+            return Err(Error::InvalidConfiguration {
+                reason: "enabled native Local-API requires an HTTP(S) endpoint",
+            });
+        }
+        self.local_api_enabled = Some(enabled);
+        Ok(self)
     }
 
     /// Set the retained management Client's per-request deadline (default 10s).
