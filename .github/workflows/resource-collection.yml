@@ -119,6 +119,8 @@ jobs:
             ${{ runner.temp }}/vs-frozen-resource-v12/**/samples.jsonl
             ${{ runner.temp }}/vs-frozen-resource-v12/**/events.jsonl
             ${{ runner.temp }}/vs-frozen-resource-v12/**/safe-error.json
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/console.log
+            ${{ runner.temp }}/vs-frozen-resource-v12/**/*.console.log
             ${{ runner.temp }}/vs-resource-clock-calibration/calibration.json
             ${{ runner.temp }}/vs-resource-clock-calibration/safe-error.json
             ${{ runner.temp }}/vs-resource-v12-pretrial/**/preparation-result.json
@@ -126,4 +128,5 @@ jobs:
             ${{ runner.temp }}/vs-resource-v12-pretrial/**/samples.jsonl
             ${{ runner.temp }}/vs-resource-v12-pretrial/**/events.jsonl
             ${{ runner.temp }}/vs-resource-v12-pretrial/**/safe-error.json
+            ${{ runner.temp }}/vs-resource-v12-pretrial/**/console.log
             ${{ runner.temp }}/vs-resource-v12-pretrial/pretrial-result.json
