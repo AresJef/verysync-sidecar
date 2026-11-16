@@ -86,6 +86,16 @@ def check_attempt(folder, protocol, stage, metrics):
             or calibration["cpu_observed_span_s"] <= 0 or calibration["rss_touched_bytes"] != 16777216
             or calibration["rss_growth_bytes"] <= 0):
         raise ValueError("required actual counter calibration is incomplete")
+    if "observer_policy" in protocol:
+        observer = report["observer_thread_policy"]
+        if observer["scope"] != "observer-thread-only":
+            raise ValueError("observer policy scope differs")
+        if calibration["platform"].startswith("macOS"):
+            if (observer.get("observed") != 0x19 or observer.get("requested") != 0x19
+                    or observer.get("worker_started_before_assignment") is not True):
+                raise ValueError("Darwin observer scheduling policy differs")
+        elif observer["policy"] != "unchanged":
+            raise ValueError("non-Darwin observer scheduling changed")
     source = report["source"]
     if source["profile"] != "release" or not source["rustc_version"].startswith("rustc "+protocol["rust_release"]+" "):
         raise ValueError("frozen compiler/profile differs")

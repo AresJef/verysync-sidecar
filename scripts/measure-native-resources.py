@@ -30,6 +30,27 @@ def dependency():
     return psutil
 
 
+def observer_thread_policy(worker_started=False):
+    """Only this short-lived observer thread; call after the workers started."""
+    if sys.platform != "darwin":
+        return {"policy": "unchanged", "scope": "observer-thread-only"}
+    import ctypes
+    library = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+    query = library.qos_class_self
+    query.argtypes = []; query.restype = ctypes.c_uint
+    assign = library.pthread_set_qos_class_self_np
+    assign.argtypes = [ctypes.c_uint, ctypes.c_int]; assign.restype = ctypes.c_int
+    before = query()
+    # Apple SDK sys/qos.h QOS_CLASS_USER_INITIATED; never a process-wide change.
+    error = assign(0x19, 0)
+    after = query()
+    if error or after != 0x19:
+        raise RuntimeError(f"observer thread QoS request failed: errno={error}, observed={after}")
+    return {"policy": "darwin-user-initiated", "scope": "observer-thread-only",
+            "before": before, "requested": 0x19, "observed": after,
+            "worker_started_before_assignment": worker_started, "lifetime": "this observer process"}
+
+
 class SamplerTicker:
     """Own one blocking timer; Darwin avoids power-aware timer coalescing."""
     def __init__(self, interval_ms, critical=True):
@@ -301,6 +322,7 @@ def main():
     report = {"stage": args.stage, "calibration": calibration, "formal_sample": False}
     if args.stage == "calibration":
         if args.timer_calibration:
+            report["observer_thread_policy"] = observer_thread_policy()
             report["timer_calibration"] = calibrate_timers(args.interval_ms)
         report["sampler_sha256"] = digest(__file__)
         (args.evidence_dir / "calibration.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -359,6 +381,9 @@ def main():
                                     raise ValueError("actual engine version differs from frozen baseline")
                                 processes = owned_processes(value)
                                 report["identities"] = [snapshot(p) for p in processes]
+                                # The controller and owned engine already exist;
+                                # neither inherits this observer's new QoS.
+                                report["observer_thread_policy"] = observer_thread_policy(worker_started=True)
                                 ticker = SamplerTicker(args.interval_ms)
                                 report["timer_backend"] = ticker.backend
                                 phase = "baseline"

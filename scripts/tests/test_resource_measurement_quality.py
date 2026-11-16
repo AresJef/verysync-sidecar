@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location(
     "resource_metrics", Path(__file__).resolve().parents[1] / "measure-native-resources.py")
@@ -37,6 +38,24 @@ def fixture():
 
 
 class ResourceQualityContracts(unittest.TestCase):
+    def test_observer_policy_never_calls_native_qos_on_other_systems(self):
+        with patch.object(METRICS.sys, "platform", "linux"), patch("ctypes.CDLL") as library:
+            self.assertEqual(METRICS.observer_thread_policy()["policy"], "unchanged")
+            library.assert_not_called()
+
+    def test_observer_qos_is_self_only_and_native_failure_is_not_silenced(self):
+        library = Mock()
+        library.qos_class_self.side_effect = [0x15, 0x19]
+        library.pthread_set_qos_class_self_np.return_value = 0
+        with patch.object(METRICS.sys, "platform", "darwin"), patch("ctypes.CDLL", return_value=library):
+            receipt = METRICS.observer_thread_policy()
+            self.assertEqual(receipt["observed"], 0x19)
+            library.pthread_set_qos_class_self_np.assert_called_once_with(0x19, 0)
+            library.qos_class_self.side_effect = [0x15, 0x15]
+            library.pthread_set_qos_class_self_np.return_value = 1
+            with self.assertRaisesRegex(RuntimeError, "QoS request failed"):
+                METRICS.observer_thread_policy()
+
     def test_snapshot_batches_reads_without_reusing_a_previous_snapshot(self):
         class Process:
             pid = 7

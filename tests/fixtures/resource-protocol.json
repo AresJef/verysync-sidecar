@@ -1,6 +1,6 @@
 {
-  "protocol_id": "VS045-native-resources-v3",
-  "version": 3,
+  "protocol_id": "VS045-native-resources-v4",
+  "version": 4,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
@@ -8,10 +8,10 @@
   "source_inputs": {
     "rust_sources_sha256": "b58af3b7cc2eb61b45da86c38cdc489b60cace30709dbf39c15bb90f24efda3c",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
-    "sampler_sha256": "4810c22525f26efa7dc136934f70eac0fa9c412663da5cd87953c949612b2128",
+    "sampler_sha256": "6f231c3e3c3e0f9cdf53365d28e3682ff669186209fc55b29674cc46a17a3bda",
     "wrapper_sha256": "aa14ab6c94b2d0f693047246c8286385710c5997a345bc2844f1ae0fab1f95f3"
   },
-  "collector_sha256": "4e9dca6b3ffc8c3de5119e1747c80eda050593ed153271e1f2e7897adfe7ad55",
+  "collector_sha256": "bbdec05319ce82d2e001d96598cf50bf50405e2d56e68c13e5b7d64bde3ec6e8",
   "scenarios": {
     "idle": {
       "bytes_each": 8192,
@@ -106,7 +106,8 @@
     "project_resource_original_s": 10800,
     "reuse_scope": "N4 adds role/config/source validation and complete-group recording outside measurement. Rust workload, timing boundaries, sampling loop, metric reads and quality thresholds remain unchanged. Confirm updated collector dependencies before formal.",
     "v2": "Each actual CI profile completes two opposite full pretrial orders using exact frozen source inputs before formal acquisition; prep is not formal evidence.",
-    "v3": "Repeat calibration and two opposite full actual pretrial orders on each actual profile; v2 pretrial and accepted groups are not v3 samples."
+    "v3": "Repeat calibration and two opposite full actual pretrial orders on each actual profile; v2 pretrial and accepted groups are not v3 samples.",
+    "v4": "New counter/timer calibration and8actualfresh pretrial cases per actual profile before complete new formal and independent acquisition."
   },
   "profiles": [
     "macos-amd64-standard",
@@ -118,11 +119,16 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "350306cdad7ed1575258ad688bda99ed2f03bb27c63e0b14488c8ea99e200c7d",
-    "retained": "All v1/v2 attempts and accepted groups remain historical, never v3 members. Original project and phase budgets persist.",
-    "changes": "Creator-PID-bound state lease release changes Rust source identity. Per-snapshot psutil oneshot shares underlying kernel reads without caching between snapshots; explicit live PID identity check remains before each batch. macOS Intel v2 pretrial overhead0.057049806 exceeded unchanged0.05 limit.",
-    "unchanged": "Every workload, repeat count, timing boundary, CPU/RSS counter, quality threshold, sample interval, atomic full-group rule, attempt/deadline limit, four formal/two independent fresh-process cycles and memory/stability criterion.",
-    "source": "https://psutil.io/7.2/#psutil.Process.oneshot and psutil release-7.2.2 _psosx.py shared _get_pidtaskinfo cache"
+    "previous_protocol_sha256": "9c3b56a9e5a4b2cf20850c908c2fd8cda8341ece3d5c2d8bf897bdde1bbe3e84",
+    "retained": "All v1-v3 observations and failures retain original bytes, attempts, source identities and budgets; no old row is a v4 sample.",
+    "changes": "Atomic binary writes preserve exact frozen protocol bytes onWindows; canonical LF JSON records. Darwin observer self-threadQoS set only after worker ready; borrowed scheduling intervals do not change metric quality gates.",
+    "cause": "Windows outer9c3b.. vs nestedb97c.. from128CRLF substitutions; MacARM three attempts had66.158/94.935/107.706ms gaps with6/10timerexpirations and<0.3ms metric reads. Exact delay cause beyond observer interval unresolved.",
+    "unchanged": "Rust sources/artifacts, every input/repeat/workload, operation boundaries, all quality/memory/stability thresholds, four formal+two independent fresh-process cycles, attempt limits and original project/phase budgets."
   },
-  "preflight_sha256": "4a13665bb438ce948c28aee13b992f329d5dbf4f62c3c282bbca114f4161d485"
+  "preflight_sha256": "4a13665bb438ce948c28aee13b992f329d5dbf4f62c3c282bbca114f4161d485",
+  "observer_policy": {
+    "darwin": "Request QOS_CLASS_USER_INITIATED0x19 only on the short-lived observer thread after the real controller and engine are ready; retain requested/observed receipt. No worker or global priority changes.",
+    "other_systems": "unchanged",
+    "scope": "Measurement observer, not library runtime; no timing-quality relaxation or scheduling guarantee."
+  }
 }
