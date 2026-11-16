@@ -2,6 +2,7 @@
   "draft_labels": [
     "native-socks5-proxy",
     "native-helper-effects",
-    "remote-version-archives"
+    "remote-version-archives",
+    "ftp-disconnect-recovery"
   ]
 }

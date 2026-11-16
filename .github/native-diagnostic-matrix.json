@@ -743,5 +743,59 @@
     "filter": "actual_native_helpers_",
     "label": "native-helper-effects",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
   }
 ]

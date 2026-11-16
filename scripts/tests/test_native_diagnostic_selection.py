@@ -42,9 +42,18 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "engine_control" and row["filter"] ==
                             "actual_native_helpers_" for row in helpers))
 
+    def test_current_manifest_requires_native_ftp_disconnect_boundaries_on_all_six_profiles(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        ftp = [row for row in actual if row.get("label") == "ftp-disconnect-recovery"]
+        self.assertEqual(len(ftp), 6)
+        self.assertEqual(len({row["package"] for row in ftp}), 6)
+        self.assertTrue(all(row["target"] == "local_sync_runtime_engine" and row["filter"] ==
+                            "public_ftp_" for row in ftp))
+
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 84)
+        self.assertEqual(len(self.rows), 90)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
