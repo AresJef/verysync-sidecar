@@ -119,8 +119,8 @@ records use explicit UTF-8/LF bytes, and each nested collector copies the exact
 frozen protocol bytes before checking its digest. The Windows v3 parent/child
 CRLF identity mismatch remains invalid evidence under its original identity.
 
-After both real worker processes are ready, the short-lived Darwin observer
-requests `QOS_CLASS_USER_INITIATED` only for its own current thread, retaining
+From v4 through v18, after both real worker processes were ready, the short-lived Darwin observer
+requested `QOS_CLASS_USER_INITIATED` only for its own current thread, retaining
 the requested and observed class. Workers are started before that assignment;
 the library, worker priorities and host-wide settings are unchanged. Other
 systems retain their existing policy. This follows
@@ -128,6 +128,22 @@ systems retain their existing policy. This follows
 The request offers no scheduling guarantee: a gap over 50 ms still rejects the
 whole original-order cycle. All v3 attempts, including the three insufficient
 macOS ARM64 cycles, remain separate from the new v4 acquisition.
+
+The v19 observer requests `QOS_CLASS_USER_INTERACTIVE` for its brief snapshots,
+after both real workers are ready. It records the exact native class and policy
+name; offline validation rejects a mismatched receipt. This candidate follows
+v18 traces with 80 ms to over one second between observations, predominantly
+inside the native wait, while metric-read overhead remained within its original
+limit. It changes neither worker priorities nor library behavior, counters,
+timestamps, workloads, formal and independent quotas, or quality thresholds.
+The scheduling request offers no guarantee: a gap over 50 ms still rejects the
+complete original-order cycle. Native API failures remain errors. Calibration
+and preparation are separate evidence and never become formal samples.
+
+Resource CI also retains observer and native worker console logs, including
+failures before the first ready event. An exit code without its diagnostic log
+does not establish a root cause. Earlier datasets with omitted logs retain
+that limitation.
 
 The v5 identity includes the corrected bounded WOW64 helper query. It also
 retains diagnostic durations for journal polling, the preceding raw-record write

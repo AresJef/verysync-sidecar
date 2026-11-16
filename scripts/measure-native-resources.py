@@ -70,13 +70,14 @@ def observer_thread_policy(worker_started=False):
     assign = library.pthread_set_qos_class_self_np
     assign.argtypes = [ctypes.c_uint, ctypes.c_int]; assign.restype = ctypes.c_int
     before = query()
-    # Apple SDK sys/qos.h QOS_CLASS_USER_INITIATED; never a process-wide change.
-    error = assign(0x19, 0)
+    # Apple SDK sys/qos.h QOS_CLASS_USER_INTERACTIVE for this observer's
+    # brief, latency-sensitive snapshots. Never change a worker or process QoS.
+    error = assign(0x21, 0)
     after = query()
-    if error or after != 0x19:
+    if error or after != 0x21:
         raise RuntimeError(f"observer thread QoS request failed: errno={error}, observed={after}")
-    return {"policy": "darwin-user-initiated", "scope": "observer-thread-only",
-            "before": before, "requested": 0x19, "observed": after,
+    return {"policy": "darwin-user-interactive", "scope": "observer-thread-only",
+            "before": before, "requested": 0x21, "observed": after,
             "worker_started_before_assignment": worker_started, "lifetime": "this observer process"}
 
 

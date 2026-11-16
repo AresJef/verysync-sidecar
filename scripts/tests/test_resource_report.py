@@ -154,6 +154,31 @@ class ResourceReportContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "observer scheduling policy"):
                 REPORT.check_attempt(folder, protocol, "formal", METRICS)
 
+    def test_darwin_observer_receipt_must_match_the_frozen_class_and_name(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); protocol, _ = dataset(root)
+            protocol["observer_policy"]["darwin_qos_class"] = 0x21
+            folder = next((root / "formal").rglob("preparation-result.json")).parent
+            report = REPORT.read(folder / "preparation-result.json")
+            report["calibration"]["platform"] = "macOS-synthetic-test-only"
+            report["observer_thread_policy"].update(requested=0x21, observed=0x21,
+                policy="darwin-user-interactive", worker_started_before_assignment=True)
+            save(folder / "preparation-result.json", report)
+            _, quality = REPORT.check_attempt(folder, protocol, "formal", METRICS)
+            self.assertEqual(quality["status"], "VALID")
+            for field, value in [("requested", 0x19), ("observed", 0x19),
+                                 ("policy", "darwin-user-initiated")]:
+                original = report["observer_thread_policy"][field]
+                report["observer_thread_policy"][field] = value
+                save(folder / "preparation-result.json", report)
+                with self.assertRaisesRegex(ValueError, "observer scheduling policy"):
+                    REPORT.check_attempt(folder, protocol, "formal", METRICS)
+                report["observer_thread_policy"][field] = original
+            save(folder / "preparation-result.json", report)
+            protocol["observer_policy"]["darwin_qos_class"] = 0xff
+            with self.assertRaisesRegex(ValueError, "observer scheduling policy"):
+                REPORT.check_attempt(folder, protocol, "formal", METRICS)
+
     def test_memory_stability_failure_and_insufficiency_remain_separate(self):
         protocol = REPORT.read(PROTOCOL)
         def cases(small, large):

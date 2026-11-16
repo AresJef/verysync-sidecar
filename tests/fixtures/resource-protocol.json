@@ -1,6 +1,6 @@
 {
-  "protocol_id": "VS045-native-resources-v18",
-  "version": 18,
+  "protocol_id": "VS045-native-resources-v19",
+  "version": 19,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
@@ -8,7 +8,7 @@
   "source_inputs": {
     "rust_sources_sha256": "4b2e9f34185e43dc4cd0b9584bcef96ae5e6fd2fd24821c55057140c3c736b19",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
-    "sampler_sha256": "813ade9e90b8159e58381567dccd173813b6a273dbecc47f9c4e37b963cfa871",
+    "sampler_sha256": "79a67943cb502bd4e9dc58e62faa754f6d89c45c0da206202ef41c094bd36e51",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a"
   },
   "collector_sha256": "bbdec05319ce82d2e001d96598cf50bf50405e2d56e68c13e5b7d64bde3ec6e8",
@@ -126,17 +126,18 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "9a47ec1079c08446e2fc0e2ab8ded8eebfa0547c89607631bce35adf389a3747",
+    "previous_protocol_sha256": "e7a0c11f89d926dae48c5fe4396972271f4f5dd385c53ca1d84c06d9bb0e0f37",
     "retained": "All previous datasets and original attempts/deadlines remain historical, not members of this source protocol. No project budget or prior overrun is reset.",
-    "changes": "Preparation continues after a recomputed native-correct INSUFFICIENT case under the explicit whole-order readiness policy. Offline revalidation independently recomputes all eight cases and records readiness rejection counts. Formal/independent validation remains strictly VALID-only, and legacy preparation stays strict. Preflight and reporter source hashes bind the new protocol; product and sampler inputs unchanged.",
+    "changes": "Darwin measurement observer alone requests native interactive QoS0x21 instead of initiated0x19 after both owned workers are ready. Offline validation binds the frozen class/name and rejects failed or mismatched receipts. Old native wait-gap failures, raw measurements and original deadlines remain historical. Measured Rust/controller/engine inputs unchanged; no counter, window, sample-gap, correctness or final resource relaxation.",
     "unchanged": "Measured workloads, repeat counts, timing boundaries, native byte/state/exit checks, all quality/memory/stability thresholds and four formal plus two independent fresh-process cycles.",
     "diagnostic_policy": "Initial unobserved previous durations are null; diagnostics never replace required counters or become new acceptance gates."
   },
   "preflight_sha256": "d0df504754e28fa52d54831f0d1a8fb2b62ea22679dc60c1262460ce82aacc47",
   "observer_policy": {
-    "darwin": "Request QOS_CLASS_USER_INITIATED0x19 only on the short-lived observer thread after the real controller and engine are ready; retain requested/observed receipt. No worker or global priority changes.",
+    "darwin": "Request QOS_CLASS_USER_INTERACTIVE0x21 only on the short-lived observer thread after the real controller and engine are ready; retain exact requested/observed class and policy name. No worker or global priority changes.",
     "other_systems": "unchanged",
-    "scope": "Measurement observer, not library runtime; no timing-quality relaxation or scheduling guarantee."
+    "scope": "Measurement observer, not library runtime; no timing-quality relaxation or scheduling guarantee.",
+    "darwin_qos_class": 33
   },
   "raw_observation_recording": {
     "mode": "bounded-in-memory-until-owned-worker-cleanup",
@@ -158,5 +159,5 @@
     "retain_quality_rejections": true,
     "formal_samples_from_preparation": 0
   },
-  "reporter_sha256": "b45c1fe11c4f131df43dc5793469625a1b3decd94c97310a77edcd84ccab6b39"
+  "reporter_sha256": "8eca79d5bca4a5f5f18c69b6d70ce3d7505e55f8ee885881c7a6e23715c5c244"
 }
