@@ -427,26 +427,26 @@ jobs:
         run: >-
           python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Observe the original device-removal condition with bounded role diagnostics
+      - name: Require single-DELETE snapshot, retained files and actual shared-key readmission
         id: device_first
         continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target devices --test-filter actual_device_pause_disconnects
+          --test-target devices --test-filter actual_single_delete_preserves_files_and_allows_share_key_readmission
           --evidence-dir "${{ runner.temp }}/vs-device-removal-first"
       - name: Require exact owned-core cleanup before the independent repetition
         run: python scripts/prepare-test-engine.py check-cleanup
-      - name: Repeat independently without overriding the first outcome
+      - name: Require first actual explicit disconnect and removal with retained files
         id: device_second
         continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target devices --test-filter actual_device_pause_disconnects
+          --test-target devices --test-filter actual_explicit_disconnect_and_remove_preserves_files
           --evidence-dir "${{ runner.temp }}/vs-device-removal-second"
       - name: Verify exact owned-core cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
-      - name: Verify explicit observed-disconnect then single-delete operation separately
+      - name: Repeat explicit observed-disconnect and removal independently
         id: device_explicit
         continue-on-error: true
         run: >-
@@ -456,7 +456,7 @@ jobs:
       - name: Require exact cleanup after the explicit operation
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
-      - name: Require both original device conditions; this is not full acceptance
+      - name: Require actual readmission and both explicit disconnect cases; not full acceptance
         if: always()
         env:
           FIRST_OUTCOME: ${{ steps.device_first.outcome }}
