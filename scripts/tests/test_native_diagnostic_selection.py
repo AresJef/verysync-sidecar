@@ -62,8 +62,8 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "local_sync_runtime_engine" and row["filter"] ==
                             "public_ftp_" for row in ftp))
 
-    def test_current_manifest_requires_both_strict_ldap_transport_cases_on_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_both_strict_ldap_transport_cases_on_six_profiles(self):
+        selection = {"draft_labels": ["ldap-verified-transport"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         ldap = [row for row in actual if row.get("label") == "ldap-verified-transport"]
         self.assertEqual(len(ldap), 6)
@@ -71,9 +71,19 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "ldap_trusted_ca_engine" and row["filter"] ==
                             "native_trusted_ca_" for row in ldap))
 
+    def test_current_manifest_requires_actual_home_free_space_control_on_six_profiles(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        space = [row for row in actual if row.get("label") == "native-home-free-space-policy"]
+        self.assertEqual(len(space), 6)
+        self.assertEqual(len({row["package"] for row in space}), 6)
+        self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
+                            "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers"
+                            for row in space))
+
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 102)
+        self.assertEqual(len(self.rows), 108)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):

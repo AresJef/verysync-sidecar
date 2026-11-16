@@ -905,5 +905,59 @@
     "filter": "native_trusted_ca_",
     "label": "ldap-verified-transport",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
   }
 ]

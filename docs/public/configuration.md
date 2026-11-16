@@ -413,6 +413,27 @@ under an explicit restart and new connection; it does not establish immediate
 renaming of an already connected peer. The six native platform gates and final
 integrated acceptance remain required.
 
+## Configuration-volume free-space policy
+
+`GeneralOptionsPatch::min_home_disk_free` selects the minimum free space for
+the target configuration/index volume. It does not reserve space or measure
+the controller's filesystem. The native effect case starts with a `0%`
+selection and an indexed synthetic file, then selects `100%` on the occupied
+owned database volume without exhausting a disk. A subsequent scan returns
+native HTTP 500 with the database-space error, retained as
+`MutationOutcomeUnknown`; the folder enters its real error state and the new
+physical file remains absent from the index. Both file byte sequences and
+unrelated caller data remain intact in that controlled observation.
+
+The caller then explicitly resets the selection to `0%`, requests a new scan,
+and verifies that both files are indexed and the folder is idle. A normal
+restart retains that policy, index, identity and unrelated configuration.
+This proves the selected free-space guard and explicit recovery in the tested
+scenario. It does not turn an arbitrary failed scan into a no-effects result,
+exhaust physical storage, or establish disk-write throughput. The new case has
+local macOS ARM64 evidence; six native profiles and final integration remain
+required.
+
 ## Diagnostic preferences
 
 `diagnostics_options()` reads actual crash settings and legacy usage information.
