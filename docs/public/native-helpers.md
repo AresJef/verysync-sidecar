@@ -466,15 +466,15 @@ Survival is not reported as library cleanup or graphical rollback. A run with
 no cancellation journals reports unknown cancellation observations. Native
 execution of the new Linux cancellation case and the complete current-source
 platform gate remain pending.
-Windows native browser integration remains pending; its fallback uses
-`ShellExecute`, which the directory-opener fixture does not intercept.
-A standalone Windows CI protocol pilot first checks whether a temporary owned
-HTTP/HTTPS command can be selected and independently observed through the Shell.
-It preserves `UserChoice`, refuses delegated or unverifiable handlers before
-dispatch, and requires exact original registry values and effective handlers
-after restoration, including a pre-dispatch interruption. This pilot invokes
-only the owned capture executable; it does not execute VerySync or establish
-acceptance of the browser API.
+Actual isolated Windows AMD64 and ARM64 SDK cases verified the controlled native
+fallback, both verified and unverified requests, exact URLs, actor execution after
+successful root return, and exact actor exit. Cancellation independently held an
+observed live native-root handle and required its actual exit and helper-lease
+release; primary identity, configuration, keys and caller bytes were preserved.
+Both cases required the owned test Job to be empty before external termination
+and restored the original per-user protocol handlers. These results establish
+the scoped native API behavior, not a visible browser window or graphical rollback.
+The complete final-source platform matrix remains a separate gate.
 
 ```no_run
 # async fn example(core: &verysync_sidecar::ManagedInstance, helper: std::path::PathBuf) -> verysync_sidecar::Result<()> {
@@ -488,47 +488,30 @@ if receipt.outcome == NativeBrowserOutcome::CommandSucceeded {
 # Ok(()) }
 ```
 
-## Windows protocol research pilot
+## Windows browser test isolation
 
-The opt-in isolated-CI pilot can query the current Windows ProgID and temporarily
-shadow its per-user class command with an exact owned capture program. Protected
-UserChoice values remain read-only and are checked unchanged after restoration.
-Merged COM-delegated or DDE handlers are refused before dispatch. The pilot also
-verifies restoration after an injected pre-dispatch failure, then exact native
-HTTP/HTTPS arguments and process exit. This is test infrastructure, with actual
-Windows results tracked separately from SDK browser acceptance.
+The opt-in SDK runner is restricted to a fresh standard hosted Windows VM. It
+identifies the exact integration-test artifact from Cargo JSON before selecting
+private empty ProgramFiles lookup roots for that test child. Native helper
+LocalAppData remains its managed private profile; an ambient LORCACHROME override
+is removed from the child snapshot. This targets the
+[upstream Chrome lookup candidates](https://github.com/zserge/lorca/blob/master/locate.go),
+while real native URL and lifetime observations establish the actual path taken
+by the pinned core. Caller environment and installed browser files are preserved.
 
-A separate opt-in Windows SDK runner reuses the loopback-only proxy, exact owned
-opener and restored ProgID transaction. Its native case checks verified and
-unverified dispatch, exact URL/actor exit, primary/helper key separation and
-caller bytes. Cancellation must first observe a new live process with the exact
-owned program image after preparation completed, hold that native process handle,
-and then independently observe its exit and helper lease release. Desktop
-rollback is not inferred. Windows runtime acceptance remains pending these actual
-SDK results; compiling the case does not establish them.
+The runner queries the current HTTP/HTTPS ProgID, refuses delegated or
+unverifiable handlers, and temporarily shadows only its per-user class command
+with an exact owned capture executable. Protected UserChoice values remain
+read-only. Restoration requires exact original registry values and effective
+handlers, including after an injected pre-dispatch failure. The standalone
+protocol pilot invokes no VerySync; only the separate real SDK case provides
+native browser evidence. This fixture installs no library desktop hook.
 
-The Windows SDK runner uses an ordinary distinct browser-capture filename while
-retaining the built artifact's exact bytes. This keeps its protocol association
-separate from the shared directory fixture's `rundll32` role. The same-file
-handler check remains mandatory and a refusal records observed/expected paths.
-Two earlier SDK attempts stopped at that check and restored their handlers before
-running the native test; they establish no SDK browser result.
-The ordinary-filename candidate reached the real SDK case on Windows AMD64 and
-ARM64, but both cases timed out without a recorded capture actor. This remains a
-failed native result, with no inferred cause or browser acceptance. Phase receipts
-and bounded image observations from the exact test Job Object distinguish native
-command completion from desktop observation; they never change the timeout or
-cleanup requirements. Job-image diagnostics follow Microsoft's
+Cargo/test execution is assigned to the owned Job before its first instruction.
+The original deadlines, successful-empty-Job condition, native-root/actor exit
+observations and exact registry restoration are mandatory. Bounded failure image
+snapshots use Microsoft's
 [process-list layout](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_process_id_list)
 and [handle-based membership check](https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob).
-The next diagnostic observed successful native command receipts followed by
-owned Chrome processes on both Windows profiles, with no protocol capture. The
-test now builds and identifies the exact integration-test artifact before
-selecting private, empty ProgramFiles lookup roots for that test child. Native
-helper LocalAppData remains its managed private profile; an ambient LORCACHROME
-override is removed from the child snapshot. Caller environment, installed
-browser files and protected UserChoice values are preserved. This selection is
-based on the [upstream Chrome lookup candidates](https://github.com/zserge/lorca/blob/master/locate.go);
-only actual native dispatch/cancellation evidence can establish that the pinned
-core followed the controlled fallback. The original deadlines and cleanup gates
-still apply.
+All earlier refused or failed fixture attempts remain evidence of those attempts;
+they are not relabeled as successful native runs.
