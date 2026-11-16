@@ -52,7 +52,8 @@ use crate::{
 };
 use crate::{RawRequest, RawResponse, RequestEffect};
 pub use local_api::{
-    LocalApiClient, LocalApiConnectOptions, LocalApiFolder, LocalApiPeer,
+    LocalApiClient, LocalApiConnectOptions, LocalApiFolder, LocalApiHardware,
+    LocalApiHistoryFilter, LocalApiHistoryPage, LocalApiHistoryRecord, LocalApiPeer,
     LocalApiScanAcknowledgement,
 };
 

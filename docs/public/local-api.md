@@ -60,6 +60,42 @@ status/body. Generic HTTP403 or future error codes do not invent this entitlemen
 classification. A selection acknowledgement does not prove removal, download or
 all-peer completion. Licensed success/effects remain pending native acceptance.
 
+`folder_summaries()`, `folder_statistics()`, `connections()`,
+`folder_download_progress()` and `folder_completions()` return typed native
+maps/snapshots behind their individual Local-API license gates. The summary
+handler omits folders whose model lookup fails. Completion maps contain peer
+device IDs and exclude this instance; omitted/error peers are not fabricated.
+Download progress names remain untrusted index names. No read initiates peer
+discovery or establishes WAN reachability, file durability or batch completion.
+
+`folder_history(page, filter)` sends one explicit bounded page and a JSON-encoded
+`LocalApiHistoryFilter`. Name/folder/action fields remain native selections;
+start/end must be RFC3339 with a valid ordering. The core itself ignores malformed
+filter JSON, so the SDK validates/encodes it before making a request. Native
+backend errors remain `Error::Api`; missing page containers are response errors.
+An explicit null record collection is preserved separately from an empty array.
+Known omitempty record fields remain optional. Signed native modified/event-time
+integers are retained without guessing their unit or converting them to a clock.
+An empty free-instance page does not verify licensed recording or populated
+history effects. It does not enable auditing, reset history or follow pages.
+
+`hardware()` decodes the three nested CPU/memory/network objects. An embedded
+native section error returns bounded `Error::Api` diagnostics, preserving partial
+data for explicit inspection; missing/malformed sections are response errors.
+No controller inventory or synthetic zero inventory is substituted. The local
+macOS ARM64 common-control case observed this native error path, so it establishes
+error preservation rather than a positive complete hardware inventory.
+
+`generate_share()` and `validate_share_key()` reuse the existing `GeneratedShare`
+and `ValidatedShare` types through the native licensed Local-API handlers. Both
+consume native randomness and use the conservative modifying-request path.
+Neither registers or joins a folder. Suggested registration IDs can differ on
+each call and are not stable key fingerprints or cross-node group IDs. Native
+invalid-key errors can be JSON objects and remain private bounded
+`Error::ShareKeyRejected` diagnostics; the SDK never coerces them to text. A
+read-only validation cannot acquire a read/write credential. Real licensed
+generation/validation effects remain pending authorized acceptance.
+
 For a library-owned instance, `ManagedOptions::local_api_enabled(true)` explicitly
 sets the native startup flag. It requires an HTTP(S) management endpoint and
 grants no commercial entitlement. The default preserves Local-API settings.
