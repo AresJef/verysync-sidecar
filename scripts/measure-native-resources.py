@@ -30,6 +30,60 @@ def dependency():
     return psutil
 
 
+class SamplerTicker:
+    """Own one blocking timer; Darwin avoids power-aware timer coalescing."""
+    def __init__(self, interval_ms, critical=True):
+        self.interval_s = interval_ms / 1000
+        self.queue = None
+        self.expirations = None
+        self.backend = "monotonic-sleep"
+        if sys.platform == "darwin" and critical:
+            import select
+            self.queue = select.kqueue()
+            # Darwin SDK sys/event.h: NOTE_NSECONDS=0x04, NOTE_CRITICAL=0x20.
+            # NOTE_CRITICAL requests minimal coalescing on this owned descriptor;
+            # it changes no machine-wide timer, power setting or process priority.
+            timer = select.kevent(1, filter=select.KQ_FILTER_TIMER,
+                                 flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+                                 fflags=0x04 | 0x20, data=int(interval_ms * 1000000))
+            try:
+                self.queue.control([timer], 0, 0)
+            except BaseException:
+                self.queue.close()
+                raise
+            self.backend = "darwin-kqueue-critical-nanoseconds"
+
+    def wait(self):
+        if self.queue is None:
+            time.sleep(self.interval_s)
+        else:
+            import select
+            events = self.queue.control(None, 1, 1)
+            if not events or events[0].flags & select.KQ_EV_ERROR:
+                raise RuntimeError("owned precise timer did not produce a valid tick")
+            self.expirations = events[0].data
+
+    def close(self):
+        if self.queue is not None:
+            self.queue.close()
+
+
+def calibrate_timers(interval_ms):
+    result = []
+    for critical in [False, True, True, False]:
+        ticker = SamplerTicker(interval_ms, critical=critical)
+        points = [time.perf_counter_ns()]
+        try:
+            for _ in range(64):
+                ticker.wait(); points.append(time.perf_counter_ns())
+        finally:
+            ticker.close()
+        result.append({"backend": ticker.backend, "critical_requested": critical, "order": len(result),
+                       "interval_ns": [b-a for a, b in zip(points, points[1:])],
+                       "max_gap_ns": max(b-a for a, b in zip(points, points[1:]))})
+    return result
+
+
 def digest(path):
     result = hashlib.sha256()
     with Path(path).open("rb") as source:
@@ -80,6 +134,19 @@ def calibrate():
     if any(r["rss_bytes"] <= 0 or r["cpu_user_s"] < 0 or r["cpu_system_s"] < 0 for r in reads):
         raise RuntimeError("invalid process metric units")
     cpu = [r["cpu_user_s"] + r["cpu_system_s"] for r in reads]
+    initial_cpu_span = cpu[-1] - cpu[0]
+    # A fast read loop may fit inside one Windows CPU-accounting tick. Keep the
+    # original 1000-read overhead window, then do bounded calibration work before
+    # any native workload exists. Never turn a constant counter into zero CPU.
+    cpu_started = time.process_time()
+    wall_started = time.perf_counter_ns()
+    extra_reads = 0
+    while time.process_time() - cpu_started < .1 and time.perf_counter_ns() - wall_started < 500000000:
+        sum(range(10000))
+        point = snapshot(process)
+        cpu.append(point["cpu_user_s"] + point["cpu_system_s"])
+        extra_reads += 1
+    cpu_calibration_wall_ns = time.perf_counter_ns() - wall_started
     if any(a > b for a, b in zip(cpu, cpu[1:])) or cpu[-1] <= cpu[0]:
         raise RuntimeError("process CPU counter did not advance monotonically")
     positive_cpu = [b - a for a, b in zip(cpu, cpu[1:]) if b > a]
@@ -101,6 +168,9 @@ def calibrate():
             "metric_first": before, "metric_last": after,
             "cpu_min_observed_positive_step_s": min(positive_cpu),
             "cpu_observed_span_s": cpu[-1] - cpu[0],
+            "cpu_initial_1000_read_span_s": initial_cpu_span,
+            "cpu_calibration_extra_reads": extra_reads,
+            "cpu_calibration_extra_wall_ns": cpu_calibration_wall_ns,
             "cpu_counter_step_is_empirical_not_an_error_bound": True,
             "rss_touched_bytes": 16 * 1024 * 1024, "rss_growth_bytes": rss_growth,
             "psutil": psutil.__version__, "python": sys.version, "platform": platform.platform()}
@@ -208,17 +278,27 @@ def main():
     parser.add_argument("--interval-ms", type=float, default=10)
     parser.add_argument("--stage", choices=["calibration", "pilot", "formal", "independent"], required=True)
     parser.add_argument("--protocol", type=Path)
+    parser.add_argument("--timer-calibration", action="store_true")
     args = parser.parse_args()
     if not args.evidence_dir.is_absolute() or args.evidence_dir.exists():
         raise ValueError("fresh absolute evidence directory required")
-    if not 1 <= args.repeats <= 32 or not 1 <= args.interval_ms <= 100:
+    if not 1 <= args.repeats <= 128 or not 1 <= args.interval_ms <= 100:
         raise ValueError("outside the explicit preparation parameter bounds")
     dependency()
     if args.stage != "calibration" and (args.cargo is None or not args.cargo.is_absolute() or not args.cargo.is_file()):
         raise ValueError("native measurement requires an explicit absolute Cargo executable")
     args.evidence_dir.mkdir(parents=True, mode=0o700)
-    report = {"stage": args.stage, "calibration": calibrate(), "formal_sample": False}
+    try:
+        calibration = calibrate()
+    except Exception as error:
+        (args.evidence_dir / "safe-error.json").write_text(json.dumps({"phase":"self-counter-calibration",
+            "type":type(error).__name__,"message":str(error)[:320]})+"\n")
+        raise
+    report = {"stage": args.stage, "calibration": calibration, "formal_sample": False}
     if args.stage == "calibration":
+        if args.timer_calibration:
+            report["timer_calibration"] = calibrate_timers(args.interval_ms)
+        report["sampler_sha256"] = digest(__file__)
         (args.evidence_dir / "calibration.json").write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report))
         return 0
@@ -235,6 +315,7 @@ def main():
                "--evidence-dir", str(args.evidence_dir / "native")]
     journal_offset = 0
     processes = None
+    ticker = None
     phase = "prepare"
     report.update(scenario=args.scenario, repeats=args.repeats, interval_ms=args.interval_ms,
                   events=[], identities=None, source=source_identity(args.cargo, args.toolchain))
@@ -274,6 +355,8 @@ def main():
                                     raise ValueError("actual engine version differs from frozen baseline")
                                 processes = owned_processes(value)
                                 report["identities"] = [snapshot(p) for p in processes]
+                                ticker = SamplerTicker(args.interval_ms)
+                                report["timer_backend"] = ticker.backend
                                 phase = "baseline"
                                 events.with_suffix(".ack").write_text(nonce)
                             elif kind == "begin":
@@ -289,17 +372,22 @@ def main():
                 if processes is not None and phase in {"baseline", "measure"}:
                     row = {"phase": phase, "start_ns": time.perf_counter_ns(),
                            "controller": snapshot(processes[0]), "engine": snapshot(processes[1]),
-                           "end_ns": time.perf_counter_ns()}
+                           "end_ns": time.perf_counter_ns(), "previous_timer_expirations": ticker.expirations}
                     samples.write(json.dumps(row) + "\n")
                 if child.poll() is not None:
                     break
-                time.sleep(args.interval_ms / 1000)
+                if ticker is not None:
+                    ticker.wait()
+                else:
+                    time.sleep(args.interval_ms / 1000)
             report["exit_code"] = child.wait()
         finally:
             if child.poll() is None:
                 # A fixture failure still reaches its normal bounded SDK cleanup.
                 # Never kill by name or signal unrelated native processes.
                 child.wait(timeout=150)
+            if ticker is not None:
+                ticker.close()
             (args.evidence_dir / "preparation-result.json").write_text(json.dumps(report, indent=2) + "\n")
     if report["exit_code"] != 0:
         print(json.dumps({"exit_code": report["exit_code"], "evidence": str(args.evidence_dir)}))
