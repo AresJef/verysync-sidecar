@@ -515,3 +515,22 @@ snapshots use Microsoft's
 and [handle-based membership check](https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob).
 All earlier refused or failed fixture attempts remain evidence of those attempts;
 they are not relabeled as successful native runs.
+
+## Native verification scope
+
+[Run 43888496709](https://github.com/AresJef/verysync-sidecar/actions/runs/43888496709)
+contains six complete standard native bundles. Their auxiliary cases separately
+verify an acknowledged restart followed by actual unforced exit and explicit
+state-preserving relaunch; target-directory creation, reads and completions;
+normal native paths across restart; exact temporary/session cleanup with retained
+unrelated data; health and the preexisting migration snapshot. Native GUI-language,
+identity metadata, independently decoded QR references, image wallpaper resources
+and conditional responses have their own actual-effect checks in those bundles.
+
+Hardware results retain each platform's real data, error or empty snapshot.
+Writable-path snapshots keep the documented fixed-baseline limitation alongside
+an independent actual write. These results establish the stated controls and
+observations, with the original producer identity retained. Nonempty pending-link
+delivery, public-IP conditions, remaining helper/CLI behavior and complete current
+Windows SDK-browser execution retain separate gates. They do not establish a
+complete integrated release or every possible runtime state.
