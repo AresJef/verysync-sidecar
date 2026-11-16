@@ -150,6 +150,38 @@ async fn native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_s
     ] {
         assert!(matches!(error, Error::LicenseRequired { code: 3001, .. }));
     }
+    let full = enabled.client().folder(&folder_id).await?;
+    let template = enabled.client().folder_defaults().await?;
+    let new_options = CreateFolderOptions::new(
+        FolderId::parse("localapi-not-created")?,
+        TargetPath::local(root.join("not-created")),
+    )
+    .paused(true);
+    for error in [
+        local.folder_configuration(&folder_id).await.unwrap_err(),
+        local
+            .create_folder(&template, &new_options)
+            .await
+            .unwrap_err(),
+        local
+            .update_folder(&folder_id, &FolderPatch::default().label("not-applied"))
+            .await
+            .unwrap_err(),
+        local.replace_folder_configuration(&full).await.unwrap_err(),
+        local
+            .replace_folder_configurations(std::slice::from_ref(&full))
+            .await
+            .unwrap_err(),
+        local
+            .remove_folder_keep_files(&folder_id)
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(matches!(error, Error::LicenseRequired { code: 3001, .. }));
+    }
+    assert!(!root.join("not-created").exists());
+    assert_eq!(enabled.client().folder(&folder_id).await?.label, full.label);
+    println!("native Local-API typed_configuration_proxy_license3001=true unchanged_existing_configuration=true new_folder_not_created=true no_license_activation=true");
     println!("native Local-API common history_snapshot=true history_total={} history_rows={:?} hardware_typed_data={} shared_controls_license3001=true no_activation=true",history.total,history.records.as_ref().map(Vec::len),hardware_data);
     assert!(projected.path.local_path().is_none());
     assert!(!projected.extra.contains_key("label"));

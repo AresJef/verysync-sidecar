@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add licensed Local-API full folder configuration reads, guarded template-based
+  creation, partial updates, full item/collection replacement and unregister
+  requests, with clone serialization through readback and preserved uncertainty.
+
 - Add native Local-API history filters/records, hardware error-preserving reads,
   typed shared statistics/progress snapshots and licensed share generation/key
   checks, keeping source schemas and positive authorization gates explicit.

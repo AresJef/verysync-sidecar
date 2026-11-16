@@ -96,7 +96,7 @@ impl LocalApiClient {
         )
         .await
     }
-    fn path_style(&self) -> Result<PathStyle> {
+    pub(super) fn path_style(&self) -> Result<PathStyle> {
         match self.instance.version.os.as_str() {
             "windows" => Ok(PathStyle::Windows),
             "linux" | "darwin" => Ok(PathStyle::Unix),
@@ -116,32 +116,7 @@ impl LocalApiClient {
             self.system_status().await?;
         }
         let response = self.raw(request).await?;
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct LicenseEnvelope {
-            code: i64,
-            error: String,
-        }
-        // HTTP200 is the actual native Local-API rejection. Do not classify
-        // ordinary 403 responses or JSON arrays as commercial rejections.
-        if (200..300).contains(&response.status)
-            && response
-                .body
-                .iter()
-                .copied()
-                .find(|v| !v.is_ascii_whitespace())
-                == Some(b'{')
-        {
-            if let Ok(envelope) = serde_json::from_slice::<LicenseEnvelope>(&response.body) {
-                if envelope.code == 3001 && !envelope.error.is_empty() {
-                    return Err(Error::LicenseRequired {
-                        code: 3001,
-                        response: ResponseDiagnostic::new(response.status, response.body),
-                    });
-                }
-            }
-        }
-        crate::client::checked_response(operation, response, modifying)
+        checked_control_response(operation, response, modifying)
     }
 
     pub(super) async fn control_json<T: DeserializeOwned>(
@@ -162,7 +137,42 @@ impl LocalApiClient {
             )
         })
     }
+}
 
+pub(super) fn checked_control_response(
+    operation: &'static str,
+    response: RawResponse,
+    modifying: bool,
+) -> Result<RawResponse> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LicenseEnvelope {
+        code: i64,
+        error: String,
+    }
+    // HTTP200 is the actual native Local-API rejection. Do not classify
+    // ordinary 403 responses or JSON arrays as commercial rejections.
+    if (200..300).contains(&response.status)
+        && response
+            .body
+            .iter()
+            .copied()
+            .find(|v| !v.is_ascii_whitespace())
+            == Some(b'{')
+    {
+        if let Ok(envelope) = serde_json::from_slice::<LicenseEnvelope>(&response.body) {
+            if envelope.code == 3001 && !envelope.error.is_empty() {
+                return Err(Error::LicenseRequired {
+                    code: 3001,
+                    response: ResponseDiagnostic::new(response.status, response.body),
+                });
+            }
+        }
+    }
+    crate::client::checked_response(operation, response, modifying)
+}
+
+impl LocalApiClient {
     fn scope_request(
         &self,
         method: RawMethod,

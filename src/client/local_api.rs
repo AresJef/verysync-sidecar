@@ -8,10 +8,12 @@ use crate::{
 use std::{fmt, sync::Arc, time::Duration};
 mod common;
 mod control;
+mod writes;
 pub use common::{
     LocalApiHardware, LocalApiHistoryFilter, LocalApiHistoryPage, LocalApiHistoryRecord,
 };
 pub use control::{LocalApiFolder, LocalApiPeer, LocalApiScanAcknowledgement};
+pub use writes::LocalApiFolderCollectionUpdate;
 
 #[derive(Clone)]
 struct NativeLocalPolicy;
@@ -204,6 +206,13 @@ impl LocalApiClient {
         if modifying {
             self.system_status().await?;
         }
+        self.send_raw(request).await
+    }
+
+    // Only public raw or a typed operation retaining the mutation guard calls
+    // this transport primitive. RequestEffect remains truthful for uncertainty.
+    pub(super) async fn send_raw(&self, request: RawRequest) -> Result<RawResponse> {
+        let modifying = request.effect == RequestEffect::MayModify;
         let mut url = self.connection.base.clone();
         url.path_segments_mut()
             .map_err(|_| Error::InvalidEndpoint {

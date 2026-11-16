@@ -52,9 +52,9 @@ use crate::{
 };
 use crate::{RawRequest, RawResponse, RequestEffect};
 pub use local_api::{
-    LocalApiClient, LocalApiConnectOptions, LocalApiFolder, LocalApiHardware,
-    LocalApiHistoryFilter, LocalApiHistoryPage, LocalApiHistoryRecord, LocalApiPeer,
-    LocalApiScanAcknowledgement,
+    LocalApiClient, LocalApiConnectOptions, LocalApiFolder, LocalApiFolderCollectionUpdate,
+    LocalApiHardware, LocalApiHistoryFilter, LocalApiHistoryPage, LocalApiHistoryRecord,
+    LocalApiPeer, LocalApiScanAcknowledgement,
 };
 
 /// The policy applied to an engine version during connection.
