@@ -1578,11 +1578,14 @@ async fn actual_native_helpers_consume_official_add_url_before_existing_instance
         let state = owner.state_directory();
         let stdout = root.join(format!("private-producer-{index}.stdout"));
         let stderr = root.join(format!("private-producer-{index}.stderr"));
+        let native_log = root.join(format!("private-producer-{index}.native.log"));
         let mut command = Command::new(owner.selected_program().path());
         command
             .arg("serve")
             .arg("--home")
             .arg(state)
+            .arg("--log-file")
+            .arg(&native_log)
             .args(["--no-browser", "--no-restart", "--no-upgrade", "--add-url"])
             .arg(&link)
             .current_dir(state)
@@ -1621,9 +1624,64 @@ async fn actual_native_helpers_consume_official_add_url_before_existing_instance
         assert_eq!(status.code(), Some(1));
         assert!(std::fs::metadata(&stdout)?.len() <= 8192);
         assert!(std::fs::metadata(&stderr)?.len() <= 8192);
-        let output = [std::fs::read(&stdout)?, std::fs::read(&stderr)?].concat();
-        assert!(String::from_utf8_lossy(&output)
-            .contains("Failed to acquire lock: is another Verysync instance already running?"));
+        let native_output = if native_log.try_exists()? {
+            let metadata = native_log.symlink_metadata()?;
+            assert!(
+                metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() <= 8192
+            );
+            std::fs::read(&native_log)?
+        } else {
+            Vec::new()
+        };
+        let output = [
+            std::fs::read(&stdout)?,
+            std::fs::read(&stderr)?,
+            native_output,
+        ]
+        .concat();
+        let observed = String::from_utf8_lossy(&output);
+        let exact_refusal = observed
+            .contains("Failed to acquire lock: is another Verysync instance already running?");
+        if !exact_refusal {
+            // Only this owned synthetic producer, with URLs/paths and opaque
+            // credential-shaped runs removed before publishing CI diagnostics.
+            let safe = observed
+                .replace(&link, "[SYNTHETIC-LINK]")
+                .replace("native-cli-private-query", "[SYNTHETIC-QUERY]")
+                .replace(state.to_string_lossy().as_ref(), "[OWNED-STATE]");
+            let mut sanitized = String::new();
+            let mut token = String::new();
+            for ch in safe.chars().chain(std::iter::once(' ')) {
+                if ch.is_ascii_alphanumeric() {
+                    token.push(ch);
+                } else {
+                    sanitized.push_str(if token.len() >= 16 {
+                        "[OPAQUE]"
+                    } else {
+                        &token
+                    });
+                    token.clear();
+                    sanitized.push(if ch.is_control() && !matches!(ch, '\n' | '\t') {
+                        '?'
+                    } else {
+                        ch
+                    });
+                }
+            }
+            eprintln!(
+                "native official producer diagnostic: {}",
+                serde_json::json!({
+                    "exit_code":status.code(),"stdout_bytes":std::fs::metadata(&stdout)?.len(),
+                    "stderr_bytes":std::fs::metadata(&stderr)?.len(),"explicit_native_log_present":native_log.try_exists()?,
+                    "native_input_present_before_consumption":state.join("add-url").is_file(),
+                    "bounded_owned_diagnostic":sanitized.chars().take(768).collect::<String>()
+                })
+            );
+        }
+        assert!(
+            exact_refusal,
+            "the specific native refusal remains required"
+        );
         let pending = owner.client().pending_native_link().await?;
         assert_eq!(pending.link(), Some(link.as_str()));
         assert!(!format!("{pending:?}").contains("native-cli-private-query"));
