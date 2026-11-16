@@ -98,7 +98,13 @@ consumes it once and observes an empty follow-up, with no HTTP connection,
 folder registration or changes to the existing core's configuration, identity
 and caller bytes. This verifies native production and consumption together;
 it does not report the failed CLI start as success or install an OS protocol
-handler. The added producer case still requires its six native platform gates.
+handler. All four helper cases, including this official producer, ran on the
+six standard native AMD64/ARM64 profiles in
+[run 43977006777](https://github.com/AresJef/verysync-sidecar/actions/runs/43977006777).
+An earlier Windows ARM64 file-sharing failure remains retained; the newer
+successful original-order execution includes all operation stages and normal
+cleanup, without claiming that failure's root cause is fixed. Final integrated
+acceptance remains required.
 
 An empty result means the native response contained no text. It also occurs
 when the native inbox cannot be read: a nonempty directory at that location
@@ -568,7 +574,12 @@ observations, with the original producer identity retained.
 adds three actual helper cases on every standard native profile: nonempty link
 consumption and native read-error ambiguity, exact public-IP snapshot equality,
 and response loss after actual link consumption with one GET and no retry.
-The separate official CLI producer case has local macOS ARM64 evidence;
-its six-profile coverage, remaining helper/CLI behavior and complete current
-Windows SDK-browser execution retain separate gates. They
-do not establish a complete integrated release or every possible runtime state.
+[Run 43977006777](https://github.com/AresJef/verysync-sidecar/actions/runs/43977006777)
+adds the official producer and all four helper cases on those six profiles.
+The unchanged native random-string length boundaries and text-log snapshots,
+filters and data retention have separate six-profile evidence in
+[run 43929620380](https://github.com/AresJef/verysync-sidecar/actions/runs/43929620380).
+Each result retains its actual producer identity; older artifacts are not
+relabeled as the final binary. Remaining system/CLI controls and complete
+current-candidate integration retain separate gates. These results do not
+establish a complete integrated release or every possible runtime state.

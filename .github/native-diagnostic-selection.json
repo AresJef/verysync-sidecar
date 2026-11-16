@@ -4,6 +4,7 @@
     "native-helper-effects",
     "remote-version-archives",
     "ftp-disconnect-recovery",
-    "native-home-free-space-policy"
+    "native-home-free-space-policy",
+    "native-sleep-prevention-policy"
   ]
 }

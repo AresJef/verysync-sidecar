@@ -1613,3 +1613,7 @@ async fn native_temporary_retention_scans_expire_only_aged_native_inputs_and_sur
     );
     Ok(())
 }
+
+#[cfg(target_os = "macos")]
+#[path = "common/sleep_prevention_cases.rs"]
+mod sleep_prevention_cases;

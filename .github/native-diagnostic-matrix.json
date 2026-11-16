@@ -1013,5 +1013,23 @@
     "filter": "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart",
     "label": "native-temporary-retention-policy",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
+    "label": "native-sleep-prevention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
+    "label": "native-sleep-prevention-policy",
+    "trace": "0"
   }
 ]
