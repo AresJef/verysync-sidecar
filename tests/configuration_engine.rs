@@ -1320,3 +1320,157 @@ async fn native_remote_device_name_policy_uses_global_selection_and_preserves_re
     );
     Ok(())
 }
+
+async fn home_policy_index_ready(client: &Client, folder: &FolderId, files: u64) -> TestResult {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let status = client.folder_status(folder).await?;
+            if status.state == Some(FolderState::Idle) && status.local_files == Some(files) {
+                return Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers() -> TestResult
+{
+    let root = tempfile::Builder::new()
+        .prefix("vhomefree-")
+        .tempdir()?
+        .keep();
+    let data = root.join("synthetic data");
+    std::fs::create_dir(&data)?;
+    let original = b"independent low-threshold fixture";
+    let later = b"synthetic new bytes under selected high threshold";
+    std::fs::write(data.join("retained.txt"), original)?;
+    std::fs::write(root.join("sentinel"), b"unrelated disk-policy bytes")?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let id = core.client().instance().device_id.clone();
+    let low = DiskFreeRequirement::new(0.0, DiskSpaceUnit::Percent)?;
+    let high = DiskFreeRequirement::new(100.0, DiskSpaceUnit::Percent)?;
+    assert!(
+        core.client()
+            .update_general_options(&GeneralOptionsPatch::default().min_home_disk_free(low.clone()))
+            .await?
+            .requested_fields_match
+    );
+    let folder = FolderId::parse("native-home-free-space")?;
+    core.client()
+        .create_folder(&CreateFolderOptions::new(
+            folder.clone(),
+            TargetPath::local(&data),
+        ))
+        .await?;
+    core.client().request_scan(&folder).await?;
+    home_policy_index_ready(core.client(), &folder, 1).await?;
+    let before = core.client().configuration().await?;
+    assert!(
+        core.client()
+            .update_general_options(
+                &GeneralOptionsPatch::default().min_home_disk_free(high.clone())
+            )
+            .await?
+            .requested_fields_match
+    );
+    assert!(
+        core.client()
+            .general_options()
+            .await?
+            .min_home_disk_free
+            .as_ref()
+            == Some(&high)
+    );
+    std::fs::write(data.join("later.txt"), later)?;
+    let failure = core
+        .client()
+        .request_scan(&folder)
+        .await
+        .expect_err("a selected 100percent minimum must refuse the database's occupied volume");
+    assert!(
+        matches!(&failure,Error::MutationOutcomeUnknown{source,..}
+        if matches!(&**source,Error::Http{response} if response.status()==500
+            && String::from_utf8_lossy(response.body_bytes()).contains("insufficient space on disk for database"))),
+        "preserve the specific native database-space refusal as an unknown scan outcome"
+    );
+    let blocked = core.client().folder_status(&folder).await?;
+    assert!(blocked.state == Some(FolderState::Error) && blocked.local_files == Some(1));
+    assert!(blocked
+        .extra
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|v| v.contains("insufficient space on disk for database")
+            && v.contains("required 100 %")));
+    assert!(
+        matches!(core.client().index_file_info(&folder,&TargetPath::local("later.txt")).await,
+        Err(Error::Http{response}) if response.status()==404)
+    );
+    assert_eq!(std::fs::read(data.join("retained.txt"))?, original);
+    assert_eq!(std::fs::read(data.join("later.txt"))?, later);
+    assert_eq!(
+        std::fs::read(root.join("sentinel"))?,
+        b"unrelated disk-policy bytes"
+    );
+    assert!(
+        core.client()
+            .update_general_options(&GeneralOptionsPatch::default().min_home_disk_free(low.clone()))
+            .await?
+            .requested_fields_match
+    );
+    core.client().request_scan(&folder).await?;
+    home_policy_index_ready(core.client(), &folder, 2).await?;
+    assert!(
+        core.client()
+            .index_file_info(&folder, &TargetPath::local("later.txt"))
+            .await?
+            .local
+            .name
+            == "later.txt"
+    );
+    core.restart(Duration::from_secs(30)).await?;
+    home_policy_index_ready(core.client(), &folder, 2).await?;
+    assert!(
+        core.client()
+            .general_options()
+            .await?
+            .min_home_disk_free
+            .as_ref()
+            == Some(&low)
+    );
+    let after = core.client().configuration().await?;
+    for key in ["gui", "devices", "folders", "ldap"] {
+        assert!(
+            before.native_document().get(key) == after.native_document().get(key),
+            "home-free policy must preserve unrelated configuration sections"
+        );
+    }
+    assert_eq!(core.client().system_status().await?.device_id, id);
+    assert_eq!(std::fs::read(data.join("retained.txt"))?, original);
+    assert_eq!(std::fs::read(data.join("later.txt"))?, later);
+    assert_eq!(
+        std::fs::read(root.join("sentinel"))?,
+        b"unrelated disk-policy bytes"
+    );
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "native home-free policy evidence: {}",
+        serde_json::json!({
+            "actual_low_threshold_indexed_existing_file":true,
+            "actual_high_threshold_refused_database_scan_with_native_http500":true,
+            "actual_unknown_scan_outcome_preserved":true,
+            "actual_error_state_and_unchanged_index_count":true,
+            "actual_new_file_absent_from_index_while_physically_retained":true,
+            "actual_explicit_low_threshold_reset_and_new_file_indexing":true,
+            "actual_normal_restart_retains_low_policy_identity_and_both_indexed_files":true,
+            "actual_unrelated_sections_and_caller_bytes_retained":true,
+            "actual_normal_owned_tree_and_state_exit":true,
+            "physical_disk_exhaustion_induced":false
+        })
+    );
+    Ok(())
+}
