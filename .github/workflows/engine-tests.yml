@@ -57,10 +57,11 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     name: ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
-    # Source abe7 Windows AMD64 reached 55 minutes in the final mechanism probes
-    # after product suites completed. Allow the complete required bundle and its
-    # cleanup to finish; individual native deadlines and all outcome gates stay.
-    timeout-minutes: 65
+    # Source136 Windows native bundles reached cache suites at the65-minute
+    # job limit; later required suites and cleanup never completed. Reserve the
+    # full bundle allowance; individual operation deadlines and outcome gates
+    # remain unchanged. A cancelled/partial bundle still cannot pass acceptance.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -561,6 +562,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+            target: upgrade_engine
+            label: official-provider-cli
+            filter: stopped_owner_cli_checks_and_upgrades_the_dedicated_program
+            trace: "0"
           - package: macos-amd64-standard
             runner: macos-15-intel
             rust: x86_64-apple-darwin
@@ -791,6 +799,11 @@ jobs:
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Prepare the pinned older source for the focused official-provider case
+        if: matrix.target == 'upgrade_engine'
+        run: >-
+          python scripts/prepare-test-engine.py prepare --upgrade-source
+          --package "${{ matrix.package }}" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
       - name: Observe actual Windows x86 socket-provider guard inputs without changing them
         if: matrix.package == 'windows-386-standard'
         run: |
@@ -823,12 +836,19 @@ jobs:
               print('native socket-provider guard metadata: '+json.dumps(row), flush=True)
           PY
       - name: Preserve original native effects, strict predicates and deadlines
-        if: matrix.target != 'disk_full_engine'
+        if: matrix.target != 'disk_full_engine' && matrix.target != 'upgrade_engine'
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target "${{ matrix.target }}"
           --test-filter "${{ matrix.filter }}"
           --evidence-dir "${{ runner.temp }}/vs-windows-folder-opener-diagnosis"
+      - name: Require actual fixed URL and official-provider CLI upgrade effects
+        if: matrix.target == 'upgrade_engine'
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --test-filter "${{ matrix.filter }}"
+          --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-focused-official-provider"
       - name: Require real native disk-full effects and verified volume cleanup
         if: matrix.target == 'disk_full_engine'
         run: >-
@@ -837,6 +857,10 @@ jobs:
       - name: Require exact owned-executable cleanup after the original result
         if: always()
         run: python scripts/prepare-test-engine.py check-cleanup
+
+      - name: Require exact older owned-executable cleanup
+        if: always() && matrix.target == 'upgrade_engine'
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
 
   windows-browser-association-pilot:
     if: github.event_name == 'workflow_dispatch' && inputs.windows_browser_pilot
