@@ -183,7 +183,7 @@ pub use hardware::{
     NativeCpuPackage, NativeMemoryHardware, NativeMemoryModule, NativeNetworkHardware,
     NativeNetworkInterface, NativeNicCapability,
 };
-pub use ignores::{IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
+pub use ignores::{IgnoreDefaults, IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
 pub use invitations::{
     DeviceIgnoreUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
     PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
