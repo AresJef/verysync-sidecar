@@ -12,7 +12,13 @@ use verysync_sidecar::{
 
 #[tokio::test]
 async fn public_remote_sftp_archive_location_retains_and_restores_versions() -> TestResult {
-    let protocol = verysync_sidecar::StorageProtocol::Sftp;
+    remote_archive_case(verysync_sidecar::StorageProtocol::Sftp).await
+}
+#[tokio::test]
+async fn public_remote_ftp_archive_location_checks_first_generation_boundary() -> TestResult {
+    remote_archive_case(verysync_sidecar::StorageProtocol::Ftp).await
+}
+async fn remote_archive_case(protocol: verysync_sidecar::StorageProtocol) -> TestResult {
     use verysync_sidecar::VersionArchiveLocation;
     let root = tempfile::Builder::new().prefix("varc-").tempdir()?.keep();
     let mut peer =
@@ -30,7 +36,11 @@ async fn public_remote_sftp_archive_location_retains_and_restores_versions() -> 
     let source = root.join("source");
     let receive = root.join("receive");
     std::fs::create_dir(&source)?;
-    let name = "archive 二 %.txt";
+    let name = if protocol == verysync_sidecar::StorageProtocol::Ftp {
+        "archive-ascii.txt"
+    } else {
+        "archive 二 %.txt"
+    };
     let old = b"retained original archive bytes";
     let new = b"new remote content with a different length";
     std::fs::write(source.join(name), old)?;
@@ -61,7 +71,7 @@ async fn public_remote_sftp_archive_location_retains_and_restores_versions() -> 
         observed.cleanup_interval_seconds,
         prior.cleanup_interval_seconds
     );
-    eprintln!("private SFTP archive stage: configured");
+    eprintln!("private remote archive stage: configured");
     a.client().resume_folder(&af.id).await?;
     b.client().resume_folder(&bf.id).await?;
     a.client().request_scan(&af.id).await?;
@@ -69,7 +79,75 @@ async fn public_remote_sftp_archive_location_retains_and_restores_versions() -> 
     tokio::time::sleep(Duration::from_millis(1100)).await;
     std::fs::write(source.join(name), new)?;
     a.client().request_scan(&af.id).await?;
-    data(&receive.join(name), new).await?;
+    // Only macOS ARM64 has an established native first-generation refusal. Other
+    // platforms still require actual positive FTP archival and restoration.
+    if cfg!(all(target_os = "macos", target_arch = "aarch64"))
+        && protocol == verysync_sidecar::StorageProtocol::Ftp
+    {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let errors = b
+                    .client()
+                    .folder_errors(&bf.id, verysync_sidecar::ListPage::new(1, 10)?)
+                    .await?;
+                if errors.errors.as_ref().is_some_and(|rows| {
+                    rows.iter().any(|e| {
+                        e.path == name
+                            && e.error
+                                .contains("simple versioner: archive: file does not exist")
+                    })
+                }) {
+                    return Ok::<_, verysync_sidecar::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await??;
+        assert!(b
+            .client()
+            .folder_status(&bf.id)
+            .await?
+            .pull_errors
+            .is_some_and(|n| n > 0));
+        assert_eq!(std::fs::read(receive.join(name))?, old);
+        assert_eq!(std::fs::read(source.join(name))?, new);
+        assert_eq!(std::fs::read_dir(&archive)?.count(), 0);
+        let exit = a.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+        let exit = b.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+        peer.stop()?;
+        std::fs::remove_dir_all(root)?;
+        println!(
+            "public native FTP archive refusal evidence: {}",
+            serde_json::json!({
+            "actual_typed_location_readback":true,"actual_native_archive_not_found_error":true,
+            "actual_nonzero_pull_error_counter":true,"actual_receiver_old_bytes_retained":true,
+            "actual_source_new_bytes_retained":true,"actual_no_remote_archive_invented":true,
+            "actual_both_normal_owned_tree_exits":true,"positive_ftp_archival":false,
+            "scope":"macOS ARM64 fixed v2.33.2 first generation on the dedicated standard FTP peer"})
+        );
+        return Ok(());
+    }
+    if let Err(error) = data(&receive.join(name), new).await {
+        let errors = b
+            .client()
+            .folder_errors(&bf.id, verysync_sidecar::ListPage::new(1, 10)?)
+            .await;
+        eprintln!(
+            "private remote archive failure snapshot: {}",
+            serde_json::json!({
+            "protocol":peer.endpoint.filesystem_type(),
+            "actual_receiver_old":std::fs::read(receive.join(name)).is_ok_and(|v|v==old),
+            "actual_source_new":std::fs::read(source.join(name)).is_ok_and(|v|v==new),
+            "native_archive_not_found":errors.ok().and_then(|p|p.errors).is_some_and(|rows|
+                rows.iter().any(|e|e.path==name && e.error.contains("simple versioner: archive: file does not exist"))),
+            "remote_archive_entries":std::fs::read_dir(&archive).ok().map(|v|v.count()),
+            "original_data_deadline_retained":true})
+        );
+        return Err(error);
+    }
+
     let files = std::fs::read_dir(&archive)?
         .map(|x| x.map(|v| v.path()))
         .collect::<Result<Vec<_>, _>>()?;
@@ -84,7 +162,7 @@ async fn public_remote_sftp_archive_location_retains_and_restores_versions() -> 
         .ok_or("native SFTP archive not listed")?
         .version_time
         .clone();
-    eprintln!("private SFTP archive stage: real bytes archived and listed");
+    eprintln!("private remote archive stage: real bytes archived and listed");
     let exit = a.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     past_archive_generation(&b, &stamp).await?;
@@ -127,12 +205,13 @@ async fn public_remote_sftp_archive_location_retains_and_restores_versions() -> 
     peer.stop()?;
     std::fs::remove_dir_all(root)?;
     println!(
-        "public remote SFTP version archive evidence: {}",
+        "public remote version archive evidence: {}",
         serde_json::json!({
         "actual_typed_remote_archive_location":true,"actual_original_policy_preserved":true,
         "actual_old_bytes_archived_on_remote_peer":true,"actual_native_version_browse":true,
         "actual_restored_old_bytes":true,"actual_source_new_bytes_retained":true,
-        "actual_unicode_percent_filename":true,"actual_normal_restart_keeps_remote_location":true,
+        "actual_selected_filename_restored":true,"protocol":peer.endpoint.filesystem_type(),
+        "filename_kind":if protocol == verysync_sidecar::StorageProtocol::Sftp { "unicode-percent" } else { "ascii" },"actual_normal_restart_keeps_remote_location":true,
         "actual_reset_default_preserves_remote_archives":true,"actual_both_normal_owned_tree_exits":true})
     );
     Ok(())
