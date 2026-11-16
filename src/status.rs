@@ -44,7 +44,7 @@ impl<'de> Deserialize<'de> for FolderId {
     }
 }
 
-/// A fresh authenticated engine-wide snapshot.
+/// A fresh engine-wide snapshot from the selected management channel.
 ///
 /// Absent or null metrics are `None`; a reported zero is `Some(0)`. These
 /// metrics describe the engine and do not establish completion of a caller's

@@ -19,6 +19,7 @@ mod ignore_control;
 mod invitation_control;
 mod ldap_control;
 mod license_control;
+mod local_api;
 mod local_sync_control;
 mod maintenance_control;
 mod management_auth;
@@ -50,6 +51,7 @@ use crate::{
     Result, SystemStatus, BASELINE_ENGINE_VERSION,
 };
 use crate::{RawRequest, RawResponse, RequestEffect};
+pub use local_api::{LocalApiClient, LocalApiConnectOptions};
 
 /// The policy applied to an engine version during connection.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -93,14 +95,14 @@ pub struct EngineVersion {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Identity and version observed during the authenticated connection handshake.
+/// Identity and version observed during a connection handshake.
 ///
 /// This is a snapshot, not a live status or evidence that any transfer finished.
 #[derive(Clone, Debug)]
 pub struct InstanceInfo {
-    /// The identity read from the authenticated status endpoint.
+    /// The identity read from the selected channel's status endpoint.
     pub device_id: DeviceId,
-    /// The version read from the authenticated version endpoint.
+    /// The version read from the selected channel's version endpoint.
     pub version: EngineVersion,
     /// The version policy outcome, independent of feature/platform acceptance.
     pub compatibility: VersionCompatibility,
@@ -182,11 +184,21 @@ impl ConnectOptions {
     }
 }
 
+trait RequestAuthorization: Clone {
+    fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder;
+}
+
+impl RequestAuthorization for ApiKey {
+    fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        request.header("X-API-Key", self.header())
+    }
+}
+
 #[derive(Clone)]
-struct Connection {
+struct Connection<Authorization = ApiKey> {
     http: reqwest::Client,
     base: Url,
-    key: ApiKey,
+    key: Authorization,
     response_limit: usize,
     mutation_lock: Arc<tokio::sync::Mutex<()>>,
     endpoint_kind: crate::EndpointKind,
@@ -978,7 +990,7 @@ pub(crate) fn management_http(
     Ok((http, base))
 }
 
-impl Connection {
+impl<Authorization: RequestAuthorization> Connection<Authorization> {
     async fn get_json<T: DeserializeOwned>(
         &self,
         operation: &'static str,
@@ -1052,10 +1064,7 @@ impl Connection {
         body: Option<&serde_json::Value>,
         mutation: bool,
     ) -> Result<(u16, Vec<u8>)> {
-        let mut request = self
-            .http
-            .request(method, url)
-            .header("X-API-Key", self.key.header());
+        let mut request = self.key.authorize(self.http.request(method, url));
         if let Some(body) = body {
             request = request.json(body);
         }

@@ -107,6 +107,9 @@ pub enum Capability {
     LdapAuthentication,
     /// Account, configuration and commercial authorization.
     AccountLicense,
+    /// Separate native Local-API version/status connection and bounded raw scope;
+    /// licensed Local-API operations retain independent acceptance gates.
+    LocalApiConnection,
     /// Explicit official-account status, login and logout, separate from GUI auth.
     OfficialAccount,
     /// Native license metadata and explicitly selected refresh/trial requests.
@@ -325,6 +328,11 @@ static CATALOG: &[LibraryCapability] = &[
         verification: VerificationStatus::Pending,
     },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::LocalApiConnection,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::LicenseControl,
         implementation: ImplementationStatus::Typed,

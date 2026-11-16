@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add a separate explicit Local-API connection with typed version/status reads,
+  bounded scoped raw requests and an opt-in owned startup flag. Correct the
+  generated native app settings root without replacing arbitrary caller settings.
+  Licensed Local-API effects and final platform validation remain separate gates.
+
 - Add explicit native browser dispatch with a separate private helper profile,
   actual root outcomes and desktop-lifetime release; native acceptance pending.
 
