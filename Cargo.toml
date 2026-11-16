@@ -18,6 +18,7 @@ include = [
     "/src/**/*.rs",
     "/examples/**/*.rs",
     "/tests/**/*.rs",
+    "/tests/fixtures/resource-protocol.json",
     "/scripts/**/*.py",
     "/scripts/trace-native-folder-opener.ps1",
     "/scripts/storage-test-requirements.txt",
