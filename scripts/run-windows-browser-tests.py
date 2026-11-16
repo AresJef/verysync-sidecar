@@ -82,6 +82,9 @@ class WindowsChildJob:
             "Thread32Next": ([wintypes.HANDLE, ctypes.c_void_p], wintypes.BOOL),
             "OpenThread": ([wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
             "ResumeThread": ([wintypes.HANDLE], wintypes.DWORD),
+            "OpenProcess": ([wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+            "QueryFullProcessImageNameW": ([wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)], wintypes.BOOL),
+            "IsProcessInJob": ([wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)], wintypes.BOOL),
             "CloseHandle": ([wintypes.HANDLE], wintypes.BOOL),
         }
         for name, (args, result) in signatures.items():
@@ -131,6 +134,37 @@ class WindowsChildJob:
             raise
         return process
 
+    def active_images(self):
+        """Read only this exact job; do not enumerate or signal host processes."""
+        class ProcessIds(ctypes.Structure):
+            _fields_ = [("assigned", wintypes.DWORD), ("count", wintypes.DWORD),
+                        ("pids", ctypes.c_size_t * 128)]
+        info = ProcessIds()
+        if not self.kernel.QueryInformationJobObject(self.handle, 3, ctypes.byref(info), ctypes.sizeof(info), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if info.assigned > 128 or info.count > 128:
+            raise RuntimeError("owned job diagnostic exceeds bounded process count")
+        images = []
+        for pid in info.pids[:info.count]:
+            handle = self.kernel.OpenProcess(0x1000, False, pid)
+            if not handle:
+                images.append({"pid": pid, "observation": "unavailable after job snapshot"})
+                continue
+            try:
+                member = wintypes.BOOL()
+                if not self.kernel.IsProcessInJob(handle, self.handle, ctypes.byref(member)) or not member.value:
+                    images.append({"pid": pid, "observation": "job membership changed"})
+                    continue
+                size = wintypes.DWORD(32768)
+                image = ctypes.create_unicode_buffer(size.value)
+                if not self.kernel.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size)):
+                    images.append({"pid": pid, "observation": "image unavailable"})
+                else:
+                    images.append({"pid": pid, "image_name": Path(image.value).name})
+            finally:
+                self.kernel.CloseHandle(handle)
+        return images
+
     def wait_empty(self, seconds):
         class Accounting(ctypes.Structure):
             _fields_ = [("times", ctypes.c_int64 * 4), ("faults", wintypes.DWORD),
@@ -175,6 +209,11 @@ def run_bounded(command, env, log, report):
         reader.join(timeout=5)
         if reader.is_alive() or markers["read_error"]:
             raise RuntimeError("test output drain did not complete")
+        if report["test_exit_code"] != 0:
+            try:
+                report["owned_job_images_after_failure"] = job.active_images()
+            except Exception as error:
+                report["owned_job_image_diagnostic_error"] = type(error).__name__
         job.wait_empty(3)
         report["owned_job_empty_before_outer_termination"] = True
         report["native_sdk_effects_verified"] = report["test_exit_code"] == 0 and markers["native"] and markers["one_case"]

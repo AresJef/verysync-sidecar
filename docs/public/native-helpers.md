@@ -513,3 +513,11 @@ separate from the shared directory fixture's `rundll32` role. The same-file
 handler check remains mandatory and a refusal records observed/expected paths.
 Two earlier SDK attempts stopped at that check and restored their handlers before
 running the native test; they establish no SDK browser result.
+The ordinary-filename candidate reached the real SDK case on Windows AMD64 and
+ARM64, but both cases timed out without a recorded capture actor. This remains a
+failed native result, with no inferred cause or browser acceptance. Phase receipts
+and bounded image observations from the exact test Job Object distinguish native
+command completion from desktop observation; they never change the timeout or
+cleanup requirements. Job-image diagnostics follow Microsoft's
+[process-list layout](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_process_id_list)
+and [handle-based membership check](https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob).
