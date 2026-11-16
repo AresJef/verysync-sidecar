@@ -61,6 +61,25 @@ class BoundedDiskContracts(unittest.TestCase):
                 self.assertTrue(volume.mount.exists())
                 self.assertFalse(volume.cleanup_verified)
 
+    def test_detached_entry_is_removed_even_when_followed_target_is_missing(self):
+        # Reproduce the dangling mounted-directory state without mounting any
+        # filesystem on the developer host. The native Windows case separately
+        # proves actual VHD detach and junction removal on the runner.
+        from unittest.mock import Mock
+        volume = DRIVER.OwnedVolume.__new__(DRIVER.OwnedVolume)
+        volume.mount = Mock()
+        volume.mount.exists.return_value = False
+        volume.root = Mock()
+        volume.root.iterdir.return_value = []
+        volume.image = Mock()
+        volume.image.exists.return_value = False
+        volume.cleanup_verified = False
+        with patch.object(sys, "platform", "win32"), patch.object(DRIVER.os.path, "lexists", return_value=True):
+            volume.cleanup()
+        volume.mount.rmdir.assert_called_once()
+        volume.root.rmdir.assert_called_once()
+        self.assertTrue(volume.cleanup_verified)
+
 
 if __name__ == "__main__":
     unittest.main()

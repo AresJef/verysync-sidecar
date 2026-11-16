@@ -31,7 +31,7 @@ class OwnedVolume:
         require_ci(parent, evidence)
         evidence.mkdir(mode=0o700)
         self.nonce = secrets.token_hex(32)
-        self.root = parent / ("vs-bounded-" + self.nonce)
+        self.root = parent.resolve(strict=True) / ("vs-bounded-" + self.nonce)
         self.root.mkdir(mode=0o700)
         self.mount = self.root / "volume"
         self.mount.mkdir()
@@ -46,6 +46,10 @@ class OwnedVolume:
         with (self.evidence / "filesystem-commands.log").open("ab") as log:
             log.write((json.dumps(argv) + "\n").encode())
             log.write(result.stdout + result.stderr + b"\n")
+        if result.returncode:
+            print(json.dumps({"owned_filesystem_command": Path(argv[0]).name,
+                              "exit_code": result.returncode,
+                              "stderr": result.stderr.decode("utf-8", errors="replace")[-2000:]}), flush=True)
         result.check_returncode()
         return result.stdout
 
@@ -118,7 +122,7 @@ class OwnedVolume:
         elif sys.platform == "darwin":
             self.command(["/usr/bin/hdiutil", "create", "-size", "16m", "-fs", "HFS+",
                           "-layout", "NONE", "-nospotlight", "-volname", "VerySyncOwned",
-                          "-format", "UDRW", str(self.image)])
+                          "-type", "UDIF", str(self.image)])
             self.command(["/usr/bin/hdiutil", "attach", "-nobrowse", "-owners", "off", "-plist",
                           "-mountpoint", str(self.mount), str(self.image)])
             if not self.mac_image():
@@ -155,11 +159,14 @@ class OwnedVolume:
                 raise RuntimeError("owned VHD is still attached")
         # No recursive deletion across a mount point. Failure leaves evidence
         # and the owned image for diagnosis instead of touching another volume.
-        if self.mount.exists():
+        # A detached Windows volume may leave a dangling directory mount point:
+        # exists() follows its missing target and is false, while lexists() still
+        # observes our exact entry. rmdir removes only that entry after detach.
+        if os.path.lexists(self.mount):
             self.mount.rmdir()
         for child in self.root.iterdir():
             if child not in {self.image, self.root / "attach.txt", self.root / "detach.txt"} or child.is_symlink():
-                raise RuntimeError("unexpected fixture child; refuse deletion")
+                raise RuntimeError("unexpected fixture child; refuse deletion: "+child.name)
             child.unlink()
         self.root.rmdir()
         self.cleanup_verified = True
