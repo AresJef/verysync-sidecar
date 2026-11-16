@@ -225,3 +225,19 @@ preparation order means incomplete readiness and `INCONCLUSIVE`, even when forma
 data is otherwise complete. Protocols without this policy retain the old strict
 preparation rule. Old rejected trials and all earlier datasets keep their original
 identities; v18 binds both the changed preflight and offline reporter hashes.
+
+The separate `Mac resource environment check` workflow evaluates the same frozen
+protocol on the explicit standard `macos-26` and `macos-26-intel` images. GitHub
+lists both as generally available standard runners and provides standard runners
+without usage charges for public repositories ([runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
+[image announcement](https://github.blog/changelog/2026-02-26-macos-26-is-now-generally-available-for-github-hosted-runners/)).
+This bounded environment check follows actual Mac 15 hosted-capacity refusals
+and insufficient observation gaps. A different image is not a capacity or timing
+guarantee. Each new environment must independently calibrate, complete both
+preparation orders, then collect all four formal and two independent cycles.
+Old deadlines, attempts and results remain with their original runs; Mac 15
+preparation members are never combined with Mac 26 members. Original observation
+limits, source bindings, native correctness and cleanup gates remain unchanged.
+The existing six-profile collection and native acceptance workflows still run
+their original jobs. Image-specific results do not prove a minimum supported OS
+or complete platform coverage; the environment check has no accepted result yet.
