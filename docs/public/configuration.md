@@ -472,7 +472,11 @@ and raw logs. Final integrated acceptance remains required.
 scheduling limit. Zero retains the engine's policy; the SDK does not invent a
 fixed zero-value limit or promise a throughput improvement.
 
-The controlled two-core case registers two independent shared folders and
+The controlled case uses two independent authenticated source peers and one
+receiver, registering one shared folder per source. Each source has its own
+private TCP connection and explicit observation rate; both actual source indexes
+and peer connections are checked before unpause. This separates work arriving
+from different peers from the receiver's folder scheduling limit. The case
 selects one, then two, with explicit normal restarts. Under one, the native
 history must show one folder synchronizing while the other waits to synchronize.
 Under two, both folders must actually enter the synchronizing state together.
@@ -497,6 +501,10 @@ preparation diagnostics retain source index counts, unpause call spans and the
 ordered native state history, including starting and sync-preparing stages.
 Observer delivery times are not native event times. These diagnostics do not
 replace the requirement to observe both folders synchronizing together.
+The revised independent-peer fixture retains the four 8 MiB payloads and
+45-second observation limit, and extends configuration, identity and normal-exit
+checks to all three owned cores. Its current cross-platform results remain
+required; the earlier single-peer successes and failures retain their own scope.
 
 A configured paused folder can retain an empty runtime state as
 `FolderState::Unknown("")` in this baseline. Inspect the configuration's

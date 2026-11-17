@@ -9,6 +9,9 @@ struct Pair {
     received: PathBuf,
     a: FolderId,
     b: FolderId,
+    sender: ManagedInstance,
+    sender_identity: DeviceId,
+    before_sender: ConfigurationSnapshot,
 }
 
 #[tokio::test]
@@ -16,48 +19,58 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
     let root = tempfile::Builder::new().prefix("vsfc-").tempdir()?.keep();
     let sentinel = root.join("caller-sentinel");
     std::fs::write(&sentinel, b"folder-concurrency caller bytes")?;
-    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
-    let aid = a.client().instance().device_id.clone();
     let bid = b.client().instance().device_id.clone();
-    for core in [&a, &b] {
-        core.client()
+    b.client()
+        .update_network_configuration(&NetworkPatch::default().reconnection_interval_seconds(5))
+        .await?;
+    b.client()
+        .update_general_options(&GeneralOptionsPatch::default().disable_system_sleep_on_sync(false))
+        .await?;
+    let address = super::configuration_policy_listener(&b).await?;
+    let mut pairs = Vec::new();
+    for index in 0..2 {
+        // Distinct peers keep one sender's protocol/index queue from deciding
+        // when the other folder becomes eligible at the receiver.
+        let a = ManagedInstance::start(options(&root.join(format!("sender-{index}")))?).await?;
+        let aid = a.client().instance().device_id.clone();
+        assert_ne!(aid, bid);
+        a.client()
             .update_network_configuration(&NetworkPatch::default().reconnection_interval_seconds(5))
             .await?;
-        core.client()
+        a.client()
             .update_general_options(
                 &GeneralOptionsPatch::default().disable_system_sleep_on_sync(false),
             )
             .await?;
-    }
-    let address = super::configuration_policy_listener(&b).await?;
-    for (client, peer, addresses) in [
-        (a.client(), &bid, vec![format!("tcp://{address}")]),
-        (b.client(), &aid, vec!["dynamic".into()]),
-    ] {
-        client
-            .create_device(
-                &CreateDeviceOptions::new(peer.clone()).settings(
-                    DevicePatch::default()
-                        .addresses(addresses)
-                        .compression(DeviceCompression::Never)
-                        .allowed_transports(vec![DeviceTransport::Tcp])
-                        .advanced_configuration(
-                            DeviceAdvancedPatch::default().num_connections(1),
-                        )?,
-                ),
-            )
-            .await?;
-    }
-    a.client()
-        .update_bandwidth_configuration(
-            &BandwidthPatch::default()
-                .max_send_kib_per_second(1024)
-                .limit_in_lan(true),
-        )
-        .await?;
-    let mut pairs = Vec::new();
-    for index in 0..2 {
+        for (client, peer, addresses) in [
+            (a.client(), &bid, vec![format!("tcp://{address}")]),
+            (b.client(), &aid, vec!["dynamic".into()]),
+        ] {
+            client
+                .create_device(
+                    &CreateDeviceOptions::new(peer.clone()).settings(
+                        DevicePatch::default()
+                            .addresses(addresses)
+                            .compression(DeviceCompression::Never)
+                            .allowed_transports(vec![DeviceTransport::Tcp])
+                            .advanced_configuration(
+                                DeviceAdvancedPatch::default().num_connections(1),
+                            )?,
+                    ),
+                )
+                .await?;
+        }
+        assert!(
+            a.client()
+                .update_bandwidth_configuration(
+                    &BandwidthPatch::default()
+                        .max_send_kib_per_second(1024)
+                        .limit_in_lan(true),
+                )
+                .await?
+                .requested_fields_match
+        );
         let source = root.join(format!("source-{index}"));
         let received = root.join(format!("received-{index}"));
         std::fs::create_dir(&source)?;
@@ -79,14 +92,18 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
             .share_folder_with(&bf.configuration.id, &aid)
             .await?;
         a.client().resume_folder(&af.configuration.id).await?;
+        let before_sender = a.client().configuration().await?;
         pairs.push(Pair {
             source,
             received,
             a: af.configuration.id,
             b: bf.configuration.id,
+            sender: a,
+            sender_identity: aid,
+            before_sender,
         });
     }
-    let before_a = a.client().configuration().await?;
+    assert_ne!(pairs[0].sender_identity, pairs[1].sender_identity);
     let before_b = b.client().configuration().await?;
     let mut all_samples = Vec::new();
     for (phase, limit) in [1, 2].into_iter().enumerate() {
@@ -108,14 +125,24 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
         );
         b.restart(Duration::from_secs(30)).await?;
         let address = super::configuration_policy_listener(&b).await?;
-        a.client()
-            .update_device(
-                &bid,
-                &DevicePatch::default().addresses(vec![format!("tcp://{address}")]),
-            )
-            .await?;
-        a.restart(Duration::from_secs(30)).await?;
-        super::name_policy_connection_pair(&a, &b, true).await?;
+        for pair in &mut pairs {
+            pair.sender
+                .client()
+                .update_device(
+                    &bid,
+                    &DevicePatch::default().addresses(vec![format!("tcp://{address}")]),
+                )
+                .await?;
+            pair.sender.restart(Duration::from_secs(30)).await?;
+            super::name_policy_connection_pair(&pair.sender, &b, true).await?;
+        }
+        let connected = b.client().connections().await?;
+        for pair in &pairs {
+            assert!(connected
+                .connections
+                .get(&pair.sender_identity)
+                .is_some_and(|p| p.connected));
+        }
         assert_eq!(
             b.client().general_options().await?.max_folder_concurrency,
             limit
@@ -135,8 +162,9 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
                 .map(|i| ((i * 73 + i / 251 + (phase * 2 + index) * 41) % 251) as u8)
                 .collect();
             std::fs::write(pair.source.join(&name), &bytes)?;
-            a.client().request_scan(&pair.a).await?;
-            let indexed = a.client().folder_status(&pair.a).await?;
+            pair.sender.client().request_scan(&pair.a).await?;
+            let indexed = pair.sender.client().folder_status(&pair.a).await?;
+            assert_eq!(indexed.local_files, Some(u64::try_from(phase + 1)?));
             source_index_observations.push(serde_json::json!({
                 "folder_index":index,"expected_local_files":phase+1,
                 "actual_local_files":indexed.local_files,
@@ -263,14 +291,19 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
                 "selected":limit,"actual_max_syncing_in_ordered_event_history":max_syncing,
                 "native_state_events":state_events,"actual_serial_sync_waiting_observed":serial_waiting_seen,
                 "actual_gap_free_source_bound_event_history":true,"actual_both_new_payloads_received":true,
-                "actual_normal_restart_retained_policy":true,"sequential_status_reads_used_as_overlap_proof":false
+                "actual_normal_restart_retained_policy":true,"sequential_status_reads_used_as_overlap_proof":false,
+                "actual_two_independent_authenticated_source_peers":true
             })
         );
     }
     for pair in &pairs {
         b.client().pause_folder(&pair.b).await?;
     }
-    for (core, before, identity) in [(&a, &before_a, &aid), (&b, &before_b, &bid)] {
+    for (core, before, identity) in pairs
+        .iter()
+        .map(|p| (&p.sender, &p.before_sender, &p.sender_identity))
+        .chain(std::iter::once((&b, &before_b, &bid)))
+    {
         assert_eq!(&core.client().system_status().await?.device_id, identity);
         let after = core.client().configuration().await?;
         for key in ["gui", "folders", "defaults", "ldap"] {
@@ -282,11 +315,13 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
         assert_eq!(&std::fs::read(received)?, bytes);
     }
     assert_eq!(std::fs::read(sentinel)?, b"folder-concurrency caller bytes");
-    for core in [&mut a, &mut b] {
+    let exit = b.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    for core in pairs.iter_mut().map(|pair| &mut pair.sender) {
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
     std::fs::remove_dir_all(root)?;
-    println!("native folder concurrency cleanup evidence: actual_four_source_receiver_payloads_retained=true actual_unrelated_sections_identities_and_sentinel_retained=true actual_both_normal_owned_tree_and_state_exit=true dial_or_incoming_request_limits_claimed=false throughput_improvement_claimed=false");
+    println!("native folder concurrency cleanup evidence: actual_four_source_receiver_payloads_retained=true actual_unrelated_sections_identities_and_sentinel_retained=true actual_all_three_normal_owned_tree_and_state_exit=true actual_two_independent_authenticated_source_peers=true dial_or_incoming_request_limits_claimed=false throughput_improvement_claimed=false");
     Ok(())
 }

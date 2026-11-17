@@ -116,6 +116,14 @@ configuration. This fixture cleanup is separate from the primary core's required
 normal shutdown. Current Windows execution must verify the containment and final
 directory cleanup; compilation alone does not resolve the earlier failure.
 
+The Windows 386 case in
+[run 44014094430](https://github.com/AresJef/verysync-sidecar/actions/runs/44014094430/job/133807813244)
+actually observed one remaining member in each failed producer's private Job,
+emptied each Job, and verified continued primary authentication/configuration,
+normal primary exit and final directory cleanup. That source-bound result retains
+the original sharing failure as earlier evidence; final integrated execution
+remains required.
+
 An empty result means the native response contained no text. It also occurs
 when the native inbox cannot be read: a nonempty directory at that location
 returns an empty snapshot while remaining present. It therefore does not prove
