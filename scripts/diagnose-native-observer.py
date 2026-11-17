@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit diagnostic pilots with wall/thread-CPU/GC waits; never v23 members."""
+"""Bounded wall/thread-CPU/GC diagnosis; never frozen resource members."""
 import argparse
 import gc
 import hashlib
@@ -21,15 +21,20 @@ def sampler_module():
     return module
 
 
-def source_binding(original, runner_bytes, sampler_bytes, *, activity_mode=None, activity_bytes=b""):
+def source_binding(original, runner_bytes, sampler_bytes, *, activity_mode=None, activity_bytes=b"", timer_backend=None):
     if activity_mode not in (None, "off", "on"):
         raise ValueError("explicit activity comparison mode required")
+    if timer_backend not in (None, "mach", "critical-kqueue"):
+        raise ValueError("explicit native timer comparison backend required")
     extra = b"" if activity_mode is None else b"\0"+activity_mode.encode()+b"\0"+activity_bytes
+    if timer_backend is not None:
+        extra += b"\0timer\0"+timer_backend.encode()
     return {**original, 'unmodified_sampler_file_sha256': hashlib.sha256(sampler_bytes).hexdigest(),
             'diagnostic_runner_sha256': hashlib.sha256(runner_bytes).hexdigest(),
             'sampler_sha256': hashlib.sha256(runner_bytes+b'\0'+sampler_bytes+extra).hexdigest(),
             'diagnostic_only': True, 'eligible_for_frozen_preparation_or_formal': False,
             'activity_mode': activity_mode,
+            'timer_backend': timer_backend,
             'activity_helper_sha256': hashlib.sha256(activity_bytes).hexdigest() if activity_mode else None}
 
 
@@ -82,6 +87,7 @@ def worker(args):
     original_policy = module.observer_thread_policy
     original_activity_factory = getattr(module, "observer_process_activity", None)
     activity_mode = getattr(args, 'activity_mode', None)
+    timer_backend = getattr(args, 'timer_backend', None)
     if activity_mode is not None and original_activity_factory is not None:
         # Explicit diagnostic variants own this setting themselves; never let
         # the canonical default turn an off control into an on measurement.
@@ -107,10 +113,12 @@ def worker(args):
     def ticker(*a, **k):
         if overflow:
             raise RuntimeError('GC diagnostic bound exceeded; retained prefix is insufficient')
+        if timer_backend is not None:
+            k['darwin_backend'] = timer_backend
         return DiagnosticTicker(original_ticker(*a, **k), waits, lambda: overflow)
 
     module.SamplerTicker = ticker
-    module.source_identity = lambda *a, **k: source_binding(original_source(*a, **k), runner_bytes, sampler_bytes, activity_mode=activity_mode, activity_bytes=activity_bytes)
+    module.source_identity = lambda *a, **k: source_binding(original_source(*a, **k), runner_bytes, sampler_bytes, activity_mode=activity_mode, activity_bytes=activity_bytes, timer_backend=timer_backend)
     original_argv = sys.argv
     gc.callbacks.append(on_gc)
     started = time.monotonic()
@@ -146,6 +154,7 @@ def worker(args):
                   'formal_sample': False, 'native_pilot_exit_code': code, 'gc_overflow': overflow,
                   'diagnostic_error_type': error_type,
                   'activity_mode': activity_mode,
+                  'timer_backend': timer_backend,
                   'process_activity': activity.report() if activity is not None else None,
                   'activity_cleanup_error_type': type(cleanup_error).__name__ if cleanup_error is not None else None,
                   'elapsed_s': time.monotonic()-started,
@@ -165,22 +174,30 @@ def main():
     parser.add_argument('--worker', choices=sorted(set(ORDER)))
     parser.add_argument('--activity-mode', choices=['off', 'on'])
     parser.add_argument('--activity-abba', action='store_true')
+    parser.add_argument('--timer-backend', choices=['mach', 'critical-kqueue'],
+                        help='explicit worker-only native timer variant; diagnosis only')
+    parser.add_argument('--timer-abba', action='store_true',
+                        help='four fresh many-small pilots comparing native timers with activity on')
     args = parser.parse_args()
     if sys.platform != 'darwin' or not args.evidence_dir.is_absolute() or args.evidence_dir.exists():
         raise ValueError('explicit fresh absolute macOS diagnostic directory required')
     if args.worker:
-        if args.activity_abba:
-            raise ValueError('activity ABBA belongs to the bounded parent only')
+        if args.activity_abba or args.timer_abba:
+            raise ValueError('ABBA selection belongs to the bounded parent only')
         return worker(args)
-    if args.activity_mode is not None:
-        raise ValueError('single activity mode requires an explicit worker')
-    selected_order = ['many-small']*4 if args.activity_abba else ORDER
-    activity_modes = ['off', 'on', 'on', 'off'] if args.activity_abba else [None]*4
+    if args.activity_mode is not None or args.timer_backend is not None:
+        raise ValueError('single diagnostic variant requires an explicit worker')
+    if args.activity_abba and args.timer_abba:
+        raise ValueError('activity and timer comparisons must remain separate')
+    selected_order = ['many-small']*4 if args.activity_abba or args.timer_abba else ORDER
+    activity_modes = (['on']*4 if args.timer_abba else
+                      ['off', 'on', 'on', 'off'] if args.activity_abba else [None]*4)
+    timer_backends = ['critical-kqueue', 'mach', 'mach', 'critical-kqueue'] if args.timer_abba else [None]*4
     args.evidence_dir.mkdir(mode=0o700)
     started = time.monotonic()
     result = {'formal_sample': False, 'role': 'bounded native observer diagnosis only',
               'original_budget_s': 600, 'original_order': ORDER, 'selected_order': selected_order,
-              'activity_modes': activity_modes, 'cases': []}
+              'activity_modes': activity_modes, 'timer_backends': timer_backends, 'cases': []}
     try:
         for index, scenario in enumerate(selected_order):
             if time.monotonic()-started+150 > 600:
@@ -191,9 +208,12 @@ def main():
                        '--toolchain', args.toolchain, '--evidence-dir', str(destination), '--worker', scenario]
             if activity_modes[index] is not None:
                 command += ['--activity-mode', activity_modes[index]]
+            if timer_backends[index] is not None:
+                command += ['--timer-backend', timer_backends[index]]
             with (args.evidence_dir/f'case-{index}.console.log').open('wb') as output:
                 code = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=False).returncode
-            result['cases'].append({'scenario': scenario, 'activity_mode': activity_modes[index], 'exit_code': code, 'directory': destination.name})
+            result['cases'].append({'scenario': scenario, 'activity_mode': activity_modes[index],
+                'timer_backend': timer_backends[index], 'exit_code': code, 'directory': destination.name})
             if code not in {0, 2}:
                 result['status'] = 'ERROR'
                 return code
