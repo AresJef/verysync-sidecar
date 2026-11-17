@@ -18,7 +18,8 @@ class DiagnosticSelection(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
         for branch in ["test/strict-storage-tls-defaults-20261117-01a1ca9b",
                        "test/trusted-https-webdav-20261117-01a1ca9b",
-                       "ci/strict-storage-native-execution-20261117-01a1ca9b"]:
+                       "ci/strict-storage-native-execution-20261117-01a1ca9b",
+                       "ci/native-stop-diagnostics-20261117-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -104,7 +105,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 175)
+        self.assertEqual(len(self.rows), 181)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -218,21 +219,21 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(producer[0]["package"], "windows-386-standard")
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_draft_selects_trusted_https_and_strict_flags_on_all_six_profiles(self):
+    def test_current_draft_selects_concurrency_and_partial_peer_shutdown_on_all_six_profiles(self):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 12)
         expected = {
-            "trusted-https-identity": "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified",
-            "strict-storage-tls-flag": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+            "native-folder-concurrency-policy": ("configuration_engine", "native_folder_concurrency_has_ordered_single_and_double_sync_effects"),
+            "native-partial-peer-shutdown": ("engine_control", "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters"),
         }
-        for label, name in expected.items():
+        for label, (target, name) in expected.items():
             subset = [r for r in rows if r["label"] == label]
             self.assertEqual(len(subset), 6)
             self.assertEqual({r["package"] for r in subset}, set(HELPER.PROFILES) - {"windows-386-standard"})
-            self.assertTrue(all(r["target"] == "local_sync_protocol_engine" and r["filter"] == name for r in subset))
+            self.assertTrue(all(r["target"] == target and r["filter"] == name and r["trace"] == "0" for r in subset))
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 175)
+        self.assertEqual(len(self.rows), 181)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

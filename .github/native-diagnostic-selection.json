@@ -1,6 +1,6 @@
 {
   "draft_labels": [
-    "trusted-https-identity",
-    "strict-storage-tls-flag"
+    "native-folder-concurrency-policy",
+    "native-partial-peer-shutdown"
   ]
 }
