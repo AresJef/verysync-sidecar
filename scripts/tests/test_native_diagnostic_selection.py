@@ -83,7 +83,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 134)
+        self.assertEqual(len(self.rows), 140)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_actual_temporary_expiry_on_six_profiles(self):
@@ -108,11 +108,11 @@ class DiagnosticSelection(unittest.TestCase):
                             "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer"
                             for row in sleep))
 
-    def test_current_manifest_requires_real_ordered_folder_concurrency_on_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_real_ordered_folder_concurrency_on_six_profiles(self):
+        selection = {"draft_labels": ["native-folder-concurrency-policy"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         folders = [row for row in actual if row.get("label") == "native-folder-concurrency-policy"]
-        self.assertEqual(len(actual), 32)
+        self.assertEqual(len(actual), 6)
         self.assertEqual(len(folders), 6)
         self.assertEqual(len({row["package"] for row in folders}), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
@@ -140,6 +140,17 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_signed_incoming_request_budgets_survive_restart_and_real_transfers"
                             for row in budgets))
+
+    def test_current_manifest_requires_native_general_signed_domains_on_all_six_profiles(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        domains = [row for row in actual if row.get("label") == "native-general-signed-domains"]
+        self.assertEqual(len(actual), 32)
+        self.assertEqual(len(domains), 6)
+        self.assertEqual(len({row["package"] for row in domains}), 6)
+        self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
+                            "native_general_signed_integer_domains_survive_partial_full_saves_and_restart"
+                            for row in domains))
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

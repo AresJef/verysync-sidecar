@@ -1,7 +1,7 @@
 {
   "draft_labels": [
     "native-signed-incoming-budget",
-    "native-folder-concurrency-policy",
+    "native-general-signed-domains",
     "remote-version-archives",
     "ftp-disconnect-recovery",
     "native-dial-concurrency-policy",

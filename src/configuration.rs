@@ -179,18 +179,18 @@ pub struct ConfigurationSectionUpdate<T> {
 /// General engine options. Runtime scheduling effects require separate observation.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct GeneralOptions {
-    /// Configured retention interval for temporary files, in hours.
+    /// Signed native retention selection for temporary files, in hours.
     #[serde(rename = "keepTemporariesH")]
-    pub keep_temporaries_hours: u32,
+    pub keep_temporaries_hours: i64,
     /// Configured progress reporting interval, in seconds.
     #[serde(rename = "progressUpdateIntervalS")]
     pub progress_update_interval_seconds: i64,
-    /// Native folder-concurrency setting, including the engine's zero policy.
+    /// Signed native folder-concurrency selection; runtime policy is separate.
     #[serde(rename = "maxFolderConcurrency")]
-    pub max_folder_concurrency: u32,
-    /// Native concurrent-dial setting, including the engine's zero policy.
+    pub max_folder_concurrency: i64,
+    /// Signed native concurrent-dial selection; runtime policy is separate.
     #[serde(rename = "maxDialConcurrent")]
-    pub max_dial_concurrent: u32,
+    pub max_dial_concurrent: i64,
     /// Signed native incoming-request budget in KiB, retaining negative and zero policies.
     #[serde(rename = "maxConcurrentIncomingRequestKiB")]
     pub max_concurrent_incoming_request_kib: i64,
@@ -203,9 +203,9 @@ pub struct GeneralOptions {
     /// Native minimum free space for configuration/index storage, when reported.
     #[serde(rename = "minHomeDiskFree", skip_serializing_if = "Option::is_none")]
     pub min_home_disk_free: Option<DiskFreeRequirement>,
-    /// Minimum temporary-file block count for index publication, when reported.
+    /// Signed native temporary-index block selection, when reported.
     #[serde(rename = "tempIndexMinBlocks", skip_serializing_if = "Option::is_none")]
-    pub temp_index_min_blocks: Option<u32>,
+    pub temp_index_min_blocks: Option<i64>,
     /// Native global preference for adopting announced remote names.
     #[serde(
         rename = "overwriteRemoteDeviceNamesOnConnect",
@@ -218,9 +218,9 @@ pub struct GeneralOptions {
         skip_serializing_if = "Option::is_none"
     )]
     pub send_full_index_on_upgrade: Option<bool>,
-    /// Configured IP traffic-class byte; not proof of OS or router handling.
+    /// Signed native IP traffic-class selection; OS and router handling are separate.
     #[serde(rename = "trafficClass", skip_serializing_if = "Option::is_none")]
-    pub traffic_class: Option<u8>,
+    pub traffic_class: Option<i64>,
     /// Remaining upstream options; values may be private and are omitted by Debug.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -243,7 +243,7 @@ impl fmt::Debug for GeneralOptions {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct GeneralOptionsPatch {
     #[serde(rename = "keepTemporariesH", skip_serializing_if = "Option::is_none")]
-    keep_temporaries_hours: Option<u32>,
+    keep_temporaries_hours: Option<i64>,
     #[serde(
         rename = "progressUpdateIntervalS",
         skip_serializing_if = "Option::is_none"
@@ -253,9 +253,9 @@ pub struct GeneralOptionsPatch {
         rename = "maxFolderConcurrency",
         skip_serializing_if = "Option::is_none"
     )]
-    max_folder_concurrency: Option<u32>,
+    max_folder_concurrency: Option<i64>,
     #[serde(rename = "maxDialConcurrent", skip_serializing_if = "Option::is_none")]
-    max_dial_concurrent: Option<u32>,
+    max_dial_concurrent: Option<i64>,
     #[serde(
         rename = "maxConcurrentIncomingRequestKiB",
         skip_serializing_if = "Option::is_none"
@@ -271,7 +271,7 @@ pub struct GeneralOptionsPatch {
     #[serde(rename = "minHomeDiskFree", skip_serializing_if = "Option::is_none")]
     min_home_disk_free: Option<DiskFreeRequirement>,
     #[serde(rename = "tempIndexMinBlocks", skip_serializing_if = "Option::is_none")]
-    temp_index_min_blocks: Option<u32>,
+    temp_index_min_blocks: Option<i64>,
     #[serde(
         rename = "overwriteRemoteDeviceNamesOnConnect",
         skip_serializing_if = "Option::is_none"
@@ -283,11 +283,11 @@ pub struct GeneralOptionsPatch {
     )]
     send_full_index_on_upgrade: Option<bool>,
     #[serde(rename = "trafficClass", skip_serializing_if = "Option::is_none")]
-    traffic_class: Option<u8>,
+    traffic_class: Option<i64>,
 }
 impl GeneralOptionsPatch {
-    /// Set the engine's temporary-file retention interval in hours.
-    pub fn keep_temporaries_hours(mut self, value: u32) -> Self {
+    /// Set the signed native temporary-file retention selection in hours.
+    pub fn keep_temporaries_hours(mut self, value: i64) -> Self {
         self.keep_temporaries_hours = Some(value);
         self
     }
@@ -296,13 +296,13 @@ impl GeneralOptionsPatch {
         self.progress_update_interval_seconds = Some(value);
         self
     }
-    /// Set native folder concurrency; interpret zero according to the engine.
-    pub fn max_folder_concurrency(mut self, value: u32) -> Self {
+    /// Set signed native folder concurrency; retain negative and zero policies.
+    pub fn max_folder_concurrency(mut self, value: i64) -> Self {
         self.max_folder_concurrency = Some(value);
         self
     }
-    /// Set native dial concurrency; interpret zero according to the engine.
-    pub fn max_dial_concurrent(mut self, value: u32) -> Self {
+    /// Set signed native dial concurrency; retain negative and zero policies.
+    pub fn max_dial_concurrent(mut self, value: i64) -> Self {
         self.max_dial_concurrent = Some(value);
         self
     }
@@ -329,8 +329,8 @@ impl GeneralOptionsPatch {
         self.min_home_disk_free = Some(value);
         self
     }
-    /// Set the native temporary-file index block threshold.
-    pub fn temp_index_min_blocks(mut self, value: u32) -> Self {
+    /// Set the signed native temporary-file index block selection.
+    pub fn temp_index_min_blocks(mut self, value: i64) -> Self {
         self.temp_index_min_blocks = Some(value);
         self
     }
@@ -344,8 +344,8 @@ impl GeneralOptionsPatch {
         self.send_full_index_on_upgrade = Some(value);
         self
     }
-    /// Set the native IP traffic-class byte; downstream handling remains separate.
-    pub fn traffic_class(mut self, value: u8) -> Self {
+    /// Retain the signed native IP traffic-class selection, without an OS guarantee.
+    pub fn traffic_class(mut self, value: i64) -> Self {
         self.traffic_class = Some(value);
         self
     }

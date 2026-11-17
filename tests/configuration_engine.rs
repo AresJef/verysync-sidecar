@@ -1650,3 +1650,6 @@ mod dial_concurrency_cases;
 
 #[path = "common/incoming_request_budget_cases.rs"]
 mod incoming_request_budget_cases;
+
+#[path = "common/general_integer_domain_cases.rs"]
+mod general_integer_domain_cases;
