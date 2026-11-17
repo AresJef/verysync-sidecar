@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Replace Chrono with Jiff for verified native wire timestamps while retaining
+  Rust 1.85. Preserve offset-based ordering and original request spelling; reject
+  unsupported leap seconds and precision beyond nanoseconds, and retain floor
+  seconds for archive timestamps before the Unix epoch. Dependency auditing
+  continues to reject vulnerabilities and informational maintenance warnings.
+
 - Preserve native signed general-option selections for temporary retention,
   folder/dial concurrency, temporary-index block selection and traffic class.
   Their fields and setters use `i64` in the unstable alpha API. Preserve

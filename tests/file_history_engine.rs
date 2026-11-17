@@ -501,17 +501,20 @@ fn history_result<T>(
 }
 
 async fn past_archive_generation(core: &ManagedInstance, stamp: &str) -> TestResult {
-    let selected = chrono::DateTime::parse_from_rfc3339(stamp)?.timestamp();
+    let selected = stamp
+        .parse::<jiff::Timestamp>()?
+        .as_nanosecond()
+        .div_euclid(1_000_000_000);
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let status = core.client().system_status().await?;
-            let now = chrono::DateTime::parse_from_rfc3339(
-                status
-                    .now_time
-                    .as_deref()
-                    .ok_or("native current clock absent")?,
-            )?
-            .timestamp();
+            let now = status
+                .now_time
+                .as_deref()
+                .ok_or("native current clock absent")?
+                .parse::<jiff::Timestamp>()?
+                .as_nanosecond()
+                .div_euclid(1_000_000_000);
             if now > selected {
                 break;
             }

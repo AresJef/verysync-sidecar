@@ -1,13 +1,13 @@
 //! Exact disconnect observations and bounded, value-redacted native event ordering.
 use serde_json::{json, Value};
 use std::time::SystemTime;
+#[path = "../../src/timestamps.rs"]
+mod wire_timestamps;
 
-fn event_time(event: &Value) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+fn event_time(event: &Value) -> Option<jiff::Timestamp> {
     event["time"]
         .as_str()
-        .filter(|time| time.len() <= 128)
-        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
-        .filter(|time| time.timestamp_subsec_nanos() < 1_000_000_000)
+        .and_then(wire_timestamps::parse_rfc3339)
 }
 
 pub(super) fn has_disconnect_event(
@@ -17,8 +17,12 @@ pub(super) fn has_disconnect_event(
     removal_started: SystemTime,
     observed_at: SystemTime,
 ) -> bool {
-    let started: chrono::DateTime<chrono::Utc> = removal_started.into();
-    let observed: chrono::DateTime<chrono::Utc> = observed_at.into();
+    let (Ok(started), Ok(observed)) = (
+        jiff::Timestamp::try_from(removal_started),
+        jiff::Timestamp::try_from(observed_at),
+    ) else {
+        return false;
+    };
     events.iter().any(|event| {
         let data = &event["data"];
         event["type"] == "DeviceDisconnected"
@@ -38,7 +42,7 @@ pub(super) fn removal_timeline(
     peer: &str,
     removal_started: SystemTime,
 ) -> Vec<Value> {
-    let started: chrono::DateTime<chrono::Utc> = removal_started.into();
+    let started = jiff::Timestamp::try_from(removal_started).ok();
     let includes_peer = |devices: &[Value]| {
         devices.iter().try_fold(false, |found, device| {
             let id = device["deviceID"].as_str()?;
@@ -61,8 +65,8 @@ pub(super) fn removal_timeline(
                 | "PendingDevicesChanged") => kind,
                 _ => return None,
             };
-            let relation = match event_time(event) {
-                Some(time) if time < started => "before_removal_start",
+            let relation = match event_time(event).zip(started) {
+                Some((time, started)) if time < started => "before_removal_start",
                 Some(_) => "at_or_after_removal_start",
                 None => "unverified",
             };
