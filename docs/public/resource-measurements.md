@@ -417,3 +417,23 @@ to identify the actual mechanisms being compared. No native worker, global
 priority, timer setting or power policy changes. Both native preparation orders
 and all four formal plus two independent cycles must succeed under the new
 frozen source identity before any v23 resource claim.
+
+The later v26 preparation keeps these quality thresholds and complete-group
+requirements. Its source is the strict-TLS-default repair, producer
+`ec108cb13e605cb9b9807a47043d319552f37479`, tree
+`97cdd4e3932a1ff9f445d0c26ca7776729d2711e`, in
+[resource run 44093746127](https://github.com/AresJef/verysync-sidecar/actions/runs/44093746127).
+All six profiles completed both original opposite orders. The four Linux and
+Windows profiles had eight valid preparation cases each; macOS AMD64 had seven
+valid cases and one insufficient case, with one complete valid order. macOS ARM64
+had six valid cases and two insufficient cases, leaving neither order complete.
+Those two cases retained gaps of 79.663 ms and 152.929 ms against the original
+50 ms limit. Their measured waits accounted for most of the gap; this locates the
+delay without establishing its operating-system or host cause. All eight ARM64
+cases passed native data, configuration, identity and normal process-exit checks.
+
+The ARM64 job's first attempt received no runner and executed no steps. A single
+job recovery produced the eight actual cases above; the other five profiles were
+preserved. No formal v26 collection was started. Preparation data, valid members
+of incomplete orders and earlier protocol results remain excluded from formal
+acceptance. The overall resource conclusion remains `INCONCLUSIVE`.
