@@ -49,6 +49,22 @@ combined source digest: the v23 validator must reject those pilots as frozen
 preparation or formal evidence. The bounded diagnosis may identify a scheduling
 or CPU cause; a green diagnostic job itself establishes no resource acceptance.
 
+The first [Intel native-wait diagnosis](https://github.com/AresJef/verysync-sidecar/actions/runs/44027582724)
+completed all four pilots in 80.39 seconds. No wait exceeded 50 ms; the largest
+waits were about 11 ms. It did not reproduce the earlier rejection and therefore
+does not establish whether that delay came from GC, thread scheduling or another
+host condition. These distinct diagnostic records remain ineligible for v23
+preparation or formal coverage.
+
+A single separate macOS 26 Intel preparation uses immutable producer
+`a6df5afb7e05f5fe6f3327d7f74d6de829223c29` and the exact unchanged v23 protocol.
+It first repeats actual counter/timer calibration and all eight native preparation
+cases in the two original opposite orders. Formal collection requires readiness and a subsequent
+explicit `resource-formal` label (or ready/manual execution), which starts fresh
+preparation before the original four formal plus two independent cycles. The
+Mac 15 failures, attempts and original deadline remain unchanged; no members
+are stitched across environments. A different image is not a timing guarantee.
+
 The explicit `resource_usage_engine` target runs one registered workload against
 an isolated owned VerySync instance: idle, an 8 MiB download, a 128 MiB download,
 or 256 separate 8 KiB files. Source generation uses a fixed 64 KiB buffer. Every
