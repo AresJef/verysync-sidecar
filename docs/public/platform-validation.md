@@ -136,9 +136,9 @@ required.
 
 An owned draft can select current investigation labels in
 `.github/native-diagnostic-selection.json`. The current selection investigates
-actual sleep-prevention requests on both macOS and both Windows standard
-profiles. The 151-row complete catalog retains every earlier concurrency and
-failed-producer case alongside the two new Windows effect gates. Catalog tests
+actual temporary-index threshold effects on all six standard profiles. The
+157-row complete catalog retains all 151 earlier cases, including concurrency,
+failed-producer and both Mac/Windows sleep gates, alongside six new threshold cases. Catalog tests
 independently retain the required profile/filter mappings for every earlier
 case; they do not force unrelated investigations into each draft. Missing
 selection uses the whole catalog; empty, duplicate,

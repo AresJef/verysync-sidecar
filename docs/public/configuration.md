@@ -734,6 +734,24 @@ promise immediate application without restart, retry timing, request-budget
 effects, packet QoS or a performance improvement.
 
 
+## Temporary index threshold validation
+
+The temporary-index threshold has a separate native-effect case. It selects
+`temp_index_min_blocks` as 1, 512, then 1 again across normal restarts. Each
+new 8 MiB transfer must have an actual indexed block count between those limits.
+During at least three seconds of incomplete transfer, the receiver's native
+temporary file must contain the exact first block, and the authenticated source
+observes that receiver's `fromTemporary` advertisement. The low threshold must
+advertise; the high threshold must withhold it. An explicit native null
+availability slice is recorded separately; missing/malformed fields and HTTP
+errors cannot count as absence. All source/receiver bytes, identities,
+credentials, unrelated sections, sentinel and both normal exits remain required.
+The local macOS ARM64 case passed all three phases in 120.48 seconds, with
+64 actual blocks per file and approximately 17, 28 and 25 seconds of partial
+coverage. It uses an explicitly selected in-order block pull and 256 KiB/s
+fixture send limit. Six-platform runtime acceptance is pending. This case does not establish an
+incoming-request memory cap, full-index resend after upgrade or a throughput gain.
+
 ## Signed incoming-request budgets
 
 `GeneralOptions::max_concurrent_incoming_request_kib` and its patch setter use
