@@ -156,6 +156,19 @@ class ResourceQualityContracts(unittest.TestCase):
                             samples.append({"sequence": n})
             self.assertEqual([json.loads(row)["sequence"] for row in path.read_bytes().splitlines()], [0, 1, 2])
 
+    def test_non_darwin_process_activity_never_loads_foundation(self):
+        with patch.object(METRICS.sys,"platform","linux"),patch("ctypes.CDLL") as library:
+            self.assertIsNone(METRICS.observer_process_activity(worker_started=True))
+            library.assert_not_called()
+
+    def test_activity_cleanup_is_exact_and_failure_remains_an_error(self):
+        guard=Mock();guard.report.return_value={"ended":True};report={}
+        METRICS.finish_observer_activity(guard,report)
+        guard.close.assert_called_once();self.assertTrue(report['observer_process_activity_after']['ended'])
+        guard.close.side_effect=RuntimeError('synthetic native end failure')
+        with self.assertRaises(RuntimeError):METRICS.finish_observer_activity(guard,report)
+        self.assertEqual(report['activity_cleanup_error']['type'],'RuntimeError')
+
     def test_observer_policy_never_calls_native_qos_on_other_systems(self):
         with patch.object(METRICS.sys, "platform", "linux"), patch("ctypes.CDLL") as library:
             self.assertEqual(METRICS.observer_thread_policy()["policy"], "unchanged")

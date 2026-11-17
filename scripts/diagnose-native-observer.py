@@ -80,7 +80,12 @@ def worker(args):
     waits, events = [], []
     original_ticker, original_source = module.SamplerTicker, module.source_identity
     original_policy = module.observer_thread_policy
+    original_activity_factory = getattr(module, "observer_process_activity", None)
     activity_mode = getattr(args, 'activity_mode', None)
+    if activity_mode is not None and original_activity_factory is not None:
+        # Explicit diagnostic variants own this setting themselves; never let
+        # the canonical default turn an off control into an on measurement.
+        module.observer_process_activity = lambda worker_started=False: None
     activity_bytes = Path(__file__).with_name('macos-observer-activity.py').read_bytes() if activity_mode else b''
     activity = None
     if activity_mode == 'on':
@@ -128,6 +133,8 @@ def worker(args):
         sys.argv = original_argv
         module.SamplerTicker, module.source_identity = original_ticker, original_source
         module.observer_thread_policy = original_policy
+        if original_activity_factory is not None:
+            module.observer_process_activity = original_activity_factory
         cleanup_error = None
         if activity is not None:
             try:

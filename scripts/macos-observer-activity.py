@@ -68,7 +68,10 @@ class NativeRuntime:
 
 class ObserverActivity:
     """Explicitly bracket only the observer process after native worker startup."""
-    def __init__(self, runtime=None):
+    def __init__(self, runtime=None, *, purpose="diagnostic"):
+        if purpose not in {"diagnostic", "measurement"}:
+            raise ValueError("explicit observer activity purpose required")
+        self.purpose = purpose
         self.runtime = runtime
         self.handle = None
         self.owner = None
@@ -98,5 +101,6 @@ class ObserverActivity:
         return {"scope": "observer-process-only", "worker_started_before_begin": self.started,
                 "requested_options": OPTIONS, "started": self.started, "ended": self.ended,
                 "idle_sleep_disabled": False, "display_sleep_disabled": False,
-                "system_settings_changed": False, "diagnostic_only": True,
+                "system_settings_changed": False, "diagnostic_only": self.purpose == "diagnostic",
+                "usage_role": self.purpose,
                 "timer_improvement_or_frozen_membership_claimed": False}

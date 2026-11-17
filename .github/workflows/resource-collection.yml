@@ -14,6 +14,8 @@ on:
       - tests/common/managed_fixture.rs
       - tests/fixtures/resource-protocol.json
       - scripts/measure-native-resources.py
+      - scripts/macos-observer-activity.py
+      - scripts/tests/test_macos_observer_activity.py
       - scripts/collect-native-resources.py
       - scripts/preflight-native-resources.py
       - scripts/run-isolated-engine-tests.py
@@ -40,7 +42,7 @@ jobs:
       matrix:
         include:
           - package: macos-amd64-standard
-            runner: macos-15-intel
+            runner: macos-26-intel
             rust: x86_64-apple-darwin
           - package: macos-arm64-standard
             runner: macos-15
@@ -79,6 +81,8 @@ jobs:
         run: |
           python -m unittest discover -s scripts/tests -p 'test_resource_*.py'
           python -m unittest discover -s scripts/tests -p 'test_macos_timer_probe.py'
+          python -m unittest discover -s scripts/tests -p 'test_macos_observer_activity.py'
+          python -m unittest discover -s scripts/tests -p 'test_native_observer_diagnosis.py'
       - name: Explicitly prepare this profile's fixed private core
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
@@ -94,14 +98,14 @@ jobs:
           python scripts/preflight-native-resources.py
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-resource-v12-pretrial"
+          --evidence-dir "${{ runner.temp }}/vs-resource-v24-pretrial"
       - name: Collect four formal and two independent original-order cycles
         if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'resource-formal')
         run: >-
           python scripts/collect-native-resources.py --stage all
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v12"
+          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v24"
       - name: Require exact owned-program cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
@@ -113,23 +117,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/collection-state.json
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/frozen-protocol.json
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/accepted-group.json
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/attempt.json
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/preparation-result.json
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/quality-result.json
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/samples.jsonl
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/events.jsonl
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/safe-error.json
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/console.log
-            ${{ runner.temp }}/vs-frozen-resource-v12/**/*.console.log
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/collection-state.json
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/frozen-protocol.json
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/accepted-group.json
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/attempt.json
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/preparation-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/quality-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/samples.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/events.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/safe-error.json
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/console.log
+            ${{ runner.temp }}/vs-frozen-resource-v24/**/*.console.log
             ${{ runner.temp }}/vs-resource-clock-calibration/calibration.json
             ${{ runner.temp }}/vs-resource-clock-calibration/safe-error.json
-            ${{ runner.temp }}/vs-resource-v12-pretrial/**/preparation-result.json
-            ${{ runner.temp }}/vs-resource-v12-pretrial/**/quality-result.json
-            ${{ runner.temp }}/vs-resource-v12-pretrial/**/samples.jsonl
-            ${{ runner.temp }}/vs-resource-v12-pretrial/**/events.jsonl
-            ${{ runner.temp }}/vs-resource-v12-pretrial/**/safe-error.json
-            ${{ runner.temp }}/vs-resource-v12-pretrial/**/console.log
-            ${{ runner.temp }}/vs-resource-v12-pretrial/pretrial-result.json
+            ${{ runner.temp }}/vs-resource-v24-pretrial/**/preparation-result.json
+            ${{ runner.temp }}/vs-resource-v24-pretrial/**/quality-result.json
+            ${{ runner.temp }}/vs-resource-v24-pretrial/**/samples.jsonl
+            ${{ runner.temp }}/vs-resource-v24-pretrial/**/events.jsonl
+            ${{ runner.temp }}/vs-resource-v24-pretrial/**/safe-error.json
+            ${{ runner.temp }}/vs-resource-v24-pretrial/**/console.log
+            ${{ runner.temp }}/vs-resource-v24-pretrial/pretrial-result.json
