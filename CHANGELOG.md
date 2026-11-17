@@ -2,6 +2,10 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add a source-bound native anonymous FTP case with actual named-user refusal,
+  independently observed anonymous login, exact data across restart and normal
+  cleanup. Keep default password peers and pending platform acceptance explicit.
+
 - Record strict HTTPS WebDAV native verification on six standard macOS,
   Windows and Linux AMD64/ARM64 profiles: trusted chain and hostname, incorrect
   hostname and credential rejection, exact payloads across restart and normal
