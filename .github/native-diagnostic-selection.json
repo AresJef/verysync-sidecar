@@ -1,5 +1,6 @@
 {
   "draft_labels": [
-    "trusted-https-identity"
+    "trusted-https-identity",
+    "strict-storage-tls-flag"
   ]
 }

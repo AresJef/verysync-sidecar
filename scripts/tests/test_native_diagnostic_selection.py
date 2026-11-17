@@ -83,7 +83,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 169)
+        self.assertEqual(len(self.rows), 175)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -197,16 +197,21 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(producer[0]["package"], "windows-386-standard")
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_draft_selects_strict_trusted_https_on_all_six_profiles(self):
+    def test_current_draft_selects_trusted_https_and_strict_flags_on_all_six_profiles(self):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
-        self.assertEqual(len(rows), 6)
-        self.assertEqual({r["package"] for r in rows},
-                         set(HELPER.PROFILES) - {"windows-386-standard"})
-        self.assertTrue(all(r["target"] == "local_sync_protocol_engine" and r["filter"] ==
-                            "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified" for r in rows))
+        self.assertEqual(len(rows), 12)
+        expected = {
+            "trusted-https-identity": "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified",
+            "strict-storage-tls-flag": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+        }
+        for label, name in expected.items():
+            subset = [r for r in rows if r["label"] == label]
+            self.assertEqual(len(subset), 6)
+            self.assertEqual({r["package"] for r in subset}, set(HELPER.PROFILES) - {"windows-386-standard"})
+            self.assertTrue(all(r["target"] == "local_sync_protocol_engine" and r["filter"] == name for r in subset))
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 169)
+        self.assertEqual(len(self.rows), 175)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

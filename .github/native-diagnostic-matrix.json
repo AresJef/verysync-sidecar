@@ -1508,5 +1508,59 @@
     "label": "trusted-https-identity",
     "filter": "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
   }
 ]
