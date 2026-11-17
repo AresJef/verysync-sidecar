@@ -337,7 +337,33 @@ async fn native_listener_tls_address_and_disable_limit_preserve_explicit_owner_c
     );
     let disabled = http
         .update_gui_listener(&GuiListenerPatch::default().enabled(false))
-        .await?;
+        .await;
+    if let Err(error) = &disabled {
+        let (uncertain, cause) = match error {
+            verysync_sidecar::Error::MutationOutcomeUnknown { source, .. } => {
+                (true, source.as_ref())
+            }
+            other => (false, other),
+        };
+        let category = match cause {
+            verysync_sidecar::Error::Transport { source, .. } => serde_json::json!({
+                "kind":"transport", "timeout":source.is_timeout(), "connect":source.is_connect(),
+                "request":source.is_request(), "body":source.is_body(), "decode":source.is_decode(),
+                "status":source.status().map(|s|s.as_u16())}),
+            verysync_sidecar::Error::Http { response }
+            | verysync_sidecar::Error::Api { response, .. }
+            | verysync_sidecar::Error::InvalidResponse { response, .. } => serde_json::json!({
+                "kind":"native-response", "status":response.status(), "body_bytes":response.body_bytes().len()}),
+            _ => serde_json::json!({"kind":"other"}),
+        };
+        println!(
+            "native GUI disable failure classification: {}",
+            serde_json::json!({
+            "uncertain":uncertain,"cause":category,"original_error_retained":true,
+            "retry_or_reconnect_performed":false})
+        );
+    }
+    let disabled = disabled?;
     assert!(disabled.previous_configuration.enabled);
     // The fixed core does not guarantee live disable. Observe its actual state
     // without binding, connecting, retrying the PATCH or stopping it implicitly.
