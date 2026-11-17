@@ -37,6 +37,31 @@ class OwnedPacketContracts(unittest.TestCase):
         self.assertEqual(QOS.data_headers(text, 32123), [{"tos": 18, "source_port": 45678,
             "destination_port": 32123, "tcp_payload_bytes": 48}])
 
+    def test_ipv6_filter_keeps_exact_loopback_and_explicit_family(self):
+        for host in ["darwin", "linux"]:
+            command=QOS.capture_command(32123, host, 6)
+            self.assertEqual(command[-1], "ip6 and tcp and src host ::1 and dst host ::1 and dst port 32123")
+            self.assertNotIn("-A",command)
+            self.assertNotIn("-X",command)
+        for family in [0,5,True,"6"]:
+            with self.assertRaises(ValueError): QOS.capture_command(32123,"linux",family)
+
+    def test_ipv6_class_zero_requires_complete_native_ipv6_header(self):
+        prefix="08:00:01 IP6 ({class_field}flowlabel 0x12345, hlim 64, next-header TCP (6) payload length: 52) "
+        packet="::1.45678 > ::1.32123: Flags [P.], seq 1:33, ack 1, length 32"
+        for field, value in [("class 0x10, ",16),("class 0x20, ",32),("",0)]:
+            text=prefix.format(class_field=field)+packet
+            self.assertEqual(QOS.data_headers(text,32123,6),[{"tos":value,"source_port":45678,"destination_port":32123,"tcp_payload_bytes":32}])
+        for text in [packet,"IP6 (class 0x10) "+packet,
+                     prefix.format(class_field="class 0x100, ")+packet,
+                     prefix.format(class_field="class invalid, ")+packet,
+                     prefix.format(class_field="")+packet.replace("::1.32123","::2.32123"),
+                     prefix.format(class_field="")+packet.replace("32123","32124"),
+                     prefix.format(class_field="")+packet.replace("length 32","length 0")]:
+            with self.assertRaises(ValueError): QOS.data_headers(text,32123,6)
+        with self.assertRaises(ValueError):
+            QOS.data_headers(prefix.format(class_field="class 0x10, ")+packet,32123,4)
+
     def test_missing_data_tos_or_wrong_endpoint_never_becomes_effect_evidence(self):
         for text in ["", "IP (tos 0x10)\n127.0.0.1.45678 > 127.0.0.1.32123: length 0",
                      "127.0.0.1.45678 > 127.0.0.1.32123: length 48",

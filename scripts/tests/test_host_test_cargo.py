@@ -34,6 +34,22 @@ class HostTestElevationContracts(unittest.TestCase):
             with patch.object(HELPER.sys, "platform", "linux"), self.assertRaises(ValueError):
                 HELPER.packet_command(argv, env)
 
+    def test_ipv6_packet_case_is_exact_pinned_unelevated_and_not_a_host_mutation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            artifact, env, argv=self.fixture(Path(folder))
+            receipt=Path(env["VERYSYNC_HOST_TEST_RECEIPT"])
+            row=json.loads(receipt.read_text());row["case"]=HELPER.PACKET_IPV6_CASE
+            receipt.write_text(json.dumps(row))
+            argv=[HELPER.PACKET_IPV6_CASE if x==HELPER.CASE else x for x in argv]
+            env["VERYSYNC_TEST_ALLOW_PACKET_CAPTURE"]="github-actions-owned-loopback-headers"
+            for host in ["darwin","linux"]:
+                with patch.object(HELPER.sys,"platform",host):
+                    self.assertEqual(HELPER.packet_command(argv,env),[str(artifact),HELPER.PACKET_IPV6_CASE,"--exact","--test-threads=1","--nocapture"])
+                    with self.assertRaises(ValueError):
+                        HELPER.packet_command([HELPER.PACKET_CASE if x==HELPER.PACKET_IPV6_CASE else x for x in argv],env)
+            with patch.object(HELPER.sys,"platform","linux"),self.assertRaises(ValueError):
+                HELPER.root_command(argv,env)
+
     def test_privileged_effect_uses_both_native_linux_architectures(self):
         workflow = SOURCE.parents[1] / ".github/workflows/engine-tests.yml"
         job = yaml.safe_load(workflow.read_text())["jobs"]["host-watch-limit-positive"]

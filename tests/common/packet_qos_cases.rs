@@ -1,7 +1,7 @@
 //! A separate privileged observer sees only the owned native peer's TCP headers.
 use super::managed_fixture::{options, TestResult};
 use std::io::{BufRead, BufReader};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
@@ -13,7 +13,7 @@ struct Capture {
     output: BufReader<ChildStdout>,
 }
 impl Capture {
-    fn start(port: u16) -> TestResult<Self> {
+    fn start(port: u16, ip_version: u8) -> TestResult<Self> {
         assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
         assert_eq!(
             std::env::var("VERYSYNC_TEST_ALLOW_PACKET_CAPTURE").as_deref(),
@@ -29,6 +29,8 @@ impl Capture {
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/observe-owned-tcp-qos.py"))
             .arg("--port")
             .arg(port.to_string())
+            .arg("--ip-version")
+            .arg(ip_version.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -43,6 +45,7 @@ impl Capture {
         let ready = capture.read()?;
         assert_eq!(ready["ready"], true);
         assert_eq!(ready["port"], port);
+        assert_eq!(ready["ip_version"], ip_version);
         assert_eq!(ready["loopback_only"], true);
         Ok(capture)
     }
@@ -70,7 +73,7 @@ impl Drop for Capture {
     }
 }
 
-async fn listener(core: &ManagedInstance) -> TestResult<SocketAddr> {
+async fn listener(core: &ManagedInstance, loopback: IpAddr) -> TestResult<SocketAddr> {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             for status in core.client().listener_status().await?.into_values() {
@@ -78,7 +81,7 @@ async fn listener(core: &ManagedInstance) -> TestResult<SocketAddr> {
                     if let Some(address) = value
                         .strip_prefix("tcp://")
                         .and_then(|v| v.parse::<SocketAddr>().ok())
-                        .filter(|v| v.ip() == Ipv4Addr::LOCALHOST && !matches!(v.port(), 0 | 18886))
+                        .filter(|v| v.ip() == loopback && !matches!(v.port(), 0 | 18886))
                     {
                         return Ok::<_, Error>(address);
                     }
@@ -93,6 +96,20 @@ async fn listener(core: &ManagedInstance) -> TestResult<SocketAddr> {
 
 #[tokio::test]
 async fn native_packet_class_marks_owned_tcp_data_and_retains_real_files() -> TestResult {
+    packet_class(4).await
+}
+
+#[tokio::test]
+async fn native_ipv6_packet_class_marks_owned_tcp_data_and_retains_real_files() -> TestResult {
+    packet_class(6).await
+}
+
+async fn packet_class(ip_version: u8) -> TestResult {
+    let loopback = match ip_version {
+        4 => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        6 => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        _ => return Err("explicit IPv4 or IPv6 case required".into()),
+    };
     assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
     let uid = Command::new("/usr/bin/id").arg("-u").output()?;
     assert!(uid.status.success());
@@ -117,16 +134,20 @@ async fn native_packet_class_marks_owned_tcp_data_and_retains_real_files() -> Te
         let aid = a.client().instance().device_id.clone();
         let bid = b.client().instance().device_id.clone();
         for client in [a.client(), b.client()] {
-            client
-                .update_network_configuration(
-                    &NetworkPatch::default().reconnection_interval_seconds(5),
-                )
-                .await?;
+            let mut network = NetworkPatch::default().reconnection_interval_seconds(5);
+            if ip_version == 6 {
+                network = network.listen_addresses(vec!["tcp://[::1]:0".into()]);
+            }
+            client.update_network_configuration(&network).await?;
             client
                 .update_general_options(
                     &GeneralOptionsPatch::default().disable_system_sleep_on_sync(false),
                 )
                 .await?;
+        }
+        if ip_version == 6 {
+            b.restart(Duration::from_secs(30)).await?;
+            assert_eq!(b.client().instance().device_id, bid);
         }
         let before = a.client().configuration().await?;
         let before_b = b.client().configuration().await?;
@@ -150,8 +171,8 @@ async fn native_packet_class_marks_owned_tcp_data_and_retains_real_files() -> Te
             Some(selected)
         );
         assert_eq!(a.client().instance().device_id, aid);
-        let address = listener(&b).await?;
-        let capture = Capture::start(address.port())?;
+        let address = listener(&b, loopback).await?;
+        let capture = Capture::start(address.port(), ip_version)?;
         for (client, peer, addresses) in [
             (a.client(), &bid, vec![format!("tcp://{address}")]),
             (b.client(), &aid, vec!["dynamic".into()]),
@@ -213,8 +234,9 @@ async fn native_packet_class_marks_owned_tcp_data_and_retains_real_files() -> Te
             .as_deref()
             .ok_or("native source address absent")?
             .parse()?;
-        assert_eq!(actual_source.ip(), Ipv4Addr::LOCALHOST);
+        assert_eq!(actual_source.ip(), loopback);
         let observation = capture.finish()?;
+        assert_eq!(observation["ip_version"], ip_version);
         let packets: Vec<_> = observation["packets"]
             .as_array()
             .ok_or("owned packets absent")?
@@ -267,13 +289,13 @@ async fn native_packet_class_marks_owned_tcp_data_and_retains_real_files() -> Te
         }
         println!(
             "native packet-class evidence: {}",
-            serde_json::json!({"selected":selected,
+            serde_json::json!({"selected":selected,"ip_version":ip_version,
             "actual_observed_dscp_octets":observed_dscp,
             "actual_authenticated_source_port":actual_source.port(),
             "actual_authenticated_source_port_bound_tcp_data_headers":packets.len(),
             "actual_selected_dscp_observed":true,"actual_new_file_transfer_and_both_bytes_retained":true,
             "actual_normal_restart_retained_policy_and_identity":true,"actual_both_normal_owned_tree_and_state_exit":true,
-            "observer_elevated_only":true,"ipv6_router_qos_or_throughput_claimed":false})
+            "observer_elevated_only":true,"router_qos_or_throughput_claimed":false})
         );
     }
     assert_eq!(std::fs::read(&sentinel)?, b"caller packet-policy bytes");
