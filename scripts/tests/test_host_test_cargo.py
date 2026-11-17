@@ -13,6 +13,27 @@ HELPER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HELPER)
 
 class HostTestElevationContracts(unittest.TestCase):
+    def test_packet_case_keeps_the_native_process_unelevated_and_requires_its_scope(self):
+        with tempfile.TemporaryDirectory() as folder:
+            artifact, env, argv = self.fixture(Path(folder))
+            receipt = Path(env["VERYSYNC_HOST_TEST_RECEIPT"])
+            row = json.loads(receipt.read_text()); row["case"] = HELPER.PACKET_CASE
+            receipt.write_text(json.dumps(row))
+            argv = [HELPER.PACKET_CASE if x == HELPER.CASE else x for x in argv]
+            with patch.object(HELPER.sys, "platform", "darwin"), self.assertRaises(ValueError):
+                HELPER.packet_command(argv, env)
+            env["VERYSYNC_TEST_ALLOW_PACKET_CAPTURE"] = "github-actions-owned-loopback-headers"
+            for host in ["darwin", "linux"]:
+                with patch.object(HELPER.sys, "platform", host):
+                    command = HELPER.packet_command(argv, env)
+                self.assertEqual(command, [str(artifact), HELPER.PACKET_CASE, "--exact", "--test-threads=1", "--nocapture"])
+                self.assertNotIn("sudo", " ".join(command))
+            with patch.object(HELPER.sys, "platform", "darwin"), self.assertRaises(ValueError):
+                HELPER.packet_command(argv + ["--ignored"], env)
+            artifact.write_bytes(b"changed synthetic artifact")
+            with patch.object(HELPER.sys, "platform", "linux"), self.assertRaises(ValueError):
+                HELPER.packet_command(argv, env)
+
     def test_privileged_effect_uses_both_native_linux_architectures(self):
         workflow = SOURCE.parents[1] / ".github/workflows/engine-tests.yml"
         job = yaml.safe_load(workflow.read_text())["jobs"]["host-watch-limit-positive"]

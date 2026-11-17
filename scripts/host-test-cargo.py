@@ -12,6 +12,7 @@ import tempfile
 
 CASE = "privileged_native_watch_limit_is_raised_then_independently_restored"
 SLEEP_CASE = "linux_sleep_inhibitor_cases::native::privileged_native_linux_sleep_inhibitor_tracks_transfer_and_releases"
+PACKET_CASE = "packet_qos_cases::native_packet_class_marks_owned_tcp_data_and_retains_real_files"
 TARGET = "host_control_engine"
 SCOPE = "github-actions-isolated-linux-vm"
 PRESERVE = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
@@ -22,7 +23,7 @@ PRESERVE = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
 
 def prepare(args):
     selected = getattr(args, "case", CASE)
-    if selected not in (CASE, SLEEP_CASE):
+    if selected not in (CASE, SLEEP_CASE, PACKET_CASE):
         raise ValueError("unknown explicit privileged case")
     command = [args.cargo, "+" + args.toolchain, "test", "--no-run", "--locked",
                "--features", "host-configuration-tests", "--test", TARGET,
@@ -93,6 +94,31 @@ def root_command(argv, env):
             "--preserve-env=" + ",".join(PRESERVE), str(executable), selected,
             "--exact", "--test-threads=1", "--nocapture"]
 
+
+def packet_command(argv, env):
+    """Run the pinned native case as the runner; only its header observer elevates."""
+    if (sys.platform not in {"darwin", "linux"} or env.get("GITHUB_ACTIONS") != "true"
+            or env.get("VERYSYNC_TEST_ALLOW_PACKET_CAPTURE") != "github-actions-owned-loopback-headers"):
+        raise ValueError("packet observation requires its explicit disposable CI scope")
+    receipt = Path(env["VERYSYNC_HOST_TEST_RECEIPT"])
+    if not receipt.is_absolute() or not receipt.is_file() or receipt.is_symlink() or receipt.stat().st_size > 65536:
+        raise ValueError("an explicit regular packet-test receipt is required")
+    row = json.loads(receipt.read_text(encoding="utf-8"))
+    if row.get("case") != PACKET_CASE:
+        raise ValueError("only the exact packet case may use the unelevated adapter")
+    expected = ["+" + row["toolchain"], "test", "--features", "engine-tests",
+                "--test", TARGET, "--offline", "--locked", PACKET_CASE,
+                "--", "--test-threads=1", "--nocapture"]
+    if argv != expected:
+        raise ValueError("only the exact prebuilt packet case may run")
+    executable = Path(row["executable"])
+    if not executable.is_absolute() or not executable.is_file() or executable.is_symlink():
+        raise ValueError("invalid packet test artifact")
+    if hashlib.sha256(executable.read_bytes()).hexdigest() != row["sha256"]:
+        raise ValueError("packet test artifact changed since compilation")
+    return [str(executable), PACKET_CASE, "--exact", "--test-threads=1", "--nocapture"]
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "prepare":
         parser = argparse.ArgumentParser(description=__doc__)
@@ -100,10 +126,11 @@ def main():
         parser.add_argument("--toolchain", required=True)
         parser.add_argument("--parent", required=True, type=Path)
         parser.add_argument("--github-env", required=True, type=Path)
-        parser.add_argument("--case", choices=(CASE, SLEEP_CASE), default=CASE)
+        parser.add_argument("--case", choices=(CASE, SLEEP_CASE, PACKET_CASE), default=CASE)
         print(json.dumps(prepare(parser.parse_args(sys.argv[2:]))))
         return 0
-    return subprocess.run(root_command(sys.argv[1:], os.environ)).returncode
+    build_command = packet_command if "VERYSYNC_TEST_ALLOW_PACKET_CAPTURE" in os.environ else root_command
+    return subprocess.run(build_command(sys.argv[1:], os.environ)).returncode
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -752,6 +752,22 @@ traffic-class integer, including an out-of-byte-range value accepted by native
 configuration, does not establish valid OS packet marking or router handling.
 No packet-QoS, memory-budget or performance guarantee follows from these reads.
 
+The explicit owned-packet CI case selects traffic classes `16`, `32` and `0`,
+normally restarts each isolated source, and transfers a new 32 KiB file to an
+authenticated isolated receiver. A separate privileged observer captures only
+IPv4 TCP headers on the owned loopback destination port; the Rust test and native
+cores remain unelevated. The observed data packets must match the actual
+authenticated source socket port and contain the selected DSCP octet; the zero
+control must contain no nonzero DSCP octet. ECN bits are retained in observation
+and excluded from that DSCP comparison.
+
+This is a pending effect gate for the two Linux and two macOS standard profiles.
+It also requires normal observer cleanup, both source/receiver bytes and private
+credentials, identities, unrelated sections, normal core-tree/state exits and a
+caller sentinel. Current native results remain required; parser tests and
+compilation do not establish packet marking. Windows, IPv6, router treatment,
+remote-network QoS and throughput remain separate unverified conditions.
+
 
 ## Linux sleep-inhibitor validation
 

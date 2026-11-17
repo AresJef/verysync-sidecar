@@ -4,6 +4,12 @@
 mod linux_sleep_inhibitor_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[cfg(all(
+    feature = "host-configuration-tests",
+    any(target_os = "linux", target_os = "macos")
+))]
+#[path = "common/packet_qos_cases.rs"]
+mod packet_qos_cases;
 use managed_fixture::{options, TestResult};
 #[cfg(target_os = "linux")]
 use std::path::Path;
