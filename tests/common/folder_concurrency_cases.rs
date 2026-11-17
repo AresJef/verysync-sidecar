@@ -121,6 +121,7 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
             limit
         );
         let mut pending = Vec::new();
+        let mut source_index_observations = Vec::new();
         for (index, pair) in pairs.iter().enumerate() {
             assert!(b.client().folder(&pair.b).await?.paused);
             let baseline = b.client().folder_status(&pair.b).await?.state;
@@ -135,6 +136,13 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
                 .collect();
             std::fs::write(pair.source.join(&name), &bytes)?;
             a.client().request_scan(&pair.a).await?;
+            let indexed = a.client().folder_status(&pair.a).await?;
+            source_index_observations.push(serde_json::json!({
+                "folder_index":index,"expected_local_files":phase+1,
+                "actual_local_files":indexed.local_files,
+                "actual_local_bytes":indexed.local_bytes,
+                "actual_idle":indexed.state==Some(FolderState::Idle)
+            }));
             pending.push((name, bytes));
         }
         let mut events = b
@@ -152,17 +160,26 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
         let mut max_syncing = 0;
         let mut serial_waiting_seen = false;
         let mut state_events = 0;
+        let mut unpause_spans = Vec::new();
+        let mut history = Vec::new();
+        let mut history_truncated = false;
+        let observation_started = std::time::Instant::now();
         for (pair, (name, _)) in pairs.iter().zip(&pending) {
             assert!(
                 !pair.received.join(name).try_exists()?,
                 "work completed before the observed unpause"
             );
+            let started = std::time::Instant::now();
             assert!(
                 b.client()
                     .resume_folder(&pair.b)
                     .await?
                     .requested_fields_match
             );
+            unpause_spans.push(serde_json::json!({
+                "rpc_elapsed_ns":started.elapsed().as_nanos(),
+                "observed_end_ns":observation_started.elapsed().as_nanos()
+            }));
         }
         tokio::time::timeout(Duration::from_secs(45), async {
             loop {
@@ -184,6 +201,21 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
                         states[index] = to.to_owned();
                         assert_ne!(to, "error", "owned folder entered native error state");
                         state_events += 1;
+                        if history.len() < 128 {
+                            let label = |s: &str| match s {
+                                "idle" | "starting" | "scanning" | "scan-waiting" | "syncing"
+                                | "sync-waiting" | "sync-preparing" | "cleaning" | "clean-waiting"
+                                | "paused" | "error" => s.to_owned(),
+                                _ => "<unrecognized>".to_owned(),
+                            };
+                            history.push(serde_json::json!({
+                                "event_id":event.cursor.last_id,"folder_index":index,
+                                "from":label(from),"to":label(to),
+                                "delivered_ns":observation_started.elapsed().as_nanos()
+                            }));
+                        } else {
+                            history_truncated = true;
+                        }
                         let syncing = states.iter().filter(|s| s.as_str() == "syncing").count();
                         max_syncing = max_syncing.max(syncing);
                         serial_waiting_seen |= syncing == 1 && states.iter().any(|s| s == "sync-waiting");
@@ -200,6 +232,16 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
             TestResult::Ok(())
         }).await??;
         events.close().await?;
+        eprintln!(
+            "native folder concurrency preparation diagnostic: {}",
+            serde_json::json!({
+                "selected":limit,"source_index_observations":source_index_observations,
+                "unpause_rpc_spans":unpause_spans,"history":history,
+                "history_truncated":history_truncated,
+                "delivery_clock_is_not_native_event_time":true,
+                "diagnostic_only_original_effect_assertions_unchanged":true
+            })
+        );
         assert!(seen.into_iter().all(|x| x));
         assert_eq!(
             max_syncing, limit as usize,

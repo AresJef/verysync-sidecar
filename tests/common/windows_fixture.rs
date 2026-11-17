@@ -35,7 +35,7 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
-pub(super) struct Job(OwnedHandle);
+pub(crate) struct Job(OwnedHandle);
 
 #[derive(serde::Serialize)]
 pub(super) struct JobSnapshot {
@@ -151,7 +151,7 @@ impl Job {
         self.0.try_clone().map(Self)
     }
 
-    pub(super) fn new() -> io::Result<Self> {
+    pub(crate) fn new() -> io::Result<Self> {
         Self::new_with_kill_on_close(true)
     }
 
@@ -247,7 +247,7 @@ impl Job {
         })
     }
 
-    pub(super) fn assign_and_resume(&self, child: &Child) -> io::Result<()> {
+    pub(crate) fn assign_and_resume(&self, child: &Child) -> io::Result<()> {
         // SAFETY: Both handles remain live. The caller created this child with
         // CREATE_SUSPENDED and retains its kill/wait guard on every error path.
         if unsafe { AssignProcessToJobObject(self.0.as_raw_handle(), child.as_raw_handle()) } == 0 {
@@ -264,7 +264,7 @@ impl Job {
         resume_initial_thread(child.id())
     }
 
-    fn active_processes(&self) -> io::Result<u32> {
+    pub(crate) fn active_processes(&self) -> io::Result<u32> {
         let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         // SAFETY: Correct writable initialized structure, size, information
         // class and live job handle. The optional return-length pointer is null.
@@ -297,7 +297,7 @@ impl Job {
         Ok(())
     }
 
-    pub(super) fn terminate_and_wait(&self) -> io::Result<()> {
+    pub(crate) fn terminate_and_wait(&self) -> io::Result<()> {
         if self.active_processes()? != 0 {
             // SAFETY: This is the private job, containing only the suspended-
             // then-assigned fixture and its descendants; no global PID lookup.

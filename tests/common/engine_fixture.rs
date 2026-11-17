@@ -51,7 +51,7 @@ fn readiness_error_summary(error: &(dyn std::error::Error + 'static)) -> Json {
 
 #[cfg(windows)]
 #[path = "windows_fixture.rs"]
-mod windows_fixture;
+pub(crate) mod windows_fixture;
 
 pub struct TestBinary {
     path: PathBuf,

@@ -106,6 +106,16 @@ successful original-order execution includes all operation stages and normal
 cleanup, without claiming that failure's root cause is fixed. Final integrated
 acceptance remains required.
 
+The later Windows 386 investigation retained sharing failures on temporary files
+and the synthetic core's browser profile, together with file-holder process IDs
+and creation identities. The failed-CLI fixture now assigns the producer to a
+fresh private Job before its first instruction. After the required native exit
+code 1 and input-consumption checks, it explicitly empties only that failed
+producer's Job and confirms the primary core remains authenticated with unchanged
+configuration. This fixture cleanup is separate from the primary core's required
+normal shutdown. Current Windows execution must verify the containment and final
+directory cleanup; compilation alone does not resolve the earlier failure.
+
 An empty result means the native response contained no text. It also occurs
 when the native inbox cannot be read: a nonempty directory at that location
 returns an empty snapshot while remaining present. It therefore does not prove

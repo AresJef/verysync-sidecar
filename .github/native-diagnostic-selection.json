@@ -1,13 +1,6 @@
 {
   "draft_labels": [
-    "native-signed-incoming-budget",
-    "native-general-signed-domains",
-    "remote-version-archives",
-    "ftp-disconnect-recovery",
-    "native-dial-concurrency-policy",
-    "native-sleep-prevention-policy",
-    "native-priority-queue",
-    "native-link-producer-win386",
-    "native-kernel-upload-windows"
+    "native-folder-concurrency-policy",
+    "native-link-producer-win386"
   ]
 }

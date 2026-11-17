@@ -53,8 +53,8 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "engine_control" and row["filter"] ==
                             "actual_native_helpers_" for row in helpers))
 
-    def test_current_manifest_requires_native_ftp_disconnect_boundaries_on_all_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_native_ftp_disconnect_boundaries_on_all_six_profiles(self):
+        selection = {"draft_labels": ["ftp-disconnect-recovery"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         ftp = [row for row in actual if row.get("label") == "ftp-disconnect-recovery"]
         self.assertEqual(len(ftp), 6)
@@ -86,8 +86,9 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(len(self.rows), 149)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
-    def test_current_draft_requires_priority_queue_effects_and_win386_producer(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
+        selection = {"draft_labels": ["native-priority-queue", "native-link-producer-win386",
+                                      "native-kernel-upload-windows"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         priority = [row for row in actual if row.get("label") == "native-priority-queue"]
         self.assertEqual({row["package"] for row in priority}, set(HELPER.PROFILES) - {"windows-386-standard"})
@@ -120,8 +121,8 @@ class DiagnosticSelection(unittest.TestCase):
                             "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart"
                             for row in age))
 
-    def test_current_manifest_requires_actual_macos_sleep_assertion_effects(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_actual_macos_sleep_assertion_effects(self):
+        selection = {"draft_labels": ["native-sleep-prevention-policy"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         sleep = [row for row in actual if row.get("label") == "native-sleep-prevention-policy"]
         self.assertEqual(len(sleep), 2)
@@ -142,38 +143,51 @@ class DiagnosticSelection(unittest.TestCase):
                             "native_folder_concurrency_has_ordered_single_and_double_sync_effects"
                             for row in folders))
 
-    def test_current_manifest_requires_pending_tls_dials_and_real_recovery_on_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_pending_tls_dials_and_real_recovery_on_six_profiles(self):
+        selection = {"draft_labels": ["native-dial-concurrency-policy"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         dials = [row for row in actual if row.get("label") == "native-dial-concurrency-policy"]
-        self.assertEqual(len(actual), 41)
+        self.assertEqual(len(actual), 6)
         self.assertEqual(len(dials), 6)
         self.assertEqual(len({row["package"] for row in dials}), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer"
                             for row in dials))
 
-    def test_current_manifest_requires_signed_incoming_selections_and_three_real_transfers(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_signed_incoming_selections_and_three_real_transfers(self):
+        selection = {"draft_labels": ["native-signed-incoming-budget"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         budgets = [row for row in actual if row.get("label") == "native-signed-incoming-budget"]
-        self.assertEqual(len(actual), 41)
+        self.assertEqual(len(actual), 6)
         self.assertEqual(len(budgets), 6)
         self.assertEqual(len({row["package"] for row in budgets}), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_signed_incoming_request_budgets_survive_restart_and_real_transfers"
                             for row in budgets))
 
-    def test_current_manifest_requires_native_general_signed_domains_on_all_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_native_general_signed_domains_on_all_six_profiles(self):
+        selection = {"draft_labels": ["native-general-signed-domains"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         domains = [row for row in actual if row.get("label") == "native-general-signed-domains"]
-        self.assertEqual(len(actual), 41)
+        self.assertEqual(len(actual), 6)
         self.assertEqual(len(domains), 6)
         self.assertEqual(len({row["package"] for row in domains}), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_general_signed_integer_domains_survive_partial_full_saves_and_restart"
                             for row in domains))
+
+    def test_current_draft_selects_six_concurrency_cases_and_owned_win386_producer(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        self.assertEqual(len(actual), 7)
+        folders = [row for row in actual if row["label"] == "native-folder-concurrency-policy"]
+        self.assertEqual(len(folders), 6)
+        self.assertEqual({row["package"] for row in folders},
+                         set(HELPER.PROFILES) - {"windows-386-standard"})
+        producer = [row for row in actual if row["label"] == "native-link-producer-win386"]
+        self.assertEqual(len(producer), 1)
+        self.assertEqual(producer[0]["package"], "windows-386-standard")
+        self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

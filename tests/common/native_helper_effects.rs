@@ -1546,13 +1546,38 @@ async fn actual_native_helpers_preserve_uncertainty_after_consuming_link_respons
 async fn actual_native_helpers_consume_official_add_url_before_native_start_refusal() -> TestResult
 {
     use std::process::{Child, Command, Stdio};
-    struct Producer(Child);
+    struct Producer {
+        child: Child,
+        #[cfg(windows)]
+        job: super::engine_fixture::windows_fixture::Job,
+    }
+    impl Producer {
+        fn spawn(mut command: Command) -> std::io::Result<Self> {
+            #[cfg(windows)]
+            let job = {
+                use std::os::windows::process::CommandExt;
+                use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+                command.creation_flags(CREATE_SUSPENDED);
+                super::engine_fixture::windows_fixture::Job::new()?
+            };
+            let producer = Self {
+                child: command.spawn()?,
+                #[cfg(windows)]
+                job,
+            };
+            #[cfg(windows)]
+            producer.job.assign_and_resume(&producer.child)?;
+            Ok(producer)
+        }
+    }
     impl Drop for Producer {
         fn drop(&mut self) {
-            if !matches!(self.0.try_wait(), Ok(Some(_))) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
+            if !matches!(self.child.try_wait(), Ok(Some(_))) {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
             }
+            #[cfg(windows)]
+            let _ = self.job.terminate_and_wait();
         }
     }
     let root = tempfile::Builder::new().prefix("vslcli-").tempdir()?.keep();
@@ -1612,10 +1637,11 @@ async fn actual_native_helpers_consume_official_add_url_before_native_start_refu
             .env("USERPROFILE", state.join("profile"))
             .env("TEMP", state.join("tmp"))
             .env("TMP", state.join("tmp"));
-        let mut producer = Producer(command.spawn()?);
+        let mut producer = Producer::spawn(command)?;
+        assert_ne!(producer.child.id(), owner.process_id());
         let status = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                if let Some(status) = producer.0.try_wait()? {
+                if let Some(status) = producer.child.try_wait()? {
                     return Ok::<_, std::io::Error>(status);
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1707,6 +1733,27 @@ async fn actual_native_helpers_consume_official_add_url_before_native_start_refu
         assert!(
             matches!(listener.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock)
         );
+        #[cfg(windows)]
+        {
+            // A failed native CLI can leave browser descendants holding its
+            // private profile. Own them before its first instruction, then
+            // clean only this failed producer's Job, separately from the core.
+            let remaining = producer.job.active_processes()?;
+            producer.job.terminate_and_wait()?;
+            assert_eq!(producer.job.active_processes()?, 0);
+            assert_eq!(owner.client().system_status().await?.device_id, id);
+            assert_eq!(
+                owner.client().configuration().await?.native_document(),
+                &document
+            );
+            eprintln!(
+                "native official producer contained cleanup: {}",
+                serde_json::json!({"input":index,"failed_producer_exit_code":status.code(),
+                    "owned_job_members_after_root_exit":remaining,"actual_owned_job_empty":true,
+                    "primary_core_still_authenticated_and_unchanged":true,
+                    "scope":"explicit cleanup of the failed fixture CLI, separate from normal managed-core shutdown"})
+            );
+        }
     }
     eprintln!("native official producer stage: both_inputs_and_primary_preserved");
     let exit = owner.shutdown(Duration::from_secs(10)).await?;
