@@ -8,6 +8,9 @@ use verysync_sidecar::{Error, ManagedInstance};
 #[cfg(windows)]
 #[path = "native_opener_trace.rs"]
 mod native_opener_trace;
+#[cfg(windows)]
+#[path = "windows_cleanup_diagnostic.rs"]
+mod windows_cleanup_diagnostic;
 
 #[tokio::test]
 async fn actual_native_target_path_completions_preserve_prefixes_selectors_and_owned_data(
@@ -1713,8 +1716,14 @@ async fn actual_native_helpers_consume_official_add_url_before_native_start_refu
         std::fs::read(sentinel)?,
         b"official link producer keeps caller bytes"
     );
-    std::fs::remove_dir_all(root)
-        .map_err(|error| format!("owned official producer fixture removal: {error}"))?;
+    if let Err(error) = std::fs::remove_dir_all(&root) {
+        #[cfg(windows)]
+        eprintln!(
+            "native official producer cleanup diagnostic: {}",
+            windows_cleanup_diagnostic::snapshot(&root)
+        );
+        return Err(format!("owned official producer fixture removal: {error}").into());
+    }
     println!(
         "native official link producer evidence: {}",
         serde_json::json!({

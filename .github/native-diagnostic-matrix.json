@@ -1247,5 +1247,86 @@
     "filter": "native_general_signed_integer_domains_survive_partial_full_saves_and_restart",
     "label": "native-general-signed-domains",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "windows-386-standard",
+    "runner": "windows-2022",
+    "rust": "i686-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_helpers_consume_official_add_url_before_native_start_refusal",
+    "label": "native-link-producer-win386",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "upgrade_engine",
+    "filter": "kernel_streamed_archive_upload_replaces_only_the_owned_old_copy",
+    "label": "native-kernel-upload-windows",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "upgrade_engine",
+    "filter": "kernel_streamed_archive_upload_replaces_only_the_owned_old_copy",
+    "label": "native-kernel-upload-windows",
+    "trace": "0"
   }
 ]

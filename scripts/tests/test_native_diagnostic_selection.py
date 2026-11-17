@@ -83,8 +83,31 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 140)
+        self.assertEqual(len(self.rows), 149)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
+
+    def test_current_draft_requires_priority_queue_effects_and_win386_producer(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        priority = [row for row in actual if row.get("label") == "native-priority-queue"]
+        self.assertEqual({row["package"] for row in priority}, set(HELPER.PROFILES) - {"windows-386-standard"})
+        self.assertEqual(len(priority), 6)
+        self.assertTrue(all(row["target"] == "sync_observation" and row["filter"] ==
+                            "actual_folder_order_and_specific_priority_change_preserve_samples"
+                            for row in priority))
+        producer = [row for row in actual if row.get("label") == "native-link-producer-win386"]
+        self.assertEqual(len(producer), 1)
+        self.assertEqual(producer[0]["package"], "windows-386-standard")
+        self.assertEqual(producer[0]["target"], "engine_control")
+        self.assertEqual(producer[0]["filter"],
+                         "actual_native_helpers_consume_official_add_url_before_native_start_refusal")
+        uploads = [row for row in actual if row.get("label") == "native-kernel-upload-windows"]
+        self.assertEqual({row["package"] for row in uploads},
+                         {"windows-amd64-standard", "windows-arm64-standard"})
+        self.assertEqual(len(uploads), 2)
+        self.assertTrue(all(row["target"] == "upgrade_engine" and row["filter"] ==
+                            "kernel_streamed_archive_upload_replaces_only_the_owned_old_copy"
+                            for row in uploads))
 
     def test_ready_catalog_retains_actual_temporary_expiry_on_six_profiles(self):
         selection = {"draft_labels": ["native-temporary-retention-policy"]}
@@ -123,7 +146,7 @@ class DiagnosticSelection(unittest.TestCase):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         actual = HELPER.select(self.rows, selection, draft=True)
         dials = [row for row in actual if row.get("label") == "native-dial-concurrency-policy"]
-        self.assertEqual(len(actual), 32)
+        self.assertEqual(len(actual), 41)
         self.assertEqual(len(dials), 6)
         self.assertEqual(len({row["package"] for row in dials}), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
@@ -134,7 +157,7 @@ class DiagnosticSelection(unittest.TestCase):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         actual = HELPER.select(self.rows, selection, draft=True)
         budgets = [row for row in actual if row.get("label") == "native-signed-incoming-budget"]
-        self.assertEqual(len(actual), 32)
+        self.assertEqual(len(actual), 41)
         self.assertEqual(len(budgets), 6)
         self.assertEqual(len({row["package"] for row in budgets}), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
@@ -145,7 +168,7 @@ class DiagnosticSelection(unittest.TestCase):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         actual = HELPER.select(self.rows, selection, draft=True)
         domains = [row for row in actual if row.get("label") == "native-general-signed-domains"]
-        self.assertEqual(len(actual), 32)
+        self.assertEqual(len(actual), 41)
         self.assertEqual(len(domains), 6)
         self.assertEqual(len({row["package"] for row in domains}), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==

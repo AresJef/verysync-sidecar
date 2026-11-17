@@ -5,6 +5,9 @@
     "remote-version-archives",
     "ftp-disconnect-recovery",
     "native-dial-concurrency-policy",
-    "native-sleep-prevention-policy"
+    "native-sleep-prevention-policy",
+    "native-priority-queue",
+    "native-link-producer-win386",
+    "native-kernel-upload-windows"
   ]
 }
