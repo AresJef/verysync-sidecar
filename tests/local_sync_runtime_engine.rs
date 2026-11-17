@@ -1,4 +1,6 @@
 //! Real in-flight controls, native Local Sync events, cancellation and restart.
+#[path = "common/backend_outage_cases.rs"]
+mod backend_outage_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/storage_service.rs"]
@@ -7,6 +9,11 @@ use managed_fixture::{options, TestResult};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path, time::Duration};
 use verysync_sidecar::*;
+
+#[tokio::test]
+async fn public_backend_requests_preserve_actual_outage_errors_and_data() -> TestResult {
+    backend_outage_cases::run().await
+}
 fn snapshot(root: &Path) -> TestResult<BTreeMap<String, (u64, [u8; 32])>> {
     let mut result = BTreeMap::new();
     for entry in std::fs::read_dir(root)? {
