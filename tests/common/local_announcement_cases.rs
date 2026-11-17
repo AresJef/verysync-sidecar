@@ -170,12 +170,42 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
     })
     .await;
     if !matches!(&found, Ok(Ok(_))) {
-        for core in [&a, &b] {
+        for (role, core, peer) in [("sender", &a, &b_id), ("receiver", &b, &a_id)] {
+            let diagnostics: TestResult = async {
             let cfg = core.client().network_configuration().await?;
+            let configured = core.client().device(peer).await?;
+            let cache = core.client().discovery_cache().await?;
+            let snapshot = core.client().connections().await?;
+            let listeners: Vec<_> = core
+                .client()
+                .listener_status()
+                .await?
+                .into_values()
+                .map(|s| {
+                    json!({
+                "local":s.lan_addresses,"reported_external":s.wan_addresses,"error":s.error})
+                })
+                .collect();
+            let observed = snapshot.connections.get(peer).map(|p| json!({"connected":p.connected,
+                "paused":p.paused,"address":p.address,"type":format!("{:?}",p.connection_type),
+                "started_at":p.started_at,"in_bytes":p.in_bytes_total,"out_bytes":p.out_bytes_total}));
             eprintln!(
-                "owned local announcement diagnostic: {}",
-                json!({"local_enabled":cfg.local_announce_enabled,"global_enabled":cfg.global_announce_enabled,"port":cfg.local_announce_port,"listeners":format!("{:?}",core.client().listener_status().await?),"cache":format!("{:?}",core.client().discovery_cache().await?),"peers":format!("{:?}",core.client().connections().await?)})
+                "owned local announcement address diagnostic: {}",
+                json!({"role":role,
+                "own_identity":core.client().instance().device_id.as_str(),"target_peer":peer.as_str(),
+                "local_enabled":cfg.local_announce_enabled,"global_enabled":cfg.global_announce_enabled,
+                "reconnection_seconds":cfg.reconnection_interval_seconds,"port":cfg.local_announce_port,
+                "configured_listeners":cfg.listen_addresses,"listeners":listeners,
+                "configured_peer_paused":configured.paused,"configured_peer_addresses":configured.addresses,
+                "configured_peer_transports":format!("{:?}",configured.allowed_transports),
+                "owned_peer_candidates":cache.get(peer.as_str()).map(|r| &r.addresses),
+                "total_cache_entries":cache.len(),"actual_peer":observed})
             );
+            Ok(())
+            }.await;
+            if let Err(error) = diagnostics {
+                eprintln!("owned local announcement secondary diagnostic unavailable: {error:?}");
+            }
         }
     }
     let snapshot = found??;
