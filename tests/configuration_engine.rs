@@ -1656,3 +1656,6 @@ mod incoming_request_budget_cases;
 
 #[path = "common/general_integer_domain_cases.rs"]
 mod general_integer_domain_cases;
+
+#[path = "common/temporary_index_policy_cases.rs"]
+mod temporary_index_policy_cases;
