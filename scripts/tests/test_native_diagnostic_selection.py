@@ -14,14 +14,14 @@ SPEC.loader.exec_module(HELPER)
 
 
 class DiagnosticSelection(unittest.TestCase):
-    def test_current_explicit_auxiliary_tunnel_probe_uses_all_six_native_profiles(self):
+    def test_current_folder_concurrency_uses_all_six_native_profiles(self):
         selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 6)
         self.assertEqual({row['package'] for row in rows}, set(HELPER.PROFILES) - {'windows-386-standard'})
-        self.assertTrue(all(row['label'] == 'native-explicit-auxiliary-tunnel-probe' and
-                            row['target'] == 'authentication_engine' and
-                            row['filter'] == 'explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports'
+        self.assertTrue(all(row['label'] == 'native-folder-concurrency-policy' and
+                            row['target'] == 'configuration_engine' and
+                            row['filter'] == 'native_folder_concurrency_has_ordered_single_and_double_sync_effects'
                             for row in rows))
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
         workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
@@ -35,7 +35,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-lan-bandwidth-20261118-01a1ca9b",
                        "test/native-local-announcement-20261118-01a1ca9b",
                        "test/macos-local-announcement-address-20261118-01a1ca9b",
-                       "test/native-explicit-tunnel-20261118-01a1ca9b"]:
+                       "test/native-explicit-tunnel-20261118-01a1ca9b",
+                       "test/native-folder-concurrency-current-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -97,7 +98,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-lan-bandwidth-20261118-01a1ca9b",
                        "test/native-local-announcement-20261118-01a1ca9b",
                        "test/macos-local-announcement-address-20261118-01a1ca9b",
-                       "test/native-explicit-tunnel-20261118-01a1ca9b"]:
+                       "test/native-explicit-tunnel-20261118-01a1ca9b",
+                       "test/native-folder-concurrency-current-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
