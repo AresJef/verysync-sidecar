@@ -688,3 +688,25 @@ normally. The local macOS ARM64 case verifies this scenario. Six native CI
 profiles and final integration remain separate gates. This observation does not
 promise immediate application without restart, retry timing, request-budget
 effects, packet QoS or a performance improvement.
+
+
+## Signed incoming-request budgets
+
+`GeneralOptions::max_concurrent_incoming_request_kib` and its patch setter use
+`i64`. The fixed local macOS ARM64 instance accepts negative selections as well
+as zero and positive values. The SDK retains the selected integer through reads,
+partial PATCH writes and complete snapshot edits; it does not reinterpret a
+negative value as zero or clamp it to an unsigned range. The target engine still
+validates the values its native platform can represent.
+
+The isolated native case selects `-1`, `0` and `32768`, restarts the owned
+serving core normally after each save and transfers a fresh 32 KiB synthetic
+file to the real owned receiving core. It checks partial and complete saves,
+original identities, keys, certificates, unrelated configuration and caller
+bytes, followed by both normal process-tree and state-lease exits. Local
+macOS ARM64 and six-platform CI outcomes are recorded separately.
+
+This verifies native signed selections and continued real operation. A stored
+number and a small successful transfer do not measure the actual aggregate
+concurrent request-memory bound, its native minimum/default behavior or a
+throughput improvement; those effects retain their own acceptance gates.

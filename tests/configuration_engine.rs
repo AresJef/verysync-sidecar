@@ -1647,3 +1647,6 @@ mod folder_concurrency_cases;
 
 #[path = "common/dial_concurrency_cases.rs"]
 mod dial_concurrency_cases;
+
+#[path = "common/incoming_request_budget_cases.rs"]
+mod incoming_request_budget_cases;

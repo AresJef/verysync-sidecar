@@ -1,5 +1,11 @@
 # Resource measurement evidence
 
+The signed incoming-request configuration correction changes the measured Rust
+source identity. Existing v21 results retain their original producer and source
+binding; they are not current-candidate resource acceptance. A new candidate
+freeze, complete formal collection and independent cycles remain required.
+
+
 The explicit `resource_usage_engine` target runs one registered workload against
 an isolated owned VerySync instance: idle, an 8 MiB download, a 128 MiB download,
 or 256 separate 8 KiB files. Source generation uses a fixed 64 KiB buffer. Every
