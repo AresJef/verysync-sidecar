@@ -40,6 +40,15 @@ The original three-attempt limit and 900-second deadline remain consumed with
 that run; successful members are not stitched into a replacement cycle. The
 complete six-profile resource conclusion therefore remains inconclusive.
 
+The separate Intel native-observer diagnosis runs four fresh pilot controllers
+in the fixed small/many/many/small order with the original 128/16 repetitions.
+It records each actual wait's wall and thread-CPU intervals, expiration count
+and error, plus bounded complete GC events. It changes no worker, QoS, timer
+backend, workload or quality criterion. Its bootstrap and sampler form a distinct
+combined source digest: the v23 validator must reject those pilots as frozen
+preparation or formal evidence. The bounded diagnosis may identify a scheduling
+or CPU cause; a green diagnostic job itself establishes no resource acceptance.
+
 The explicit `resource_usage_engine` target runs one registered workload against
 an isolated owned VerySync instance: idle, an 8 MiB download, a 128 MiB download,
 or 256 separate 8 KiB files. Source generation uses a fixed 64 KiB buffer. Every
