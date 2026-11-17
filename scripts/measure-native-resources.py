@@ -82,6 +82,28 @@ def observer_thread_policy(worker_started=False):
             "worker_started_before_assignment": worker_started, "lifetime": "this observer process"}
 
 
+def observer_process_activity(worker_started=False):
+    """Only the observer; native workers already exist before this request."""
+    if sys.platform != "darwin":
+        return None
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("observer_activity", Path(__file__).with_name("macos-observer-activity.py"))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    activity = module.ObserverActivity(purpose="measurement")
+    activity.begin(worker_started=worker_started)
+    return activity
+
+
+def finish_observer_activity(activity, report):
+    if activity is not None:
+        try:
+            activity.close()
+            report["observer_process_activity_after"] = activity.report()
+        except BaseException as error:
+            report["activity_cleanup_error"] = {"type": type(error).__name__, "message": str(error)[:320]}
+            raise
+
+
 class TimerWaitError(RuntimeError):
     """Retain a failed native wait without guessing its underlying cause."""
     def __init__(self, reason, wait_ns, native_details):
@@ -207,7 +229,7 @@ class SamplerTicker:
         # Absolute Mach waits own no queue, descriptor, thread or timer handle.
 
 
-def finish_owned_observation(child, ticker, report, evidence_dir):
+def finish_owned_observation(child, ticker, report, evidence_dir, activity=None):
     """Save acquisition failure even if bounded owned-worker cleanup also fails."""
     try:
         report["exit_code"] = child.poll()
@@ -221,11 +243,14 @@ def finish_owned_observation(child, ticker, report, evidence_dir):
             if ticker is not None:
                 ticker.close()
         finally:
-            (evidence_dir / "preparation-result.json").write_bytes(
-                (json.dumps(report, indent=2) + "\n").encode("utf-8"))
-            if "acquisition_error" in report:
-                (evidence_dir / "safe-error.json").write_bytes(
-                    (json.dumps(report["acquisition_error"], indent=2) + "\n").encode("utf-8"))
+            try:
+                finish_observer_activity(activity, report)
+            finally:
+                (evidence_dir / "preparation-result.json").write_bytes(
+                    (json.dumps(report, indent=2) + "\n").encode("utf-8"))
+                if "acquisition_error" in report:
+                    (evidence_dir / "safe-error.json").write_bytes(
+                        (json.dumps(report["acquisition_error"], indent=2) + "\n").encode("utf-8"))
 
 
 def calibrate_timers(interval_ms):
@@ -356,6 +381,7 @@ def source_identity(cargo, toolchain):
     return {"source_commit": git("HEAD"), "source_tree": git("HEAD^{tree}"),
             "rust_sources_sha256": source_hash.hexdigest(), "cargo_lock_sha256": digest(root / "Cargo.lock"),
             "sampler_sha256": digest(__file__),
+            "observer_activity_sha256": digest(Path(__file__).with_name("macos-observer-activity.py")),
             "wrapper_sha256": digest(Path(__file__).with_name("run-isolated-engine-tests.py")),
             "toolchain": toolchain, "cargo_version": subprocess.check_output(
                 [str(cargo), "+" + toolchain, "--version"], text=True).strip(),
@@ -371,7 +397,7 @@ def summarize(report, rows, quality=QUALITY):
     import statistics
     errors, insufficient = [], []
     events = report.get("events", [])
-    if (report.get("acquisition_error") or report.get("cleanup_error")
+    if (report.get("acquisition_error") or report.get("cleanup_error") or report.get("activity_cleanup_error")
             or report.get("exit_code") != 0
             or [x.get("kind") for x in events] != ["ready", "begin", "end", "complete"]):
         return {"status": "ERROR", "errors": ["native outcome or correctness journal incomplete"]}
@@ -484,6 +510,7 @@ def main():
     journal_offset = 0
     processes = None
     ticker = None
+    activity = None
     phase = "prepare"
     report.update(scenario=args.scenario, repeats=args.repeats, interval_ms=args.interval_ms,
                   events=[], identities=None, source=source_identity(args.cargo, args.toolchain))
@@ -528,6 +555,8 @@ def main():
                                 # The controller and owned engine already exist;
                                 # neither inherits this observer's new QoS.
                                 report["observer_thread_policy"] = observer_thread_policy(worker_started=True)
+                                activity = observer_process_activity(worker_started=True)
+                                report["observer_process_activity"] = activity.report() if activity is not None else {"scope": "not-applicable", "started": False}
                                 ticker = SamplerTicker(args.interval_ms)
                                 report["timer_backend"] = ticker.backend
                                 report["timer_parameters"] = ticker.parameters
@@ -571,7 +600,7 @@ def main():
         finally:
             # A fixture failure still reaches its normal bounded SDK cleanup.
             # Never kill by name or signal unrelated native processes.
-            finish_owned_observation(child, ticker, report, args.evidence_dir)
+            finish_owned_observation(child, ticker, report, args.evidence_dir, activity)
     if report["exit_code"] != 0:
         print(json.dumps({"exit_code": report["exit_code"], "evidence": str(args.evidence_dir)}))
         return report["exit_code"]

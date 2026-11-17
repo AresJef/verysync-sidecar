@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   diagnose:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository)
     name: Diagnosis only, four original-workload pilots (macOS Intel)
     runs-on: macos-15-intel
     timeout-minutes: 20

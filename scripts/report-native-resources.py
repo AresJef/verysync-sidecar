@@ -71,6 +71,30 @@ def conclude(scenarios, protocol):
             "performance": ("PASS" if within else "FAIL") if stable else "INCONCLUSIVE"}
 
 
+def check_observer_activity(report, protocol):
+    policy = protocol.get("observer_process_activity")
+    if policy is None:
+        return  # Historical protocols retain their original source and rules.
+    before = report.get("observer_process_activity", {})
+    if report["calibration"]["platform"].startswith("macOS"):
+        after = report.get("observer_process_activity_after", {})
+        for receipt in (before, after):
+            if (receipt.get("scope") != "observer-process-only"
+                    or receipt.get("worker_started_before_begin") is not True
+                    or receipt.get("requested_options") != policy["darwin_options"]
+                    or receipt.get("started") is not True
+                    or receipt.get("usage_role") != "measurement"
+                    or receipt.get("diagnostic_only") is not False
+                    or receipt.get("idle_sleep_disabled") is not False
+                    or receipt.get("display_sleep_disabled") is not False
+                    or receipt.get("system_settings_changed") is not False):
+                raise ValueError("Darwin observer process activity differs")
+        if before.get("ended") is not False or after.get("ended") is not True or report.get("activity_cleanup_error"):
+            raise ValueError("Darwin observer process activity cleanup incomplete")
+    elif before.get("scope") != "not-applicable" or before.get("started") is not False:
+        raise ValueError("non-Darwin observer process activity changed")
+
+
 def check_attempt(folder, protocol, stage, metrics):
     report = read(folder / "preparation-result.json")
     rows = [json.loads(line) for line in (folder / "samples.jsonl").read_text().splitlines()]
@@ -115,6 +139,7 @@ def check_attempt(folder, protocol, stage, metrics):
                 raise ValueError("Darwin observer scheduling policy differs")
         elif observer["policy"] != "unchanged":
             raise ValueError("non-Darwin observer scheduling changed")
+    check_observer_activity(report, protocol)
     source = report["source"]
     if source["profile"] != "release" or not source["rustc_version"].startswith("rustc "+protocol["rust_release"]+" "):
         raise ValueError("frozen compiler/profile differs")

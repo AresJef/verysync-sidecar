@@ -180,3 +180,20 @@ Some native Local-API routes have separate commercial checks. A successful basic
 status read does not prove licensed folder browsing, selective sync or remote
 access. Those positive paths still need authorized native acceptance. Cross-platform
 runtime coverage is tracked separately from these local observations.
+
+
+## Registered route coverage
+
+All 28 method/path entries in the fixed v2.33.2 Local-API router have typed
+interfaces. The capability catalog lists five canonical symbol-derived routes
+and 23 canonical Local-API rows; these are distinct entries, not extra aliases.
+The APIs cover connection/status, projections, configuration changes, scans,
+selection and listing, progress/statistics, history, share-key operations,
+system actions, temporary cleanup and index events.
+
+This records interface coverage. Native licensed selection, populated history
+and events, configuration writes and server-selected upgrade effects still
+require their own positive evidence. Existing unlicensed refusals, empty pages,
+partial hardware errors and acknowledgement-only observations keep their stated
+limits. The Local-API router does not establish an independent enterprise-control
+contract or another feature's commercial entitlement.

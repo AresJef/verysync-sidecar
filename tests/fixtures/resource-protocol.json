@@ -1,6 +1,6 @@
 {
-  "protocol_id": "VS045-native-resources-v23",
-  "version": 23,
+  "protocol_id": "VS045-native-resources-v24",
+  "version": 24,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
@@ -8,8 +8,9 @@
   "source_inputs": {
     "rust_sources_sha256": "c759e3ffe400fd79e2b943f05e53770009228ca7d0c7010ef63b0e19f426ec35",
     "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
-    "sampler_sha256": "4795624a24efa74161be3204471944fd964007b43f2f2aa3e7e6ed202d28f1b1",
-    "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a"
+    "sampler_sha256": "a48b3b08650e9628dec37a4a6ee1f0bca63129f145a34a1e1be807c935bb2a3b",
+    "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a",
+    "observer_activity_sha256": "f8ca7901ddf906b7ae640c9489ab7a643c32cc5b107f1898ccffb45aec3ef172"
   },
   "collector_sha256": "bbdec05319ce82d2e001d96598cf50bf50405e2d56e68c13e5b7d64bde3ec6e8",
   "scenarios": {
@@ -115,7 +116,8 @@
     "v16": "Each actual profile repeats source-bound calibration and both complete opposite-order pretrials before v16 formal and independent acquisition. Previous-source attempts stay historical.",
     "v17": "Each actual profile repeats source-bound clock/counter/native-wait calibration and both complete opposite-order pretrials before v17 formal and independent acquisition. Local prototype and prior-source attempts are not formal members.",
     "v18": "All eight native-correct/source-bound/calibrated cases execute in the original two opposite orders. At least one entire VALID order establishes readiness; the other order may retain INSUFFICIENT cases but never native/source/counter/acquisition errors. No preparation data enters formal groups. Formal coverage, every quality/resource criterion, deadlines and attempt limits unchanged.",
-    "v23": "Each actual profile repeats exact source-bound counter/timer calibration and all eight native pretrial cases in both original orders before complete new formal and independent collection. Earlier observer-only diagnostics and v22 measurements cannot supply v23 members."
+    "v23": "Each actual profile repeats exact source-bound counter/timer calibration and all eight native pretrial cases in both original orders before complete new formal and independent collection. Earlier observer-only diagnostics and v22 measurements cannot supply v23 members.",
+    "v24": "All6actual profiles repeat counter/timer calibration and both original complete opposite native orders before new4formal+2independent fresh-process cycles; preserve allv23strict data/Intelpartial/expired budgets and rejected attempts under original identities. Preparation members never formal."
   },
   "profiles": [
     "macos-amd64-standard",
@@ -127,10 +129,10 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "97dbd688bd497dd0a9ecd8191f6affce08da01a3eeef5bc62e7fe6aeb0f057cb",
-    "retained": "All v22 and earlier datasets keep their actual source/protocol identities, strict failures, deadlines and attempts. No earlier members enter v23; no project time or overrun is reset.",
-    "changes": "Replace only the Darwin observer wait with an owned periodic kqueue timer using NOTE_NSECONDS|NOTE_CRITICAL, after complete observer-only Mach/critical ABBA diagnostics on both actual Mac profiles. Keep and validate each real event and expiration count, record failed wait/errno, close the exact queue. The legacy Mach backend remains explicit for diagnosis, never relabeled as critical kqueue. Other systems retain monotonic sleep. Every actual profile repeats counter/timer calibration, both original native preparation orders, four formal and two independent fresh-process cycles.",
-    "unchanged": "Rust workload/source identity, native controller and engine scheduling, original sizes/repeats, timing boundaries, counters/reads, recording, quality/memory/stability thresholds, readiness policy, complete orders, quotas, deadlines and attempt limits."
+    "previous_protocol_sha256": "c0d0d4c15aec47a78152c9785181b38b03593f9a16c466a2d912581fb8efd131",
+    "retained": "Allv23and earlier raw groups/strict outcomes/attempts/deadlines keep originalsource identities, including5strictcomplete profiles and incompleteIntel runs. None become v24members;156h/projectelapsed isnotreset.",
+    "changes": "Darwin observer declares scopedlatency-critical/user-initiated allowingidle-sleep activity only afterworkersready. Bind exacthelper file and active/ended measurement-role receipts, requirecleanup evidence. NonDarwin hasno native activity. Source200ABBA iseligibility evidence, not proof ofoldcause/strict completion. Every actualprofile needs newcalibration/8pretrial/fourformal/twoindependent on thisdistinct setup.",
+    "unchanged": "Rustsource/workload, nativeprogramv2.33.2, sizes/repeats/order, alltiming/metricreads/buffering, QoS33/criticalkqueue/monotonicsleep,50ms5%/25snap500ms,16MiB/8MiBresource/stability gates,4+2fresh cycles,900s/3attempts/180span/120estimate30save and readiness1completevalidorder of2."
   },
   "preflight_sha256": "d0df504754e28fa52d54831f0d1a8fb2b62ea22679dc60c1262460ce82aacc47",
   "observer_policy": {
@@ -159,5 +161,13 @@
     "retain_quality_rejections": true,
     "formal_samples_from_preparation": 0
   },
-  "reporter_sha256": "8eca79d5bca4a5f5f18c69b6d70ce3d7505e55f8ee885881c7a6e23715c5c244"
+  "reporter_sha256": "00295dfb2d8cd0f4027310f4dd38d0382ab1930bc5019ba1fe422a53731c4dc4",
+  "observer_process_activity": {
+    "darwin_options": 1095232389119,
+    "darwin": "Explicit measurement-role observer-process activity after actual native workers exist; end exact token before persisting final raw receipt. ThreadQOS33/critical-kqueue remain unchanged.",
+    "sleep_policy": "No system/display sleep inhibitor bits, no global setting or worker policy changes.",
+    "other_systems": "No activity requested; Foundation never loaded by this path.",
+    "required_receipts": "before started/notended and after ended, exactoptions/owner/scope/role; native creation/end failure isERROR, never absence or zero.",
+    "scope": "Observer eligibility setup, no claim about root cause or guaranteed scheduling/quality."
+  }
 }

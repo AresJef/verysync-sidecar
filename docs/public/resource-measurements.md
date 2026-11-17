@@ -1,5 +1,31 @@
 # Resource measurement evidence
 
+Protocol v24 adds a scoped process activity request to the Darwin measurement
+observer, after its owned native workers have started. It combines
+`NSActivityLatencyCritical` with `NSActivityUserInitiatedAllowingIdleSystemSleep`,
+ends the exact token during cleanup, and records both receipts. It does not
+request idle or display sleep prevention or change system settings. Other
+platforms keep their existing observer policy and record that this activity is
+not applicable. The helper is part of the frozen source identity.
+
+This is a distinct measurement configuration. The original 50 ms sample-gap,
+5% read/boundary limits, workloads, complete fresh-process orders, four formal
+cycles, two independent cycles, memory limits, and finite acquisition budgets
+remain unchanged. All six profiles must complete fresh calibration and both
+full preparation orders before their v24 formal results can be accepted. The
+Intel preparation uses `macos-26-intel`. Historical v23 results remain tied to
+their original source and are not members of v24.
+
+The preceding Intel off/on/on/off diagnostic had one invalid off control,
+two valid on runs, and a valid final off control. This supports testing the
+explicit observer configuration; it does not establish a cause for the old
+missed wakeups or guarantee formal collection will pass. A local ARM64
+canonical pilot passed quality and owned cleanup, but v24 cross-platform
+preparation and formal acceptance remain pending.
+
+## Retained v23 evidence
+
+
 Protocol v23 changes the Darwin observer's blocking wait to an owned periodic
 critical kqueue timer. Rust workload/source inputs, native worker scheduling,
 original orders, every quality/resource limit and acquisition controls remain

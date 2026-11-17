@@ -40,6 +40,12 @@ class ObserverActivityContracts(unittest.TestCase):
         with patch.object(A.os,'getpid',return_value=-1),self.assertRaises(RuntimeError):guard.close()
         native.end.assert_not_called();guard.close();native.end.assert_called_once()
 
+    def test_measurement_role_is_explicit_and_does_not_claim_dataset_acceptance(self):
+        guard=A.ObserverActivity(Mock(),purpose='measurement');guard.begin(worker_started=True)
+        self.assertFalse(guard.report()['diagnostic_only']);self.assertEqual(guard.report()['usage_role'],'measurement')
+        self.assertFalse(guard.report()['timer_improvement_or_frozen_membership_claimed']);guard.close()
+        with self.assertRaises(ValueError):A.ObserverActivity(purpose='unknown')
+
     def test_native_activity_is_not_available_on_non_macos(self):
         with patch.object(A.sys,'platform','linux'),self.assertRaises(ValueError):A.NativeRuntime()
 
