@@ -818,19 +818,7 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
         BandwidthPatch, DeviceTransport, FolderPullOrder, JoinFolderOptions, RawMethod, RawRequest,
         RequestEffect,
     };
-    let root = tempfile::Builder::new().prefix("vssp-").tempdir()?.keep();
-    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
-    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
-    let a_id = a.client().instance().device_id.clone();
-    let b_id = b.client().instance().device_id.clone();
-    let a_address = private_tcp(a.client()).await?;
-    let b_address = private_tcp(b.client()).await?;
-    let keys = a.client().generate_share().await?;
-    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
-    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
-    let source = root.join("source");
-    std::fs::create_dir(&source)?;
-    for index in 0..512u64 {
+    fn write_sample(source: &std::path::Path, index: u64) -> std::io::Result<()> {
         let name = if index == 511 {
             "zz priority %.bin".to_owned()
         } else {
@@ -845,8 +833,23 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
                 random as u8
             })
             .collect();
-        std::fs::write(source.join(name), sample)?;
+        std::fs::write(source.join(name), sample)
     }
+    let root = tempfile::Builder::new().prefix("vssp-").tempdir()?.keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let a_address = private_tcp(a.client()).await?;
+    let b_address = private_tcp(b.client()).await?;
+    let keys = a.client().generate_share().await?;
+    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
+    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
+    let source = root.join("source");
+    std::fs::create_dir(&source)?;
+    write_sample(&source, 0)?;
     let af = a
         .client()
         .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(&source)).paused(true))
@@ -905,8 +908,8 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
         b.client()
             .update_bandwidth_configuration(
                 &BandwidthPatch::default()
-                    .max_receive_kib_per_second(1)
-                    .limit_in_lan(true)
+                    .max_receive_kib_per_second(0)
+                    .limit_in_lan(false)
             )
             .await?
             .requested_fields_match
@@ -927,15 +930,53 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
             .await?;
         client.share_folder_with(folder, peer).await?;
     }
-    a.client().resume_folder(&af.configuration.id).await?;
-    a.client().request_scan(&af.configuration.id).await?;
-    b.client().resume_folder(folder).await?;
+    for client in [a.client(), b.client()] {
+        assert_eq!(
+            client
+                .network_configuration()
+                .await?
+                .reconnection_interval_seconds,
+            5
+        );
+    }
     let page = ListPage::new(1, 1000)?;
+    let mut normal_rate_readiness_received = false;
+    let mut backlog_created_after_throttle = false;
+    // The original preparation window includes the actual first transfer and
+    // queue creation. Do not throttle authentication/index exchange or wait an
+    // entire default redial period before the fixture can become connected.
     let need_result = tokio::time::timeout(Duration::from_secs(20), async {
+        a.client().resume_folder(&af.configuration.id).await?;
+        a.client().request_scan(&af.configuration.id).await?;
+        b.client().resume_folder(folder).await?;
+        let readiness = std::fs::read(source.join("file-0000.bin"))?;
+        while std::fs::read(root.join("receiver").join("file-0000.bin"))
+            .ok()
+            .as_deref()
+            != Some(readiness.as_slice())
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        normal_rate_readiness_received = true;
+        assert!(
+            b.client()
+                .update_bandwidth_configuration(
+                    &BandwidthPatch::default()
+                        .max_receive_kib_per_second(1)
+                        .limit_in_lan(true)
+                )
+                .await?
+                .requested_fields_match
+        );
+        for index in 1..512u64 {
+            write_sample(&source, index)?;
+        }
+        backlog_created_after_throttle = true;
+        a.client().request_scan(&af.configuration.id).await?;
         loop {
             let n = b.client().folder_need(folder, page).await?;
             if n.queued.len() >= 2 && n.queued.iter().any(|f| f.name == "zz priority %.bin") {
-                break Ok::<_, Error>(n);
+                break Ok::<_, Box<dyn std::error::Error + Send + Sync>>(n);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -1017,12 +1058,12 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     b.client().pause_device(&a_id).await?;
     for instance in [&mut b, &mut a] {
         let exit = instance.shutdown(Duration::from_secs(10)).await?;
-        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
     std::fs::remove_dir_all(root)?;
     println!(
         "public folder priority evidence: {}",
-        json!({"all_six_actual_order_readbacks":true,"paused_scope_rejected":true,"legacy_queue_fixture_fields_read_back":true,"actual_alphabetic_backlog_has_nonfirst_target":true,"actual_target_promoted_while_other_work_still_queued":true,"actual_page_scope_preserved":true,"unrelated_folder_settings_retained":true,"unknown_order_and_invalid_relative_path_rejected":true,"explicit_rate_restoration_read_back":true,"actual_all_512_files_received":true,"all_source_and_destination_contents_match":true,"both_actual_normal_tree_exits":true})
+        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"actual_511_backlog_files_created_after_throttle":backlog_created_after_throttle,"explicit_owned_fixture_reconnection_seconds":5,"all_six_actual_order_readbacks":true,"paused_scope_rejected":true,"legacy_queue_fixture_fields_read_back":true,"actual_alphabetic_backlog_has_nonfirst_target":true,"actual_target_promoted_while_other_work_still_queued":true,"actual_page_scope_preserved":true,"unrelated_folder_settings_retained":true,"unknown_order_and_invalid_relative_path_rejected":true,"explicit_rate_restoration_read_back":true,"actual_all_512_files_received":true,"all_source_and_destination_contents_match":true,"both_actual_normal_tree_and_state_exits":true})
     );
     Ok(())
 }

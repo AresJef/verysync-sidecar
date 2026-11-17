@@ -1,6 +1,12 @@
 //! Real different-version transitions, not same-version reinstall evidence.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[cfg(windows)]
+#[path = "common/windows_cleanup_diagnostic.rs"]
+mod windows_cleanup_diagnostic;
+#[cfg(windows)]
+use windows_cleanup_diagnostic::delete_admission;
+
 use managed_fixture::{options, TestResult};
 use std::{path::PathBuf, time::Duration};
 use verysync_sidecar::{
@@ -121,25 +127,11 @@ fn report_cli_io_failure(stage: &'static str, root: &std::path::Path, error: &st
                 "scope":"read-only handle admission on exact owned fixture; no deletion or retry; no holder identity inferred"
             })
         );
+        eprintln!(
+            "owned Windows resource-holder snapshot: {}",
+            windows_cleanup_diagnostic::snapshot(root)
+        );
     }
-}
-
-#[cfg(windows)]
-fn delete_admission(path: &std::path::Path) -> std::io::Result<()> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE,
-    };
-    // Request DELETE access only to observe existing share-mode conflicts.
-    // No delete disposition, rename, writes, privilege changes or retries occur.
-    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
-    std::fs::OpenOptions::new()
-        .access_mode(0x0001_0000)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map(drop)
 }
 
 #[cfg(windows)]
@@ -178,8 +170,13 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     let root = tempfile::Builder::new().prefix("vku-").tempdir()?.keep();
     let source = upgrade_source()?;
     let program = root.join(source.path().file_name().ok_or("program name missing")?);
-    std::fs::copy(source.path(), &program)?;
-    let old_sha: [u8; 32] = Sha256::digest(std::fs::read(&program)?).into();
+    std::fs::copy(source.path(), &program)
+        .inspect_err(|e| report_cli_io_failure("kernel-copy-private-old-program", &root, e))?;
+    let old_sha: [u8; 32] = Sha256::digest(
+        std::fs::read(&program)
+            .inspect_err(|e| report_cli_io_failure("kernel-read-owned-program", &root, e))?,
+    )
+    .into();
     let base = options(&root.join("c"))?;
     let settings = ManagedOptions::new(
         LocalProgram::new(&program)?.expected_sha256(old_sha),
@@ -273,7 +270,13 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                     core.client().request_server_selected_upgrade().await,
                     Err(Error::UpgradeReleaseUnavailable { .. })
                 ));
-                assert_eq!(Sha256::digest(std::fs::read(&program)?).as_slice(), old_sha);
+                assert_eq!(
+                    Sha256::digest(std::fs::read(&program).inspect_err(|e| {
+                        report_cli_io_failure("kernel-read-owned-program", &root, e)
+                    })?)
+                    .as_slice(),
+                    old_sha
+                );
                 assert_eq!(
                     std::fs::read(base.state_directory().join("setting.dat"))?,
                     config
@@ -287,7 +290,9 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                 );
                 let exit = core.shutdown(Duration::from_secs(10)).await?;
                 assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
-                std::fs::remove_dir_all(root)?;
+                std::fs::remove_dir_all(&root).inspect_err(|e| {
+                    report_cli_io_failure("kernel-remove-fixture-after-normal-exit", &root, e)
+                })?;
                 println!(
                     "public provider release absence evidence: {}",
                     serde_json::json!({
@@ -311,7 +316,17 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                 .await,
             Err(Error::ProgramRejected { .. })
         ));
-        assert_eq!(Sha256::digest(std::fs::read(&program)?).as_slice(), old_sha);
+        assert_eq!(
+            Sha256::digest(
+                std::fs::read(&program).inspect_err(|e| report_cli_io_failure(
+                    "kernel-read-owned-program",
+                    &root,
+                    e
+                ))?,
+            )
+            .as_slice(),
+            old_sha
+        );
         core.client()
             .upload_kernel_upgrade(
                 PathBuf::from(
@@ -342,11 +357,18 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     }
     let exit = tokio::time::timeout(Duration::from_secs(20), core.wait_for_exit()).await??;
     assert!(exit.tree_stopped && !exit.forced);
-    let new_sha: [u8; 32] = Sha256::digest(std::fs::read(&program)?).into();
+    let new_sha: [u8; 32] = Sha256::digest(
+        std::fs::read(&program)
+            .inspect_err(|e| report_cli_io_failure("kernel-read-owned-program", &root, e))?,
+    )
+    .into();
     assert_ne!(new_sha, old_sha);
     assert_eq!(
         new_sha,
-        Sha256::digest(std::fs::read(base.program().path())?).as_slice()
+        Sha256::digest(std::fs::read(base.program().path()).inspect_err(|e| {
+            report_cli_io_failure("kernel-read-fixed-baseline-program", &root, e)
+        })?)
+        .as_slice()
     );
     core.restart_with_program(
         LocalProgram::new(&program)?.expected_sha256(new_sha),
@@ -368,7 +390,9 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     result?;
-    std::fs::remove_dir_all(root)?;
+    std::fs::remove_dir_all(&root).inspect_err(|e| {
+        report_cli_io_failure("kernel-remove-fixture-after-normal-exit", &root, e)
+    })?;
     println!(
         "public native kernel upgrade evidence: {}",
         serde_json::json!({"mode":if upload { "streamed_archive" } else { "provider" },

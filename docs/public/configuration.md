@@ -516,7 +516,8 @@ immediate policy change without restart.
 [Run 43981961787](https://github.com/AresJef/verysync-sidecar/actions/runs/43981961787)
 verifies all three phases, actual assertions and cleanup on native Intel Mac
 and Apple Silicon Mac. Each result retains its original producer and raw logs.
-Linux/Windows effects and final integrated acceptance remain separate requirements.
+Linux inhibitor evidence is described below. Windows effects and final integrated
+acceptance remain separate requirements.
 
 ## Diagnostic preferences
 
@@ -751,8 +752,11 @@ The gate runs only its hash-bound prebuilt test in a disposable GitHub VM,
 under an explicit separate sleep-inhibitor scope. Compilation remains
 unprivileged. It does not change a host power scheme, suspend the machine,
 install a service, or treat a synthetic helper invocation as an OS lock.
-Current native Linux results are required before claiming this validation;
-local parser checks and foreign-target compilation do not supply them.
+Native AMD64 and ARM64 results in
+[run 44005835739](https://github.com/AresJef/verysync-sidecar/actions/runs/44005835739)
+verify all three actual transfer/lock phases and cleanup. Each result retains its
+original producer and raw log. Local parser checks and foreign-target compilation
+are separate evidence and do not supply these native results.
 Existing macOS assertion evidence and Windows verification remain separate.
 See the official [logind interface](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html)
 for the native inhibitor snapshot contract.
