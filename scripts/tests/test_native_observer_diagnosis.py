@@ -1,7 +1,9 @@
 """Wait diagnosis preserves actual counts/errors and cannot claim frozen identity."""
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -12,6 +14,41 @@ SPEC.loader.exec_module(D)
 
 
 class NativeObserverDiagnosisContracts(unittest.TestCase):
+    def test_timer_backend_is_bound_without_changing_other_source_inputs(self):
+        original = {'sampler_sha256': 'original', 'rust_sources_sha256': 'unchanged'}
+        rows = [D.source_binding(original, b'runner', b'sampler', activity_mode='on',
+                    activity_bytes=b'helper', timer_backend=backend)
+                for backend in [None, 'mach', 'critical-kqueue']]
+        self.assertEqual(len({row['sampler_sha256'] for row in rows}), 3)
+        for row, backend in zip(rows, [None, 'mach', 'critical-kqueue']):
+            self.assertEqual(row['timer_backend'], backend)
+            self.assertEqual(row['rust_sources_sha256'], 'unchanged')
+            self.assertFalse(row['eligible_for_frozen_preparation_or_formal'])
+        with self.assertRaises(ValueError):
+            D.source_binding(original, b'runner', b'sampler', timer_backend='unknown')
+
+    def test_timer_comparison_runs_four_fresh_pilots_with_balanced_order_and_same_activity(self):
+        with tempfile.TemporaryDirectory() as parent:
+            destination = Path(parent) / 'fresh'
+            commands = []
+            def run(command, **kwargs):
+                commands.append(command)
+                return SimpleNamespace(returncode=[0, 2, 2, 0][len(commands)-1])
+            with patch.object(D.sys, 'platform', 'darwin'), patch.object(D.sys, 'argv',
+                    ['diagnose', '--cargo', str(Path(parent)/'cargo'), '--timer-abba',
+                     '--evidence-dir', str(destination)]), patch.object(D.subprocess, 'run', side_effect=run):
+                self.assertEqual(D.main(), 0)
+            result = json.loads((destination/'diagnosis-result.json').read_text())
+            self.assertEqual(result['timer_backends'], ['critical-kqueue', 'mach', 'mach', 'critical-kqueue'])
+            self.assertEqual(result['activity_modes'], ['on']*4)
+            self.assertEqual([c['scenario'] for c in result['cases']], ['many-small']*4)
+            self.assertEqual([c['exit_code'] for c in result['cases']], [0, 2, 2, 0])
+            self.assertFalse(result['formal_sample'])
+            self.assertEqual(len({c[c.index('--evidence-dir')+1] for c in commands}), 4)
+            for command, backend in zip(commands, result['timer_backends']):
+                self.assertEqual(command[command.index('--timer-backend')+1], backend)
+                self.assertEqual(command[command.index('--activity-mode')+1], 'on')
+
     def test_bootstrap_changes_effective_identity_and_explicitly_refuses_frozen_roles(self):
         original = {'sampler_sha256': hashlib.sha256(b'original sampler').hexdigest(), 'rust_sources_sha256': 'unchanged'}
         result = D.source_binding(original, b'diagnostic runner', b'original sampler')
