@@ -3,6 +3,8 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +14,25 @@ SPEC.loader.exec_module(HELPER)
 
 
 class DiagnosticSelection(unittest.TestCase):
+    def test_owned_storage_drafts_run_the_selected_native_matrix(self):
+        workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
+        for branch in ["test/strict-storage-tls-defaults-20261117-01a1ca9b",
+                       "test/trusted-https-webdav-20261117-01a1ca9b",
+                       "ci/strict-storage-native-execution-20261117-01a1ca9b"]:
+            github = SimpleNamespace(event_name="pull_request", head_ref=branch,
+                repository="AresJef/verysync-sidecar", event=SimpleNamespace(
+                    pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
+                        repo=SimpleNamespace(full_name="AresJef/verysync-sidecar")))))
+            for job in ["native-diagnostic-plan", "windows-folder-opener-diagnosis"]:
+                block = workflow.split(f"\n  {job}:\n", 1)[1]
+                block = re.split(r"\n  [a-z][a-z0-9-]*:\n", block, maxsplit=1)[0]
+                condition = next(line[len("    if: "):] for line in block.splitlines()
+                                 if line.startswith("    if: "))
+                expression = condition.replace("&&", " and ").replace("||", " or ")
+                expression = re.sub(r"!(?!=)", "not ", expression)
+                self.assertTrue(eval(expression, {"__builtins__": {}}, {"github": github}),
+                                f"selected native checks were skipped: {branch} / {job}")
+
     def setUp(self):
         self.rows = json.loads((ROOT / ".github/native-diagnostic-matrix.json").read_text())
         self.selection = {"draft_labels": ["remote-version-archives", "thumbnail-cache"]}
