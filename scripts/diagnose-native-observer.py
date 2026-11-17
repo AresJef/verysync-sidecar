@@ -21,11 +21,25 @@ def sampler_module():
     return module
 
 
-def source_binding(original, runner_bytes, sampler_bytes):
+def source_binding(original, runner_bytes, sampler_bytes, *, activity_mode=None, activity_bytes=b""):
+    if activity_mode not in (None, "off", "on"):
+        raise ValueError("explicit activity comparison mode required")
+    extra = b"" if activity_mode is None else b"\0"+activity_mode.encode()+b"\0"+activity_bytes
     return {**original, 'unmodified_sampler_file_sha256': hashlib.sha256(sampler_bytes).hexdigest(),
             'diagnostic_runner_sha256': hashlib.sha256(runner_bytes).hexdigest(),
-            'sampler_sha256': hashlib.sha256(runner_bytes+b'\0'+sampler_bytes).hexdigest(),
-            'diagnostic_only': True, 'eligible_for_frozen_preparation_or_formal': False}
+            'sampler_sha256': hashlib.sha256(runner_bytes+b'\0'+sampler_bytes+extra).hexdigest(),
+            'diagnostic_only': True, 'eligible_for_frozen_preparation_or_formal': False,
+            'activity_mode': activity_mode,
+            'activity_helper_sha256': hashlib.sha256(activity_bytes).hexdigest() if activity_mode else None}
+
+
+def activity_policy(original, mode, activity, *, worker_started):
+    result = original(worker_started=worker_started)
+    if mode == "on":
+        return {**result, "process_activity": activity.begin(worker_started=worker_started)}
+    if mode == "off":
+        return {**result, "process_activity": {"started": False, "mode": "off", "diagnostic_only": True}}
+    return result
 
 
 class DiagnosticTicker:
@@ -65,6 +79,15 @@ def worker(args):
     protocol = json.loads(Path(__file__).resolve().parents[1].joinpath('tests/fixtures/resource-protocol.json').read_text())
     waits, events = [], []
     original_ticker, original_source = module.SamplerTicker, module.source_identity
+    original_policy = module.observer_thread_policy
+    activity_mode = getattr(args, 'activity_mode', None)
+    activity_bytes = Path(__file__).with_name('macos-observer-activity.py').read_bytes() if activity_mode else b''
+    activity = None
+    if activity_mode == 'on':
+        spec = importlib.util.spec_from_file_location('observer_activity', Path(__file__).with_name('macos-observer-activity.py'))
+        native_activity = importlib.util.module_from_spec(spec); spec.loader.exec_module(native_activity)
+        activity = native_activity.ObserverActivity()
+    module.observer_thread_policy = lambda worker_started=False: activity_policy(original_policy, activity_mode, activity, worker_started=worker_started)
     runner_bytes, sampler_bytes = Path(__file__).read_bytes(), Path(module.__file__).read_bytes()
     overflow = False
 
@@ -82,7 +105,7 @@ def worker(args):
         return DiagnosticTicker(original_ticker(*a, **k), waits, lambda: overflow)
 
     module.SamplerTicker = ticker
-    module.source_identity = lambda *a, **k: source_binding(original_source(*a, **k), runner_bytes, sampler_bytes)
+    module.source_identity = lambda *a, **k: source_binding(original_source(*a, **k), runner_bytes, sampler_bytes, activity_mode=activity_mode, activity_bytes=activity_bytes)
     original_argv = sys.argv
     gc.callbacks.append(on_gc)
     started = time.monotonic()
@@ -104,15 +127,27 @@ def worker(args):
         gc.callbacks.remove(on_gc)
         sys.argv = original_argv
         module.SamplerTicker, module.source_identity = original_ticker, original_source
+        module.observer_thread_policy = original_policy
+        cleanup_error = None
+        if activity is not None:
+            try:
+                activity.close()
+            except BaseException as error:
+                cleanup_error = error
         args.evidence_dir.mkdir(parents=True, exist_ok=True)
         report = {'role': 'diagnosis only; not frozen preparation or formal evidence',
                   'formal_sample': False, 'native_pilot_exit_code': code, 'gc_overflow': overflow,
                   'diagnostic_error_type': error_type,
+                  'activity_mode': activity_mode,
+                  'process_activity': activity.report() if activity is not None else None,
+                  'activity_cleanup_error_type': type(cleanup_error).__name__ if cleanup_error is not None else None,
                   'elapsed_s': time.monotonic()-started,
                   'diagnostic_runner_sha256': hashlib.sha256(runner_bytes).hexdigest(),
                   'unmodified_sampler_file_sha256': hashlib.sha256(sampler_bytes).hexdigest(),
                   'waits': waits, 'gc_events': events}
         (args.evidence_dir/'wait-diagnostics.json').write_bytes((json.dumps(report, indent=2)+'\n').encode())
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def main():
@@ -121,26 +156,37 @@ def main():
     parser.add_argument('--toolchain', default='1.85.0')
     parser.add_argument('--evidence-dir', type=Path, required=True)
     parser.add_argument('--worker', choices=sorted(set(ORDER)))
+    parser.add_argument('--activity-mode', choices=['off', 'on'])
+    parser.add_argument('--activity-abba', action='store_true')
     args = parser.parse_args()
     if sys.platform != 'darwin' or not args.evidence_dir.is_absolute() or args.evidence_dir.exists():
         raise ValueError('explicit fresh absolute macOS diagnostic directory required')
     if args.worker:
+        if args.activity_abba:
+            raise ValueError('activity ABBA belongs to the bounded parent only')
         return worker(args)
+    if args.activity_mode is not None:
+        raise ValueError('single activity mode requires an explicit worker')
+    selected_order = ['many-small']*4 if args.activity_abba else ORDER
+    activity_modes = ['off', 'on', 'on', 'off'] if args.activity_abba else [None]*4
     args.evidence_dir.mkdir(mode=0o700)
     started = time.monotonic()
     result = {'formal_sample': False, 'role': 'bounded native observer diagnosis only',
-              'original_budget_s': 600, 'original_order': ORDER, 'cases': []}
+              'original_budget_s': 600, 'original_order': ORDER, 'selected_order': selected_order,
+              'activity_modes': activity_modes, 'cases': []}
     try:
-        for index, scenario in enumerate(ORDER):
+        for index, scenario in enumerate(selected_order):
             if time.monotonic()-started+150 > 600:
                 result['status'] = 'INSUFFICIENT_DIAGNOSTIC_TIME'
                 return 2
             destination = args.evidence_dir/f'case-{index}-{scenario}'
             command = [sys.executable, '-B', str(Path(__file__).resolve()), '--cargo', str(args.cargo),
                        '--toolchain', args.toolchain, '--evidence-dir', str(destination), '--worker', scenario]
+            if activity_modes[index] is not None:
+                command += ['--activity-mode', activity_modes[index]]
             with (args.evidence_dir/f'case-{index}.console.log').open('wb') as output:
                 code = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=False).returncode
-            result['cases'].append({'scenario': scenario, 'exit_code': code, 'directory': destination.name})
+            result['cases'].append({'scenario': scenario, 'activity_mode': activity_modes[index], 'exit_code': code, 'directory': destination.name})
             if code not in {0, 2}:
                 result['status'] = 'ERROR'
                 return code

@@ -22,6 +22,27 @@ class NativeObserverDiagnosisContracts(unittest.TestCase):
         self.assertFalse(result['eligible_for_frozen_preparation_or_formal'])
         self.assertEqual(original.keys(), {'sampler_sha256', 'rust_sources_sha256'})
 
+    def test_activity_variants_and_helper_are_part_of_composite_identity(self):
+        original={'sampler_sha256':'original','rust_sources_sha256':'unchanged'}
+        off=D.source_binding(original,b'runner',b'sampler',activity_mode='off',activity_bytes=b'helper')
+        on=D.source_binding(original,b'runner',b'sampler',activity_mode='on',activity_bytes=b'helper')
+        changed=D.source_binding(original,b'runner',b'sampler',activity_mode='on',activity_bytes=b'changed')
+        self.assertEqual(len({off['sampler_sha256'],on['sampler_sha256'],changed['sampler_sha256']}),3)
+        for row in [off,on,changed]:
+            self.assertTrue(row['diagnostic_only']);self.assertFalse(row['eligible_for_frozen_preparation_or_formal'])
+            self.assertEqual(row['rust_sources_sha256'],'unchanged')
+
+    def test_activity_starts_after_original_thread_policy_and_off_never_starts(self):
+        events=[];activity=Mock()
+        def original(*,worker_started):events.append(('original',worker_started));return {'observed':33}
+        activity.begin.side_effect=lambda **kwargs:events.append(('activity',kwargs['worker_started'])) or {'started':True}
+        result=D.activity_policy(original,'on',activity,worker_started=True)
+        self.assertEqual(events,[('original',True),('activity',True)])
+        self.assertEqual(result['observed'],33)
+        events.clear();activity.reset_mock()
+        self.assertFalse(D.activity_policy(original,'off',activity,worker_started=True)['process_activity']['started'])
+        activity.begin.assert_not_called()
+
     def test_delayed_native_wait_keeps_wall_cpu_expirations_and_exact_cleanup(self):
         inner = Mock(backend='original', parameters={'original': True}, expirations=9)
         rows = []
