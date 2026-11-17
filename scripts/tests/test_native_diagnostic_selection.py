@@ -83,14 +83,14 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 128)
+        self.assertEqual(len(self.rows), 134)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
-    def test_current_manifest_requires_actual_temporary_expiry_on_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_actual_temporary_expiry_on_six_profiles(self):
+        selection = {"draft_labels": ["native-temporary-retention-policy"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         age = [row for row in actual if row.get("label") == "native-temporary-retention-policy"]
-        self.assertEqual(len(actual), 32)
+        self.assertEqual(len(actual), 6)
         self.assertEqual(len(age), 6)
         self.assertEqual(len({row["package"] for row in age}), 6)
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
@@ -129,6 +129,17 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer"
                             for row in dials))
+
+    def test_current_manifest_requires_signed_incoming_selections_and_three_real_transfers(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        budgets = [row for row in actual if row.get("label") == "native-signed-incoming-budget"]
+        self.assertEqual(len(actual), 32)
+        self.assertEqual(len(budgets), 6)
+        self.assertEqual(len({row["package"] for row in budgets}), 6)
+        self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
+                            "native_signed_incoming_request_budgets_survive_restart_and_real_transfers"
+                            for row in budgets))
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
