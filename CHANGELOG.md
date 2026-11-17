@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Preserve signed native incoming-request budgets with an `i64` field and patch
+  setter, including negative selections, zero and target-supported positive
+  values. This changes the unstable alpha API. Configuration persistence and
+  real transfer checks remain separate from actual memory-limit effects; old
+  resource measurements retain their original source binding.
+
 - Correct native SOCKS5 preferences to use the fixed core's host:port authority,
   including percent-encoded credentials, instead of a full URI. On explicit
   managed startup/restart, apply the persisted selection only to the owned core's

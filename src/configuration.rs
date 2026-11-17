@@ -191,9 +191,9 @@ pub struct GeneralOptions {
     /// Native concurrent-dial setting, including the engine's zero policy.
     #[serde(rename = "maxDialConcurrent")]
     pub max_dial_concurrent: u32,
-    /// Native incoming-request budget in KiB, including its zero policy.
+    /// Signed native incoming-request budget in KiB, retaining negative and zero policies.
     #[serde(rename = "maxConcurrentIncomingRequestKiB")]
-    pub max_concurrent_incoming_request_kib: u32,
+    pub max_concurrent_incoming_request_kib: i64,
     /// Whether the engine requests a lower process priority.
     #[serde(rename = "setLowPriority")]
     pub set_low_priority: bool,
@@ -260,7 +260,7 @@ pub struct GeneralOptionsPatch {
         rename = "maxConcurrentIncomingRequestKiB",
         skip_serializing_if = "Option::is_none"
     )]
-    max_concurrent_incoming_request_kib: Option<u32>,
+    max_concurrent_incoming_request_kib: Option<i64>,
     #[serde(rename = "setLowPriority", skip_serializing_if = "Option::is_none")]
     set_low_priority: Option<bool>,
     #[serde(
@@ -306,8 +306,11 @@ impl GeneralOptionsPatch {
         self.max_dial_concurrent = Some(value);
         self
     }
-    /// Set the native incoming request budget in KiB.
-    pub fn max_concurrent_incoming_request_kib(mut self, value: u32) -> Self {
+    /// Set the signed native incoming request budget in KiB.
+    ///
+    /// Negative and zero selections retain their native meanings. Matching
+    /// readback does not establish an actual concurrent memory limit.
+    pub fn max_concurrent_incoming_request_kib(mut self, value: i64) -> Self {
         self.max_concurrent_incoming_request_kib = Some(value);
         self
     }

@@ -65,6 +65,9 @@ mod target_directory_contracts;
 #[path = "common/whole_section_configuration_contracts.rs"]
 mod whole_section_configuration_contracts;
 
+#[path = "common/incoming_request_budget_contracts.rs"]
+mod incoming_request_budget_contracts;
+
 #[tokio::test]
 async fn remote_tunnel_connection_preserves_prefix_and_requires_target_identity() -> TestResult {
     use verysync_sidecar::DeviceId;
