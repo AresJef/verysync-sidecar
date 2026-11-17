@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -14,6 +15,65 @@ SPEC.loader.exec_module(D)
 
 
 class NativeObserverDiagnosisContracts(unittest.TestCase):
+    def test_arm_owned_draft_selects_matching_runner_and_core_without_broadening_scope(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/native-observer-diagnosis.yml').read_text()
+        runner = next(x.strip()[len('runs-on: '):] for x in workflow.splitlines()
+                      if x.strip().startswith('runs-on: '))
+        package = re.search(r'--package "(\$\{\{.*?\}\})"', workflow).group(1)
+        branch = 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b'
+        for event, draft, head, repo, expected in [
+            ('pull_request', True, branch, 'AresJef/verysync-sidecar', ('macos-15', 'macos-arm64-standard')),
+            ('pull_request', False, branch, 'AresJef/verysync-sidecar', ('macos-15-intel', 'macos-amd64-standard')),
+            ('pull_request', True, branch, 'external/fork', ('macos-15-intel', 'macos-amd64-standard')),
+            ('workflow_dispatch', True, branch, 'AresJef/verysync-sidecar', ('macos-15-intel', 'macos-amd64-standard')),
+            ('pull_request', True, 'unrelated', 'AresJef/verysync-sidecar', ('macos-15-intel', 'macos-amd64-standard')),
+        ]:
+            github = SimpleNamespace(event_name=event, head_ref=head,
+                repository='AresJef/verysync-sidecar', event=SimpleNamespace(pull_request=SimpleNamespace(
+                    draft=draft, head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
+            def evaluate(expression):
+                expression = expression.removeprefix('${{').removesuffix('}}')
+                expression = expression.replace('&&', ' and ').replace('||', ' or ')
+                expression = re.sub(r'!(?!=)', 'not ', expression)
+                return eval(expression.strip(), {'__builtins__': {}},
+                            {'github': github, 'false': False, 'true': True})
+            self.assertEqual((evaluate(runner), evaluate(package)), expected)
+            engine = (root / '.github/workflows/engine-tests.yml').read_text()
+            conditions = [line[len('    if: '):] for line in engine.splitlines()
+                          if line.startswith('    if: ') and branch in line]
+            self.assertEqual(len(conditions), 10)
+            for expression in conditions:
+                actual = evaluate(expression)
+                if expected[0] == 'macos-15':
+                    self.assertFalse(actual)
+                else:
+                    github.head_ref = 'unrelated'
+                    self.assertEqual(actual, evaluate(expression))
+                    github.head_ref = head
+
+    def test_diagnostic_draft_never_launches_a_second_frozen_acquisition(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/resource-collection.yml').read_text()
+        expression = next(x[len('    if: '):] for x in workflow.splitlines() if x.startswith('    if: '))
+        expression = re.sub(r'!(?!=)', 'not ', expression.replace('&&', ' and ').replace('||', ' or '))
+        branch = 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b'
+        for event, draft, head, repo in [
+            ('pull_request', True, branch, 'AresJef/verysync-sidecar'),
+            ('pull_request', False, branch, 'AresJef/verysync-sidecar'),
+            ('pull_request', True, branch, 'external/fork'),
+            ('workflow_dispatch', True, branch, 'AresJef/verysync-sidecar'),
+            ('pull_request', True, 'unrelated', 'AresJef/verysync-sidecar'),
+        ]:
+            for action, label in [('synchronize', 'none'), ('labeled', 'resource-formal'), ('labeled', 'other')]:
+                github = SimpleNamespace(event_name=event, head_ref=head, repository='AresJef/verysync-sidecar',
+                    event=SimpleNamespace(action=action, label=SimpleNamespace(name=label),
+                        pull_request=SimpleNamespace(draft=draft, head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
+                original = event != 'pull_request' or action != 'labeled' or label == 'resource-formal'
+                owned_draft = event == 'pull_request' and draft and head == branch and repo == github.repository
+                self.assertEqual(bool(eval(expression, {'__builtins__': {}}, {'github': github})),
+                                 original and not owned_draft)
+
     def test_timer_backend_is_bound_without_changing_other_source_inputs(self):
         original = {'sampler_sha256': 'original', 'rust_sources_sha256': 'unchanged'}
         rows = [D.source_binding(original, b'runner', b'sampler', activity_mode='on',

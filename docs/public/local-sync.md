@@ -346,11 +346,19 @@ accounts or permissions. The test peer registers only an anonymous identity,
 refuses an ordinary named user and records the actual accepted anonymous login
 without printing credentials.
 
-The isolated macOS ARM64 v2.33.2 case verified native probe/browse, two distinct
+All six standard macOS/Linux/Windows AMD64/ARM64 v2.33.2 cases verified native
+probe/browse, two distinct
 explicit preview/run cycles across a same-identity restart, exact 131072-byte and
 65536-byte payloads, retained source and target-only data, unregister without
-deletion, and normal owned core/state/peer cleanup. Separate six-profile native
-acceptance remains pending. This is plain FTP authentication and data evidence;
+deletion, and normal owned core/state/peer cleanup in
+[run 44118836327](https://github.com/AresJef/verysync-sidecar/actions/runs/44118836327).
+The Mac ARM job's original cancellation had no runner or executed steps; its
+single scheduling retry supplied that profile's actual native result. Other
+profiles retain their original results. Independent password-authentication
+cases also verify actual incorrect-credential refusal and real native data
+effects. These are authentication subcases; the complete release candidate and
+remaining backend, fault and authorization gates are separate. This is plain FTP
+authentication and data evidence;
 it does not establish FTPS or a verified server identity.
 
 ## SFTP key validation boundary

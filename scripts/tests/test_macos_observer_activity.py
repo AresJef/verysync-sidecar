@@ -1,6 +1,8 @@
 """A diagnostic activity must preserve scope, exact ownership and cleanup."""
 import importlib.util
 from pathlib import Path
+import re
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -8,6 +10,26 @@ SPEC=importlib.util.spec_from_file_location('activity',Path(__file__).resolve().
 A=importlib.util.module_from_spec(SPEC);SPEC.loader.exec_module(A)
 
 class ObserverActivityContracts(unittest.TestCase):
+    def test_arm_draft_does_not_duplicate_intel_activity_acquisition(self):
+        workflow = (Path(__file__).resolve().parents[2] /
+                    '.github/workflows/native-observer-activity.yml').read_text()
+        expression = next(line[len('    if: '):] for line in workflow.splitlines()
+                          if line.startswith('    if: '))
+        expression = expression.replace('&&', ' and ').replace('||', ' or ')
+        expression = re.sub(r'!(?!=)', 'not ', expression)
+        branch = 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b'
+        for event, draft, head, repo, expected in [
+            ('pull_request', True, branch, 'AresJef/verysync-sidecar', False),
+            ('pull_request', False, branch, 'AresJef/verysync-sidecar', True),
+            ('pull_request', True, branch, 'external/fork', True),
+            ('workflow_dispatch', True, branch, 'AresJef/verysync-sidecar', True),
+            ('pull_request', True, 'unrelated', 'AresJef/verysync-sidecar', True),
+        ]:
+            github = SimpleNamespace(event_name=event, head_ref=head,
+                repository='AresJef/verysync-sidecar', event=SimpleNamespace(pull_request=SimpleNamespace(
+                    draft=draft, head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
+            self.assertEqual(bool(eval(expression, {'__builtins__': {}}, {'github': github})), expected)
+
     def test_only_latency_and_user_activity_allowing_idle_sleep_are_requested(self):
         self.assertEqual(A.OPTIONS,0xFF00000000|0x00EFFFFF)
         self.assertEqual(A.OPTIONS&((1<<20)|(1<<40)),0)

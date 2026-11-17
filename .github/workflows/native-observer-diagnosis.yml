@@ -1,4 +1,4 @@
-name: Intel native observer timer comparison
+name: Native observer timer comparison
 
 on:
   pull_request:
@@ -18,8 +18,9 @@ concurrency:
 jobs:
   diagnose:
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository)
-    name: Diagnosis only, four fresh native timer ABBA pilots (macOS Intel)
-    runs-on: macos-15-intel
+    name: Diagnosis only, four fresh native timer ABBA pilots
+    # Only this owned Draft diagnoses the ARM preparation failure. Ready/manual keep Intel.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository && 'macos-15' || 'macos-15-intel' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -37,9 +38,9 @@ jobs:
           rustup toolchain install 1.85.0 --profile minimal
           cargo +1.85.0 fetch --locked
           python -B -m unittest discover -s scripts/tests -p test_native_observer_diagnosis.py
-      - name: Explicitly prepare the owned fixed Intel core
+      - name: Explicitly prepare the owned fixed native core
         run: >-
-          python scripts/prepare-test-engine.py prepare --package macos-amd64-standard
+          python scripts/prepare-test-engine.py prepare --package "${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository && 'macos-arm64-standard' || 'macos-amd64-standard' }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
       - name: Build the unchanged real release workload before diagnosis
         run: cargo +1.85.0 test --release --no-run --features engine-tests,download --test resource_usage_engine --locked
