@@ -1,6 +1,6 @@
 {
   "draft_labels": [
-    "native-folder-concurrency-policy",
-    "native-link-producer-win386"
+    "native-sleep-prevention-policy",
+    "native-windows-sleep-prevention-policy"
   ]
 }
