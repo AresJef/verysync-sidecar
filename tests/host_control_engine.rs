@@ -1,4 +1,7 @@
 //! Host actions are explicit; the privileged case is only for a disposable CI VM.
+#[cfg(feature = "host-configuration-tests")]
+#[path = "common/linux_sleep_inhibitor_cases.rs"]
+mod linux_sleep_inhibitor_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 use managed_fixture::{options, TestResult};

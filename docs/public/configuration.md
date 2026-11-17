@@ -734,3 +734,25 @@ retention and temporary-index effects are independently unverified. A stored
 traffic-class integer, including an out-of-byte-range value accepted by native
 configuration, does not establish valid OS packet marking or router handling.
 No packet-QoS, memory-budget or performance guarantee follows from these reads.
+
+
+## Linux sleep-inhibitor validation
+
+The fixed Linux ARM64 program's native backend invokes the system
+systemd-inhibit command with a sleep/block request and its own
+VerysyncStayAwake reason. The new isolated Linux AMD64/ARM64 CI gate checks
+the actual logind inhibitor through its read-only ListInhibitors interface,
+bound to the selected owned process group, helper creation identity and kernel
+executable path. It requires false/true/false policy phases, fresh real file
+transfers, helper/lock release after completion, retained caller data and
+credentials, and both normal owned process-tree/state exits.
+
+The gate runs only its hash-bound prebuilt test in a disposable GitHub VM,
+under an explicit separate sleep-inhibitor scope. Compilation remains
+unprivileged. It does not change a host power scheme, suspend the machine,
+install a service, or treat a synthetic helper invocation as an OS lock.
+Current native Linux results are required before claiming this validation;
+local parser checks and foreign-target compilation do not supply them.
+Existing macOS assertion evidence and Windows verification remain separate.
+See the official [logind interface](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html)
+for the native inhibitor snapshot contract.
