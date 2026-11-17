@@ -86,11 +86,14 @@ For this fixed version's archive SFTP backend, the native `privateKey` query
 value is a **key-file path on the target machine**, not inline PEM text. Encode
 it as a URI query value; the SDK neither reads the key nor copies it to the
 target. This differs from the Local Sync endpoint's inline-key interface.
-An isolated macOS ARM64 key-only peer rejects a different valid private key,
-then authenticates the selected key without password fallback and verifies real
-archival, browsing, restoration, restart and retained remote archives. The test
-also uses a target key path containing Unicode, spaces and a literal percent.
-Corresponding native platform runs remain required.
+Native tests on all six standard macOS/Linux/Windows AMD64/ARM64 profiles reject
+a different valid private key at a dedicated key-only peer, then authenticate the
+selected key without password fallback and verify real archival, browsing,
+restoration, restart and retained remote archives. They also use a target key
+path containing Unicode, spaces and a literal percent. These results belong to
+[run 44082376849](https://github.com/AresJef/verysync-sidecar/actions/runs/44082376849),
+whose unrelated failures remain recorded; they do not establish a passing full
+release candidate.
 
 The fixed native parser accepts `parallelConnections` (default 1, maximum 32)
 and `sftpChannels` (default 5, maximum 256). Missing, invalid or nonpositive
@@ -104,12 +107,13 @@ when changing `parallelConnections` from 1 to 2, and performs the data effects
 with `sftpChannels=2` and `connectTimeout=6`. It does not measure a concurrency
 or network-timeout bound, throughput improvement or verified server identity.
 
-An isolated macOS ARM64 SFTP case has verified real remote old bytes, native
-version browsing, restoration of a Unicode/percent filename, unchanged source
-data, normal restart with the remote location retained, resetting to the default
-location without deleting remote archives, and normal owned exits. Four separate
-standard Linux/Windows AMD64/ARM64 cases in [run 43914478575](https://github.com/AresJef/verysync-sidecar/actions/runs/43914478575)
-verify those same SFTP effects.
+Separate password and key-file SFTP cases in the six standard profiles verify
+real remote old bytes, native version browsing, restoration of a Unicode/percent
+filename, unchanged source data, normal restart with the remote location retained,
+resetting to the default location without deleting remote archives, and normal
+owned-tree/state release. Each profile's complete file-history target passed all
+11 tests in the linked run. These archive results do not establish verified
+server host identity or a concurrency or network-timeout bound.
 
 FTP URI readback succeeds, but the first remote generation fails with the exact
 native `simple versioner: archive: file does not exist` error on all six standard
@@ -122,8 +126,8 @@ authentication, observed USER/PASS commands, no upload command in that observati
 window, the exact native error and a nonzero pull-error counter, retained files,
 an empty archive, and normal owned-tree/state release. The observer is opt-in,
 records command names without arguments or credentials, and preserves the original
-server command handler. The new Mac observed case passes; the corresponding new
-cross-platform strict cases remain pending.
+server command handler. All six standard profiles passed this strict observed
+refusal case in the linked run, independently of their positive SFTP archive cases.
 
 This is a faithful native-refusal contract, not positive FTP archival. The
 underlying cause remains unresolved. Acceptance tests apply this exception only
