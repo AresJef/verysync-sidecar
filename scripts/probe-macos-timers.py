@@ -6,40 +6,9 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import select
 import platform
 import sys
 import time
-
-
-class CriticalKqueueTicker:
-    """One owned periodic timer, with the Apple SDK's minimum-coalescing flag."""
-    def __init__(self):
-        self.queue = select.kqueue()
-        self.expirations = None
-        # sys/event.h: NOTE_NSECONDS=4, NOTE_CRITICAL=32. CPython does not
-        # expose these macOS flags. This is interval mode, not an epoch guess.
-        self.parameters = {"interval_ns": 10_000_000, "fflags": 4 | 32}
-        try:
-            self.queue.control([select.kevent(1, filter=select.KQ_FILTER_TIMER,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
-                fflags=self.parameters["fflags"], data=10_000_000)], 0, 0)
-        except BaseException:
-            self.queue.close()
-            raise
-
-    def wait(self):
-        events = self.queue.control(None, 1, 2)
-        if len(events) != 1:
-            raise RuntimeError("owned critical timer did not return one event within 2s")
-        event = events[0]
-        if (event.ident != 1 or event.filter != select.KQ_FILTER_TIMER
-                or event.flags & select.KQ_EV_ERROR or event.data < 1):
-            raise RuntimeError("owned critical timer returned an invalid event")
-        self.expirations = event.data
-
-    def close(self):
-        self.queue.close()
 
 
 def probe(output):
@@ -74,7 +43,7 @@ def probe(output):
     try:
         # Complete ABBA clock blocks, retaining every slow and fast wait.
         for name in ["mach", "critical-kqueue", "critical-kqueue", "mach"]:
-            ticker = sampler.SamplerTicker(10) if name == "mach" else CriticalKqueueTicker()
+            ticker = sampler.SamplerTicker(10, darwin_backend=name)
             block = {"timer": name, "parameters": ticker.parameters, "rows": []}
             report["blocks"].append(block)
             previous = time.perf_counter_ns()

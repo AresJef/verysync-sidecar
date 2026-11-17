@@ -56,7 +56,7 @@ class ResourceQualityContracts(unittest.TestCase):
             first = 100 + period
             library.mach_absolute_time.side_effect = [100, first+2*period+5, first+3*period]
             with patch.object(METRICS.sys, "platform", "darwin"), patch("ctypes.CDLL", return_value=library):
-                timer = METRICS.SamplerTicker(10)
+                timer = METRICS.SamplerTicker(10, darwin_backend="mach")
                 self.assertEqual(timer.backend, "darwin-mach-absolute-deadline")
                 self.assertEqual(timer.parameters["period_ticks"], period)
                 self.assertGreaterEqual(period*numer, 10_000_000*denom)
@@ -77,7 +77,7 @@ class ResourceQualityContracts(unittest.TestCase):
             library.mach_absolute_time.side_effect = [100, returned]
             library.mach_wait_until.return_value = status
             with patch.object(METRICS.sys, "platform", "darwin"), patch("ctypes.CDLL", return_value=library):
-                timer = METRICS.SamplerTicker(10)
+                timer = METRICS.SamplerTicker(10, darwin_backend="mach")
                 with self.assertRaises(METRICS.TimerWaitError) as caught:
                     timer.wait()
                 self.assertEqual(caught.exception.diagnostic["reason"], reason)
@@ -91,7 +91,7 @@ class ResourceQualityContracts(unittest.TestCase):
             library.mach_absolute_time.return_value = clock
             with patch.object(METRICS.sys, "platform", "darwin"), patch("ctypes.CDLL", return_value=library):
                 with self.assertRaises(METRICS.TimerWaitError):
-                    METRICS.SamplerTicker(10)
+                    METRICS.SamplerTicker(10, darwin_backend="mach")
                 library.mach_wait_until.assert_not_called()
 
     def test_other_platform_timer_does_not_load_darwin_libraries_or_change_sleep(self):
