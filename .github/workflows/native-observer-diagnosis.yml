@@ -1,4 +1,4 @@
-name: Intel native observer wait diagnosis
+name: Intel native observer timer comparison
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ concurrency:
 jobs:
   diagnose:
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository)
-    name: Diagnosis only, four original-workload pilots (macOS Intel)
+    name: Diagnosis only, four fresh native timer ABBA pilots (macOS Intel)
     runs-on: macos-15-intel
     timeout-minutes: 20
     defaults:
@@ -45,7 +45,7 @@ jobs:
         run: cargo +1.85.0 test --release --no-run --features engine-tests,download --test resource_usage_engine --locked
       - name: Retain wall and thread CPU waits plus all GC events under real work
         run: >-
-          python -B scripts/diagnose-native-observer.py --toolchain 1.85.0
+          python -B scripts/diagnose-native-observer.py --timer-abba --toolchain 1.85.0
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
           --evidence-dir "${{ runner.temp }}/vs-intel-wait-diagnosis"
       - name: Verify all four native pilots and refuse their frozen membership
@@ -56,11 +56,14 @@ jobs:
           root = Path(os.environ["RUNNER_TEMP"]) / "vs-intel-wait-diagnosis"
           result = json.loads((root / "diagnosis-result.json").read_text())
           assert result["status"] == "DIAGNOSIS_COMPLETE_ONLY" and not result["formal_sample"]
-          assert [x["scenario"] for x in result["cases"]] == ["stream-small", "many-small", "many-small", "stream-small"]
+          assert [x["scenario"] for x in result["cases"]] == ["many-small"]*4
+          assert result["timer_backends"] == ["critical-kqueue", "mach", "mach", "critical-kqueue"]
+          assert result["activity_modes"] == ["on"]*4
           spec = importlib.util.spec_from_file_location("validator", "scripts/report-native-resources.py")
           validator = importlib.util.module_from_spec(spec); spec.loader.exec_module(validator)
           metrics = validator.module("metrics", "measure-native-resources.py")
           protocol = validator.read(Path("tests/fixtures/resource-protocol.json"))
+          identities, binaries = [], set()
           for case in result["cases"]:
               folder = root / case["directory"]
               raw = json.loads((folder / "preparation-result.json").read_text())
@@ -69,6 +72,21 @@ jobs:
               assert raw["source"]["diagnostic_only"] and not raw["source"]["eligible_for_frozen_preparation_or_formal"]
               assert raw["source"]["sampler_sha256"] != protocol["source_inputs"]["sampler_sha256"]
               assert not trace["gc_overflow"] and trace["diagnostic_error_type"] is None
+              assert trace["timer_backend"] == raw["source"]["timer_backend"] == case["timer_backend"]
+              assert trace["activity_mode"] == case["activity_mode"] == "on"
+              assert trace["activity_cleanup_error_type"] is None
+              activity = trace["process_activity"]
+              assert activity["started"] and activity["ended"] and activity["worker_started_before_begin"]
+              assert not activity["idle_sleep_disabled"] and not activity["display_sleep_disabled"]
+              assert activity["scope"] == "observer-process-only"
+              expected_timer = {"mach": "darwin-mach-absolute-deadline", "critical-kqueue": "darwin-critical-kqueue"}
+              assert raw["timer_backend"] == expected_timer[case["timer_backend"]]
+              rows = [json.loads(line) for line in (folder / "samples.jsonl").read_text().splitlines()]
+              quality = metrics.summarize(raw, rows, protocol["quality"])
+              assert quality == json.loads((folder / "quality-result.json").read_text())
+              assert not quality["errors"] and quality["status"] in {"VALID", "INSUFFICIENT"}
+              identities.extend((v["pid"], v["creation_time"]) for v in raw["identities"])
+              binaries.add((bytes(raw["events"][0]["controller_sha256"]).hex(), raw["events"][0]["engine_sha256"]))
               assert trace["waits"] and all(w["thread_cpu_ns"] >= 0 for w in trace["waits"])
               assert all(raw["events"][-1][k] is True for k in ["all_actual_bytes_verified", "source_config_identity_unchanged", "normal_owned_tree_exit"])
               try:
@@ -78,9 +96,10 @@ jobs:
               else:
                   raise AssertionError("diagnostic pilot admitted as frozen preparation")
               slow = sorted(trace["waits"], key=lambda w: w["end_ns"]-w["start_ns"], reverse=True)
-              print(json.dumps({"role": "diagnosis only", "scenario": case["scenario"], "waits": len(slow),
+              print(json.dumps({"role": "diagnosis only", "scenario": case["scenario"], "timer_backend": case["timer_backend"], "quality": quality["status"], "waits": len(slow),
                   "gc_events": len(trace["gc_events"]), "largest_three_waits": slow[:3],
                   "waits_over_50ms": sum(w["end_ns"]-w["start_ns"] > 50000000 for w in slow)}))
+          assert len(identities) == len(set(identities)) == 8 and len(binaries) == 1
           PY
       - name: Require exact owned-core cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
