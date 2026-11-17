@@ -1,6 +1,32 @@
 //! Powercfg attributes requests to the private image, not a fabricated PID.
 use super::managed_fixture::TestResult;
 
+fn decode_native_requests(raw: &[u8]) -> TestResult<String> {
+    if raw.len() > 1024 * 1024 {
+        return Err("native power request snapshot exceeded bound".into());
+    }
+    let wide = if let Some(unmarked) = raw.strip_prefix(&[0xff, 0xfe]) {
+        Some(unmarked)
+    } else if raw.starts_with(b"D\0I\0S\0P\0") {
+        Some(raw)
+    } else {
+        None
+    };
+    if let Some(wide) = wide {
+        if wide.len() % 2 != 0 {
+            return Err("truncated native UTF-16 power request snapshot".into());
+        }
+        let units: Vec<_> = wide
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        return Ok(String::from_utf16(&units)?);
+    }
+    // ASCII is also UTF-8. Unknown legacy encodings must fail instead of
+    // replacing characters in a device path or fabricating an empty request.
+    Ok(std::str::from_utf8(raw)?.to_owned())
+}
+
 pub(super) fn owned_system_request(text: &str, image: &str) -> TestResult<bool> {
     if text.len() > 1024 * 1024 || !image.starts_with(r"\Device\") || image.contains(['\r', '\n']) {
         return Err("bounded native image and power request snapshot required".into());
@@ -75,23 +101,51 @@ fn parser_refuses_missing_truncated_or_unattributable_snapshots() {
     assert!(owned_system_request("SYSTEM:\nNone.\nAWAYMODE:\nNone.\n", "verysync.exe").is_err());
 }
 
+#[test]
+fn native_request_decoder_preserves_unicode_and_refuses_unknown_or_truncated_bytes() -> TestResult {
+    let expected = "DISPLAY:\r\nNone.\r\nSYSTEM:\r\n[PROCESS] \\Device\\private-二\\verysync.exe\r\nAWAYMODE:\r\nNone.\r\n";
+    assert_eq!(decode_native_requests(expected.as_bytes())?, expected);
+    let wide: Vec<u8> = expected.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    assert_eq!(decode_native_requests(&wide)?, expected);
+    let mut marked = vec![0xff, 0xfe];
+    marked.extend_from_slice(&wide);
+    assert_eq!(decode_native_requests(&marked)?, expected);
+    for malformed in [vec![0xff], vec![0xff, 0xfe, 1], vec![0xff, 0xfe, 0, 0xd8]] {
+        assert!(decode_native_requests(&malformed).is_err());
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
-pub(super) async fn powercfg(selector: &'static str) -> TestResult<String> {
+pub(super) async fn powercfg(selector: &'static str) -> TestResult<Vec<u8>> {
     if !["/requests", "/query"].contains(&selector) {
         return Err("only read-only powercfg snapshots are allowed".into());
     }
     tokio::task::spawn_blocking(move || {
-        let base = std::path::PathBuf::from(std::env::var_os("SystemRoot").ok_or("Windows directory absent")?);
-        let shell = base.join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
-        // Decode native console output in PowerShell, then emit UTF-8 to our
-        // pipe. No caller data is interpolated into this fixed read-only command.
-        let script = format!("$ErrorActionPreference='Stop'; $p=Join-Path (Join-Path $env:SystemRoot 'System32') 'powercfg.exe'; $t=& $p {selector}; $c=$LASTEXITCODE; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); [Console]::Out.Write(($t -join \"`n\")); exit $c");
-        let output = std::process::Command::new(shell).args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &script]).output()?;
+        let base = std::path::PathBuf::from(
+            std::env::var_os("SystemRoot").ok_or("Windows directory absent")?,
+        );
+        let native = base.join("System32").join("powercfg.exe");
+        let started = std::time::Instant::now();
+        let output = std::process::Command::new(native).arg(selector).output()?;
+        let elapsed_ms = started.elapsed().as_millis();
+        if selector == "/query" || elapsed_ms >= 1000 {
+            eprintln!(
+                "native powercfg command diagnostic: {}",
+                serde_json::json!({
+                    "selector":selector,"elapsed_ms":elapsed_ms,"shell_invoked":false,
+                    "exit_code":output.status.code(),"stdout_bytes":output.stdout.len()
+                })
+            );
+        }
         if !output.status.success() || output.stdout.len() > 1024 * 1024 {
             return Err("read-only power request snapshot failed or exceeded bound".into());
         }
-        Ok(String::from_utf8(output.stdout)?)
-    }).await?
+        // /query is compared byte-for-byte; decoding must not normalize the
+        // protected host power-plan snapshot.
+        Ok(output.stdout)
+    })
+    .await?
 }
 
 #[cfg(windows)]
@@ -138,7 +192,7 @@ fn owned_native_image(pid: u32) -> TestResult<String> {
 #[cfg(windows)]
 pub(super) async fn observe(pid: u32) -> TestResult<(bool, String)> {
     let image = owned_native_image(pid)?;
-    let snapshot = powercfg("/requests").await?;
+    let snapshot = decode_native_requests(&powercfg("/requests").await?)?;
     let active = owned_system_request(&snapshot, &image)
         .map_err(|e| format!("{e}; powercfg snapshot: {snapshot}"))?;
     Ok((active, snapshot))

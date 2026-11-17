@@ -562,6 +562,16 @@ now retains phase boundaries, actual native-read durations, bounded state
 transitions and the last native request snapshot in timeout diagnostics. The
 original transfer, baseline, release and correctness requirements remain in force.
 
+The phase diagnosis in [run 44037144658](https://github.com/AresJef/verysync-sidecar/actions/runs/44037144658)
+recorded 22.209–22.322-second observer calls on Windows ARM64; the transfer had
+finished before an active-state observation arrived. That evidence does not
+isolate PowerShell startup from native Powercfg time. The observer candidate now
+invokes the fixed system `powercfg.exe` directly and records its actual duration.
+Request output is decoded strictly as UTF-8/ASCII or recognized UTF-16LE;
+unrecognized/truncated encodings remain errors. The complete `/query` protection
+snapshot is compared as original bytes. Actual direct-call timing and Windows
+policy enforcement still require the native jobs; no timeout was extended.
+
 ## Diagnostic preferences
 
 `diagnostics_options()` reads actual crash settings and legacy usage information.
