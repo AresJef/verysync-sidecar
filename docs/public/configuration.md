@@ -490,6 +490,14 @@ case is verified on all six standard native AMD64/ARM64 profiles in
 with the original producer and raw logs retained. Final integrated acceptance
 remains required.
 
+A later [integrated Windows AMD64 run](https://github.com/AresJef/verysync-sidecar/actions/runs/43999174938/job/133758758221)
+observed only one synchronizing folder under selection two and failed the strict
+overlap assertion. Current integrated acceptance remains pending. Bounded
+preparation diagnostics retain source index counts, unpause call spans and the
+ordered native state history, including starting and sync-preparing stages.
+Observer delivery times are not native event times. These diagnostics do not
+replace the requirement to observe both folders synchronizing together.
+
 A configured paused folder can retain an empty runtime state as
 `FolderState::Unknown("")` in this baseline. Inspect the configuration's
 `paused` flag and event history separately.
