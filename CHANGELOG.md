@@ -2,6 +2,11 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Record strict HTTPS WebDAV native verification on six standard macOS,
+  Windows and Linux AMD64/ARM64 profiles: trusted chain and hostname, incorrect
+  hostname and credential rejection, exact payloads across restart and normal
+  cleanup. Keep SFTP host identity and full final-source acceptance separate.
+
 - Reconcile the native omitted `insecureTls: false` default for SFTP and WebDAV
   job creation and endpoint updates. Keep the raw omission in returned snapshots;
   explicit true, null, malformed values and unrelated missing settings still
