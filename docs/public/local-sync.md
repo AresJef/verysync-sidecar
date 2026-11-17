@@ -338,6 +338,21 @@ Missing baseline files alone do not necessarily produce a native failure; the
 comparison mismatch is the tested recovery trigger. Per-backend recovery and
 fault conditions remain independently required.
 
+## Explicit anonymous FTP
+
+An FTP endpoint can explicitly select `.credentials("anonymous", "contact@example.invalid")`.
+The server must already allow that identity; the SDK does not configure server
+accounts or permissions. The test peer registers only an anonymous identity,
+refuses an ordinary named user and records the actual accepted anonymous login
+without printing credentials.
+
+The isolated macOS ARM64 v2.33.2 case verified native probe/browse, two distinct
+explicit preview/run cycles across a same-identity restart, exact 131072-byte and
+65536-byte payloads, retained source and target-only data, unregister without
+deletion, and normal owned core/state/peer cleanup. Separate six-profile native
+acceptance remains pending. This is plain FTP authentication and data evidence;
+it does not establish FTPS or a verified server identity.
+
 ## SFTP key validation boundary
 
 `private_key_pem(pem)` explicitly supplies private-key text for the fixed native

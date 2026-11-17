@@ -187,6 +187,104 @@ async fn public_smb_uses_the_native_core_for_actual_authenticated_data_effects()
 }
 
 #[tokio::test]
+async fn public_ftp_anonymous_authentication_has_actual_refusal_and_data_effects() -> TestResult {
+    use verysync_sidecar::Error;
+    let root = tempfile::Builder::new()
+        .prefix("vs-ftp-anonymous-")
+        .tempdir()?
+        .keep();
+    let source = root.join("source");
+    std::fs::create_dir(&source)?;
+    let payload = vec![0x5d; 131072];
+    std::fs::write(source.join("anonymous %.bin"), &payload)?;
+    let mut peer = storage_service::Service::start_anonymous_ftp(&root)?;
+    std::fs::write(peer.share.join("sentinel.bin"), b"anonymous target-only")?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let denied = core
+        .client()
+        .browse_storage_endpoint(&peer.bad_endpoint, "")
+        .await
+        .expect_err("anonymous-only peer must refuse an ordinary named user");
+    let cause = match &denied {
+        Error::MutationOutcomeUnknown { source, .. } => source.as_ref(),
+        other => other,
+    };
+    assert!(
+        matches!(
+            cause,
+            Error::Api { .. } | Error::Http { .. } | Error::AccessDenied { .. }
+        ),
+        "actual native authentication refusal, not a timeout, required"
+    );
+    core.client().probe_storage_endpoint(&peer.endpoint).await?;
+    let listing = core
+        .client()
+        .browse_storage_endpoint(&peer.endpoint, "")
+        .await?;
+    assert!(listing.entries.iter().any(|x| x.path == "sentinel.bin"));
+    let job = core
+        .client()
+        .create_local_sync_job(
+            &CreateLocalSyncJob::new(
+                "explicit anonymous FTP",
+                StorageEndpoint::local(TargetPath::local(&source))?,
+                peer.endpoint.clone(),
+                LocalSyncMode::MirrorAToB,
+            )?
+            .ignore_permissions(true),
+        )
+        .await?;
+    let first = execute(&core, &job.job_id).await?;
+    assert_eq!(first.summary.failed, 0);
+    assert_eq!(std::fs::read(peer.share.join("anonymous %.bin"))?, payload);
+    core.restart(Duration::from_secs(30)).await?;
+    let retained = core.client().local_sync_job(&job.job_id).await?;
+    assert_eq!(retained.side_b.extra()["user"], "anonymous");
+    let next = vec![0x36; 65536];
+    std::fs::write(source.join("after-restart.bin"), &next)?;
+    let second = execute(&core, &job.job_id).await?;
+    assert_ne!(first.id, second.id);
+    assert_eq!(second.summary.failed, 0);
+    for path in [&source, &peer.share] {
+        assert_eq!(std::fs::read(path.join("anonymous %.bin"))?, payload);
+        assert_eq!(std::fs::read(path.join("after-restart.bin"))?, next);
+    }
+    assert_eq!(
+        std::fs::read(peer.share.join("sentinel.bin"))?,
+        b"anonymous target-only"
+    );
+    core.client().delete_local_sync_job(&job.job_id).await?;
+    assert_eq!(std::fs::read(peer.share.join("after-restart.bin"))?, next);
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    peer.stop()?;
+    let observations = std::fs::read_to_string(&peer.observation_log)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect::<Vec<_>>();
+    assert!(
+        observations
+            .iter()
+            .any(|v| v["owned_ftp_event"] == "anonymous_authentication"
+                && v["anonymous_user"] == true)
+    );
+    std::fs::remove_dir_all(&root)?;
+    assert!(!root.exists());
+    println!(
+        "public anonymous FTP authentication evidence: {}",
+        serde_json::json!({
+        "actual_named_user_refused":true,"actual_anonymous_peer_identity_observed":true,
+        "actual_probe_and_browse":true,"actual_two_explicit_previews_and_runs":true,
+        "actual_exact_source_and_destination_bytes":true,"actual_same_identity_restart_and_credentials":true,
+        "actual_sentinel_and_removal_retention":true,"actual_normal_tree_state_and_peer_cleanup":true,
+        "ftp_tls_or_server_identity_claimed":false})
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn public_https_webdav_rejects_untrusted_certificate_and_requires_explicit_bypass_for_data(
 ) -> TestResult {
     use sha2::{Digest, Sha256};

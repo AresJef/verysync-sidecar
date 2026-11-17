@@ -14,13 +14,34 @@ SPEC.loader.exec_module(HELPER)
 
 
 class DiagnosticSelection(unittest.TestCase):
+    def test_focused_management_target_prepares_private_interpreter_and_arm_helper_role(self):
+        workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
+        for name, arm_only in [("Prepare private protocol-peer tools for storage and management cases", False),
+                               ("Prepare the explicit x64 protocol-peer interpreter on Windows ARM", True)]:
+            block = workflow.split(f"      - name: {name}\n", 1)[1].split("\n      - ", 1)[0]
+            condition = next(line[len("        if: "):] for line in block.splitlines()
+                             if line.startswith("        if: "))
+            expression = condition.replace("&&", " and ").replace("||", " or ")
+            for target in ["authentication_engine", "local_sync_protocol_engine", "engine_control"]:
+                for package in ["windows-arm64-standard", "windows-amd64-standard", "linux-amd64-standard"]:
+                    matrix = SimpleNamespace(target=target, package=package)
+                    expected = target != "engine_control" and (not arm_only or package == "windows-arm64-standard")
+                    self.assertEqual(bool(eval(expression, {"__builtins__": {}}, {"matrix": matrix})), expected,
+                                     f"missing private fixture interpreter: {name} / {target} / {package}")
+            if arm_only:
+                self.assertIn("architecture: x64", block)
+                self.assertIn("update-environment: false", block)
+            else:
+                self.assertIn("python scripts/prepare-storage-test-environment.py", block)
+
     def test_owned_storage_drafts_run_the_selected_native_matrix(self):
         workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
         for branch in ["test/strict-storage-tls-defaults-20261117-01a1ca9b",
                        "test/trusted-https-webdav-20261117-01a1ca9b",
                        "ci/strict-storage-native-execution-20261117-01a1ca9b",
                        "ci/native-stop-diagnostics-20261117-01a1ca9b",
-                       "ci/native-boundary-diagnostics-20261117-01a1ca9b"]:
+                       "ci/native-boundary-diagnostics-20261117-01a1ca9b",
+                       "test/ftp-anonymous-native-20261117-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -106,7 +127,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 187)
+        self.assertEqual(len(self.rows), 193)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -220,12 +241,12 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(producer[0]["package"], "windows-386-standard")
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_draft_selects_real_temporary_blocks_and_listener_failure_on_all_six_profiles(self):
+    def test_current_draft_selects_anonymous_ftp_and_management_fixture_on_all_six_profiles(self):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 12)
         expected = {
-            "native-temporary-index-minimum-policy": ("configuration_engine", "native_temporary_index_threshold_controls_partial_block_advertisement"),
+            "native-ftp-anonymous-authentication": ("local_sync_protocol_engine", "public_ftp_anonymous_authentication_has_actual_refusal_and_data_effects"),
             "native-gui-listener-boundary": ("authentication_engine", "native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control"),
         }
         for label, (target, name) in expected.items():
@@ -234,7 +255,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertEqual({r["package"] for r in subset}, set(HELPER.PROFILES) - {"windows-386-standard"})
             self.assertTrue(all(r["target"] == target and r["filter"] == name and r["trace"] == "0" for r in subset))
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 187)
+        self.assertEqual(len(self.rows), 193)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

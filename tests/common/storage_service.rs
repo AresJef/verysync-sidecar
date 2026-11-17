@@ -26,6 +26,13 @@ enum ServerTls<'a> {
     PublicCa(&'a Path),
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum FtpPeerMode {
+    Password,
+    ObservedPassword,
+    Anonymous,
+}
+
 impl Service {
     pub fn start(
         protocol: StorageProtocol,
@@ -38,7 +45,7 @@ impl Service {
             write_delay,
             ServerTls::Off,
             None,
-            false,
+            FtpPeerMode::Password,
             false,
         )
     }
@@ -50,7 +57,7 @@ impl Service {
             Duration::ZERO,
             ServerTls::SelfSigned,
             None,
-            false,
+            FtpPeerMode::Password,
             false,
         )
     }
@@ -62,7 +69,7 @@ impl Service {
             Duration::ZERO,
             ServerTls::PublicCa(manifest),
             None,
-            false,
+            FtpPeerMode::Password,
             false,
         )
     }
@@ -77,7 +84,7 @@ impl Service {
             Duration::ZERO,
             ServerTls::Off,
             Some(mode),
-            false,
+            FtpPeerMode::Password,
             false,
         )
     }
@@ -89,7 +96,19 @@ impl Service {
             Duration::ZERO,
             ServerTls::Off,
             None,
-            true,
+            FtpPeerMode::ObservedPassword,
+            false,
+        )
+    }
+    #[allow(dead_code)] // Only the explicit anonymous FTP native case selects it.
+    pub fn start_anonymous_ftp(root: &Path) -> TestResult<Self> {
+        Self::configured(
+            StorageProtocol::Ftp,
+            root,
+            Duration::ZERO,
+            ServerTls::Off,
+            None,
+            FtpPeerMode::Anonymous,
             false,
         )
     }
@@ -101,7 +120,7 @@ impl Service {
             Duration::ZERO,
             ServerTls::Off,
             None,
-            false,
+            FtpPeerMode::Password,
             true,
         )
     }
@@ -111,9 +130,12 @@ impl Service {
         write_delay: Duration,
         tls: ServerTls<'_>,
         smb_auth: Option<&str>,
-        record_ftp_events: bool,
+        ftp_mode: FtpPeerMode,
         sftp_key_only: bool,
     ) -> TestResult<Self> {
+        if ftp_mode != FtpPeerMode::Password && protocol != StorageProtocol::Ftp {
+            return Err("FTP peer policy requires the explicit FTP protocol".into());
+        }
         let public_manifest = match tls {
             ServerTls::PublicCa(path) => Some(path),
             _ => None,
@@ -172,8 +194,11 @@ impl Service {
         if let Some(manifest) = public_manifest {
             configuration["public_tls_manifest"] = serde_json::to_value(manifest)?;
         }
-        if record_ftp_events {
+        if ftp_mode != FtpPeerMode::Password {
             configuration["record_ftp_events"] = true.into();
+        }
+        if ftp_mode == FtpPeerMode::Anonymous {
+            configuration["ftp_anonymous"] = true.into();
         }
         if sftp_key_only {
             configuration["sftp_key_only"] = true.into();
@@ -246,7 +271,11 @@ impl Service {
         } else {
             endpoint
         };
-        service.endpoint = if smb_auth == Some("guest") {
+        service.endpoint = if ftp_mode == FtpPeerMode::Anonymous {
+            endpoint
+                .clone()
+                .credentials("anonymous", "anonymous@synthetic.invalid")?
+        } else if smb_auth == Some("guest") {
             endpoint.clone().smb_guest(true)?
         } else {
             let endpoint = endpoint.clone().credentials(user.clone(), password)?;

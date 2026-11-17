@@ -22,6 +22,11 @@ class PublicHttpsPeerBoundary(unittest.TestCase):
 
 
 class FtpObservationContracts(unittest.TestCase):
+    def test_anonymous_policy_requires_explicit_boolean_before_peer_setup(self):
+        for value in [None, 1, 0, "true", [], {}]:
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "boolean anonymous"):
+                PEER.ftp({"ftp_anonymous": value}, Path("/uncreated"))
+
     def test_only_fixed_command_names_are_emitted_and_arguments_are_absent(self):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):

@@ -45,13 +45,19 @@ def ftp_observation(event, command=None):
 
 
 def ftp(config, root):
+    anonymous = config.get("ftp_anonymous", False)
+    if type(anonymous) is not bool:
+        raise ValueError("explicit boolean anonymous FTP policy required")
     from pyftpdlib.authorizers import DummyAuthorizer
     from pyftpdlib.handlers import FTPHandler, DTPHandler
     from pyftpdlib.servers import FTPServer
 
     authorizer = DummyAuthorizer()
-    authorizer.add_user(config["user"], config["password"], str(root),
-                        perm="elradfmwMT")
+    if anonymous:
+        authorizer.add_anonymous(str(root), perm="elradfmwMT")
+    else:
+        authorizer.add_user(config["user"], config["password"], str(root),
+                            perm="elradfmwMT")
     class OwnedDataHandler(DTPHandler):
         def recv(self, buffer_size):
             data = super().recv(buffer_size)
@@ -71,6 +77,10 @@ def ftp(config, root):
             def on_login(self, _username):
                 # pyftpdlib invokes this only after230 and accepted credentials.
                 ftp_observation("authenticated")
+                if anonymous:
+                    print(json.dumps({"owned_ftp_event": "anonymous_authentication",
+                                      "anonymous_user": _username == "anonymous"}),
+                          file=sys.stderr, flush=True)
 
         handler = ObservedFTPHandler
     server = FTPServer(("127.0.0.1", 0), handler)
