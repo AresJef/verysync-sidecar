@@ -1,6 +1,8 @@
 //! Actual private listener, connection, transport and discovery observations.
 #[path = "common/discovery_fixture.rs"]
 mod discovery_fixture;
+#[path = "common/local_announcement_cases.rs"]
+mod local_announcement_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/network_limit_effects.rs"]
