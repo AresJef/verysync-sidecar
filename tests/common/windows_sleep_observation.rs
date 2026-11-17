@@ -1,6 +1,37 @@
 //! Powercfg attributes requests to the private image, not a fabricated PID.
 use super::managed_fixture::TestResult;
 
+pub(super) fn known_retained_request_boundary(version: &str, arch: &str, sha: &str) -> bool {
+    version == "v2.33.2"
+        && matches!(
+            (arch, sha),
+            (
+                "x86_64",
+                "b1455da891a0723404c8c025ca77dc5ee8bc73632979edf4542c45d57fc73ea7"
+            ) | (
+                "aarch64",
+                "56ee421e3933e8d8bb164164f25cc0cf7626d13ba4ed30f8a2ee9b78b8d841fa"
+            )
+        )
+}
+
+#[test]
+fn retained_request_boundary_does_not_expand_to_unknown_version_arch_or_program() {
+    let amd = "b1455da891a0723404c8c025ca77dc5ee8bc73632979edf4542c45d57fc73ea7";
+    let arm = "56ee421e3933e8d8bb164164f25cc0cf7626d13ba4ed30f8a2ee9b78b8d841fa";
+    assert!(known_retained_request_boundary("v2.33.2", "x86_64", amd));
+    assert!(known_retained_request_boundary("v2.33.2", "aarch64", arm));
+    for (version, arch, sha) in [
+        ("v2.33.3", "x86_64", amd),
+        ("v2.33.2", "i686", amd),
+        ("v2.33.2", "aarch64", amd),
+        ("v2.33.2", "x86_64", arm),
+        ("v2.33.2", "x86_64", "unknown"),
+    ] {
+        assert!(!known_retained_request_boundary(version, arch, sha));
+    }
+}
+
 fn decode_native_requests(raw: &[u8]) -> TestResult<String> {
     if raw.len() > 1024 * 1024 {
         return Err("native power request snapshot exceeded bound".into());
@@ -150,7 +181,7 @@ pub(super) async fn powercfg(selector: &'static str) -> TestResult<Vec<u8>> {
 
 #[cfg(windows)]
 #[allow(unsafe_code)]
-fn owned_native_image(pid: u32) -> TestResult<String> {
+pub(super) fn owned_native_image(pid: u32) -> TestResult<String> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -192,8 +223,13 @@ fn owned_native_image(pid: u32) -> TestResult<String> {
 #[cfg(windows)]
 pub(super) async fn observe(pid: u32) -> TestResult<(bool, String)> {
     let image = owned_native_image(pid)?;
+    observe_image(&image).await
+}
+
+#[cfg(windows)]
+pub(super) async fn observe_image(image: &str) -> TestResult<(bool, String)> {
     let snapshot = decode_native_requests(&powercfg("/requests").await?)?;
-    let active = owned_system_request(&snapshot, &image)
+    let active = owned_system_request(&snapshot, image)
         .map_err(|e| format!("{e}; powercfg snapshot: {snapshot}"))?;
     Ok((active, snapshot))
 }

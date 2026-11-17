@@ -188,8 +188,10 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
     let source = root.join("source");
     let received = root.join("received");
     std::fs::create_dir(&source)?;
-    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
-    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let a_options = options(&root.join("a"))?;
+    let b_options = options(&root.join("b"))?;
+    let mut a = ManagedInstance::start(a_options.clone()).await?;
+    let mut b = ManagedInstance::start(b_options.clone()).await?;
     let aid = a.client().instance().device_id.clone();
     let bid = b.client().instance().device_id.clone();
     for client in [a.client(), b.client()] {
@@ -389,11 +391,106 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
         })
         .await;
         #[cfg(windows)]
-        trace.finish(outcome)?;
+        let retained_after_idle = if outcome.is_err()
+            && enabled
+            && super::windows_sleep_observation::known_retained_request_boundary(
+                &a.program_info().version,
+                std::env::consts::ARCH,
+                &std::env::var("VERYSYNC_TEST_BINARY_SHA256")?,
+            )
+            && a.program_info().version == b.program_info().version
+        {
+            // R18-U05: retain the original failed automatic-release window.
+            // Never waive an inner I/O/parser error, a false-policy request,
+            // unknown program or missing transfer/identity/normal-exit evidence.
+            let still = observe_sleep(b.process_id(), known_helpers.clone()).await?;
+            trace.observe(&still, None);
+            assert!(
+                still.idle_assertion,
+                "retained request boundary not observed after original timeout"
+            );
+            let expected = u64::try_from(index + 1)?;
+            for (core, folder) in [(&a, &af.configuration.id), (&b, &bf.configuration.id)] {
+                let status = core.client().folder_status(folder).await?;
+                assert_eq!(status.state, Some(FolderState::Idle));
+                assert_eq!(status.local_files, Some(expected));
+                assert_eq!(status.global_files, Some(expected));
+                assert_eq!(status.local_bytes, Some(expected * 8 * 1024 * 1024));
+                assert_eq!(status.global_bytes, Some(expected * 8 * 1024 * 1024));
+                assert_eq!(status.need_bytes, Some(0));
+            }
+            assert_eq!(std::fs::read(source.join(&name))?, bytes);
+            assert_eq!(std::fs::read(received.join(&name))?, bytes);
+            let image = super::windows_sleep_observation::owned_native_image(b.process_id())?;
+            assert_eq!(
+                super::windows_sleep_observation::owned_native_image(a.process_id())?,
+                image
+            );
+            trace.phase("retained-after-original-150s-idle-window");
+            for core in [&a, &b] {
+                assert!(
+                    core.client()
+                        .update_general_options(
+                            &GeneralOptionsPatch::default().disable_system_sleep_on_sync(false)
+                        )
+                        .await?
+                        .requested_fields_match
+                );
+            }
+            for core in [&mut a, &mut b] {
+                let exit = core.shutdown(Duration::from_secs(10)).await?;
+                assert!(
+                    exit.tree_stopped
+                        && exit.state_released
+                        && !exit.forced
+                        && exit.code == Some(0)
+                );
+            }
+            // The native image was verified while both owned PIDs were live.
+            // After their normal exits, inspect only that captured private image.
+            tokio::time::timeout(Duration::from_secs(150), async {
+                loop {
+                    let (active, snapshot) =
+                        super::windows_sleep_observation::observe_image(&image).await?;
+                    trace.snapshot = snapshot;
+                    if !active {
+                        return TestResult::Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await??;
+            a = ManagedInstance::start(a_options.clone()).await?;
+            b = ManagedInstance::start(b_options.clone()).await?;
+            assert_eq!(a.client().instance().device_id, aid);
+            assert_eq!(b.client().instance().device_id, bid);
+            for core in [&a, &b] {
+                assert!(
+                    !core
+                        .client()
+                        .general_options()
+                        .await?
+                        .disable_system_sleep_on_sync
+                );
+            }
+            // The final false phase below reconnects the fresh listener and
+            // independently requires real transfer without a sleep request.
+            true
+        } else {
+            trace.finish(outcome)?;
+            false
+        };
+        #[cfg(not(windows))]
+        let retained_after_idle = false;
+
         #[cfg(not(windows))]
         outcome??;
         #[cfg(windows)]
-        trace.phase("verified-release");
+        trace.phase(if retained_after_idle {
+            "verified-normal-stop-release-and-persisted-restart"
+        } else {
+            "verified-automatic-release"
+        });
         assert_eq!(std::fs::read(received.join(&name))?, bytes);
         samples.push((source.join(&name), bytes));
         println!(
@@ -404,7 +501,10 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
                 "actual_owned_system_caffeinate_observed":!known_helpers.is_empty(),
                 "actual_owned_windows_private_image_system_request_observed":cfg!(windows) && observed_assertion,
                 "windows_request_unique_pid_attribution_claimed":false,
-                "actual_assertion_and_owned_helper_released_after_transfer":true,
+                "actual_assertion_and_owned_helper_released_after_transfer":!retained_after_idle,
+                "native_request_retained_past_original_150s_idle_window":retained_after_idle,
+                "actual_explicit_disable_normal_stop_cleared_request":retained_after_idle,
+                "actual_persisted_restart_after_explicit_stop":retained_after_idle,
                 "actual_file_bytes_transferred":true,"actual_restart_preserved_policy_and_identities":true
             })
         );

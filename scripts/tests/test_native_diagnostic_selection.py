@@ -197,14 +197,14 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(producer[0]["package"], "windows-386-standard")
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_draft_selects_six_actual_full_index_upgrade_policy_cases(self):
+    def test_current_draft_selects_two_actual_windows_sleep_policy_cases(self):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
-        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(rows), 2)
         self.assertEqual({r["package"] for r in rows},
-                         set(HELPER.PROFILES) - {"windows-386-standard"})
-        self.assertTrue(all(r["target"] == "upgrade_engine" and r["filter"] ==
-                            "native_full_index_upgrade_policy_changes_actual_unchanged_index_resend" for r in rows))
+                         {"windows-amd64-standard", "windows-arm64-standard"})
+        self.assertTrue(all(r["target"] == "configuration_engine" and r["filter"] ==
+                            "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer" for r in rows))
         self.assertEqual(len(HELPER.select(self.rows, selection, draft=False)), 163)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):

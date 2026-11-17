@@ -136,7 +136,8 @@ required.
 
 An owned draft can select current investigation labels in
 `.github/native-diagnostic-selection.json`. The current selection investigates
-actual full-index resend across a fixed-version upgrade on all six standard profiles. The
+actual Windows sleep requests and explicit normal-stop release of retained
+requests on both standard Windows profiles. The
 163-row complete catalog retains all 157 earlier cases, including concurrency,
 failed-producer, Mac/Windows sleep and temporary-index threshold gates, alongside
 six new upgrade-policy cases. Catalog tests
