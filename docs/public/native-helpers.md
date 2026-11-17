@@ -585,8 +585,10 @@ verifies native browser fallback dispatch, failure and cancellation on all six
 profiles, including independent actor/native-root observations and Windows
 registry restoration. It also verifies a real Linux AMD64 kernel watch-limit
 increase by one and independent restoration of the exact original value in a
-disposable VM. The added native ARM64 privileged gate remains pending; AMD64
-evidence is not an ARM64 result. The SDK does not perform implicit elevation,
+disposable VM. Both native Linux AMD64 and ARM64 perform that strict actual
+raise/readback/exact-restore case in
+[run 43981961787](https://github.com/AresJef/verysync-sidecar/actions/runs/43981961787),
+with private-state retention and exact owned cleanup. The SDK does not perform implicit elevation,
 kernel rollback, persistent configuration, or graphical rollback.
 
 [Run 43957189957](https://github.com/AresJef/verysync-sidecar/actions/runs/43957189957)
@@ -599,6 +601,6 @@ The unchanged native random-string length boundaries and text-log snapshots,
 filters and data retention have separate six-profile evidence in
 [run 43929620380](https://github.com/AresJef/verysync-sidecar/actions/runs/43929620380).
 Each result retains its actual producer identity; older artifacts are not
-relabeled as the final binary. Remaining system/CLI controls and complete
-current-candidate integration retain separate gates. These results do not
+relabeled as the final binary. Complete current-candidate integration and
+additional platform gates remain separate. These results do not
 establish a complete integrated release or every possible runtime state.

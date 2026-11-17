@@ -44,8 +44,8 @@ class DiagnosticSelection(unittest.TestCase):
                             "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data"
                             for row in names))
 
-    def test_current_manifest_runs_nonempty_native_helpers_on_all_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_nonempty_native_helpers_on_all_six_profiles(self):
+        selection = {"draft_labels": ["native-helper-effects"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         helpers = [row for row in actual if row.get("label") == "native-helper-effects"]
         self.assertEqual(len(helpers), 6)
@@ -83,7 +83,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 116)
+        self.assertEqual(len(self.rows), 122)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_current_manifest_requires_actual_temporary_expiry_on_six_profiles(self):
@@ -107,6 +107,17 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer"
                             for row in sleep))
+
+    def test_current_manifest_requires_real_ordered_folder_concurrency_on_six_profiles(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        folders = [row for row in actual if row.get("label") == "native-folder-concurrency-policy"]
+        self.assertEqual(len(actual), 32)
+        self.assertEqual(len(folders), 6)
+        self.assertEqual(len({row["package"] for row in folders}), 6)
+        self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
+                            "native_folder_concurrency_has_ordered_single_and_double_sync_effects"
+                            for row in folders))
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

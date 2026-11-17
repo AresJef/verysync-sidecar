@@ -1,7 +1,7 @@
 {
   "draft_labels": [
     "native-temporary-retention-policy",
-    "native-helper-effects",
+    "native-folder-concurrency-policy",
     "remote-version-archives",
     "ftp-disconnect-recovery",
     "native-home-free-space-policy",

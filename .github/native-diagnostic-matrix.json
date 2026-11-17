@@ -1031,5 +1031,59 @@
     "filter": "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
     "label": "native-sleep-prevention-policy",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
   }
 ]

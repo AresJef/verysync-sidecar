@@ -94,30 +94,6 @@ async fn observe_sleep(root: u32, known_helpers: Vec<u32>) -> TestResult<SleepOb
     .await?
 }
 
-async fn native_loopback_listener(core: &ManagedInstance) -> TestResult<std::net::SocketAddr> {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            for status in core.client().listener_status().await?.into_values() {
-                for text in status.lan_addresses {
-                    if let Some(address) = text
-                        .strip_prefix("tcp://")
-                        .and_then(|v| v.parse::<std::net::SocketAddr>().ok())
-                        .filter(|v| {
-                            v.ip() == std::net::Ipv4Addr::LOCALHOST
-                                && !matches!(v.port(), 0 | 18886)
-                        })
-                    {
-                        return Ok::<_, Error>(address);
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await?
-    .map_err(Into::into)
-}
-
 #[tokio::test]
 async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer() -> TestResult {
     let root = tempfile::Builder::new()
@@ -138,7 +114,7 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
             .update_network_configuration(&NetworkPatch::default().reconnection_interval_seconds(5))
             .await?;
     }
-    let address = native_loopback_listener(&b).await?;
+    let address = super::configuration_policy_listener(&b).await?;
     for (client, id, addresses) in [
         (a.client(), &bid, vec![format!("tcp://{address}")]),
         (b.client(), &aid, vec!["dynamic".into()]),
@@ -198,7 +174,7 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
             );
         }
         b.restart(Duration::from_secs(30)).await?;
-        let address = native_loopback_listener(&b).await?;
+        let address = super::configuration_policy_listener(&b).await?;
         a.client()
             .update_device(
                 &bid,
