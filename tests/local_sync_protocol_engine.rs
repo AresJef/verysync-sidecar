@@ -488,3 +488,182 @@ async fn public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_bou
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
+
+// The explicit native runner serializes tests. This changes only this disposable
+// test process before starting owned cores, and restores every previous entry.
+struct PrivateTlsNoProxy(Vec<(&'static str, Option<std::ffi::OsString>)>);
+impl PrivateTlsNoProxy {
+    fn select() -> Self {
+        let names = if cfg!(windows) {
+            vec!["NO_PROXY"]
+        } else {
+            vec!["NO_PROXY", "no_proxy"]
+        };
+        let previous = names
+            .into_iter()
+            .map(|name| (name, std::env::var_os(name)))
+            .collect::<Vec<_>>();
+        for (name, old) in &previous {
+            let mut selected = old.clone().unwrap_or_default();
+            selected.push(",ldap.localhost.direct");
+            std::env::set_var(name, selected);
+        }
+        Self(previous)
+    }
+}
+impl Drop for PrivateTlsNoProxy {
+    fn drop(&mut self) {
+        for (name, previous) in &self.0 {
+            match previous {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified() -> TestResult
+{
+    use verysync_sidecar::Error;
+    let manifest = std::path::PathBuf::from(
+        std::env::var_os("VERYSYNC_TEST_LDAP_TLS_MANIFEST")
+            .ok_or("explicit prepared private public-CA loopback TLS fixture required")?,
+    );
+    if !manifest.is_absolute() || manifest.file_name().is_none_or(|p| p != "manifest.json") {
+        return Err("absolute private TLS manifest required".into());
+    }
+    let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest)?)?;
+    assert_eq!(fixture["hostname"], "ldap.localhost.direct");
+    let bypass = PrivateTlsNoProxy::select();
+    let root = tempfile::Builder::new()
+        .prefix("vs-dav-trusted-")
+        .tempdir()?
+        .keep();
+    let source = root.join("source");
+    std::fs::create_dir(&source)?;
+    let payload = vec![0x6d; 262144];
+    std::fs::write(source.join("trusted TLS %.bin"), &payload)?;
+    let mut peer = storage_service::Service::start_public_https(&root, &manifest)?;
+    std::fs::write(peer.share.join("sentinel.bin"), b"trusted TLS target-only")?;
+    let checked = peer.endpoint.clone().insecure_tls(false)?;
+    assert!(checked.uri().starts_with("https://ldap.localhost.direct:"));
+    let wrong_host = StorageEndpoint::remote(
+        StorageProtocol::WebDav,
+        &checked
+            .uri()
+            .replacen("ldap.localhost.direct", "127.0.0.1", 1),
+    )?
+    .credentials(
+        checked.extra()["user"]
+            .as_str()
+            .ok_or("private user absent")?,
+        checked.extra()["password"]
+            .as_str()
+            .ok_or("private password absent")?,
+    )?
+    .insecure_tls(false)?;
+    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    core.client().probe_storage_endpoint(&checked).await?;
+    let refused = core
+        .client()
+        .probe_storage_endpoint(&wrong_host)
+        .await
+        .expect_err("trusted chain must not bypass hostname validation");
+    let cause = match &refused {
+        Error::MutationOutcomeUnknown { source, .. } => source.as_ref(),
+        error => error,
+    };
+    let response = match cause {
+        Error::Api { response, .. } | Error::Http { response } => response,
+        error => {
+            return Err(
+                format!("expected completed native hostname refusal, observed {error:?}").into(),
+            )
+        }
+    };
+    let text = String::from_utf8_lossy(response.body_bytes()).to_ascii_lowercase();
+    assert!(
+        text.contains("certificate")
+            && (text.contains("127.0.0.1") || text.contains("ip san") || text.contains("hostname"))
+    );
+    let denied = core
+        .client()
+        .probe_storage_endpoint(&peer.bad_endpoint.clone().insecure_tls(false)?)
+        .await
+        .expect_err("strict TLS must retain credential validation");
+    let denied = match &denied {
+        Error::MutationOutcomeUnknown { source, .. } => source.as_ref(),
+        error => error,
+    };
+    assert!(
+        matches!(
+            denied,
+            Error::Api { .. } | Error::Http { .. } | Error::AccessDenied { .. }
+        ),
+        "actual credential refusal required, observed {denied:?}"
+    );
+    assert!(!peer.share.join("trusted TLS %.bin").exists());
+    let job = core
+        .client()
+        .create_local_sync_job(
+            &CreateLocalSyncJob::new(
+                "strict trusted HTTPS",
+                StorageEndpoint::local(TargetPath::local(&source))?,
+                checked,
+                LocalSyncMode::MirrorAToB,
+            )?
+            .ignore_permissions(true),
+        )
+        .await?;
+    assert_eq!(job.side_b.extra()["insecureTls"], false);
+    let first = execute(&core, &job.job_id).await?;
+    assert_eq!(first.summary.failed, 0);
+    assert_eq!(
+        std::fs::read(peer.share.join("trusted TLS %.bin"))?,
+        payload
+    );
+    core.restart(Duration::from_secs(30)).await?;
+    let retained = core.client().local_sync_job(&job.job_id).await?;
+    assert_eq!(retained.side_b.extra()["insecureTls"], false);
+    core.client()
+        .probe_storage_endpoint(&retained.side_b)
+        .await?;
+    let next_payload = vec![0x93; 131072];
+    std::fs::write(source.join("after-restart.bin"), &next_payload)?;
+    let next = execute(&core, &job.job_id).await?;
+    assert_ne!(first.id, next.id);
+    assert_eq!(next.summary.failed, 0);
+    for path in [&source, &peer.share] {
+        assert_eq!(std::fs::read(path.join("trusted TLS %.bin"))?, payload);
+        assert_eq!(std::fs::read(path.join("after-restart.bin"))?, next_payload);
+    }
+    assert_eq!(
+        std::fs::read(peer.share.join("sentinel.bin"))?,
+        b"trusted TLS target-only"
+    );
+    core.client().delete_local_sync_job(&job.job_id).await?;
+    assert_eq!(
+        std::fs::read(peer.share.join("after-restart.bin"))?,
+        next_payload
+    );
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    peer.stop()?;
+    std::fs::remove_dir_all(&root)?;
+    assert!(!root.exists());
+    drop(bypass);
+    println!(
+        "public trusted HTTPS WebDAV identity evidence: {}",
+        serde_json::json!({
+        "actual_strict_chain_and_hostname_success":true,"actual_wrong_hostname_refused":true,
+        "actual_wrong_credentials_refused":true,"actual_no_transfer_before_explicit_run":true,
+        "actual_exact_payloads_before_and_after_restart":true,"actual_strict_policy_persisted":true,
+        "actual_same_identity_source_sentinel_and_registration_removal_retention":true,
+        "actual_normal_tree_and_state_release":true,"actual_owned_peer_and_private_files_removed":true,
+        "leaf_sha256":fixture["leaf_sha256"],"system_trust_mutations":0,"insecure_tls":false})
+    );
+    Ok(())
+}

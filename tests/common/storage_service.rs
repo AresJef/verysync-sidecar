@@ -19,13 +19,28 @@ pub struct Service {
     pub observation_log: PathBuf,
     pub python_platform: String,
 }
+#[derive(Clone, Copy)]
+enum ServerTls<'a> {
+    Off,
+    SelfSigned,
+    PublicCa(&'a Path),
+}
+
 impl Service {
     pub fn start(
         protocol: StorageProtocol,
         root: &Path,
         write_delay: Duration,
     ) -> TestResult<Self> {
-        Self::configured(protocol, root, write_delay, false, None, false, false)
+        Self::configured(
+            protocol,
+            root,
+            write_delay,
+            ServerTls::Off,
+            None,
+            false,
+            false,
+        )
     }
     #[allow(dead_code)] // Shared fixture modules are compiled by separate targets.
     pub fn start_https(root: &Path) -> TestResult<Self> {
@@ -33,7 +48,19 @@ impl Service {
             StorageProtocol::WebDav,
             root,
             Duration::ZERO,
-            true,
+            ServerTls::SelfSigned,
+            None,
+            false,
+            false,
+        )
+    }
+    #[allow(dead_code)] // Only the strict HTTPS native case selects this fixture.
+    pub fn start_public_https(root: &Path, manifest: &Path) -> TestResult<Self> {
+        Self::configured(
+            StorageProtocol::WebDav,
+            root,
+            Duration::ZERO,
+            ServerTls::PublicCa(manifest),
             None,
             false,
             false,
@@ -48,7 +75,7 @@ impl Service {
             StorageProtocol::Smb,
             root,
             Duration::ZERO,
-            false,
+            ServerTls::Off,
             Some(mode),
             false,
             false,
@@ -60,7 +87,7 @@ impl Service {
             StorageProtocol::Ftp,
             root,
             Duration::ZERO,
-            false,
+            ServerTls::Off,
             None,
             true,
             false,
@@ -72,7 +99,7 @@ impl Service {
             StorageProtocol::Sftp,
             root,
             Duration::ZERO,
-            false,
+            ServerTls::Off,
             None,
             false,
             true,
@@ -82,11 +109,16 @@ impl Service {
         protocol: StorageProtocol,
         root: &Path,
         write_delay: Duration,
-        tls: bool,
+        tls: ServerTls<'_>,
         smb_auth: Option<&str>,
         record_ftp_events: bool,
         sftp_key_only: bool,
     ) -> TestResult<Self> {
+        let public_manifest = match tls {
+            ServerTls::PublicCa(path) => Some(path),
+            _ => None,
+        };
+        let tls = !matches!(tls, ServerTls::Off);
         if write_delay.as_millis() > 100 {
             return Err("bounded write delay is test-only".into());
         }
@@ -137,6 +169,9 @@ impl Service {
             .ok_or("private service owner absent")?;
         let mut input = child.stdin.take().ok_or("private service stdin absent")?;
         let mut configuration = serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis(),"tls":tls,"smb_auth":smb_auth});
+        if let Some(manifest) = public_manifest {
+            configuration["public_tls_manifest"] = serde_json::to_value(manifest)?;
+        }
         if record_ftp_events {
             configuration["record_ftp_events"] = true.into();
         }
@@ -177,6 +212,9 @@ impl Service {
         if ready["ready"] != true || ready["loopback_only"] != true || ready["tls"] != tls {
             return Err("service has no explicit private readiness".into());
         }
+        if public_manifest.is_some() && ready["public_ca"] != true {
+            return Err("public-CA peer did not confirm its explicit fixture".into());
+        }
         service.python_platform = ready["python_platform"]
             .as_str()
             .ok_or("helper platform classification absent")?
@@ -195,8 +233,13 @@ impl Service {
         } else {
             "/"
         };
+        let host = if public_manifest.is_some() {
+            "ldap.localhost.direct"
+        } else {
+            "127.0.0.1"
+        };
         let endpoint =
-            StorageEndpoint::remote(protocol, &format!("{scheme}://127.0.0.1:{port}{path}"))?
+            StorageEndpoint::remote(protocol, &format!("{scheme}://{host}:{port}{path}"))?
                 .connection_timeout_seconds(6);
         let endpoint = if protocol == StorageProtocol::Sftp {
             endpoint.insecure_tls(true)?

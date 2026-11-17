@@ -391,9 +391,17 @@ directions, simultaneous newer/larger/manual conflicts, manual replacement
 preview without immediate file changes, and a separately explicit selected-only
 run with native predicted counts/bytes. The unselected target file remains
 absent and its source bytes remain intact. Registration removal retains files.
-These effects remain separate from licensed scheduling, in-flight control,
-additional authentication/identity modes and per-backend fault recovery. Final
-six-profile source acceptance is still required.
+These effects remain separate from licensed scheduling, in-flight control and
+additional authentication/identity modes. Separate source-bound native recovery
+cases on all six standard profiles verified each protocol after an actual peer
+disconnection: partial files and source/sentinel bytes remained intact, an
+explicit new endpoint/preview/run completed all sixteen payloads, stale result
+identities were refused, and owned teardown completed normally. Some backends
+required an explicitly chosen owned force-stop/restart; this is not a normal
+Stop acknowledgement or proof that the old native operation was cancelled.
+The [recorded run](https://github.com/AresJef/verysync-sidecar/actions/runs/43999174938)
+retains unrelated whole-fixture failures. Final current-candidate six-profile
+acceptance is still required.
 
 The Impacket 0.13.1 synthetic SMB peer also needs a correctly structured EOF
 error response for actual remote reads. Its stock READ handler returns a READ
@@ -470,7 +478,12 @@ still produced an actual native refusal. Source data, target-only data and copie
 bytes remained intact, and owned teardown completed normally.
 
 This deliberately insecure synthetic endpoint does not establish positive
-trusted-CA/server-identity acceptance. The SDK installs no CA, changes no system
+trusted-CA/server-identity acceptance. A separate strict HTTPS native case now
+uses the existing fingerprint-pinned public-CA loopback development fixture,
+with explicit private preparation and cleanup. It requires a correct hostname,
+rejects the same certificate through the loopback IP, retains credential
+validation, and verifies exact data before and after restart without TLS bypass.
+Its final native evidence is still pending. The SDK changes no system trust. The SDK installs no CA, changes no system
 trust store and makes no universal trust-configuration promise for the target
 kernel. Final source/platform acceptance and a correctly trusted identity retain
 their separate gates; configuration flags are not certificate verification proof.
