@@ -26,6 +26,17 @@ def eligible(run, pull, current_run, current_sha, is_ancestor):
             and is_ancestor(run["head_sha"]))
 
 
+def preserve_ancestor_drafts(root):
+    path = root / ".github/native-diagnostic-preservation.json"
+    if not path.exists():
+        return False
+    value = json.loads(path.read_text())
+    if (not isinstance(value, dict) or set(value) != {"preserve_ancestor_drafts"}
+            or type(value["preserve_ancestor_drafts"]) is not bool):
+        raise ValueError("exact boolean diagnostic-preservation setting required")
+    return value["preserve_ancestor_drafts"]
+
+
 def main():
     if (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("GITHUB_REPOSITORY") != "AresJef/verysync-sidecar"
             or os.environ.get("GITHUB_EVENT_NAME") != "pull_request"):
@@ -36,9 +47,14 @@ def main():
         raise ValueError("only an owned draft candidate may retire ancestor drafts")
     current_sha = current_pull["head"]["sha"]
     current_run = int(os.environ["GITHUB_RUN_ID"])
-    token = os.environ["GH_TOKEN"]
     base = "https://api.github.com/repos/AresJef/verysync-sidecar"
     root = Path(__file__).resolve().parents[1]
+    if preserve_ancestor_drafts(root):
+        print(json.dumps({"preserve_ancestor_drafts": True,
+                          "reason": "distinct pending evidence remains required",
+                          "cancellation_requests": 0}))
+        return
+    token = os.environ["GH_TOKEN"]
 
     def api(path, method="GET"):
         request = urllib.request.Request(base+path, method=method,

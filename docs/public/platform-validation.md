@@ -135,10 +135,20 @@ matrix, additional-platform acceptance and final outcome/cleanup gates remain
 required.
 
 An owned draft can select current investigation labels in
-`.github/native-diagnostic-selection.json`. The current selection carries both
-remote version archives and configured thumbnail-cache effects on all six
-standard profiles. Missing selection uses the whole catalog; empty, duplicate,
+`.github/native-diagnostic-selection.json`. The current selection investigates
+folder-concurrency preparation on all six standard profiles and ownership of
+the failed Windows 386 CLI producer. Catalog tests
+independently retain the required profile/filter mappings for every earlier
+case; they do not force unrelated investigations into each draft. Missing
+selection uses the whole catalog; empty, duplicate,
 unknown or unsafe selections fail before scheduling. Fork pull requests keep
 complete diagnostic coverage. Selection and cancellation of a superseded draft
 are scheduling decisions, never successful capability acceptance. Completed
 results retain their original producer and test identities.
+
+When an ancestor draft still carries distinct required evidence, the explicit
+boolean in `.github/native-diagnostic-preservation.json` can preserve those runs.
+The retirement step then returns before credential access or cancellation API
+calls. This scheduling control does not accept any test or reduce the complete
+ready/manual catalog or final native gates. The current concurrency investigation
+preserves the separate priority and Windows sharing observations in PR #183.
