@@ -592,8 +592,13 @@ All keys, identities, unrelated sections, caller bytes, unchanged power-plan
 bytes and final normal exits remain required. Changing the flag remains a
 configuration operation; these lifecycle calls are explicit. The case reports
 retention and explicit-stop release separately from automatic release. This new
-boundary path still requires actual Windows CI evidence. The macOS automatic
-release deadline remains ten seconds.
+boundary passed on both Windows AMD64 and ARM64 in [run 44048891608](https://github.com/AresJef/verysync-sidecar/actions/runs/44048891608):
+three real 8 MiB transfers, normal-stop release, persistent-state restart,
+unchanged power-plan bytes and all data/identity/normal-exit checks passed.
+The original automatic-release failure remains recorded. These observations
+attribute the request to the private native image; they do not identify a unique
+requesting PID or separate the effects of disabling and stopping. The macOS
+automatic release deadline remains ten seconds.
 
 ## Diagnostic preferences
 
@@ -782,8 +787,11 @@ credentials, unrelated sections, sentinel and both normal exits remain required.
 The local macOS ARM64 case passed all three phases in 120.48 seconds, with
 64 actual blocks per file and approximately 17, 28 and 25 seconds of partial
 coverage. It uses an explicitly selected in-order block pull and 256 KiB/s
-fixture send limit. Six-platform runtime acceptance is pending. This case does not establish an
-incoming-request memory cap, full-index resend after upgrade or a throughput gain.
+fixture send limit. All six standard native profiles passed this exact case
+in [run 44040037108](https://github.com/AresJef/verysync-sidecar/actions/runs/44040037108),
+including all three qualified partial-transfer windows and both normal exits.
+This case does not establish an incoming-request memory cap, full-index resend
+after upgrade or a throughput gain.
 
 ## Full-index resend after a real upgrade
 
@@ -805,7 +813,12 @@ The local macOS ARM64 case observes 0 and 4 resent items respectively, then
 verifies a new post-upgrade transfer, all old source/receiver bytes, both native
 identities and credentials, unrelated sections, caller sentinel and both normal
 owned tree/state exits. Event-subscription close errors are propagated.
-Six-platform current runtime and integrated release acceptance remain pending.
+All six standard native profiles passed in [run 44044835585](https://github.com/AresJef/verysync-sidecar/actions/runs/44044835585):
+the post-upgrade windows observed zero resent items when disabled and four
+when enabled, followed by the new transfer and all protection/normal-exit
+checks. The initial event count may exceed four because it counts native
+index updates, not distinct files. Complete integrated release acceptance
+remains pending.
 
 ## Signed incoming-request budgets
 

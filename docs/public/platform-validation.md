@@ -127,6 +127,19 @@ results are not positive runtime support evidence.
 
 ## Focused native diagnostics
 
+Source-bound focused results now include six-profile temporary-index threshold
+validation ([run 44040037108](https://github.com/AresJef/verysync-sidecar/actions/runs/44040037108)),
+six-profile full-index resend after the explicitly pinned test upgrade
+([run 44044835585](https://github.com/AresJef/verysync-sidecar/actions/runs/44044835585)),
+and both Windows profiles for the retained sleep-request boundary
+([run 44048891608](https://github.com/AresJef/verysync-sidecar/actions/runs/44048891608)).
+The Windows result verifies explicit disabling plus normal stop and persistent
+restart; automatic release within 150 seconds remains unreliable for the two
+verified native fingerprints. [Configuration](configuration.md) describes each
+fixture and its limits. These focused results retain their original source
+identities and do not replace the complete integrated native matrix, resource
+gates, additional-platform or minimum-system acceptance.
+
 The diagnostic catalog in `.github/native-diagnostic-matrix.json` retains the
 explicit profile, compiler target, native test filter and trace selection for
 every helper case. Ready-for-review and manually dispatched Engine workflows
