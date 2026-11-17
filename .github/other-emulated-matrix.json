@@ -1,0 +1,96 @@
+[
+  {
+    "package": "linux-loong64-standard",
+    "rust": "loongarch64-unknown-linux-gnu",
+    "platform": "loong64",
+    "emulator": "qemu-loongarch64",
+    "compiler": "loongarch64-linux-gnu",
+    "cc": "loongarch64-linux-gnu-gcc-14",
+    "cxx": "loongarch64-linux-gnu-g++-14",
+    "apt": "g++-14-loongarch64-linux-gnu libc6-dev-loong64-cross",
+    "cpu": "la464"
+  },
+  {
+    "package": "linux-ppc64le-standard",
+    "rust": "powerpc64le-unknown-linux-gnu",
+    "platform": "ppc64le",
+    "emulator": "qemu-ppc64le",
+    "compiler": "powerpc64le-linux-gnu",
+    "cc": "powerpc64le-linux-gnu-gcc",
+    "cxx": "powerpc64le-linux-gnu-g++",
+    "apt": "g++-powerpc64le-linux-gnu",
+    "cpu": "power9"
+  },
+  {
+    "package": "linux-riscv64-standard",
+    "rust": "riscv64gc-unknown-linux-gnu",
+    "platform": "riscv64",
+    "emulator": "qemu-riscv64",
+    "compiler": "riscv64-linux-gnu",
+    "cc": "riscv64-linux-gnu-gcc",
+    "cxx": "riscv64-linux-gnu-g++",
+    "apt": "g++-riscv64-linux-gnu",
+    "cpu": "rv64"
+  },
+  {
+    "package": "linux-s390x-standard",
+    "rust": "s390x-unknown-linux-gnu",
+    "platform": "s390x",
+    "emulator": "qemu-s390x",
+    "compiler": "s390x-linux-gnu",
+    "cc": "s390x-linux-gnu-gcc",
+    "cxx": "s390x-linux-gnu-g++",
+    "apt": "g++-s390x-linux-gnu",
+    "cpu": "max"
+  },
+  {
+    "package": "linux-mips-standard",
+    "rust": "mips-unknown-linux-gnu",
+    "platform": "mips",
+    "emulator": "qemu-mips-binfmt-P",
+    "compiler": "mips-linux-gnu",
+    "cc": "mips-linux-gnu-gcc",
+    "cxx": "mips-linux-gnu-g++",
+    "apt": "g++-mips-linux-gnu",
+    "cpu": "24Kf",
+    "custom_std": true,
+    "manual_registration": true
+  },
+  {
+    "package": "linux-mipsle-standard",
+    "rust": "mipsel-unknown-linux-gnu",
+    "platform": "mipsle",
+    "emulator": "qemu-mipsel-binfmt-P",
+    "compiler": "mipsel-linux-gnu",
+    "cc": "mipsel-linux-gnu-gcc",
+    "cxx": "mipsel-linux-gnu-g++",
+    "apt": "g++-mipsel-linux-gnu",
+    "cpu": "24Kf",
+    "custom_std": true,
+    "manual_registration": true
+  },
+  {
+    "package": "linux-mips64-standard",
+    "rust": "mips64-unknown-linux-gnuabi64",
+    "platform": "mips64",
+    "emulator": "qemu-mips64",
+    "compiler": "mips64-linux-gnuabi64",
+    "cc": "mips64-linux-gnuabi64-gcc",
+    "cxx": "mips64-linux-gnuabi64-g++",
+    "apt": "g++-mips64-linux-gnuabi64",
+    "cpu": "MIPS64R2-generic",
+    "custom_std": true
+  },
+  {
+    "package": "linux-mips64le-standard",
+    "rust": "mips64el-unknown-linux-gnuabi64",
+    "platform": "mips64le",
+    "emulator": "qemu-mips64el",
+    "compiler": "mips64el-linux-gnuabi64",
+    "cc": "mips64el-linux-gnuabi64-gcc",
+    "cxx": "mips64el-linux-gnuabi64-g++",
+    "apt": "g++-mips64el-linux-gnuabi64",
+    "cpu": "MIPS64R2-generic",
+    "custom_std": true
+  }
+]

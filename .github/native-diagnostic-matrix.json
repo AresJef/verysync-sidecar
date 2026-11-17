@@ -1562,5 +1562,59 @@
     "label": "strict-storage-tls-flag",
     "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
   }
 ]

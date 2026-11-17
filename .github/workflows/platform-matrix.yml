@@ -333,93 +333,35 @@ jobs:
           print('Selected QEMU effects, positive owned-core inventory and exact cleanup passed; native ARM, minimum kernel and remaining feature gates are separate.')
           PY
 
+  other-emulated-plan:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false || (github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository)
+    name: Plan complete emulation or the exact owned MIPS diagnosis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Keep all original targets and refuse unsafe or foreign selection
+        run: python -B -m unittest discover -s scripts/tests -p test_emulated_platform_selection.py
+      - name: Select complete ready/manual coverage or one diagnostic profile
+        id: plan
+        run: python -B scripts/select-emulated-platforms.py
+
   other-emulated:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false || (github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository)
+    needs: other-emulated-plan
     name: ${{ matrix.package }} (QEMU user emulation)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - package: linux-loong64-standard
-            rust: loongarch64-unknown-linux-gnu
-            platform: loong64
-            emulator: qemu-loongarch64
-            compiler: loongarch64-linux-gnu
-            cc: loongarch64-linux-gnu-gcc-14
-            cxx: loongarch64-linux-gnu-g++-14
-            apt: g++-14-loongarch64-linux-gnu libc6-dev-loong64-cross
-            cpu: la464
-          - package: linux-ppc64le-standard
-            rust: powerpc64le-unknown-linux-gnu
-            platform: ppc64le
-            emulator: qemu-ppc64le
-            compiler: powerpc64le-linux-gnu
-            cc: powerpc64le-linux-gnu-gcc
-            cxx: powerpc64le-linux-gnu-g++
-            apt: g++-powerpc64le-linux-gnu
-            cpu: power9
-          - package: linux-riscv64-standard
-            rust: riscv64gc-unknown-linux-gnu
-            platform: riscv64
-            emulator: qemu-riscv64
-            compiler: riscv64-linux-gnu
-            cc: riscv64-linux-gnu-gcc
-            cxx: riscv64-linux-gnu-g++
-            apt: g++-riscv64-linux-gnu
-            cpu: rv64
-          - package: linux-s390x-standard
-            rust: s390x-unknown-linux-gnu
-            platform: s390x
-            emulator: qemu-s390x
-            compiler: s390x-linux-gnu
-            cc: s390x-linux-gnu-gcc
-            cxx: s390x-linux-gnu-g++
-            apt: g++-s390x-linux-gnu
-            cpu: max
-          - package: linux-mips-standard
-            rust: mips-unknown-linux-gnu
-            platform: mips
-            emulator: qemu-mips-binfmt-P
-            compiler: mips-linux-gnu
-            cc: mips-linux-gnu-gcc
-            cxx: mips-linux-gnu-g++
-            apt: g++-mips-linux-gnu
-            cpu: 24Kf
-            custom_std: true
-            manual_registration: true
-          - package: linux-mipsle-standard
-            rust: mipsel-unknown-linux-gnu
-            platform: mipsle
-            emulator: qemu-mipsel-binfmt-P
-            compiler: mipsel-linux-gnu
-            cc: mipsel-linux-gnu-gcc
-            cxx: mipsel-linux-gnu-g++
-            apt: g++-mipsel-linux-gnu
-            cpu: 24Kf
-            custom_std: true
-            manual_registration: true
-          - package: linux-mips64-standard
-            rust: mips64-unknown-linux-gnuabi64
-            platform: mips64
-            emulator: qemu-mips64
-            compiler: mips64-linux-gnuabi64
-            cc: mips64-linux-gnuabi64-gcc
-            cxx: mips64-linux-gnuabi64-g++
-            apt: g++-mips64-linux-gnuabi64
-            cpu: MIPS64R2-generic
-            custom_std: true
-          - package: linux-mips64le-standard
-            rust: mips64el-unknown-linux-gnuabi64
-            platform: mips64le
-            emulator: qemu-mips64el
-            compiler: mips64el-linux-gnuabi64
-            cc: mips64el-linux-gnuabi64-gcc
-            cxx: mips64el-linux-gnuabi64-g++
-            apt: g++-mips64el-linux-gnuabi64
-            cpu: MIPS64R2-generic
-            custom_std: true
+      matrix: ${{ fromJSON(needs.other-emulated-plan.outputs.matrix) }}
     defaults:
       run:
         shell: bash

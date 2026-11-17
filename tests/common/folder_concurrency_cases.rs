@@ -16,10 +16,20 @@ struct Pair {
 
 #[tokio::test]
 async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() -> TestResult {
+    let started = std::time::Instant::now();
+    let record_phase = |stage: &str, slot: Option<usize>| {
+        eprintln!(
+            "native folder concurrency phase: {}",
+            serde_json::json!({
+            "stage":stage,"slot":slot,"elapsed_ms":started.elapsed().as_millis()})
+        );
+    };
     let root = tempfile::Builder::new().prefix("vsfc-").tempdir()?.keep();
     let sentinel = root.join("caller-sentinel");
     std::fs::write(&sentinel, b"folder-concurrency caller bytes")?;
+    record_phase("receiver-start", None);
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    record_phase("receiver-ready", None);
     let bid = b.client().instance().device_id.clone();
     b.client()
         .update_network_configuration(&NetworkPatch::default().reconnection_interval_seconds(5))
@@ -32,7 +42,9 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
     for index in 0..2 {
         // Distinct peers keep one sender's protocol/index queue from deciding
         // when the other folder becomes eligible at the receiver.
+        record_phase("sender-start", Some(index));
         let a = ManagedInstance::start(options(&root.join(format!("sender-{index}")))?).await?;
+        record_phase("sender-ready", Some(index));
         let aid = a.client().instance().device_id.clone();
         assert_ne!(aid, bid);
         a.client()
@@ -107,6 +119,7 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
     let before_b = b.client().configuration().await?;
     let mut all_samples = Vec::new();
     for (phase, limit) in [1, 2].into_iter().enumerate() {
+        record_phase("phase-configure", Some(phase));
         for pair in &pairs {
             assert!(
                 b.client()
@@ -124,8 +137,9 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
                 .requested_fields_match
         );
         b.restart(Duration::from_secs(30)).await?;
+        record_phase("phase-receiver-restarted", Some(phase));
         let address = super::configuration_policy_listener(&b).await?;
-        for pair in &mut pairs {
+        for (index, pair) in pairs.iter_mut().enumerate() {
             pair.sender
                 .client()
                 .update_device(
@@ -134,7 +148,9 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
                 )
                 .await?;
             pair.sender.restart(Duration::from_secs(30)).await?;
+            record_phase("phase-sender-restarted", Some(index));
             super::name_policy_connection_pair(&pair.sender, &b, true).await?;
+            record_phase("phase-sender-connected", Some(index));
         }
         let connected = b.client().connections().await?;
         for pair in &pairs {
@@ -299,12 +315,15 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
     for pair in &pairs {
         b.client().pause_folder(&pair.b).await?;
     }
-    for (core, before, identity) in pairs
+    for (index, (core, before, identity)) in pairs
         .iter()
         .map(|p| (&p.sender, &p.before_sender, &p.sender_identity))
         .chain(std::iter::once((&b, &before_b, &bid)))
+        .enumerate()
     {
+        record_phase("final-identity-read", Some(index));
         assert_eq!(&core.client().system_status().await?.device_id, identity);
+        record_phase("final-configuration-read", Some(index));
         let after = core.client().configuration().await?;
         for key in ["gui", "folders", "defaults", "ldap"] {
             assert!(before.native_document()[key] == after.native_document()[key]);
@@ -315,9 +334,11 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
         assert_eq!(&std::fs::read(received)?, bytes);
     }
     assert_eq!(std::fs::read(sentinel)?, b"folder-concurrency caller bytes");
+    record_phase("receiver-normal-shutdown", None);
     let exit = b.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
-    for core in pairs.iter_mut().map(|pair| &mut pair.sender) {
+    for (index, core) in pairs.iter_mut().map(|pair| &mut pair.sender).enumerate() {
+        record_phase("sender-normal-shutdown", Some(index));
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
