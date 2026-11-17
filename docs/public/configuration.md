@@ -779,9 +779,13 @@ The temporary-index threshold has a separate native-effect case. It selects
 new 8 MiB transfer must have an actual indexed block count between those limits.
 During at least three seconds of incomplete transfer, the receiver's native
 temporary file must contain a complete 128 KiB block matching the exact source
-bytes at that block's offset, and the authenticated source
-observes that receiver's `fromTemporary` advertisement. The low threshold must
-advertise; the high threshold must withhold it. An explicit native null
+bytes at that block's offset. The authenticated source must actually receive
+native `RemoteDownloadProgress` events for this receiver, folder and file. Each
+low-threshold phase requires at least three positive partial-block advertisements
+across at least three seconds, with no event gaps. The high threshold must
+withhold those advertisements. The separate native file-query availability
+snapshot checks block zero; it cannot establish whether arbitrary later blocks
+are advertised. An explicit native null
 availability slice is recorded separately; missing/malformed fields and HTTP
 errors cannot count as absence. All source/receiver bytes, identities,
 credentials, unrelated sections, sentinel and both normal exits remain required.
@@ -800,16 +804,22 @@ AMD64 and both Windows profiles. A synthetic out-of-order layout reproduced the
 observer's false negative, and an actual macOS run observed a later complete
 block while block zero was still unavailable. The corrected observer keeps the
 original 8 MiB payload, 45-second deadline, three-second/three-observation minimum,
-threshold sequence, native availability checks and all data/exit protections.
+threshold sequence, separate native availability checks and all data/exit protections.
 Its six-profile revalidation remains required; earlier results keep their
 original producer and are not relabeled as the revised observer's results.
 The revised observer passed on both Windows profiles and Linux ARM64 in
-[native run 44114401766](https://github.com/AresJef/verysync-sidecar/actions/runs/44114401766). Linux AMD64 retained a genuine third low-threshold advertisement
-failure despite three qualified windows of approximately 30 seconds. That result
-is not a short-window rejection or a passing policy effect. A diagnostic now
-compares the receiver's separate native download-progress snapshot once at the
-three-second boundary; missing entries and native errors remain explicit, and
-the original advertisement assertion still decides the case.
+[native run 44114401766](https://github.com/AresJef/verysync-sidecar/actions/runs/44114401766). Its Linux AMD64 case retained a failed third low-threshold
+block-zero availability assertion despite a qualified window of approximately
+30 seconds. A later Windows AMD64 case retained the same assertion failure in
+its first phase. Both original failures remain recorded. An independent native
+comparison then observed positive remote-received advertisement events while the
+block-zero query was still empty. This distinguishes an observation mismatch
+from proof that the core sent no advertisements. The corrected case uses those
+actual remote-received events as its advertisement evidence, retaining all
+original payload/deadline/data/exit protections and adding the three-event,
+three-second and zero-gap requirements. The receiver's local progress snapshot
+remains diagnostic only; missing state and native errors remain explicit.
+Six-profile validation of this revised event-based observer is still required.
 This case does not establish an incoming-request memory cap, full-index resend
 after upgrade or a throughput gain.
 

@@ -5,6 +5,78 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use verysync_sidecar::*;
 
+fn advertised_block_count(
+    data: &serde_json::Value,
+    device: &str,
+    folder: &str,
+    file: &str,
+    total_blocks: u64,
+) -> TestResult<Option<u64>> {
+    if data["device"] != device || data["folder"] != folder {
+        return Ok(None);
+    }
+    let state = data["state"]
+        .as_object()
+        .ok_or("matching remote progress event omitted its native state map")?;
+    state
+        .get(file)
+        .map(|value| {
+            let count = value
+                .as_u64()
+                .ok_or("native remote advertised block count is not unsigned")?;
+            if count > total_blocks {
+                return Err("native advertised block count exceeds indexed file blocks".into());
+            }
+            Ok(count)
+        })
+        .transpose()
+}
+
+#[test]
+fn remote_advertisement_observation_preserves_scope_and_missing_native_state() -> TestResult {
+    let event = serde_json::json!({"device":"peer", "folder":"folder", "state":{"file":3}});
+    assert_eq!(
+        advertised_block_count(&event, "peer", "folder", "file", 64)?,
+        Some(3)
+    );
+    assert_eq!(
+        advertised_block_count(&event, "other", "folder", "file", 64)?,
+        None
+    );
+    assert_eq!(
+        advertised_block_count(&event, "peer", "other", "file", 64)?,
+        None
+    );
+    assert_eq!(
+        advertised_block_count(&event, "peer", "folder", "other", 64)?,
+        None
+    );
+    for count in [0, 64] {
+        let event = serde_json::json!({"device":"peer", "folder":"folder", "state":{"file":count}});
+        assert_eq!(
+            advertised_block_count(&event, "peer", "folder", "file", 64)?,
+            Some(count)
+        );
+    }
+    for value in [
+        serde_json::Value::Null,
+        serde_json::json!(-1),
+        serde_json::json!(65),
+    ] {
+        let bad = serde_json::json!({"device":"peer", "folder":"folder", "state":{"file":value}});
+        assert!(advertised_block_count(&bad, "peer", "folder", "file", 64).is_err());
+    }
+    assert!(advertised_block_count(
+        &serde_json::json!({"device":"peer", "folder":"folder"}),
+        "peer",
+        "folder",
+        "file",
+        64
+    )
+    .is_err());
+    Ok(())
+}
+
 fn complete_block_matches(
     path: &Path,
     bytes: &[u8],
@@ -214,6 +286,15 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
         .map(|p| std::fs::read(b.state_directory().join(p)))
         .collect::<std::io::Result<Vec<_>>>()?;
     let mut samples = Vec::new();
+    // This source stays on the same process across all receiver restarts.
+    // Its actual BEP-received progress event is independent of /rest/db/file's
+    // zero-offset availability check. Only an event actually received by this
+    // other core proves advertisement of arbitrary out-of-order blocks; local
+    // receiver progress alone is never a substitute.
+    let mut remote_events = a
+        .client()
+        .subscribe_events(EventOptions::default().reconnect_attempts(0)?)
+        .await?;
     for (phase, selected) in [1_i64, 512, 1].into_iter().enumerate() {
         assert!(
             b.client()
@@ -275,6 +356,7 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
         let mut partial_started = None;
         let mut partial_span = Duration::ZERO;
         let mut advertised = false;
+        let mut block_zero_advertised = false;
         let mut explicit_null_availability_seen = false;
         let observation_started = Instant::now();
         let mut syncing_observations = 0;
@@ -282,6 +364,13 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
         let mut first_partial_ms = None;
         let mut verified_partial_block = None;
         let mut receiver_progress_comparison = None;
+        let mut remote_advertised_blocks_max = None;
+        let mut remote_positive_without_zero_availability = 0;
+        let mut remote_progress_events = 0;
+        let mut remote_event_gaps = 0;
+        let mut remote_positive_observations = 0;
+        let mut remote_positive_started = None;
+        let mut remote_positive_span = Duration::ZERO;
         let observed = tokio::time::timeout(Duration::from_secs(45), async {
             loop {
                 let state = b.client().folder_status(&bf.configuration.id).await?.state;
@@ -329,13 +418,43 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
                             .unwrap_or_default()
                             .iter()
                             .any(|v| v.device_id == bid && v.from_temporary);
-                        advertised |= active;
+                        block_zero_advertised |= active;
+                        // The queue has one consumer. Drain only items already
+                        // buffered at this qualified incomplete-file snapshot.
+                        for _ in 0..remote_events.buffered_items() {
+                            match remote_events.next().await.ok_or("source event task ended")?? {
+                                EventStreamItem::Event(event)
+                                    if matches!(&event.kind, EventKind::Unknown(kind) if kind == "RemoteDownloadProgress") =>
+                                {
+                                    if let Some(count) = advertised_block_count(
+                                        event.data(), bid.as_str(), af.configuration.id.as_str(),
+                                        &name, indexed.global.num_blocks,
+                                    )? {
+                                        remote_progress_events += 1;
+                                        remote_advertised_blocks_max = Some(remote_advertised_blocks_max
+                                            .map_or(count, |previous: u64| previous.max(count)));
+                                        advertised |= count > 0;
+                                        if count > 0 && count < indexed.global.num_blocks {
+                                            remote_positive_observations += 1;
+                                            remote_positive_span = remote_positive_started
+                                                .get_or_insert_with(Instant::now)
+                                                .elapsed();
+                                        }
+                                        if count > 0 && count < indexed.global.num_blocks && !active {
+                                            remote_positive_without_zero_availability += 1;
+                                        }
+                                    }
+                                }
+                                EventStreamItem::Gap(_) => remote_event_gaps += 1,
+                                _ => (),
+                            }
+                        }
                         if receiver_progress_comparison.is_none()
                             && partial_span >= Duration::from_secs(3)
                         {
                             // Compare the receiver's independent native progress
-                            // once without changing the original advertisement
-                            // assertion or inferring zero from an absent emitter.
+                            // once without substituting it for the independently
+                            // received advertisement or inferring missing zero.
                             let comparison = match b
                                 .client()
                                 .folder_download_progress(&bf.configuration.id)
@@ -356,7 +475,8 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
                                     "partial_span_ms":partial_span.as_millis(),
                                     "source_advertised_in_snapshot":active,
                                     "receiver_progress":comparison,
-                                    "diagnostic_only":true,"original_assertion_retained":true}));
+                                    "diagnostic_only":true,"low_high_low_threshold_assertion_retained":true,
+                                    "remote_received_events_decide_advertisement":true}));
                             receiver_progress_comparison = Some(comparison);
                         }
                         if selected == 512 {
@@ -385,6 +505,13 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
                 "verified_partial_block_index":verified_partial_block,
                 "receiver_progress_comparison":receiver_progress_comparison,
                 "observed_advertisement":advertised,
+                "observed_block_zero_availability":block_zero_advertised,
+                "remote_received_event_block_count_max":remote_advertised_blocks_max,
+                "remote_received_positive_events_without_block_zero_availability":remote_positive_without_zero_availability,
+                "remote_received_progress_events":remote_progress_events,
+                "remote_event_gaps":remote_event_gaps,
+                "remote_positive_observations":remote_positive_observations,
+                "remote_positive_span_ms":remote_positive_span.as_millis(),
                 "partial_observations":partial_observations,
                 "partial_span_ms":partial_span.as_millis(),
                 "deadline_elapsed":observed.is_err()})
@@ -392,6 +519,14 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
         observed??;
         assert!(partial_observations >= 3 && partial_span >= Duration::from_secs(3),
             "actual incomplete complete-block transfer coverage too short: observations={partial_observations}, span={partial_span:?}");
+        assert_eq!(
+            remote_event_gaps, 0,
+            "native remote advertisement event continuity is required"
+        );
+        if selected == 1 {
+            assert!(remote_positive_observations >= 3 && remote_positive_span >= Duration::from_secs(3),
+                "actual received partial-block advertisement coverage too short: observations={remote_positive_observations}, span={remote_positive_span:?}");
+        }
         assert_eq!(
             advertised,
             selected == 1,
@@ -404,6 +539,10 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
                 "selected":selected,"actual_file_blocks":indexed.global.num_blocks,
                 "actual_incomplete_complete_block_bytes_verified":true,"actual_partial_observations":partial_observations,
                 "actual_partial_span_ms":partial_span.as_millis(),"actual_peer_temporary_availability_observed":advertised,
+                "actual_remote_advertisement_observations":remote_positive_observations,
+                "actual_remote_advertisement_span_ms":remote_positive_span.as_millis(),
+                "actual_remote_event_continuity":true,
+                "block_zero_availability_observed":block_zero_advertised,
             "explicit_native_null_availability_observed":explicit_null_availability_seen,
                 "actual_normal_restart_retained_policy":true,"actual_new_file_bytes_received":true,
                 "throughput_or_memory_cap_claimed":false
@@ -411,6 +550,7 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
         );
         samples.push((name, bytes));
     }
+    remote_events.close().await?;
     for (name, bytes) in &samples {
         assert_eq!(&std::fs::read(source.join(name))?, bytes);
         assert_eq!(&std::fs::read(received.join(name))?, bytes);

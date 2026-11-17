@@ -14,6 +14,29 @@ SPEC.loader.exec_module(HELPER)
 
 
 class DiagnosticSelection(unittest.TestCase):
+    def test_remote_advertisement_fix_draft_excludes_only_unrelated_native_jobs(self):
+        workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
+        branch = "test/native-remote-advertisement-20261118-01a1ca9b"
+        github = SimpleNamespace(event_name="pull_request", head_ref=branch,
+            repository="AresJef/verysync-sidecar", event=SimpleNamespace(
+                pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
+                    repo=SimpleNamespace(full_name="AresJef/verysync-sidecar")))))
+        checked = []
+        for job, block in re.findall(r"(?ms)^  ([a-z][a-z0-9-]*):\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)", workflow):
+            conditions = [line[len("    if: "):] for line in block.splitlines()
+                          if line.startswith("    if: ")]
+            if not conditions or "github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b'" not in conditions[0]:
+                continue
+            expression = conditions[0].replace("&&", " and ").replace("||", " or ")
+            expression = re.sub(r"!(?!=)", "not ", expression)
+            context = {"github": github, "false": False, "true": True}
+            self.assertFalse(eval(expression, {"__builtins__": {}}, context), job)
+            github.event.pull_request.draft = False
+            self.assertTrue(eval(expression, {"__builtins__": {}}, context), job)
+            github.event.pull_request.draft = True
+            checked.append(job)
+        self.assertEqual(len(checked), 8)
+
     def test_focused_management_target_prepares_private_interpreter_and_arm_helper_role(self):
         workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
         for name, arm_only in [("Prepare private protocol-peer tools for storage and management cases", False),
@@ -42,7 +65,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "ci/native-stop-diagnostics-20261117-01a1ca9b",
                        "ci/native-boundary-diagnostics-20261117-01a1ca9b",
                        "test/ftp-anonymous-native-20261117-01a1ca9b",
-                       "ci/native-temp-advertisement-20261117-01a1ca9b"]:
+                       "ci/native-temp-advertisement-20261117-01a1ca9b",
+                       "test/native-remote-advertisement-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
