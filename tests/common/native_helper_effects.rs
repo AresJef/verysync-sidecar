@@ -582,8 +582,41 @@ async fn incomplete_native_peer_observation(observe_download: bool) -> TestResul
     assert_eq!(std::fs::read(origin.join("sample.bin"))?, sample);
     assert_eq!(a.client().system_status().await?.device_id, aid);
     assert_eq!(b.client().system_status().await?.device_id, bid);
-    for owner in [&mut b, &mut a] {
-        let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    for (index, owner) in [&mut b, &mut a].into_iter().enumerate() {
+        let started = std::time::Instant::now();
+        let initial = owner.shutdown(Duration::from_secs(10)).await;
+        println!(
+            "native partial-peer shutdown observation: {}",
+            serde_json::json!({
+            "role":if index == 0 { "receiver" } else { "sender" },
+            "initial_budget_ms":10000,"initial_elapsed_ms":started.elapsed().as_millis(),
+            "initial_success":initial.is_ok(),"initial_timeout":matches!(&initial, Err(Error::Timeout { .. }))})
+        );
+        if matches!(&initial, Err(Error::Timeout { .. })) {
+            // Keep the original failure. Observe only the original request's
+            // eventual exit; never send a second shutdown or force request.
+            let observed_at = std::time::Instant::now();
+            let observation = match tokio::time::timeout(
+                Duration::from_secs(30),
+                owner.wait_for_exit(),
+            )
+            .await
+            {
+                Ok(Ok(exit)) => serde_json::json!({"ended":true,"code":exit.code,
+                    "forced":exit.forced,"tree_stopped":exit.tree_stopped,"state_released":exit.state_released}),
+                Ok(Err(_)) => serde_json::json!({"ended":false,"observation_error":true}),
+                Err(_) => serde_json::json!({"ended":false,"passive_deadline_reached":true}),
+            };
+            println!(
+                "native partial-peer passive-exit diagnosis: {}",
+                serde_json::json!({
+                "role":if index == 0 { "receiver" } else { "sender" },
+                "passive_budget_ms":30000,"passive_elapsed_ms":observed_at.elapsed().as_millis(),
+                "original_error_preserved":true,"additional_shutdown_requests":0,
+                "explicit_force_requests":0,"observation":observation})
+            );
+        }
+        let exit = initial?;
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
     std::fs::remove_dir_all(root)?;
