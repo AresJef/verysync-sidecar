@@ -1,4 +1,6 @@
 //! Actual indexed data, bounded pages and a native file-access failure.
+#[path = "common/lan_bandwidth_cases.rs"]
+mod lan_bandwidth_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/private_redial.rs"]
