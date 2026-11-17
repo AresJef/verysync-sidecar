@@ -762,6 +762,28 @@ coverage. It uses an explicitly selected in-order block pull and 256 KiB/s
 fixture send limit. Six-platform runtime acceptance is pending. This case does not establish an
 incoming-request memory cap, full-index resend after upgrade or a throughput gain.
 
+## Full-index resend after a real upgrade
+
+`send_full_index_on_upgrade` controls the native startup policy; saving it does
+not select or download another program. The dedicated case explicitly prepares
+the pinned v2.33.1 test source and uses `restart_with_program` to select the fixed
+v2.33.2 program. The public support baseline remains v2.33.2.
+
+Each disabled/enabled comparison uses a fresh isolated pair. The receiver stays
+on the same process, identity and uninterrupted standard event source. Its
+initial four-item `RemoteIndexUpdated` event and actual file bytes establish
+that the observation works. A fresh source-bound head excludes that initial
+index before upgrading the sender. With initial scans disabled and all four
+files unchanged, the next ten-second window must observe zero resent items
+when disabled and at least four when enabled. Configuration readback alone
+cannot pass this case.
+
+The local macOS ARM64 case observes 0 and 4 resent items respectively, then
+verifies a new post-upgrade transfer, all old source/receiver bytes, both native
+identities and credentials, unrelated sections, caller sentinel and both normal
+owned tree/state exits. Event-subscription close errors are propagated.
+Six-platform current runtime and integrated release acceptance remain pending.
+
 ## Signed incoming-request budgets
 
 `GeneralOptions::max_concurrent_incoming_request_kib` and its patch setter use

@@ -136,9 +136,10 @@ required.
 
 An owned draft can select current investigation labels in
 `.github/native-diagnostic-selection.json`. The current selection investigates
-actual sleep requests with the direct system Powercfg observer on both Windows standard profiles. The
-157-row complete catalog retains all 151 earlier cases, including concurrency,
-failed-producer and both Mac/Windows sleep gates, alongside six new threshold cases. Catalog tests
+actual full-index resend across a fixed-version upgrade on all six standard profiles. The
+163-row complete catalog retains all 157 earlier cases, including concurrency,
+failed-producer, Mac/Windows sleep and temporary-index threshold gates, alongside
+six new upgrade-policy cases. Catalog tests
 independently retain the required profile/filter mappings for every earlier
 case; they do not force unrelated investigations into each draft. Missing
 selection uses the whole catalog; empty, duplicate,

@@ -83,7 +83,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 157)
+        self.assertEqual(len(self.rows), 163)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -197,15 +197,15 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(producer[0]["package"], "windows-386-standard")
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_draft_selects_two_actual_windows_sleep_policy_cases(self):
+    def test_current_draft_selects_six_actual_full_index_upgrade_policy_cases(self):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 6)
         self.assertEqual({r["package"] for r in rows},
-                         {"windows-amd64-standard", "windows-arm64-standard"})
-        self.assertTrue(all(r["target"] == "configuration_engine" and r["filter"] ==
-                            "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer" for r in rows))
-        self.assertEqual(len(HELPER.select(self.rows, selection, draft=False)), 157)
+                         set(HELPER.PROFILES) - {"windows-386-standard"})
+        self.assertTrue(all(r["target"] == "upgrade_engine" and r["filter"] ==
+                            "native_full_index_upgrade_policy_changes_actual_unchanged_index_resend" for r in rows))
+        self.assertEqual(len(HELPER.select(self.rows, selection, draft=False)), 163)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
