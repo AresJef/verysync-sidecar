@@ -18,7 +18,7 @@ concurrency:
 jobs:
   diagnose:
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository)
-    name: Diagnosis only, four fresh native timer ABBA pilots
+    name: Native timer diagnosis with guarded preparation for one owned draft
     # Only this owned Draft diagnoses the ARM preparation failure. Ready/manual keep Intel.
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository && 'macos-15' || 'macos-15-intel' }}
     timeout-minutes: 20
@@ -42,6 +42,11 @@ jobs:
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository && 'macos-arm64-standard' || 'macos-amd64-standard' }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Retain original counter and timer calibration for the controlled supplement
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/intel-v27-preparation-window-20261118-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository
+        run: >-
+          python scripts/measure-native-resources.py --stage calibration --timer-calibration
+          --evidence-dir "${{ runner.temp }}/vs-intel-preparation-window/calibration"
       - name: Build the unchanged real release workload before diagnosis
         run: cargo +1.85.0 test --release --no-run --features engine-tests,download --test resource_usage_engine --locked
       - name: Retain wall and thread CPU waits plus all GC events under real work
@@ -121,6 +126,35 @@ jobs:
                   "waits_over_50ms": sum(w["end_ns"]-w["start_ns"] > 50000000 for w in slow)}))
           assert len(identities) == len(set(identities)) == 8 and len(binaries) == 1
           PY
+      - name: Require both predetermined Kqueue short windows before complete preparation
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/intel-v27-preparation-window-20261118-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          python - <<'PYCODE'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'vs-intel-wait-diagnosis'
+          summary = json.loads((root / 'diagnosis-result.json').read_text())
+          assert summary['status'] == 'DIAGNOSIS_COMPLETE_ONLY' and not summary['formal_sample']
+          assert summary['timer_backends'] == ['critical-kqueue', 'mach', 'mach', 'critical-kqueue']
+          assert len(summary['cases']) == 4
+          for index in (0, 3):
+              case = summary['cases'][index]
+              assert case['timer_backend'] == 'critical-kqueue' and case['activity_mode'] == 'on'
+              quality = json.loads((root / case['directory'] / 'quality-result.json').read_text())
+              assert quality['status'] == 'VALID' and not quality['errors']
+          protocol = Path('tests/fixtures/resource-protocol.json')
+          assert hashlib.sha256(protocol.read_bytes()).hexdigest() == '965702efb9291a5e13971e552e76dfa912dbc05cc73d642bc8150f6d06984913'
+          print(json.dumps({'protocol': 'VS045-v27-controlled-preparation-entry-v1',
+              'both_predetermined_kqueue_short_windows_valid': True, 'diagnosis_is_not_preparation': True,
+              'complete_preparation_members_required': 8, 'formal_samples': 0}))
+          PYCODE
+      - name: Run all eight unchanged v27 preparation members in both original orders
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/intel-v27-preparation-window-20261118-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository
+        run: >-
+          python scripts/preflight-native-resources.py
+          --protocol tests/fixtures/resource-protocol.json --toolchain 1.85.0
+          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
+          --evidence-dir "${{ runner.temp }}/vs-intel-preparation-window/pretrial"
       - name: Require exact owned-core cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
@@ -139,3 +173,10 @@ jobs:
             ${{ runner.temp }}/vs-intel-wait-diagnosis/**/samples.jsonl
             ${{ runner.temp }}/vs-intel-wait-diagnosis/**/safe-error.json
             ${{ runner.temp }}/vs-intel-wait-diagnosis/**/*.console.log
+            ${{ runner.temp }}/vs-intel-preparation-window/**/calibration.json
+            ${{ runner.temp }}/vs-intel-preparation-window/**/pretrial-result.json
+            ${{ runner.temp }}/vs-intel-preparation-window/**/preparation-result.json
+            ${{ runner.temp }}/vs-intel-preparation-window/**/quality-result.json
+            ${{ runner.temp }}/vs-intel-preparation-window/**/samples.jsonl
+            ${{ runner.temp }}/vs-intel-preparation-window/**/events.jsonl
+            ${{ runner.temp }}/vs-intel-preparation-window/**/console.log

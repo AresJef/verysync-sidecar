@@ -15,6 +15,60 @@ SPEC.loader.exec_module(D)
 
 
 class NativeObserverDiagnosisContracts(unittest.TestCase):
+    def test_controlled_intel_preparation_is_owned_guarded_and_keeps_full_v27_work(self):
+        root = Path(__file__).resolve().parents[2]
+        branch = 'ci/intel-v27-preparation-window-20261118-01a1ca9b'
+        engine = (root / '.github/workflows/engine-tests.yml').read_text()
+        guarded = [x[len('    if: '):] for x in engine.splitlines()
+                   if x.startswith('    if: ') and branch in x]
+        self.assertEqual(len(guarded), 10)
+        for file in ['resource-collection.yml', 'native-observer-activity.yml']:
+            text = (root / '.github/workflows' / file).read_text()
+            guarded.append(next(x[len('    if: '):] for x in text.splitlines()
+                                if x.startswith('    if: ') and branch in x))
+        workflow = (root / '.github/workflows/native-observer-diagnosis.yml').read_text()
+        steps = []
+        for name in ['Retain original counter and timer calibration for the controlled supplement',
+                     'Require both predetermined Kqueue short windows before complete preparation',
+                     'Run all eight unchanged v27 preparation members in both original orders']:
+            block = workflow.split('      - name: ' + name + '\n', 1)[1].split('\n      - ', 1)[0]
+            condition = next(x[len('        if: '):] for x in block.splitlines()
+                             if x.startswith('        if: '))
+            self.assertNotIn('always()', condition)
+            self.assertNotIn('continue-on-error', block)
+            steps.append((condition, block))
+        self.assertIn('for index in (0, 3):', steps[1][1])
+        self.assertIn("quality['status'] == 'VALID'", steps[1][1])
+        self.assertIn('scripts/preflight-native-resources.py', steps[2][1])
+        self.assertIn('--protocol tests/fixtures/resource-protocol.json', steps[2][1])
+        self.assertIn('--toolchain 1.85.0', steps[2][1])
+        self.assertNotIn('collect-native-resources.py', workflow)
+        self.assertIn('vs-intel-preparation-window/**/pretrial-result.json', workflow)
+        for event, draft, repo, head in [
+            ('pull_request', True, 'AresJef/verysync-sidecar', branch),
+            ('pull_request', False, 'AresJef/verysync-sidecar', branch),
+            ('pull_request', True, 'external/fork', branch),
+            ('workflow_dispatch', True, 'AresJef/verysync-sidecar', branch),
+            ('pull_request', True, 'AresJef/verysync-sidecar', 'unrelated')]:
+            github = SimpleNamespace(event_name=event, head_ref=head,
+                repository='AresJef/verysync-sidecar', event=SimpleNamespace(action='synchronize',
+                    pull_request=SimpleNamespace(draft=draft,
+                        head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
+            owned = event == 'pull_request' and draft and repo == github.repository and head == branch
+            def evaluate(condition):
+                expression = re.sub(r'!(?!=)', 'not ', condition.replace('&&', ' and ').replace('||', ' or '))
+                return bool(eval(expression, {'__builtins__': {}}, {'github': github, 'false': False, 'true': True}))
+            for condition in guarded:
+                actual = evaluate(condition)
+                if owned:
+                    self.assertFalse(actual)
+                else:
+                    github.head_ref = 'unrelated'
+                    self.assertEqual(actual, evaluate(condition))
+                    github.head_ref = head
+            for condition, _ in steps:
+                self.assertEqual(evaluate(condition), owned)
+
     def test_intel_wait_draft_scopes_other_jobs_and_preserves_ready_manual_and_forks(self):
         root = Path(__file__).resolve().parents[2]
         branch = 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b'
