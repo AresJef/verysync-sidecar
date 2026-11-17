@@ -553,6 +553,15 @@ identities, files, unrelated sections and normal tree/state exits. Windows
 AMD64/ARM64 native jobs must still establish these effects. Parser contracts,
 cross-compilation and the macOS regression are not Windows runtime acceptance.
 
+The first native Windows run [44032216441](https://github.com/AresJef/verysync-sidecar/actions/runs/44032216441)
+failed on both architectures: ARM64 did not observe an incomplete transfer in
+the active-sync state; AMD64 completed the first disabled phase and later
+timed out without identifying the phase. These results establish neither
+unsupported engine behavior nor successful request enforcement. The candidate
+now retains phase boundaries, actual native-read durations, bounded state
+transitions and the last native request snapshot in timeout diagnostics. The
+original transfer, baseline, release and correctness requirements remain in force.
+
 ## Diagnostic preferences
 
 `diagnostics_options()` reads actual crash settings and legacy usage information.

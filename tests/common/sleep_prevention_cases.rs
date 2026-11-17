@@ -11,6 +11,69 @@ struct SleepObservation {
     idle_assertion: bool,
     #[cfg(windows)]
     native_snapshot: String,
+    #[cfg(windows)]
+    native_read_elapsed_ms: u128,
+}
+
+#[cfg(windows)]
+struct WindowsSleepTrace {
+    phase: &'static str,
+    selected: bool,
+    root_pid: u32,
+    started: std::time::Instant,
+    reads: u64,
+    maximum_read_ms: u128,
+    states: Vec<String>,
+    snapshot: String,
+}
+
+#[cfg(windows)]
+impl WindowsSleepTrace {
+    fn new(selected: bool, root_pid: u32) -> Self {
+        Self {
+            phase: "idle-baseline",
+            selected,
+            root_pid,
+            started: std::time::Instant::now(),
+            reads: 0,
+            maximum_read_ms: 0,
+            states: Vec::new(),
+            snapshot: String::new(),
+        }
+    }
+
+    fn details(&self) -> serde_json::Value {
+        serde_json::json!({
+            "phase":self.phase,"selected":self.selected,"owned_root_pid":self.root_pid,
+            "elapsed_ms":self.started.elapsed().as_millis(),"native_reads":self.reads,
+            "maximum_native_read_ms":self.maximum_read_ms,"observed_states":self.states,
+            "last_native_snapshot":self.snapshot
+        })
+    }
+
+    fn phase(&mut self, phase: &'static str) {
+        self.phase = phase;
+        println!("native Windows sleep diagnostic: {}", self.details());
+    }
+
+    fn observe(&mut self, observation: &SleepObservation, state: Option<&FolderState>) {
+        self.reads += 1;
+        self.maximum_read_ms = self.maximum_read_ms.max(observation.native_read_elapsed_ms);
+        self.snapshot.clone_from(&observation.native_snapshot);
+        if let Some(state) = state {
+            let state = format!("{state:?}");
+            if self.states.last() != Some(&state) && self.states.len() < 16 {
+                self.states.push(state);
+            }
+        }
+    }
+
+    fn finish(
+        &self,
+        outcome: std::result::Result<TestResult, tokio::time::error::Elapsed>,
+    ) -> TestResult {
+        outcome.map_err(|_| format!("native Windows sleep deadline expired: {}", self.details()))?
+    }
 }
 
 // The installed Apple SDK declares proc_pidpath(int, void *, uint32_t) and
@@ -102,11 +165,13 @@ async fn observe_sleep(root: u32, known_helpers: Vec<u32>) -> TestResult<SleepOb
 
 #[cfg(windows)]
 async fn observe_sleep(root: u32, _known_helpers: Vec<u32>) -> TestResult<SleepObservation> {
+    let started = std::time::Instant::now();
     let (idle_assertion, native_snapshot) = super::windows_sleep_observation::observe(root).await?;
     Ok(SleepObservation {
         helpers: Vec::new(),
         idle_assertion,
         native_snapshot,
+        native_read_elapsed_ms: started.elapsed().as_millis(),
     })
 }
 
@@ -218,6 +283,8 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
                 .disable_system_sleep_on_sync,
             enabled
         );
+        #[cfg(windows)]
+        let mut trace = WindowsSleepTrace::new(enabled, b.process_id());
         let before = observe_sleep(b.process_id(), Vec::new()).await?;
         #[cfg(not(windows))]
         assert!(before.helpers.is_empty() && !before.idle_assertion);
@@ -226,19 +293,20 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
             // Older Windows can retain legacy power requests briefly after
             // they clear. Establish an actual idle baseline before new work;
             // never count a previous generation's image request as this phase.
-            let _ = before;
-            tokio::time::timeout(Duration::from_secs(150), async {
+            trace.observe(&before, None);
+            trace.phase("idle-baseline");
+            let outcome = tokio::time::timeout(Duration::from_secs(150), async {
                 loop {
-                    if !observe_sleep(b.process_id(), Vec::new())
-                        .await?
-                        .idle_assertion
-                    {
+                    let observation = observe_sleep(b.process_id(), Vec::new()).await?;
+                    trace.observe(&observation, None);
+                    if !observation.idle_assertion {
                         return TestResult::Ok(());
                     }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             })
-            .await??;
+            .await;
+            trace.finish(outcome)?;
         }
         let name = format!("idle-sleep-二-{index}.bin");
         let bytes: Vec<u8> = (0..8 * 1024 * 1024)
@@ -250,14 +318,14 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
         let mut observed_assertion = false;
         let mut known_helpers = Vec::new();
         #[cfg(windows)]
-        let mut last_native_snapshot = String::new();
-        tokio::time::timeout(Duration::from_secs(30), async {
+        trace.phase("transfer-observation");
+        let outcome = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let state = b.client().folder_status(&bf.configuration.id).await?.state;
                 let observation = observe_sleep(b.process_id(), known_helpers.clone()).await?;
                 #[cfg(windows)]
                 {
-                    last_native_snapshot = observation.native_snapshot.clone();
+                    trace.observe(&observation, state.as_ref());
                 }
                 known_helpers.extend(observation.helpers.iter().copied());
                 known_helpers.sort_unstable();
@@ -277,10 +345,21 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
             }
             TestResult::Ok(())
         })
-        .await??;
+        .await;
+        #[cfg(windows)]
+        trace.finish(outcome)?;
+        #[cfg(not(windows))]
+        outcome??;
+        #[cfg(not(windows))]
         assert!(
             observed_active,
             "a real incomplete native transfer must be observed"
+        );
+        #[cfg(windows)]
+        assert!(
+            observed_active,
+            "a real incomplete native transfer must be observed: {}",
+            trace.details()
         );
         #[cfg(not(windows))]
         assert_eq!(
@@ -289,20 +368,32 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
         );
         #[cfg(windows)]
         assert_eq!(
-            observed_assertion, enabled,
-            "actual Windows request snapshot: {last_native_snapshot}"
+            observed_assertion,
+            enabled,
+            "actual Windows request snapshot: {}",
+            trace.details()
         );
         let release_timeout = if cfg!(windows) { 150 } else { 10 };
-        tokio::time::timeout(Duration::from_secs(release_timeout), async {
+        #[cfg(windows)]
+        trace.phase("request-release");
+        let outcome = tokio::time::timeout(Duration::from_secs(release_timeout), async {
             loop {
                 let after = observe_sleep(b.process_id(), known_helpers.clone()).await?;
+                #[cfg(windows)]
+                trace.observe(&after, None);
                 if after.helpers.is_empty() && !after.idle_assertion {
                     return TestResult::Ok(());
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
         })
-        .await??;
+        .await;
+        #[cfg(windows)]
+        trace.finish(outcome)?;
+        #[cfg(not(windows))]
+        outcome??;
+        #[cfg(windows)]
+        trace.phase("verified-release");
         assert_eq!(std::fs::read(received.join(&name))?, bytes);
         samples.push((source.join(&name), bytes));
         println!(
