@@ -592,15 +592,15 @@ jobs:
         with:
           python-version: '3.13'
       - name: Prepare the explicit x64 protocol-peer interpreter on Windows ARM
-        if: (matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine') && matrix.package == 'windows-arm64-standard'
+        if: (matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine' || matrix.target == 'authentication_engine') && matrix.package == 'windows-arm64-standard'
         id: storage_tools_python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
           architecture: x64
           update-environment: false
-      - name: Prepare private protocol-peer tools for inline-key and archive cases
-        if: matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine'
+      - name: Prepare private protocol-peer tools for storage and management cases
+        if: matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine' || matrix.target == 'authentication_engine'
         env:
           VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
         run: >-
