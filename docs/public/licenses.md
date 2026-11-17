@@ -63,3 +63,14 @@ currently have synthetic transport coverage only. Successful real license
 refresh, trial issuance, license persistence, licensed operation effects and
 complete same-source platform acceptance remain pending. Pro, Local-API,
 enterprise and official remote management retain separate gates.
+
+## Enterprise control contract
+
+Enterprise control is not implemented. The vendor's
+[public release history](https://forum.verysync.com/forum.php?mod=viewthread&tid=1457)
+describes a separately arranged batch key-distribution control center; it does
+not supply a verified v2.33.2 caller-facing API contract. Device-side cloud RPCs
+and task receivers in the selected core are not treated as an implementation of
+that interface. Endpoint/operation schemas, initiating authorization and dedicated
+positive test resources remain necessary, independently of GUI authentication,
+Pro, Local-API and the existing remote-management gateway.
