@@ -832,7 +832,10 @@ omission as zero. Missing, malformed or mismatched headers cannot pass.
 
 The original real-file, normal restart, identity, credential, unrelated
 configuration, sentinel and both normal process-tree/state exits remain required.
-Four Unix runtime outcomes are pending. Existing IPv4 results keep their original
+All four Unix profiles passed the IPv6 case and current IPv4 regression in
+[run 44055342146](https://github.com/AresJef/verysync-sidecar/actions/runs/44055342146).
+Each of the eight cases completed all three selections and the original
+data/protection/normal-exit checks. Earlier IPv4 results keep their original
 source identities. Neither packet case establishes router prioritization,
 Windows effects, an incoming-request memory cap or a throughput improvement.
 
