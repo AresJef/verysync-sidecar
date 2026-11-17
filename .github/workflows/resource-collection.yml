@@ -2,7 +2,7 @@ name: Frozen resource collection
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled]
     paths:
       - src/**
       - .gitattributes
@@ -31,6 +31,7 @@ concurrency:
 
 jobs:
   collect:
+    if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'resource-formal'
     name: Resource coverage (${{ matrix.package }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
@@ -75,7 +76,9 @@ jobs:
           rustc +"$TEST_TOOLCHAIN" -vV
           cargo +"$TEST_TOOLCHAIN" fetch --locked
       - name: Verify measurement quality and complete-group contracts
-        run: python -m unittest discover -s scripts/tests -p 'test_resource_*.py'
+        run: |
+          python -m unittest discover -s scripts/tests -p 'test_resource_*.py'
+          python -m unittest discover -s scripts/tests -p 'test_macos_timer_probe.py'
       - name: Explicitly prepare this profile's fixed private core
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
@@ -93,7 +96,7 @@ jobs:
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
           --evidence-dir "${{ runner.temp }}/vs-resource-v12-pretrial"
       - name: Collect four formal and two independent original-order cycles
-        if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
+        if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'resource-formal')
         run: >-
           python scripts/collect-native-resources.py --stage all
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"

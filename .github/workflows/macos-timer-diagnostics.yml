@@ -3,6 +3,7 @@ name: Mac observer timer diagnosis
 on:
   pull_request:
     paths:
+      - scripts/measure-native-resources.py
       - scripts/probe-macos-timers.py
       - scripts/tests/test_macos_timer_probe.py
       - .github/workflows/macos-timer-diagnostics.yml
