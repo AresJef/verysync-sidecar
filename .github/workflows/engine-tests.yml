@@ -802,6 +802,72 @@ jobs:
         if: always()
         run: python scripts/prepare-test-engine.py check-cleanup
 
+  linux-sleep-inhibitor-positive:
+    name: Explicit Linux native sleep-inhibitor effects (${{ matrix.package }}; isolated VM only)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            package: linux-amd64-standard
+          - runner: ubuntu-24.04-arm
+            package: linux-arm64-standard
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+      VERYSYNC_TEST_ALLOW_HOST_CONFIGURATION: github-actions-isolated-linux-vm
+      VERYSYNC_TEST_ALLOW_SLEEP_INHIBITOR: github-actions-isolated-linux-vm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install native Rust and fetch locked dependencies without elevation
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare fixed private Linux core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Compile and identify the exact host test as the normal runner
+        run: >-
+          python scripts/host-test-cargo.py prepare --case linux_sleep_inhibitor_cases::native::privileged_native_linux_sleep_inhibitor_tracks_transfer_and_releases --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe actual owned logind locks during real transfer and release
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --cargo "$VERYSYNC_HOST_TEST_CARGO_SHIM" --test-target host_control_engine
+          --test-filter linux_sleep_inhibitor_cases::native::privileged_native_linux_sleep_inhibitor_tracks_transfer_and_releases
+          --evidence-dir "${{ runner.temp }}/vs-linux-sleep-inhibitor-positive"
+      - name: Require one actual native case and all original policy phases
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          text = (Path(os.environ["RUNNER_TEMP"]) / "vs-linux-sleep-inhibitor-positive" / "host-control-engine.log").read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in text
+          marker = "native Linux idle-sleep policy evidence: "
+          phases = [json.loads(line.split(marker, 1)[1]) for line in text.splitlines() if marker in line]
+          assert [phase["enabled"] for phase in phases] == [False, True, False]
+          for phase in phases:
+              assert phase["actual_syncing_observed"] and phase["actual_file_bytes_transferred"]
+              assert phase["actual_system_idle_sleep_assertion_observed"] == phase["enabled"]
+              assert phase["actual_owned_system_inhibit_helper_observed"] == phase["enabled"]
+              assert phase["actual_assertion_and_owned_helper_released_after_transfer"]
+          assert "native Linux idle-sleep policy cleanup evidence:" in text
+          assert "actual_both_normal_owned_tree_and_state_exit=true" in text
+          PY
+      - name: Require exact owned-core cleanup
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+
   native-browser-fallback:
     name: Native browser fallback (${{ matrix.package }})
     runs-on: ${{ matrix.runner }}
