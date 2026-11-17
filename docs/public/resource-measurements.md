@@ -1,10 +1,11 @@
 # Resource measurement evidence
 
-Protocol v22 binds the signed general-option corrections to the current measured
-Rust source. Only the protocol revision and Rust source binding differ from v21;
-workloads, original orders, quality gates and acquisition controls are unchanged.
-All v21 results retain their original producer and source binding. Complete v22
-formal collection and independent cycles remain required.
+Protocol v23 changes the Darwin observer's blocking wait to an owned periodic
+critical kqueue timer. Rust workload/source inputs, native worker scheduling,
+original orders, every quality/resource limit and acquisition controls remain
+unchanged. All v22 and earlier results retain their original producer and source
+binding. Complete v23 preparation, formal collection and independent cycles on
+all six profiles remain required.
 
 The explicit `resource_usage_engine` target runs one registered workload against
 an isolated owned VerySync instance: idle, an 8 MiB download, a 128 MiB download,
@@ -180,7 +181,11 @@ retain their original source/protocol identities and strict results.
 
 Draft pull requests run actual calibration and both full preparation orders.
 Formal/independent collection runs when the candidate is ready for review or is
-explicitly dispatched. A green preparation-only job does not establish resource
+explicitly dispatched. The `resource-formal` pull-request label also explicitly
+requests complete collection on a frozen draft without launching unrelated full
+native jobs. Applying that label starts fresh preparation and acquisition; it
+does not reuse an earlier run's preparation or alter any source, workload,
+quality, complete-group or deadline check. A green preparation-only job does not establish resource
 coverage or acceptance; all six complete formal/independent reports remain
 required. This keeps changing library sources from invalidating repeated formal
 collections before the implementation candidate is stable.
@@ -194,7 +199,7 @@ retried or converted into a sample. Sampling methods, workloads, quality limits,
 formal coverage and deadlines remain unchanged; earlier evidence keeps its
 original protocol identity.
 
-The v17 Darwin observer uses one blocking `mach_wait_until` call for each
+The v17 Darwin observer used one blocking `mach_wait_until` call for each
 absolute deadline. It obtains the architecture-specific conversion with
 `mach_timebase_info`, rounds the requested interval up to whole native ticks, and
 records that ratio and period. A delayed wakeup advances to the first future
@@ -264,3 +269,27 @@ or storage cause. The existing observer already used native Mach deadlines and
 observer-thread QoS without changing worker priority. This run keeps its own
 producer and unchanged v21 measured inputs; it is not combined with Mac 15
 trials or treated as evidence for another environment.
+
+The later [observer-only ABBA diagnosis](https://github.com/AresJef/verysync-sidecar/actions/runs/44016131525)
+completed four 64-wait blocks on each actual Mac 15 architecture, without starting
+an engine. The original Mach blocks reached 77.26/81.24 ms on Intel and
+64.52/80.60 ms on ARM64, with repeated waits over 50 ms. The critical-kqueue blocks
+reached 10.33/10.63 ms on Intel and 17.19/14.45 ms on ARM64, with none over 50 ms.
+These observations support trying that observer method; they do not establish
+resource coverage, explain the host's underlying scheduling cause, or guarantee
+future wakeups. The producer was commit
+`6111d36406c3cc1da038015d0c15c0bba4048a17`, tree
+`b4f9e15f9f49bb26799047411c9eeeda7349072a`.
+
+The v23 sampler uses that same interval-mode timer with `NOTE_NSECONDS` and
+`NOTE_CRITICAL`, whose values follow the Apple SDK event header. It checks the
+actual event identity, filter, error flag and positive expiration count. A delayed
+event's count remains diagnostic; it never creates missing observations. Missing
+or invalid events and syscall failures remain acquisition errors, retaining the
+actual wait duration and native error details without retry. The exact owned
+queue is closed on registration failure and final cleanup. The explicit legacy
+Mach backend remains available to the diagnostic probe so its labels continue
+to identify the actual mechanisms being compared. No native worker, global
+priority, timer setting or power policy changes. Both native preparation orders
+and all four formal plus two independent cycles must succeed under the new
+frozen source identity before any v23 resource claim.

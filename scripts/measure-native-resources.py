@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import platform
 import secrets
+import select
 import subprocess
 import sys
 import time
@@ -88,17 +89,65 @@ class TimerWaitError(RuntimeError):
         super().__init__("owned precise timer failed: " + json.dumps(self.diagnostic))
 
 
+class CriticalKqueueTicker:
+    """One owned periodic timer with Apple's minimum-coalescing flag."""
+    def __init__(self, interval_ms):
+        self.expirations = None
+        # Apple SDK sys/event.h: NOTE_NSECONDS=4, NOTE_CRITICAL=32.
+        # CPython omits these flags. This uses interval mode, not an epoch.
+        self.parameters = {"interval_ns": int(interval_ms * 1_000_000), "fflags": 4 | 32}
+        self.queue = select.kqueue()
+        try:
+            self.queue.control([select.kevent(1, filter=select.KQ_FILTER_TIMER,
+                flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+                fflags=self.parameters["fflags"], data=self.parameters["interval_ns"])], 0, 0)
+        except BaseException:
+            self.queue.close()
+            raise
+
+    def wait(self):
+        started = time.perf_counter_ns()
+        try:
+            events = self.queue.control(None, 1, 2)
+        except OSError as error:
+            raise TimerWaitError("critical-timer-syscall-failed", time.perf_counter_ns() - started,
+                                 {"errno": error.errno, **self.parameters}) from error
+        waited = time.perf_counter_ns() - started
+        if len(events) != 1:
+            raise TimerWaitError("critical-timer-empty-return", waited,
+                                 {"event_count": len(events), **self.parameters})
+        event = events[0]
+        if (event.ident != 1 or event.filter != select.KQ_FILTER_TIMER
+                or event.flags & select.KQ_EV_ERROR or event.data < 1):
+            raise TimerWaitError("critical-timer-invalid-event", waited, {
+                "ident": event.ident, "filter": event.filter,
+                "flags": event.flags, "data": event.data, **self.parameters})
+        # Coalesced expirations are diagnostic counts, never extra samples.
+        self.expirations = event.data
+
+    def close(self):
+        self.queue.close()
+
+
 class SamplerTicker:
     """One blocking observer wait; no worker/global policy or timestamp changes."""
     MAX_TICKS = (1 << 64) - 1
 
-    def __init__(self, interval_ms, native=True):
+    def __init__(self, interval_ms, native=True, *, darwin_backend="critical-kqueue"):
         self.interval_s = interval_ms / 1000
         self.expirations = None
         self.backend = "monotonic-sleep"
         self.parameters = {}
         self._clock = self._wait = None
+        self._critical = None
+        if sys.platform == "darwin" and native and darwin_backend == "critical-kqueue":
+            self._critical = CriticalKqueueTicker(interval_ms)
+            self.parameters = self._critical.parameters
+            self.backend = "darwin-critical-kqueue"
+            return
         if sys.platform == "darwin" and native:
+            if darwin_backend != "mach":
+                raise ValueError("unrecognized Darwin observer timer")
             import ctypes
             class Timebase(ctypes.Structure):
                 _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
@@ -130,6 +179,10 @@ class SamplerTicker:
                                  native_details={"deadline_ticks": self._deadline, **self.parameters})
 
     def wait(self):
+        if self._critical is not None:
+            self._critical.wait()
+            self.expirations = self._critical.expirations
+            return
         if self._clock is None:
             time.sleep(self.interval_s)
             return
@@ -148,8 +201,10 @@ class SamplerTicker:
         self._check_deadline()
 
     def close(self):
+        if self._critical is not None:
+            self._critical.close()
+            self._critical = None
         # Absolute Mach waits own no queue, descriptor, thread or timer handle.
-        pass
 
 
 def finish_owned_observation(child, ticker, report, evidence_dir):
