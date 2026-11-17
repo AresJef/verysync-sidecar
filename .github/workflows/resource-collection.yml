@@ -42,7 +42,7 @@ jobs:
       matrix:
         include:
           - package: macos-amd64-standard
-            runner: macos-26-intel
+            runner: macos-15-intel
             rust: x86_64-apple-darwin
           - package: macos-arm64-standard
             runner: macos-15
@@ -98,14 +98,14 @@ jobs:
           python scripts/preflight-native-resources.py
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-resource-v24-pretrial"
+          --evidence-dir "${{ runner.temp }}/vs-resource-v25-pretrial"
       - name: Collect four formal and two independent original-order cycles
         if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'resource-formal')
         run: >-
           python scripts/collect-native-resources.py --stage all
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v24"
+          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v25"
       - name: Require exact owned-program cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
@@ -117,23 +117,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/collection-state.json
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/frozen-protocol.json
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/accepted-group.json
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/attempt.json
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/preparation-result.json
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/quality-result.json
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/samples.jsonl
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/events.jsonl
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/safe-error.json
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/console.log
-            ${{ runner.temp }}/vs-frozen-resource-v24/**/*.console.log
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/collection-state.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/frozen-protocol.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/accepted-group.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/attempt.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/preparation-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/quality-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/samples.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/events.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/safe-error.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/console.log
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/*.console.log
             ${{ runner.temp }}/vs-resource-clock-calibration/calibration.json
             ${{ runner.temp }}/vs-resource-clock-calibration/safe-error.json
-            ${{ runner.temp }}/vs-resource-v24-pretrial/**/preparation-result.json
-            ${{ runner.temp }}/vs-resource-v24-pretrial/**/quality-result.json
-            ${{ runner.temp }}/vs-resource-v24-pretrial/**/samples.jsonl
-            ${{ runner.temp }}/vs-resource-v24-pretrial/**/events.jsonl
-            ${{ runner.temp }}/vs-resource-v24-pretrial/**/safe-error.json
-            ${{ runner.temp }}/vs-resource-v24-pretrial/**/console.log
-            ${{ runner.temp }}/vs-resource-v24-pretrial/pretrial-result.json
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/preparation-result.json
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/quality-result.json
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/samples.jsonl
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/events.jsonl
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/safe-error.json
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/console.log
+            ${{ runner.temp }}/vs-resource-v25-pretrial/pretrial-result.json

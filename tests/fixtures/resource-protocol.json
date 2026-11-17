@@ -1,13 +1,13 @@
 {
-  "protocol_id": "VS045-native-resources-v24",
-  "version": 24,
+  "protocol_id": "VS045-native-resources-v25",
+  "version": 25,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "c759e3ffe400fd79e2b943f05e53770009228ca7d0c7010ef63b0e19f426ec35",
-    "cargo_lock_sha256": "1ea8948038be07c5a8f492063f2a6ce3f581398ee627d311cf11c3e04492d37f",
+    "rust_sources_sha256": "4d055a1e65b800324ec2ef77da25d682b5f0c75e919eb15b540b1cbb6b034ef7",
+    "cargo_lock_sha256": "b8ba854b681e9ece06db946aa8bdbe6d7330c5d3fedaa36dac99d0d851ebd670",
     "sampler_sha256": "a48b3b08650e9628dec37a4a6ee1f0bca63129f145a34a1e1be807c935bb2a3b",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a",
     "observer_activity_sha256": "f8ca7901ddf906b7ae640c9489ab7a643c32cc5b107f1898ccffb45aec3ef172"
@@ -117,7 +117,8 @@
     "v17": "Each actual profile repeats source-bound clock/counter/native-wait calibration and both complete opposite-order pretrials before v17 formal and independent acquisition. Local prototype and prior-source attempts are not formal members.",
     "v18": "All eight native-correct/source-bound/calibrated cases execute in the original two opposite orders. At least one entire VALID order establishes readiness; the other order may retain INSUFFICIENT cases but never native/source/counter/acquisition errors. No preparation data enters formal groups. Formal coverage, every quality/resource criterion, deadlines and attempt limits unchanged.",
     "v23": "Each actual profile repeats exact source-bound counter/timer calibration and all eight native pretrial cases in both original orders before complete new formal and independent collection. Earlier observer-only diagnostics and v22 measurements cannot supply v23 members.",
-    "v24": "All6actual profiles repeat counter/timer calibration and both original complete opposite native orders before new4formal+2independent fresh-process cycles; preserve allv23strict data/Intelpartial/expired budgets and rejected attempts under original identities. Preparation members never formal."
+    "v24": "All6actual profiles repeat counter/timer calibration and both original complete opposite native orders before new4formal+2independent fresh-process cycles; preserve allv23strict data/Intelpartial/expired budgets and rejected attempts under original identities. Preparation members never formal.",
+    "v25": "Source-only implementation/lock revision plus explicit return to original standard Intel CI environment. All six actual profiles repeat fresh counter/timer calibration, both complete opposite native pretrial orders, and independently gated4formal+2independent fresh processes. No historical v24 calibration/pilot/formal member supplies v25 coverage. Native or identity errors stop; quality rejection stays retained."
   },
   "profiles": [
     "macos-amd64-standard",
@@ -129,10 +130,10 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "c0d0d4c15aec47a78152c9785181b38b03593f9a16c466a2d912581fb8efd131",
-    "retained": "Allv23and earlier raw groups/strict outcomes/attempts/deadlines keep originalsource identities, including5strictcomplete profiles and incompleteIntel runs. None become v24members;156h/projectelapsed isnotreset.",
-    "changes": "Darwin observer declares scopedlatency-critical/user-initiated allowingidle-sleep activity only afterworkersready. Bind exacthelper file and active/ended measurement-role receipts, requirecleanup evidence. NonDarwin hasno native activity. Source200ABBA iseligibility evidence, not proof ofoldcause/strict completion. Every actualprofile needs newcalibration/8pretrial/fourformal/twoindependent on thisdistinct setup.",
-    "unchanged": "Rustsource/workload, nativeprogramv2.33.2, sizes/repeats/order, alltiming/metricreads/buffering, QoS33/criticalkqueue/monotonicsleep,50ms5%/25snap500ms,16MiB/8MiBresource/stability gates,4+2fresh cycles,900s/3attempts/180span/120estimate30save and readiness1completevalidorder of2."
+    "previous_protocol_sha256": "54cea381779968b2f2bdc31ad1763a32aff097e034d48dedbafd5e634a9a4510",
+    "retained": "All v24 and earlier raw observations, quality rejections, accepted groups, attempts and deadlines retain their original source identities. No earlier group is a v25 member. The approved156h project budget is not reset.",
+    "changes": "Replace denied unmaintained Chrono with Jiff and bounded verified RFC3339 consumers, retaining Rust1.85. Bind new Rust source and lock. Use the original standard macos-15-intel environment with the v24 scoped observer activity: macos26 second pretrial had887.625ms gap and5.927% read overhead; cause is not established and no guaranteed improvement is claimed. Every profile requires fresh actual calibration and all original preparation/formal/independent work.",
+    "unchanged": "Nativev2.33.2, all resource workload/timing/metric/buffering semantics, sampler/helper/wrapper, QoS33/criticalkqueue/activity options,10ms/50ms5%/25snap500ms,16MiB/8MiB gates,4formal+2independent full fresh orders,900s/3attempts/180span/120estimate30save and1completeVALIDorder of2 preparation. No exception or lower gate."
   },
   "preflight_sha256": "d0df504754e28fa52d54831f0d1a8fb2b62ea22679dc60c1262460ce82aacc47",
   "observer_policy": {
