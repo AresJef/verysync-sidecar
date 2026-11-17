@@ -710,3 +710,27 @@ This verifies native signed selections and continued real operation. A stored
 number and a small successful transfer do not measure the actual aggregate
 concurrent request-memory bound, its native minimum/default behavior or a
 throughput improvement; those effects retain their own acceptance gates.
+
+
+## Signed general integer selections
+
+`keep_temporaries_hours`, `max_folder_concurrency`, `max_dial_concurrent`,
+`temp_index_min_blocks` and `traffic_class` retain native signed `i64` values.
+The local fixed macOS ARM64 instance accepts negative configurations that could
+not be decoded through the former unsigned fields. Partial and complete saves
+of `-1` and `-2` retain all five selections across explicit normal restarts.
+
+Native normalization remains visible. Selecting zero for `temp_index_min_blocks`
+returns the actual value `2` with `requested_fields_match == false`; the SDK does
+not replace that receipt with a match. The zero selections of the other four
+fields remain zero in this observation. Normal restart preserves those actual
+values. The case restores the complete original configuration and checks
+identity, original keys/certificates, caller bytes, unselected values and normal
+owned process-tree/state-lease exit. Other native platforms and final integrated
+acceptance remain separate gates.
+
+These are configuration-domain and persistence results. Negative scheduling,
+retention and temporary-index effects are independently unverified. A stored
+traffic-class integer, including an out-of-byte-range value accepted by native
+configuration, does not establish valid OS packet marking or router handling.
+No packet-QoS, memory-budget or performance guarantee follows from these reads.
