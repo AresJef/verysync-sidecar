@@ -359,15 +359,19 @@ let endpoint = StorageEndpoint::remote(StorageProtocol::Sftp, "sftp://127.0.0.1:
 # }
 ```
 
-A fixed v2.33.2 macOS ARM64 public-API case observed actual wrong-key rejection,
+A fixed v2.33.2 public-API case observed actual wrong-key rejection,
 key-authenticated browsing, exact preview/run identities, complete transferred
 bytes, source/destination-only retention, unregister-without-deletion and normal
-owned-tree exit. Final current-source native platform coverage remains pending.
+owned-tree exit on all six standard macOS, Windows and Linux AMD64/ARM64 profiles
+in [native run 44082376849](https://github.com/AresJef/verysync-sidecar/actions/runs/44082376849).
+The producer was `329e6680abd7dc5424e263ad2f41642112700642`, tree
+`5ab134ee957f7208391c2d99e8930c317049e5ac`. These selected cases passed inside a
+full run with other failures; they do not establish a complete final-source pass.
 Earlier escaped-key creation attempts were unknown outcomes because the SDK
 misclassified native omission of the empty password; those failed records remain
 historical evidence and are not rewritten as successful earlier tests.
 
-The native limits probe still rejects this valid backend encoding with HTTP500
+On those same six profiles, the native limits probe rejects this valid backend encoding with HTTP500
 and its `SSH private key: ssh: no key found` error. The SDK preserves that actual
 failure; it does not invent capability flags, substitute a password probe or
 claim that a successful listing validates the limits interface. Static inspection
@@ -536,4 +540,10 @@ and owned processes exit normally. The observations contain only policy match,
 username-presence, status and session flags, never NTLM hashes or passwords.
 These cases establish the selected native parameters and standalone protocol
 behavior. They do not claim Active Directory, Kerberos or arbitrary server guest
-permissions; final source/platform acceptance remains separate.
+permissions. The domain and guest arms passed on all six standard macOS, Windows
+and Linux AMD64/ARM64 profiles in
+[native run 44082376849](https://github.com/AresJef/verysync-sidecar/actions/runs/44082376849),
+producer `329e6680abd7dc5424e263ad2f41642112700642`, tree
+`5ab134ee957f7208391c2d99e8930c317049e5ac`. Other cases in that full run failed;
+these selected authentication effects retain their original producer and do not
+establish full final-source or minimum-system acceptance.
