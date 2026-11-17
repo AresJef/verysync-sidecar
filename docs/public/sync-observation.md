@@ -57,6 +57,16 @@ changes. Explicit raw fixture rate/mode settings only create this observation
 window; they do not establish typed rate-limit/mode control or performance.
 The tests preserve source data and observe normal exit of both owned trees.
 
+The priority-queue fixture first transfers one of its 512 synthetic files at the
+normal rate. It then applies its explicit observation throttle and creates the
+other 511 files, so initial authentication and index exchange are not throttled.
+The first transfer and the nonempty legacy queue must both appear within the
+same 20-second preparation window. The fixture explicitly selects a five-second
+reconnection interval; the library and official program defaults are unchanged.
+Acceptance still requires a nonfirst target to be promoted while other work
+remains queued, all 512 file contents to match after rate restoration, and both
+owned process trees and state leases to exit normally.
+
 ## Native index tree
 
 `browse_index(folder, options)` reads the distinct `/rest/db/browse` native index
