@@ -19,7 +19,8 @@ class DiagnosticSelection(unittest.TestCase):
         for branch in ["test/native-remote-advertisement-20261118-01a1ca9b",
                        "test/native-sftp-server-identity-20261118-01a1ca9b",
                        "test/native-backend-outage-20261118-01a1ca9b",
-                       "test/native-lan-bandwidth-20261118-01a1ca9b"]:
+                       "test/native-lan-bandwidth-20261118-01a1ca9b",
+                       "test/native-local-announcement-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -78,7 +79,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-remote-advertisement-20261118-01a1ca9b",
                        "test/native-sftp-server-identity-20261118-01a1ca9b",
                        "test/native-backend-outage-20261118-01a1ca9b",
-                       "test/native-lan-bandwidth-20261118-01a1ca9b"]:
+                       "test/native-lan-bandwidth-20261118-01a1ca9b",
+                       "test/native-local-announcement-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -180,7 +182,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 211)
+        self.assertEqual(len(self.rows), 217)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -297,7 +299,9 @@ class DiagnosticSelection(unittest.TestCase):
     def test_current_outage_draft_and_previous_cases_keep_six_native_profiles(self):
         current = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         for selection, label, target, name in [
-            (current, "native-lan-bandwidth-inclusion", "sync_observation",
+            (current, "native-local-announcement", "network",
+             "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart"),
+            ({"draft_labels": ["native-lan-bandwidth-inclusion"]}, "native-lan-bandwidth-inclusion", "sync_observation",
              "lan_bandwidth_cases::actual_lan_bandwidth_toggle_changes_enforcement_and_preserves_bytes"),
             ({"draft_labels": ["native-backend-request-outage"]}, "native-backend-request-outage", "local_sync_runtime_engine",
              "public_backend_requests_preserve_actual_outage_errors_and_data"),
@@ -313,7 +317,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] == label and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 211)
+        self.assertEqual(len(self.rows), 217)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
