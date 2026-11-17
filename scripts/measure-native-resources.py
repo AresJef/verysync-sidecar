@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import secrets
 import select
 import subprocess
@@ -372,6 +373,22 @@ def source_identity(cargo, toolchain):
     paths += sorted((root / "src").rglob("*.rs"))
     paths += [root / "tests/common" / name for name in
               ["managed_fixture.rs", "resource_faults.rs", "resource_fixture.rs"]]
+    # Literal include data is a compilation input even when the .rs file does
+    # not change. Bind rustdoc inputs conservatively as well as runtime data.
+    external = set()
+    for path in paths:
+        if path.suffix != ".rs":
+            continue
+        source = path.read_text()
+        includes = re.findall(r'\binclude_(?:str|bytes)!\s*\(\s*"([^"\n]+)"\s*\)', source)
+        if len(includes) != len(re.findall(r'\binclude_(?:str|bytes)!\s*\(', source)):
+            raise ValueError("nonliteral compilation input needs an explicit identity audit")
+        for name in includes:
+            target = (path.parent / name).resolve(strict=True)
+            if not target.is_relative_to(root):
+                raise ValueError("compilation input escapes the owned source tree")
+            external.add(target)
+    paths += sorted(external - set(paths))
     source_hash = hashlib.sha256()
     for path in paths:
         source_hash.update(str(path.relative_to(root)).replace(os.sep, "/").encode() + b"\0")

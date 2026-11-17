@@ -2,10 +2,12 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location("resource_collection", Path(__file__).resolve().parents[1] / "collect-native-resources.py")
@@ -13,6 +15,63 @@ COLLECT = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(COLLECT
 
 
 class ResourceCollectionContracts(unittest.TestCase):
+    def test_compilation_identity_draft_does_not_duplicate_unrelated_native_acquisition(self):
+        root = Path(__file__).resolve().parents[2]
+        branch = 'ci/compiled-input-resources-v27-20261118-01a1ca9b'
+        workflow = (root / '.github/workflows/engine-tests.yml').read_text()
+        conditions = [line[len('    if: '):] for line in workflow.splitlines()
+                      if line.startswith('    if: ') and branch in line]
+        self.assertEqual(len(conditions), 10)
+        timer = (root / '.github/workflows/macos-timer-diagnostics.yml').read_text()
+        conditions.append(next(line[len('    if: '):] for line in timer.splitlines()
+                               if line.startswith('    if: ')))
+        for event, draft, repo in [('pull_request', True, 'AresJef/verysync-sidecar'),
+                                    ('pull_request', False, 'AresJef/verysync-sidecar'),
+                                    ('pull_request', True, 'external/fork'),
+                                    ('workflow_dispatch', True, 'AresJef/verysync-sidecar')]:
+            github = SimpleNamespace(event_name=event, head_ref=branch,
+                repository='AresJef/verysync-sidecar', event=SimpleNamespace(pull_request=SimpleNamespace(
+                    draft=draft, head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
+            context = {'github': github, 'false': False, 'true': True}
+            for condition in conditions:
+                expression = re.sub(r'!(?!=)', 'not ', condition.replace('&&', ' and ').replace('||', ' or '))
+                actual = eval(expression, {'__builtins__': {}}, context)
+                if event == 'pull_request' and draft and repo == github.repository:
+                    self.assertFalse(actual)
+                else:
+                    github.head_ref = 'unrelated'
+                    self.assertEqual(actual, eval(expression, {'__builtins__': {}}, context))
+                    github.head_ref = branch
+
+    def test_checkout_repair_keeps_ready_manual_and_formal_all_six_native_profiles(self):
+        root = Path(__file__).resolve().parents[2]
+        text = (root / '.github/workflows/resource-collection.yml').read_text()
+        expression = next(line.strip()[len('include: '):] for line in text.splitlines()
+                          if line.strip().startswith('include: '))
+        expression = expression.removeprefix('${{').removesuffix('}}').strip()
+        expression = expression.replace('github.event.pull_request.labels.*.name', 'labels')
+        expression = re.sub(r'!(?!=)', 'not ', expression.replace('&&', ' and ').replace('||', ' or '))
+        branch = 'ci/compiled-input-resources-v27-20261118-01a1ca9b'
+        results = []
+        for event, draft, head, repo, labels, expected in [
+            ('pull_request', True, branch, 'AresJef/verysync-sidecar', [], 2),
+            ('pull_request', True, branch, 'AresJef/verysync-sidecar', ['resource-formal'], 6),
+            ('pull_request', False, branch, 'AresJef/verysync-sidecar', [], 6),
+            ('workflow_dispatch', True, branch, 'AresJef/verysync-sidecar', [], 6),
+            ('pull_request', True, branch, 'external/fork', [], 6),
+            ('pull_request', True, 'unrelated', 'AresJef/verysync-sidecar', [], 6),
+        ]:
+            github = SimpleNamespace(event_name=event, head_ref=head, repository='AresJef/verysync-sidecar',
+                event=SimpleNamespace(pull_request=SimpleNamespace(draft=draft,
+                    head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
+            actual = eval(expression, {'__builtins__': {}}, {'github': github, 'labels': labels,
+                'fromJSON': json.loads, 'contains': lambda values, value: value in values})
+            self.assertEqual(len(actual), expected)
+            self.assertEqual(len({row['package'] for row in actual}), expected)
+            results.append(actual)
+        self.assertEqual(results[0], [row for row in results[1] if row['package'].startswith('windows-')])
+        self.assertTrue(all(value == results[1] for value in results[1:]))
+
     def test_host_text_newlines_cannot_change_durable_record_bytes(self):
         original = COLLECT.tempfile.NamedTemporaryFile
         def windows_text_default(*args, **kwargs):

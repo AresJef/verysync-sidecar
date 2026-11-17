@@ -512,8 +512,15 @@ policy must allow the real copy. Each completed copy must preserve the source,
 destination-only sentinel and files after registration removal, and both cores
 must exit normally. On the inspected macOS ARM build, both policies allowed
 the probe, browse and copy. This confirms the native identity limitation for
-that build; it does not verify the server's identity. Other native profiles
-must pass their own observations before extending this conclusion to them.
+that build; it does not verify the server's identity. The same portable case
+also accepted both policies, including the complete file copies, on fixed
+v2.33.2 Windows AMD64/ARM64 and Linux AMD64/ARM64 builds in
+[the native SFTP policy run](https://github.com/AresJef/verysync-sidecar/actions/runs/44144810067).
+These observations cover the explicit environment and private-profile trust
+candidates; they establish no supported server-identity verification mechanism.
+The macOS CI profiles and complete final-source platform acceptance remain
+pending. Password/private-key authentication and data integrity are separate
+requirements and must not be inferred from a host-policy observation.
 
 The native job serializer can omit `insecureTls` when it is false. For SFTP and
 WebDAV, creation and endpoint-update verification recognize that known false

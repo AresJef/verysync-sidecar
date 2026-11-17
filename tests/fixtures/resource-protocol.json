@@ -1,14 +1,14 @@
 {
-  "protocol_id": "VS045-native-resources-v26",
-  "version": 26,
+  "protocol_id": "VS045-native-resources-v27",
+  "version": 27,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "1be9dc6f08412b0006930095bbfacfc8a53118a13f44bcb09819c94fcdef5043",
+    "rust_sources_sha256": "c37e63517b8f2a241a58fcbb64e294ba31e6890045084fddd541715c53fe2641",
     "cargo_lock_sha256": "b8ba854b681e9ece06db946aa8bdbe6d7330c5d3fedaa36dac99d0d851ebd670",
-    "sampler_sha256": "a48b3b08650e9628dec37a4a6ee1f0bca63129f145a34a1e1be807c935bb2a3b",
+    "sampler_sha256": "eeb177d8bcf94b9647ff16603f7eaa19d086cd1bd9226f7019220cc5cdf45364",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a",
     "observer_activity_sha256": "f8ca7901ddf906b7ae640c9489ab7a643c32cc5b107f1898ccffb45aec3ef172"
   },
@@ -130,10 +130,10 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "54cea381779968b2f2bdc31ad1763a32aff097e034d48dedbafd5e634a9a4510",
-    "retained": "All v24 and earlier raw observations, quality rejections, accepted groups, attempts and deadlines retain their original source identities. No earlier group is a v25 member. The approved156h project budget is not reset.",
-    "changes": "Replace denied unmaintained Chrono with Jiff and bounded verified RFC3339 consumers, retaining Rust1.85. Bind new Rust source and lock. Use the original standard macos-15-intel environment with the v24 scoped observer activity: macos26 second pretrial had887.625ms gap and5.927% read overhead; cause is not established and no guaranteed improvement is claimed. Every profile requires fresh actual calibration and all original preparation/formal/independent work.",
-    "unchanged": "Nativev2.33.2, all resource workload/timing/metric/buffering semantics, sampler/helper/wrapper, QoS33/criticalkqueue/activity options,10ms/50ms5%/25snap500ms,16MiB/8MiB gates,4formal+2independent full fresh orders,900s/3attempts/180span/120estimate30save and1completeVALIDorder of2 preparation. No exception or lower gate."
+    "previous_protocol_sha256": "2e73a3e2b412e9c9087a419b06c2f04483b8f28480c4067eb79f31f741526ed2",
+    "retained": "All v26 and earlier raw observations, readiness results, quality rejections, attempts and deadlines keep their original source identities. No earlier group is a v27 member; the approved156h project budget and historical costs are not reset. No formal v26 acquisition was started.",
+    "changes": "Bind literal external compile-time include_str/include_bytes inputs, including the runtime release catalog and conservatively the rustdoc documents; reject unavailable, nonliteral or outside-tree inputs. The prior runtime catalog is independently unchanged. A local MacARM current/old-four-doc/current release no-run comparison produced identical binaries, but this is not an all-ABI equivalence claim. New compilation-input and sampler hashes require fresh actual preparation and full original collection.",
+    "unchanged": "Nativev2.33.2, Rust1.85, all runtime workloads/measurement/timing/buffering semantics, dependency lock, wrapper, QOS33/criticalkqueue/activity, standardnativeprofiles,10ms/50ms5%/25snap500ms,16MiB/8MiB gates,4formal+2independent complete fresh orders,900s/3attempts/180span/120estimate30save and1completeVALIDorder of2preparation. No quality or stability exception."
   },
   "preflight_sha256": "d0df504754e28fa52d54831f0d1a8fb2b62ea22679dc60c1262460ce82aacc47",
   "observer_policy": {

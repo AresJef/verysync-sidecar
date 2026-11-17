@@ -4,3 +4,5 @@ Cargo.toml text eol=lf
 Cargo.lock text eol=lf
 scripts/*.py text eol=lf
 tests/fixtures/resource-protocol.json text eol=lf
+docs/public/*.md text eol=lf
+releases/*.json text eol=lf

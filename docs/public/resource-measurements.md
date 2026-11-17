@@ -1,5 +1,18 @@
 # Resource measurement evidence
 
+Protocol v27 binds literal external compilation inputs as well as Rust source
+files. This includes the runtime release catalog and, conservatively, rustdoc
+`include_str!` documents. Missing files, unsupported nonliteral includes and
+paths outside the owned source tree fail identity collection. A local macOS ARM
+current/old-document/current release build comparison produced identical test
+binaries, but this does not establish equivalence on other architectures.
+Fresh v27 preparation and complete formal/independent evidence remain required;
+v26 and earlier observations keep their original identities and strict results.
+Workloads, timing/quality/resource limits, original complete orders, process/data
+checks and finite acquisition quotas are unchanged. No formal v26 acquisition
+was started. This identity correction does not establish resource acceptance.
+
+
 Protocol v26 binds the required Local Sync strict-TLS default reconciliation.
 Its resource sampler, wrapper, observer activity, dependency lock, workload,
 quality limits, four formal plus two independent fresh-process cycles, profile

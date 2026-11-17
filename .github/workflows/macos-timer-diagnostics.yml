@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   probe:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository
     name: Observer clock only (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 5
