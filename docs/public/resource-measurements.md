@@ -1,7 +1,6 @@
 # Resource measurement evidence
 
-The signed incoming-request configuration correction changes the measured Rust
-source identity. Existing v21 results retain their original producer and source
+The signed general-option corrections change the measured Rust source identity. Existing v21 results retain their original producer and source
 binding; they are not current-candidate resource acceptance. A new candidate
 freeze, complete formal collection and independent cycles remain required.
 
