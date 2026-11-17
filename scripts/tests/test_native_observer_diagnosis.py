@@ -52,6 +52,28 @@ class NativeObserverDiagnosisContracts(unittest.TestCase):
                     self.assertEqual(actual, evaluate(expression))
                     github.head_ref = head
 
+    def test_diagnostic_draft_never_launches_a_second_frozen_acquisition(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/resource-collection.yml').read_text()
+        expression = next(x[len('    if: '):] for x in workflow.splitlines() if x.startswith('    if: '))
+        expression = re.sub(r'!(?!=)', 'not ', expression.replace('&&', ' and ').replace('||', ' or '))
+        branch = 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b'
+        for event, draft, head, repo in [
+            ('pull_request', True, branch, 'AresJef/verysync-sidecar'),
+            ('pull_request', False, branch, 'AresJef/verysync-sidecar'),
+            ('pull_request', True, branch, 'external/fork'),
+            ('workflow_dispatch', True, branch, 'AresJef/verysync-sidecar'),
+            ('pull_request', True, 'unrelated', 'AresJef/verysync-sidecar'),
+        ]:
+            for action, label in [('synchronize', 'none'), ('labeled', 'resource-formal'), ('labeled', 'other')]:
+                github = SimpleNamespace(event_name=event, head_ref=head, repository='AresJef/verysync-sidecar',
+                    event=SimpleNamespace(action=action, label=SimpleNamespace(name=label),
+                        pull_request=SimpleNamespace(draft=draft, head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
+                original = event != 'pull_request' or action != 'labeled' or label == 'resource-formal'
+                owned_draft = event == 'pull_request' and draft and head == branch and repo == github.repository
+                self.assertEqual(bool(eval(expression, {'__builtins__': {}}, {'github': github})),
+                                 original and not owned_draft)
+
     def test_timer_backend_is_bound_without_changing_other_source_inputs(self):
         original = {'sampler_sha256': 'original', 'rust_sources_sha256': 'unchanged'}
         rows = [D.source_binding(original, b'runner', b'sampler', activity_mode='on',
