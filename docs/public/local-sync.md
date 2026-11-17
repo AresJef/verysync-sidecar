@@ -495,6 +495,17 @@ public keys. Both new core generations accepted browsing and limits probes with
 verified host identity in the inspected build, even though upstream rclone
 supports a known-hosts configuration. No system SSH files or trust stores changed.
 
+The portable native server-policy case also checks actual data effects in two
+fresh core generations. It writes conflicting and matching synthetic public
+keys to both owned trust candidates, records probe and browse outcomes, and
+copies an entire Unicode-named payload whenever browsing succeeds. The matching
+policy must allow the real copy. Each completed copy must preserve the source,
+destination-only sentinel and files after registration removal, and both cores
+must exit normally. On the inspected macOS ARM build, both policies allowed
+the probe, browse and copy. This confirms the native identity limitation for
+that build; it does not verify the server's identity. Other native profiles
+must pass their own observations before extending this conclusion to them.
+
 The native job serializer can omit `insecureTls` when it is false. For SFTP and
 WebDAV, creation and endpoint-update verification recognize that known false
 default while preserving the omitted field in returned snapshots. An explicit

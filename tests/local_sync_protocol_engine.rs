@@ -1,6 +1,8 @@
 //! Actual native protocol traffic and data effects, with synthetic owned peers.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/sftp_identity_cases.rs"]
+mod sftp_identity_cases;
 #[path = "common/storage_diagnostic.rs"]
 mod storage_diagnostic;
 #[path = "common/storage_service.rs"]
@@ -11,6 +13,12 @@ use verysync_sidecar::{
     CreateLocalSyncJob, LocalSyncJobId, LocalSyncMode, LocalSyncRun, ManagedInstance,
     StorageEndpoint, StorageProtocol, TargetPath,
 };
+
+#[tokio::test]
+async fn public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies() -> TestResult
+{
+    sftp_identity_cases::run().await
+}
 
 async fn execute(core: &ManagedInstance, id: &LocalSyncJobId) -> TestResult<LocalSyncRun> {
     let operation = core.client().start_local_sync_preview(id).await?;

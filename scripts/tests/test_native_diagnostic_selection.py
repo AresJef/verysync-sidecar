@@ -14,28 +14,35 @@ SPEC.loader.exec_module(HELPER)
 
 
 class DiagnosticSelection(unittest.TestCase):
-    def test_remote_advertisement_fix_draft_excludes_only_unrelated_native_jobs(self):
+    def test_owned_functional_drafts_exclude_only_unrelated_native_jobs(self):
         workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
-        branch = "test/native-remote-advertisement-20261118-01a1ca9b"
-        github = SimpleNamespace(event_name="pull_request", head_ref=branch,
-            repository="AresJef/verysync-sidecar", event=SimpleNamespace(
-                pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
-                    repo=SimpleNamespace(full_name="AresJef/verysync-sidecar")))))
-        checked = []
-        for job, block in re.findall(r"(?ms)^  ([a-z][a-z0-9-]*):\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)", workflow):
-            conditions = [line[len("    if: "):] for line in block.splitlines()
-                          if line.startswith("    if: ")]
-            if not conditions or "github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b'" not in conditions[0]:
-                continue
-            expression = conditions[0].replace("&&", " and ").replace("||", " or ")
-            expression = re.sub(r"!(?!=)", "not ", expression)
-            context = {"github": github, "false": False, "true": True}
-            self.assertFalse(eval(expression, {"__builtins__": {}}, context), job)
-            github.event.pull_request.draft = False
-            self.assertTrue(eval(expression, {"__builtins__": {}}, context), job)
-            github.event.pull_request.draft = True
-            checked.append(job)
-        self.assertEqual(len(checked), 8)
+        for branch in ["test/native-remote-advertisement-20261118-01a1ca9b",
+                       "test/native-sftp-server-identity-20261118-01a1ca9b"]:
+            github = SimpleNamespace(event_name="pull_request", head_ref=branch,
+                repository="AresJef/verysync-sidecar", event=SimpleNamespace(
+                    pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
+                        repo=SimpleNamespace(full_name="AresJef/verysync-sidecar")))))
+            checked = []
+            for job, block in re.findall(r"(?ms)^  ([a-z][a-z0-9-]*):\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)", workflow):
+                conditions = [line[len("    if: "):] for line in block.splitlines()
+                              if line.startswith("    if: ")]
+                if not conditions or "github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b'" not in conditions[0]:
+                    continue
+                expression = conditions[0].replace("&&", " and ").replace("||", " or ")
+                expression = re.sub(r"!(?!=)", "not ", expression)
+                context = {"github": github, "false": False, "true": True}
+                self.assertFalse(eval(expression, {"__builtins__": {}}, context), job)
+                github.event.pull_request.draft = False
+                self.assertTrue(eval(expression, {"__builtins__": {}}, context), job)
+                github.event.pull_request.draft = True
+                github.event.pull_request.head.repo.full_name = "external/fork"
+                actual = eval(expression, {"__builtins__": {}}, context)
+                github.head_ref = "unrelated"
+                self.assertEqual(actual, eval(expression, {"__builtins__": {}}, context), job)
+                github.head_ref = branch
+                github.event.pull_request.head.repo.full_name = github.repository
+                checked.append(job)
+            self.assertEqual(len(checked), 8)
 
     def test_focused_management_target_prepares_private_interpreter_and_arm_helper_role(self):
         workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
@@ -66,7 +73,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "ci/native-boundary-diagnostics-20261117-01a1ca9b",
                        "test/ftp-anonymous-native-20261117-01a1ca9b",
                        "ci/native-temp-advertisement-20261117-01a1ca9b",
-                       "test/native-remote-advertisement-20261118-01a1ca9b"]:
+                       "test/native-remote-advertisement-20261118-01a1ca9b",
+                       "test/native-sftp-server-identity-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -91,6 +99,14 @@ class DiagnosticSelection(unittest.TestCase):
         for label in self.selection["draft_labels"]:
             self.assertEqual(len([r for r in actual if r.get("label") == label]), 6)
         self.assertTrue(all(r in self.rows for r in actual))
+
+    def test_server_identity_draft_selects_all_six_native_rust_and_core_profiles(self):
+        actual = HELPER.select(self.rows, {"draft_labels": ["native-sftp-server-identity"]}, draft=True)
+        self.assertEqual(len(actual), 6)
+        self.assertEqual(len({row["package"] for row in actual}), 6)
+        self.assertTrue(all(row["target"] == "local_sync_protocol_engine" and
+                            row["filter"] == "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies"
+                            for row in actual))
 
     def test_ready_catalog_retains_socks5_auth_transfer_on_all_six_profiles(self):
         selection = {"draft_labels": ["native-socks5-proxy"]}
@@ -152,7 +168,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 193)
+        self.assertEqual(len(self.rows), 199)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -266,20 +282,22 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(producer[0]["package"], "windows-386-standard")
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_draft_selects_real_partial_advertisement_comparison_on_all_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
-        rows = HELPER.select(self.rows, selection, draft=True)
-        self.assertEqual(len(rows), 6)
-        expected = {
-            "native-temporary-index-minimum-policy": ("configuration_engine", "native_temporary_index_threshold_controls_partial_block_advertisement"),
-        }
-        for label, (target, name) in expected.items():
-            subset = [r for r in rows if r["label"] == label]
-            self.assertEqual(len(subset), 6)
-            self.assertEqual({r["package"] for r in subset}, set(HELPER.PROFILES) - {"windows-386-standard"})
-            self.assertTrue(all(r["target"] == target and r["filter"] == name and r["trace"] == "0" for r in subset))
-        self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 193)
+    def test_current_identity_draft_and_previous_advertisement_case_keep_six_native_profiles(self):
+        current = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        for selection, label, target, name in [
+            (current, "native-sftp-server-identity", "local_sync_protocol_engine",
+             "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies"),
+            ({"draft_labels": ["native-temporary-index-minimum-policy"]},
+             "native-temporary-index-minimum-policy", "configuration_engine",
+             "native_temporary_index_threshold_controls_partial_block_advertisement"),
+        ]:
+            rows = HELPER.select(self.rows, selection, draft=True)
+            self.assertEqual(len(rows), 6)
+            self.assertEqual({r["package"] for r in rows}, set(HELPER.PROFILES) - {"windows-386-standard"})
+            self.assertTrue(all(r["label"] == label and r["target"] == target and
+                                r["filter"] == name and r["trace"] == "0" for r in rows))
+            self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
+        self.assertEqual(len(self.rows), 199)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
