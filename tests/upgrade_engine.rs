@@ -1,4 +1,6 @@
 //! Real different-version transitions, not same-version reinstall evidence.
+#[path = "common/full_index_upgrade_cases.rs"]
+mod full_index_upgrade_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[cfg(windows)]
