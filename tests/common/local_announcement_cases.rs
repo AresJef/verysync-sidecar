@@ -6,12 +6,15 @@ use std::{
 };
 use verysync_sidecar::{JoinFolderOptions, TargetPath};
 
-async fn restart_normal(core: &mut ManagedInstance, state: &Path) -> TestResult {
+async fn restart_normal(core: &mut ManagedInstance, state: &Path, peer: &DeviceId) -> TestResult {
+    core.client().pause_device(peer).await?;
+    connection(core.client(), peer, false).await?;
     let identity = core.client().instance().device_id.clone();
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     *core = ManagedInstance::start(options(state)?).await?;
     assert_eq!(core.client().instance().device_id, identity);
+    core.client().resume_device(peer).await?;
     Ok(())
 }
 
@@ -148,8 +151,8 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
     for core in [&a, &b] {
         setup(core.client(), port, &multicast, true).await?;
     }
-    restart_normal(&mut a, &a_state).await?;
-    restart_normal(&mut b, &b_state).await?;
+    restart_normal(&mut a, &a_state, &b_id).await?;
+    restart_normal(&mut b, &b_state, &a_id).await?;
     let receiver_ports = tcp_ports(b.client()).await?;
     let found = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
@@ -215,8 +218,8 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
     for core in [&a, &b] {
         setup(core.client(), port, &multicast, false).await?;
     }
-    restart_normal(&mut a, &a_state).await?;
-    restart_normal(&mut b, &b_state).await?;
+    restart_normal(&mut a, &a_state, &b_id).await?;
+    restart_normal(&mut b, &b_state, &a_id).await?;
     // A fresh third identity has no saved endpoints. Existing peers may retain
     // their old connections; disabling discovery does not promise eviction.
     let mut c = ManagedInstance::start(options(&c_state)?).await?;
@@ -240,7 +243,7 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
         )
         .await?;
     setup(c.client(), port, &multicast, true).await?;
-    restart_normal(&mut c, &c_state).await?;
+    restart_normal(&mut c, &c_state, &a_id).await?;
     no_peer_for(c.client(), &a_id, 12).await?;
     assert!(c.client().discovery_cache().await?.is_empty());
     for core in [&a, &b] {
