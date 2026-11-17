@@ -1,19 +1,39 @@
 # Resource measurement evidence
 
-Protocol v25 binds the actual timestamp dependency repair: Chrono is replaced by
-Jiff while retaining Rust 1.85. Resource workloads, the v24 observer lifecycle,
-all quality/resource limits, four formal plus two independent fresh-process
-cycles, and finite acquisition quotas are unchanged. Every profile requires new
-counter/timer calibration and both complete opposite preparation orders. No
-v24 or earlier measurements are relabeled as v25 results.
+Protocol v26 binds the required Local Sync strict-TLS default reconciliation.
+Its resource sampler, wrapper, observer activity, dependency lock, workload,
+quality limits, four formal plus two independent fresh-process cycles, profile
+environments, and finite acquisition quotas remain unchanged. The Rust source
+has changed, so v25 results remain attached to their original producer. New
+v26 native preparation and full resource acceptance remain pending.
 
-Intel returns to the original standard `macos-15-intel` environment with the
-scoped activity request. The separate macOS 26 v24 attempt had four insufficient
-streaming preparations, including an 887.625 ms gap and 5.927% metric-read cost,
-and no valid complete order; formal collection correctly did not start there.
-This environment selection is a new preparation candidate, not an identified
-cause, guaranteed fix or quality waiver. New v25 native preparation and formal
-acceptance remain pending.
+## Retained v25 timestamp-repair evidence
+
+Protocol v25 replaced Chrono with Jiff while retaining Rust 1.85. The
+[source-bound v25 collection](https://github.com/AresJef/verysync-sidecar/actions/runs/44082376843)
+was independently replayed: all six archive digests and 176 raw native cases
+with 352 fresh process identities were checked. Linux AMD64/ARM64, Windows
+AMD64/ARM64 and macOS ARM64 completed all four formal plus two independent
+cycles, valid coverage, and both controller memory and repeat-span criteria.
+The two rejected ARM Mac groups remain retained and contribute no accepted
+members.
+
+Intel macOS completed eight native preparation cases with correct data,
+configuration, identity and normal exits, but only three windows were valid.
+Neither complete order passed; formal collection did not start. Gaps up to
+1,016.512 ms exceeded the unchanged 50 ms coverage limit. Recorded native waits
+dominate the largest gaps; this does not identify an underlying host cause.
+The complete six-profile resource conclusion remains inconclusive.
+
+These results belong to producer `329e6680abd7dc5424e263ad2f41642112700642`,
+tree `5ab134ee957f7208391c2d99e8930c317049e5ac`, protocol digest
+`5c8938038b1722e47f2d35d42089fa81fe397bf27a9772ef188e01d35be262d8`.
+They are not v26 samples. Intel retains the original standard
+`macos-15-intel` environment and critical kqueue observer timer. A separate
+bounded native diagnostic compared kqueue/Mach/Mach/kqueue with activity on
+in every arm. Both Mach runs and the first kqueue run had insufficient coverage;
+all four retained actual data and normal cleanup. No alternative was adopted,
+and these explicitly bound diagnostic pilots cannot become frozen samples.
 
 ## Retained v24 observer configuration and evidence
 
@@ -38,8 +58,10 @@ The preceding Intel off/on/on/off diagnostic had one invalid off control,
 two valid on runs, and a valid final off control. This supports testing the
 explicit observer configuration; it does not establish a cause for the old
 missed wakeups or guarantee formal collection will pass. A local ARM64
-canonical pilot passed quality and owned cleanup, but v24 cross-platform
-preparation and formal acceptance remain pending.
+canonical pilot passed quality and owned cleanup. The retained v24 collection
+then completed full formal/independent acceptance on five profiles; Intel
+preparation remained insufficient and contributed no formal cycles. Those
+results retain producer `4cc84a3` and tree `fd59fc0`, separately from v25/v26.
 
 ## Retained v23 evidence
 
@@ -51,7 +73,7 @@ unchanged. All v22 and earlier results retain their original producer and source
 binding. Complete v23 preparation, formal collection and independent cycles on
 all six profiles remain required.
 
-The current [v23 collection](https://github.com/AresJef/verysync-sidecar/actions/runs/44020194748)
+The retained [v23 collection](https://github.com/AresJef/verysync-sidecar/actions/runs/44020194748)
 has source-bound, offline-replayed complete results on five profiles. Each has
 four formal and two independent fresh-process cycles, valid measurement coverage,
 the 16 MiB controller-envelope criterion and the 8 MiB repeat-span criterion.
@@ -84,7 +106,7 @@ The original three-attempt limit and 900-second deadline remain consumed with
 that run; successful members are not stitched into a replacement cycle. The
 complete six-profile resource conclusion therefore remains inconclusive.
 
-The separate Intel native-observer diagnosis runs four fresh pilot controllers
+The earlier Intel native-observer diagnosis ran four fresh pilot controllers
 in the fixed small/many/many/small order with the original 128/16 repetitions.
 It records each actual wait's wall and thread-CPU intervals, expiration count
 and error, plus bounded complete GC events. It changes no worker, QoS, timer
