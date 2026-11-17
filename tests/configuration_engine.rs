@@ -1617,3 +1617,30 @@ async fn native_temporary_retention_scans_expire_only_aged_native_inputs_and_sur
 #[cfg(target_os = "macos")]
 #[path = "common/sleep_prevention_cases.rs"]
 mod sleep_prevention_cases;
+
+async fn configuration_policy_listener(core: &ManagedInstance) -> TestResult<std::net::SocketAddr> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            for status in core.client().listener_status().await?.into_values() {
+                for text in status.lan_addresses {
+                    if let Some(address) = text
+                        .strip_prefix("tcp://")
+                        .and_then(|v| v.parse::<std::net::SocketAddr>().ok())
+                        .filter(|v| {
+                            v.ip() == std::net::Ipv4Addr::LOCALHOST
+                                && !matches!(v.port(), 0 | 18886)
+                        })
+                    {
+                        return Ok::<_, Error>(address);
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?
+    .map_err(Into::into)
+}
+
+#[path = "common/folder_concurrency_cases.rs"]
+mod folder_concurrency_cases;

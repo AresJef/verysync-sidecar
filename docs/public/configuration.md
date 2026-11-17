@@ -461,8 +461,36 @@ and global settings are preserved, and manual temporary cleanup is not invoked.
 This proves the selected scan-age behavior for the tested inputs. It does not
 promise an exact wall-clock deletion deadline, a background cleanup schedule,
 recovery of an interrupted real transfer, or removal of arbitrary caller files.
-The new case has local macOS ARM64 evidence; its six native platform gates and
-final integrated acceptance remain required.
+[Run 43977006777](https://github.com/AresJef/verysync-sidecar/actions/runs/43977006777)
+verifies these scan-age effects, controls and normal owned exit on all six
+standard native AMD64/ARM64 profiles. Each result retains its original producer
+and raw logs. Final integrated acceptance remains required.
+
+## Native folder concurrency
+
+`GeneralOptionsPatch::max_folder_concurrency` selects the native folder
+scheduling limit. Zero retains the engine's policy; the SDK does not invent a
+fixed zero-value limit or promise a throughput improvement.
+
+The controlled two-core case registers two independent shared folders and
+selects one, then two, with explicit normal restarts. Under one, the native
+history must show one folder synchronizing while the other waits to synchronize.
+Under two, both folders must actually enter the synchronizing state together.
+The maximum active count is derived from one monotonic, continuous native
+`StateChanged` event sequence, with native transition consistency and no gaps
+or reconnections. Separate HTTP snapshots are not used as an overlap proof.
+
+All four new 8 MiB payloads remain byte-identical at source and receiver. The
+case also verifies persisted policy, unrelated configuration, identities,
+sentinel data and both normal owned tree/state exits. This establishes the
+observed scheduling effect in that scenario. Dial concurrency, incoming-request
+budgets, every folder type and performance remain separate concerns. The new
+case has local macOS ARM64 evidence; its six native platform gates and final
+integration remain required.
+
+A configured paused folder can retain an empty runtime state as
+`FolderState::Unknown("")` in this baseline. Inspect the configuration's
+`paused` flag and event history separately.
 
 ## Sleep prevention during native synchronization
 
@@ -482,9 +510,11 @@ configuration, sentinel bytes and both normal owned exits are verified.
 
 This verifies an idle-system-sleep assertion during those transfers. It does
 not test physical host suspension, display sleep, every power policy, or an
-immediate policy change without restart. The new case has local macOS ARM64
-evidence; native Intel Mac execution, Linux/Windows effects and final integrated
-acceptance remain separate requirements.
+immediate policy change without restart.
+[Run 43981961787](https://github.com/AresJef/verysync-sidecar/actions/runs/43981961787)
+verifies all three phases, actual assertions and cleanup on native Intel Mac
+and Apple Silicon Mac. Each result retains its original producer and raw logs.
+Linux/Windows effects and final integrated acceptance remain separate requirements.
 
 ## Diagnostic preferences
 
