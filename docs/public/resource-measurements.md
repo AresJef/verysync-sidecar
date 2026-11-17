@@ -7,6 +7,39 @@ unchanged. All v22 and earlier results retain their original producer and source
 binding. Complete v23 preparation, formal collection and independent cycles on
 all six profiles remain required.
 
+The current [v23 collection](https://github.com/AresJef/verysync-sidecar/actions/runs/44020194748)
+has source-bound, offline-replayed complete results on five profiles. Each has
+four formal and two independent fresh-process cycles, valid measurement coverage,
+the 16 MiB controller-envelope criterion and the 8 MiB repeat-span criterion.
+The envelope is the actual conservative large-file peak minus small-file minimum;
+a negative observed difference is retained.
+
+| Profile | Accepted complete cycles | Controller envelope difference (bytes) | Resource/stability result |
+| --- | --- | ---: | --- |
+| Linux AMD64 | 4 formal + 2 independent | 299,008 | PASS |
+| Linux ARM64 | 4 formal + 2 independent | 233,472 | PASS |
+| macOS ARM64 | 4 formal + 2 independent | 16,384 | PASS |
+| Windows AMD64 | 4 formal + 2 independent | 28,672 | PASS |
+| Windows ARM64 | 4 formal + 2 independent | -114,688 | PASS |
+| macOS AMD64 | None | Not concluded | INSUFFICIENT |
+
+All six ZIP size/digest checks and 184 raw native cases were independently
+replayed against producer `a6df5afb7e05f5fe6f3327d7f74d6de829223c29`, tree
+`2dcf2e7361033d7d1e4a93a0d2ed7861e85d579a`, protocol digest
+`c0d0d4c15aec47a78152c9785181b38b03593f9a16c466a2d912581fb8efd131`.
+Rejected attempts remain in the dataset. macOS ARM64 used one original-order
+retry; its rejected group contributes no accepted members.
+
+Intel macOS completed both native preparation orders with eight valid cases.
+Its three original-order formal attempts each rejected the many-small window
+for an 89.86, 114.47 or 129.56 ms maximum gap, above the unchanged 50 ms limit.
+The largest gaps were dominated by actual timer waits and retained their real
+coalesced expiration counts; other metric-read/boundary criteria and native
+correctness passed. This does not establish the underlying scheduling cause.
+The original three-attempt limit and 900-second deadline remain consumed with
+that run; successful members are not stitched into a replacement cycle. The
+complete six-profile resource conclusion therefore remains inconclusive.
+
 The explicit `resource_usage_engine` target runs one registered workload against
 an isolated owned VerySync instance: idle, an 8 MiB download, a 128 MiB download,
 or 256 separate 8 KiB files. Source generation uses a fixed 64 KiB buffer. Every
