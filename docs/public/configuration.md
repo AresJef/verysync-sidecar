@@ -803,6 +803,13 @@ original 8 MiB payload, 45-second deadline, three-second/three-observation minim
 threshold sequence, native availability checks and all data/exit protections.
 Its six-profile revalidation remains required; earlier results keep their
 original producer and are not relabeled as the revised observer's results.
+The revised observer passed on both Windows profiles and Linux ARM64 in
+[native run 44114401766](https://github.com/AresJef/verysync-sidecar/actions/runs/44114401766). Linux AMD64 retained a genuine third low-threshold advertisement
+failure despite three qualified windows of approximately 30 seconds. That result
+is not a short-window rejection or a passing policy effect. A diagnostic now
+compares the receiver's separate native download-progress snapshot once at the
+three-second boundary; missing entries and native errors remain explicit, and
+the original advertisement assertion still decides the case.
 This case does not establish an incoming-request memory cap, full-index resend
 after upgrade or a throughput gain.
 

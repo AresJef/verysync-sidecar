@@ -281,6 +281,7 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
         let mut incomplete_observations = 0;
         let mut first_partial_ms = None;
         let mut verified_partial_block = None;
+        let mut receiver_progress_comparison = None;
         let observed = tokio::time::timeout(Duration::from_secs(45), async {
             loop {
                 let state = b.client().folder_status(&bf.configuration.id).await?.state;
@@ -329,6 +330,35 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
                             .iter()
                             .any(|v| v.device_id == bid && v.from_temporary);
                         advertised |= active;
+                        if receiver_progress_comparison.is_none()
+                            && partial_span >= Duration::from_secs(3)
+                        {
+                            // Compare the receiver's independent native progress
+                            // once without changing the original advertisement
+                            // assertion or inferring zero from an absent emitter.
+                            let comparison = match b
+                                .client()
+                                .folder_download_progress(&bf.configuration.id)
+                                .await
+                            {
+                                Ok(progress) => serde_json::json!({
+                                    "kind":"snapshot", "reported_files":progress.files.len(),
+                                    "selected_file":progress.files.get(&name).map(|file|serde_json::json!({
+                                        "total_blocks":file.total_blocks,"pulled_blocks":file.pulled_blocks,
+                                        "pulling_blocks":file.pulling_blocks,"bytes_done":file.bytes_done,
+                                        "bytes_total":file.bytes_total}))}),
+                                Err(Error::Http { response }) | Err(Error::Api { response, .. }) =>
+                                    serde_json::json!({"kind":"native-error","status":response.status()}),
+                                Err(_) => serde_json::json!({"kind":"other-error"}),
+                            };
+                            println!("native temporary receiver progress comparison: {}",
+                                serde_json::json!({"phase":phase,"selected":selected,
+                                    "partial_span_ms":partial_span.as_millis(),
+                                    "source_advertised_in_snapshot":active,
+                                    "receiver_progress":comparison,
+                                    "diagnostic_only":true,"original_assertion_retained":true}));
+                            receiver_progress_comparison = Some(comparison);
+                        }
                         if selected == 512 {
                             assert!(
                                 !active,
@@ -353,6 +383,8 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
                 "incomplete_observations":incomplete_observations,
                 "first_partial_ms":first_partial_ms,
                 "verified_partial_block_index":verified_partial_block,
+                "receiver_progress_comparison":receiver_progress_comparison,
+                "observed_advertisement":advertised,
                 "partial_observations":partial_observations,
                 "partial_span_ms":partial_span.as_millis(),
                 "deadline_elapsed":observed.is_err()})
