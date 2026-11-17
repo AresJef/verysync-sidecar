@@ -11,15 +11,19 @@ import sys
 import tempfile
 
 CASE = "privileged_native_watch_limit_is_raised_then_independently_restored"
+SLEEP_CASE = "linux_sleep_inhibitor_cases::native::privileged_native_linux_sleep_inhibitor_tracks_transfer_and_releases"
 TARGET = "host_control_engine"
 SCOPE = "github-actions-isolated-linux-vm"
 PRESERVE = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
             "http_proxy", "https_proxy", "all_proxy", "no_proxy",
             "VERYSYNC_TEST_BINARY", "VERYSYNC_TEST_BINARY_SHA256",
             "VERYSYNC_TEST_ALLOW_HOST_CONFIGURATION", "GITHUB_ACTIONS",
-            "CARGO_NET_OFFLINE")
+            "CARGO_NET_OFFLINE", "VERYSYNC_TEST_ALLOW_SLEEP_INHIBITOR")
 
 def prepare(args):
+    selected = getattr(args, "case", CASE)
+    if selected not in (CASE, SLEEP_CASE):
+        raise ValueError("unknown explicit privileged case")
     command = [args.cargo, "+" + args.toolchain, "test", "--no-run", "--locked",
                "--features", "host-configuration-tests", "--test", TARGET,
                "--message-format=json"]
@@ -46,7 +50,8 @@ def prepare(args):
     receipt = directory / "receipt.json"
     receipt.write_text(json.dumps({"executable": str(artifact),
                                   "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
-                                  "toolchain": args.toolchain}), encoding="utf-8")
+                                  "toolchain": args.toolchain,
+                                  "case": selected}), encoding="utf-8")
     adapter = directory / "cargo"
     adapter.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " " +
                        shlex.quote(str(Path(__file__).resolve())) + ' "$@"\n', encoding="utf-8")
@@ -69,8 +74,13 @@ def root_command(argv, env):
     if not receipt.is_absolute() or not receipt.is_file() or receipt.is_symlink() or receipt.stat().st_size > 65536:
         raise ValueError("an explicit regular receipt is required")
     row = json.loads(receipt.read_text(encoding="utf-8"))
+    selected = row.get("case", CASE)
+    if selected not in (CASE, SLEEP_CASE):
+        raise ValueError("unknown explicit privileged case")
+    if selected == SLEEP_CASE and env.get("VERYSYNC_TEST_ALLOW_SLEEP_INHIBITOR") != SCOPE:
+        raise ValueError("sleep inhibition requires its separate isolated VM scope")
     expected = ["+" + row["toolchain"], "test", "--features", "engine-tests",
-                "--test", TARGET, "--offline", "--locked", CASE,
+                "--test", TARGET, "--offline", "--locked", selected,
                 "--", "--test-threads=1", "--nocapture"]
     if argv != expected:
         raise ValueError("only the exact prebuilt privileged case may be elevated")
@@ -80,7 +90,7 @@ def root_command(argv, env):
     if hashlib.sha256(executable.read_bytes()).hexdigest() != row["sha256"]:
         raise ValueError("privileged test artifact changed since compilation")
     return ["/usr/bin/sudo", "--non-interactive",
-            "--preserve-env=" + ",".join(PRESERVE), str(executable), CASE,
+            "--preserve-env=" + ",".join(PRESERVE), str(executable), selected,
             "--exact", "--test-threads=1", "--nocapture"]
 
 def main():
@@ -90,6 +100,7 @@ def main():
         parser.add_argument("--toolchain", required=True)
         parser.add_argument("--parent", required=True, type=Path)
         parser.add_argument("--github-env", required=True, type=Path)
+        parser.add_argument("--case", choices=(CASE, SLEEP_CASE), default=CASE)
         print(json.dumps(prepare(parser.parse_args(sys.argv[2:]))))
         return 0
     return subprocess.run(root_command(sys.argv[1:], os.environ)).returncode

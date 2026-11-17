@@ -29,6 +29,41 @@ class HostTestElevationContracts(unittest.TestCase):
         self.assertIn("--test-filter " + HELPER.CASE, commands)
         self.assertIn("prepare-test-engine.py check-cleanup", commands)
 
+    def test_sleep_case_needs_its_own_scope_and_keeps_exact_artifact_elevation(self):
+        case = "linux_sleep_inhibitor_cases::native::privileged_native_linux_sleep_inhibitor_tracks_transfer_and_releases"
+        with tempfile.TemporaryDirectory() as folder:
+            artifact, env, argv = self.fixture(Path(folder))
+            receipt = Path(env["VERYSYNC_HOST_TEST_RECEIPT"])
+            row = json.loads(receipt.read_text()); row["case"] = case
+            receipt.write_text(json.dumps(row))
+            argv = [case if arg == HELPER.CASE else arg for arg in argv]
+            with patch.object(HELPER.sys, "platform", "linux"), self.assertRaises(ValueError):
+                HELPER.root_command(argv, env)
+            env["VERYSYNC_TEST_ALLOW_SLEEP_INHIBITOR"] = HELPER.SCOPE
+            with patch.object(HELPER.sys, "platform", "linux"):
+                command = HELPER.root_command(argv, env)
+            self.assertEqual(command[0], "/usr/bin/sudo")
+            self.assertIn(str(artifact), command)
+            self.assertEqual(command[-4], case)
+            self.assertIn("--exact", command)
+            self.assertNotIn("GITHUB_TOKEN", " ".join(command))
+
+    def test_linux_sleep_effect_gate_has_both_native_profiles_and_separate_scope(self):
+        workflow = SOURCE.parents[1] / ".github/workflows/engine-tests.yml"
+        job = yaml.safe_load(workflow.read_text())["jobs"]["linux-sleep-inhibitor-positive"]
+        self.assertEqual(job["runs-on"], "$"+"{{ matrix.runner }}")
+        self.assertEqual(job["strategy"]["matrix"]["include"], [
+            {"runner": "ubuntu-24.04", "package": "linux-amd64-standard"},
+            {"runner": "ubuntu-24.04-arm", "package": "linux-arm64-standard"},
+        ])
+        self.assertEqual(job["env"]["VERYSYNC_TEST_ALLOW_SLEEP_INHIBITOR"], HELPER.SCOPE)
+        commands = "\n".join(step.get("run", "") for step in job["steps"])
+        self.assertIn("--case " + HELPER.SLEEP_CASE, commands)
+        self.assertIn("--test-filter " + HELPER.SLEEP_CASE, commands)
+        self.assertIn("prepare-test-engine.py check-cleanup", commands)
+        self.assertNotIn("/requestsoverride", commands)
+        self.assertNotIn("systemctl start", commands)
+
     def fixture(self, root):
         artifact = root / "owned test executable"
         artifact.write_bytes(b"synthetic artifact; never executed")
