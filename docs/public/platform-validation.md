@@ -152,3 +152,11 @@ The retirement step then returns before credential access or cancellation API
 calls. This scheduling control does not accept any test or reduce the complete
 ready/manual catalog or final native gates. The current concurrency investigation
 preserves the separate priority and Windows sharing observations in PR #183.
+
+The separate Mac observer-timer workflow compares the existing absolute Mach
+wait with a periodic kqueue timer using the Apple SDK's minimum-coalescing flag.
+It retains four ABBA blocks of 64 waits at a requested 10 ms interval, complete
+wall/thread-CPU readings, timer expiration counts and garbage-collection events.
+The probe starts no native worker and changes only its own observer thread's
+existing QoS. Clock diagnosis does not establish resource-sampling validity or
+acceptance, and it does not change the frozen workload or quality thresholds.
