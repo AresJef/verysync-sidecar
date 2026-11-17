@@ -535,6 +535,24 @@ and Apple Silicon Mac. Each result retains its original producer and raw logs.
 Linux inhibitor evidence is described below. Windows effects and final integrated
 acceptance remain separate requirements.
 
+The Windows candidate reuses the three real-transfer phases and observes the
+active `SYSTEM` process requests reported by
+[Powercfg `/requests`](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options).
+It queries the live owned PID with
+[QueryFullProcessImageNameW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-queryfullprocessimagenamew),
+checks its Win32 path against the private selected program, then matches the
+actual native-system image path. Powercfg's image attribution does not identify
+a unique requesting PID; the case does not invent one or accept an unowned
+legacy-driver entry as proof. Both private cores have the same selected policy.
+
+The initial idle baseline and post-transfer request release each have a separate
+150-second Windows observation bound. Their actual absence is required;
+expiration is a failure. The complete read-only `powercfg /query` snapshot must
+remain unchanged, and the shared case preserves original keys/certificates,
+identities, files, unrelated sections and normal tree/state exits. Windows
+AMD64/ARM64 native jobs must still establish these effects. Parser contracts,
+cross-compilation and the macOS regression are not Windows runtime acceptance.
+
 ## Diagnostic preferences
 
 `diagnostics_options()` reads actual crash settings and legacy usage information.

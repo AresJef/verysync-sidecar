@@ -1614,9 +1614,12 @@ async fn native_temporary_retention_scans_expire_only_aged_native_inputs_and_sur
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[path = "common/sleep_prevention_cases.rs"]
 mod sleep_prevention_cases;
+
+#[path = "common/windows_sleep_observation.rs"]
+mod windows_sleep_observation;
 
 async fn configuration_policy_listener(core: &ManagedInstance) -> TestResult<std::net::SocketAddr> {
     tokio::time::timeout(Duration::from_secs(10), async {

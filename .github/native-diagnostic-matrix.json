@@ -1328,5 +1328,23 @@
     "filter": "kernel_streamed_archive_upload_replaces_only_the_owned_old_copy",
     "label": "native-kernel-upload-windows",
     "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
+    "label": "native-windows-sleep-prevention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
+    "label": "native-windows-sleep-prevention-policy",
+    "trace": "0"
   }
 ]
