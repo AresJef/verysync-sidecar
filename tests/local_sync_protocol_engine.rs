@@ -617,7 +617,7 @@ async fn public_https_webdav_trusted_chain_hostname_credentials_and_data_are_ver
             .ignore_permissions(true),
         )
         .await?;
-    assert_eq!(job.side_b.extra()["insecureTls"], false);
+    assert_disabled_insecure_tls_readback(&job.side_b);
     let first = execute(&core, &job.job_id).await?;
     assert_eq!(first.summary.failed, 0);
     assert_eq!(
@@ -626,7 +626,7 @@ async fn public_https_webdav_trusted_chain_hostname_credentials_and_data_are_ver
     );
     core.restart(Duration::from_secs(30)).await?;
     let retained = core.client().local_sync_job(&job.job_id).await?;
-    assert_eq!(retained.side_b.extra()["insecureTls"], false);
+    assert_disabled_insecure_tls_readback(&retained.side_b);
     core.client()
         .probe_storage_endpoint(&retained.side_b)
         .await?;
@@ -665,5 +665,140 @@ async fn public_https_webdav_trusted_chain_hostname_credentials_and_data_are_ver
         "actual_normal_tree_and_state_release":true,"actual_owned_peer_and_private_files_removed":true,
         "leaf_sha256":fixture["leaf_sha256"],"system_trust_mutations":0,"insecure_tls":false})
     );
+    Ok(())
+}
+
+// The native endpoint serializer omits its false default. Preserve that raw
+// omission while rejecting null, true and malformed values. This configuration
+// check alone never attests SFTP server identity.
+fn assert_disabled_insecure_tls_readback(endpoint: &StorageEndpoint) {
+    assert!(matches!(
+        endpoint.extra().get("insecureTls"),
+        None | Some(serde_json::Value::Bool(false))
+    ));
+}
+
+#[tokio::test]
+async fn public_strict_storage_tls_flag_survives_create_update_and_restart() -> TestResult {
+    use verysync_sidecar::{Error, LocalSyncJobPatch};
+    for protocol in [StorageProtocol::Sftp, StorageProtocol::WebDav] {
+        let root = tempfile::Builder::new()
+            .prefix("vs-strict-flag-")
+            .tempdir()?
+            .keep();
+        let source = root.join("source");
+        std::fs::create_dir(&source)?;
+        std::fs::write(
+            source.join("source.bin"),
+            b"no implicit TLS configuration transfer",
+        )?;
+        let mut peer = if protocol == StorageProtocol::WebDav {
+            storage_service::Service::start_https(&root)?
+        } else {
+            storage_service::Service::start(protocol, &root, Duration::ZERO)?
+        };
+        std::fs::write(
+            peer.share.join("sentinel.bin"),
+            b"destination-only TLS configuration sentinel",
+        )?;
+        let selected = peer.endpoint.clone().insecure_tls(false)?;
+        let mut other_fields = selected.extra().clone();
+        other_fields.remove("insecureTls");
+        let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+        let identity = core.client().instance().device_id.clone();
+        let job = core
+            .client()
+            .create_local_sync_job(
+                &CreateLocalSyncJob::new(
+                    "explicit strict TLS flag",
+                    StorageEndpoint::local(TargetPath::local(&source))?,
+                    selected.clone(),
+                    LocalSyncMode::MirrorAToB,
+                )?
+                .enabled(false)
+                .ignore_permissions(true),
+            )
+            .await?;
+        assert!(!job.enabled);
+        assert_disabled_insecure_tls_readback(&job.side_b);
+        let bypass = core
+            .client()
+            .update_local_sync_job(
+                &job.job_id,
+                &LocalSyncJobPatch::default().side_b(peer.endpoint.clone().insecure_tls(true)?),
+            )
+            .await?;
+        assert!(bypass.requested_fields_match);
+        assert_eq!(
+            bypass.configuration.side_b.extra().get("insecureTls"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        let strict = core
+            .client()
+            .update_local_sync_job(
+                &job.job_id,
+                &LocalSyncJobPatch::default().side_b(selected.clone()),
+            )
+            .await?;
+        assert!(strict.requested_fields_match);
+        assert_disabled_insecure_tls_readback(&strict.configuration.side_b);
+        core.restart(Duration::from_secs(30)).await?;
+        let retained = core.client().local_sync_job(&job.job_id).await?;
+        assert!(!retained.enabled);
+        assert_eq!(retained.side_b.uri(), selected.uri());
+        assert_disabled_insecure_tls_readback(&retained.side_b);
+        for (name, value) in &other_fields {
+            assert!(
+                retained.side_b.extra().get(name) == Some(value),
+                "unselected endpoint field differs"
+            );
+        }
+        if protocol == StorageProtocol::WebDav {
+            let refusal = core
+                .client()
+                .probe_storage_endpoint(&retained.side_b)
+                .await
+                .expect_err("omitted false default must not bypass untrusted certificates");
+            let cause = match &refusal {
+                Error::MutationOutcomeUnknown { source, .. } => source.as_ref(),
+                error => error,
+            };
+            let response = match cause {
+                Error::Api { response, .. } | Error::Http { response } => response,
+                error => {
+                    return Err(format!("native certificate refusal required: {error:?}").into())
+                }
+            };
+            assert!(String::from_utf8_lossy(response.body_bytes())
+                .to_ascii_lowercase()
+                .contains("certificate"));
+        }
+        assert_eq!(
+            std::fs::read(source.join("source.bin"))?,
+            b"no implicit TLS configuration transfer"
+        );
+        assert!(!peer.share.join("source.bin").exists());
+        assert_eq!(
+            std::fs::read(peer.share.join("sentinel.bin"))?,
+            b"destination-only TLS configuration sentinel"
+        );
+        core.client().delete_local_sync_job(&job.job_id).await?;
+        assert!(core.client().local_sync_jobs().await?.is_empty());
+        assert_eq!(core.client().system_status().await?.device_id, identity);
+        let exit = core.shutdown(Duration::from_secs(15)).await?;
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+        peer.stop()?;
+        std::fs::remove_dir_all(root)?;
+        println!(
+            "native strict storage flag evidence: {}",
+            serde_json::json!({
+            "protocol":format!("{protocol:?}"),"actual_create_and_readback":true,
+            "actual_true_to_false_update_and_native_omission_preserved":true,
+            "actual_same_identity_restart_and_other_endpoint_fields_preserved":true,
+            "actual_no_implicit_transfer_or_unrelated_file_changes":true,
+            "actual_webdav_untrusted_certificate_refused_after_restart":protocol == StorageProtocol::WebDav,
+            "sftp_host_identity_attested":false,"actual_registration_removal_and_normal_owned_cleanup":true})
+        );
+    }
     Ok(())
 }
