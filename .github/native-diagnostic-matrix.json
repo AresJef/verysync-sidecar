@@ -1940,5 +1940,14 @@
     "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
     "label": "native-local-announcement",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "network",
+    "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
+    "label": "native-local-announcement-macos-address-diagnosis",
+    "trace": "0"
   }
 ]
