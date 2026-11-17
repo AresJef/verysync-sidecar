@@ -20,7 +20,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/trusted-https-webdav-20261117-01a1ca9b",
                        "ci/strict-storage-native-execution-20261117-01a1ca9b",
                        "ci/native-stop-diagnostics-20261117-01a1ca9b",
-                       "ci/native-boundary-diagnostics-20261117-01a1ca9b"]:
+                       "ci/native-boundary-diagnostics-20261117-01a1ca9b",
+                       "test/ftp-anonymous-native-20261117-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -106,7 +107,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 187)
+        self.assertEqual(len(self.rows), 193)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -220,13 +221,12 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(producer[0]["package"], "windows-386-standard")
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_draft_selects_real_temporary_blocks_and_listener_failure_on_all_six_profiles(self):
+    def test_current_draft_selects_explicit_anonymous_ftp_on_all_six_profiles(self):
         selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
-        self.assertEqual(len(rows), 12)
+        self.assertEqual(len(rows), 6)
         expected = {
-            "native-temporary-index-minimum-policy": ("configuration_engine", "native_temporary_index_threshold_controls_partial_block_advertisement"),
-            "native-gui-listener-boundary": ("authentication_engine", "native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control"),
+            "native-ftp-anonymous-authentication": ("local_sync_protocol_engine", "public_ftp_anonymous_authentication_has_actual_refusal_and_data_effects"),
         }
         for label, (target, name) in expected.items():
             subset = [r for r in rows if r["label"] == label]
@@ -234,7 +234,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertEqual({r["package"] for r in subset}, set(HELPER.PROFILES) - {"windows-386-standard"})
             self.assertTrue(all(r["target"] == target and r["filter"] == name and r["trace"] == "0" for r in subset))
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 187)
+        self.assertEqual(len(self.rows), 193)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
