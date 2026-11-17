@@ -14,14 +14,14 @@ SPEC.loader.exec_module(HELPER)
 
 
 class DiagnosticSelection(unittest.TestCase):
-    def test_current_folder_concurrency_uses_all_six_native_profiles(self):
+    def test_current_progress_interval_uses_all_six_native_profiles(self):
         selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 6)
         self.assertEqual({row['package'] for row in rows}, set(HELPER.PROFILES) - {'windows-386-standard'})
-        self.assertTrue(all(row['label'] == 'native-folder-concurrency-policy' and
+        self.assertTrue(all(row['label'] == 'native-progress-interval-policy' and
                             row['target'] == 'configuration_engine' and
-                            row['filter'] == 'native_folder_concurrency_has_ordered_single_and_double_sync_effects'
+                            row['filter'] == 'progress_interval_cases::native_progress_interval_enables_disables_and_restores_actual_transfer_events'
                             for row in rows))
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
         workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
@@ -36,7 +36,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-local-announcement-20261118-01a1ca9b",
                        "test/macos-local-announcement-address-20261118-01a1ca9b",
                        "test/native-explicit-tunnel-20261118-01a1ca9b",
-                       "test/native-folder-concurrency-current-20261118-01a1ca9b"]:
+                       "test/native-folder-concurrency-current-20261118-01a1ca9b",
+                       "test/native-progress-interval-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -99,7 +100,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-local-announcement-20261118-01a1ca9b",
                        "test/macos-local-announcement-address-20261118-01a1ca9b",
                        "test/native-explicit-tunnel-20261118-01a1ca9b",
-                       "test/native-folder-concurrency-current-20261118-01a1ca9b"]:
+                       "test/native-folder-concurrency-current-20261118-01a1ca9b",
+                       "test/native-progress-interval-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -201,7 +203,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 224)
+        self.assertEqual(len(self.rows), 230)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -335,7 +337,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] == label and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 224)
+        self.assertEqual(len(self.rows), 230)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
