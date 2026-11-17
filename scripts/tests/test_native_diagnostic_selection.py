@@ -17,7 +17,8 @@ class DiagnosticSelection(unittest.TestCase):
     def test_owned_functional_drafts_exclude_only_unrelated_native_jobs(self):
         workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
         for branch in ["test/native-remote-advertisement-20261118-01a1ca9b",
-                       "test/native-sftp-server-identity-20261118-01a1ca9b"]:
+                       "test/native-sftp-server-identity-20261118-01a1ca9b",
+                       "test/native-backend-outage-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -52,7 +53,7 @@ class DiagnosticSelection(unittest.TestCase):
             condition = next(line[len("        if: "):] for line in block.splitlines()
                              if line.startswith("        if: "))
             expression = condition.replace("&&", " and ").replace("||", " or ")
-            for target in ["authentication_engine", "local_sync_protocol_engine", "engine_control"]:
+            for target in ["authentication_engine", "local_sync_protocol_engine", "local_sync_runtime_engine", "engine_control"]:
                 for package in ["windows-arm64-standard", "windows-amd64-standard", "linux-amd64-standard"]:
                     matrix = SimpleNamespace(target=target, package=package)
                     expected = target != "engine_control" and (not arm_only or package == "windows-arm64-standard")
@@ -74,7 +75,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/ftp-anonymous-native-20261117-01a1ca9b",
                        "ci/native-temp-advertisement-20261117-01a1ca9b",
                        "test/native-remote-advertisement-20261118-01a1ca9b",
-                       "test/native-sftp-server-identity-20261118-01a1ca9b"]:
+                       "test/native-sftp-server-identity-20261118-01a1ca9b",
+                       "test/native-backend-outage-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -106,6 +108,14 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(len({row["package"] for row in actual}), 6)
         self.assertTrue(all(row["target"] == "local_sync_protocol_engine" and
                             row["filter"] == "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies"
+                            for row in actual))
+
+    def test_idle_backend_outage_keeps_all_six_native_rust_core_and_peer_roles(self):
+        actual = HELPER.select(self.rows, {"draft_labels": ["native-backend-request-outage"]}, draft=True)
+        self.assertEqual(len(actual), 6)
+        self.assertEqual({row["package"] for row in actual}, set(HELPER.PROFILES) - {"windows-386-standard"})
+        self.assertTrue(all(row["target"] == "local_sync_runtime_engine" and
+                            row["filter"] == "public_backend_requests_preserve_actual_outage_errors_and_data"
                             for row in actual))
 
     def test_ready_catalog_retains_socks5_auth_transfer_on_all_six_profiles(self):
@@ -168,7 +178,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 199)
+        self.assertEqual(len(self.rows), 205)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -282,10 +292,12 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(producer[0]["package"], "windows-386-standard")
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_identity_draft_and_previous_advertisement_case_keep_six_native_profiles(self):
+    def test_current_outage_draft_and_previous_cases_keep_six_native_profiles(self):
         current = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
         for selection, label, target, name in [
-            (current, "native-sftp-server-identity", "local_sync_protocol_engine",
+            (current, "native-backend-request-outage", "local_sync_runtime_engine",
+             "public_backend_requests_preserve_actual_outage_errors_and_data"),
+            ({"draft_labels": ["native-sftp-server-identity"]}, "native-sftp-server-identity", "local_sync_protocol_engine",
              "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies"),
             ({"draft_labels": ["native-temporary-index-minimum-policy"]},
              "native-temporary-index-minimum-policy", "configuration_engine",
@@ -297,7 +309,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] == label and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 199)
+        self.assertEqual(len(self.rows), 205)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

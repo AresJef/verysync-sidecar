@@ -177,6 +177,15 @@ Reconcile actual partial files/status, explicitly update a changed endpoint,
 review a fresh preview, then choose a separate run. An ordinary Client does not
 acquire process ownership over an existing instance.
 
+An endpoint can also disappear after a run has completed and the job is idle.
+Failed probes or browsing do not roll back that run or remove its files. The
+controlled backend case preserves the saved run and exact destination snapshot
+across completed native refusals, then explicitly updates the endpoint and
+reviews a new preview before copying additional bytes. This is separate from
+interrupting active work. Native retries can outlast the default request timeout;
+choose a request bound explicitly when observing their final response. A deadline
+still leaves an uncertain outcome and never counts as a completed refusal.
+
 Private recovery cases distinguish FTP's failed run and saved action errors from
 deliberately chosen owned termination for the other protocols. A peer failure can
 finish before a separate stop request arrives, so the optional native `cancelled`
