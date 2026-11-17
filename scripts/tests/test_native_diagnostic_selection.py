@@ -71,8 +71,8 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "ldap_trusted_ca_engine" and row["filter"] ==
                             "native_trusted_ca_" for row in ldap))
 
-    def test_current_manifest_requires_actual_home_free_space_control_on_six_profiles(self):
-        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+    def test_ready_catalog_retains_actual_home_free_space_control_on_six_profiles(self):
+        selection = {"draft_labels": ["native-home-free-space-policy"]}
         actual = HELPER.select(self.rows, selection, draft=True)
         space = [row for row in actual if row.get("label") == "native-home-free-space-policy"]
         self.assertEqual(len(space), 6)
@@ -83,7 +83,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 122)
+        self.assertEqual(len(self.rows), 128)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_current_manifest_requires_actual_temporary_expiry_on_six_profiles(self):
@@ -118,6 +118,17 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
                             "native_folder_concurrency_has_ordered_single_and_double_sync_effects"
                             for row in folders))
+
+    def test_current_manifest_requires_pending_tls_dials_and_real_recovery_on_six_profiles(self):
+        selection = json.loads((ROOT / ".github/native-diagnostic-selection.json").read_text())
+        actual = HELPER.select(self.rows, selection, draft=True)
+        dials = [row for row in actual if row.get("label") == "native-dial-concurrency-policy"]
+        self.assertEqual(len(actual), 32)
+        self.assertEqual(len(dials), 6)
+        self.assertEqual(len({row["package"] for row in dials}), 6)
+        self.assertTrue(all(row["target"] == "configuration_engine" and row["filter"] ==
+                            "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer"
+                            for row in dials))
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
