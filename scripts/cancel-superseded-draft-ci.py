@@ -13,6 +13,87 @@ import subprocess
 import urllib.error
 import urllib.request
 
+NON_NATIVE_INPUTS = {
+    ".github/workflows/macos-timer-diagnostics.yml", ".github/workflows/resource-collection.yml",
+    "docs/public/platform-validation.md", "docs/public/resource-measurements.md",
+    "scripts/measure-native-resources.py", "scripts/probe-macos-timers.py",
+    "scripts/tests/test_macos_timer_probe.py", "scripts/tests/test_resource_measurement_quality.py",
+    "tests/fixtures/resource-protocol.json",
+}
+
+
+def exact_retirements(root):
+    path = root / ".github/exact-native-retirements.json"
+    if not path.exists():
+        return []
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict) or set(value) != {"runs"} or not isinstance(value["runs"], list) or len(value["runs"]) > 4:
+        raise ValueError("bounded explicit native retirement list required")
+    seen = set()
+    for row in value["runs"]:
+        if (not isinstance(row, dict) or set(row) != {"run_id", "pr", "head_sha", "equivalent_head_sha", "expected_files"}
+                or type(row["run_id"]) is not int or row["run_id"] <= 0 or row["run_id"] in seen
+                or type(row["pr"]) is not int or row["pr"] <= 0
+                or any(not isinstance(row[k], str) or not re.fullmatch(r"[0-9a-f]{40}", row[k]) for k in ["head_sha", "equivalent_head_sha"])
+                or not isinstance(row["expected_files"], dict) or not row["expected_files"]
+                or not set(row["expected_files"]) <= NON_NATIVE_INPUTS
+                or any(not isinstance(v, str) or not re.fullmatch(r"[0-9a-f]{40}", v) for v in row["expected_files"].values())):
+            raise ValueError("exact pinned non-native-only retirement proof required")
+        seen.add(row["run_id"])
+    return value["runs"]
+
+
+def retire_exact(rows, api, current_run, current_sha, ancestor):
+    prepared, outcomes = [], []
+    for row in rows:
+        run = api(f'/actions/runs/{row["run_id"]}')
+        if (run["id"] != row["run_id"] or run["workflow_id"] != 415510507
+                or run["name"] != "Engine fixture" or run["event"] != "pull_request"
+                or run["head_sha"] != row["head_sha"]
+                or run["repository"]["full_name"] != "AresJef/verysync-sidecar"
+                or [p["number"] for p in run["pull_requests"]] != [row["pr"]]
+                or run["id"] == current_run or run["head_sha"] == current_sha):
+            raise ValueError("explicit native run identity differs")
+        if run["status"] == "completed":
+            outcomes.append({"id": run["id"], "accepted": False, "skip": "already completed"})
+            continue
+        pull = api(f'/pulls/{row["pr"]}')
+        if not eligible(run, pull, current_run, current_sha, ancestor) or not ancestor(row["equivalent_head_sha"]):
+            raise ValueError("explicit native retirement is no longer an owned draft ancestor")
+        comparison = api(f'/compare/{row["equivalent_head_sha"]}...{row["head_sha"]}')
+        if (comparison["status"] != "ahead" or comparison["base_commit"]["sha"] != row["equivalent_head_sha"]
+                or not 1 <= comparison["total_commits"] <= 4
+                or len(comparison["commits"]) != comparison["total_commits"]
+                or comparison["commits"][-1]["sha"] != row["head_sha"]
+                or len(comparison["files"]) != len(row["expected_files"])
+                or any(f["status"] not in {"modified", "added"} for f in comparison["files"])
+                or {f["filename"]: f["sha"] for f in comparison["files"]} != row["expected_files"]):
+            raise ValueError("native consumer equivalence proof differs")
+        prepared.append(row)
+    # Validate every identity and complete exact diff before the first mutation.
+    for row in prepared:
+        fresh = api(f'/actions/runs/{row["run_id"]}')
+        pull = api(f'/pulls/{row["pr"]}')
+        if (not eligible(fresh, pull, current_run, current_sha, ancestor)
+                or fresh["head_sha"] != row["head_sha"] or fresh["id"] != row["run_id"]
+                or fresh["name"] != "Engine fixture" or fresh["workflow_id"] != 415510507
+                or fresh["repository"]["full_name"] != "AresJef/verysync-sidecar"
+                or [p["number"] for p in fresh["pull_requests"]] != [row["pr"]]):
+            outcomes.append({"id": row["run_id"], "accepted": False, "skip": "no longer eligible"})
+            continue
+        outcome = {"id": row["run_id"], "pr": row["pr"], "head_sha": row["head_sha"],
+                   "equivalent_head_sha": row["equivalent_head_sha"], "accepted": False}
+        try:
+            api(f'/actions/runs/{row["run_id"]}/cancel', "POST")
+            outcome["cancel_requested"] = True
+        except urllib.error.HTTPError as error:
+            if error.code != 409:
+                raise RuntimeError(f'explicit cancellation failed for run {row["run_id"]}: HTTP {error.code}') from None
+            outcome["cancel_requested"] = False
+            outcome["already_finished_or_uncancellable"] = True
+        outcomes.append(outcome)
+    return outcomes
+
 
 def eligible(run, pull, current_run, current_sha, is_ancestor):
     return (run["id"] != current_run and run["event"] == "pull_request"
@@ -49,7 +130,9 @@ def main():
     current_run = int(os.environ["GITHUB_RUN_ID"])
     base = "https://api.github.com/repos/AresJef/verysync-sidecar"
     root = Path(__file__).resolve().parents[1]
-    if preserve_ancestor_drafts(root):
+    preserve = preserve_ancestor_drafts(root)
+    exact = exact_retirements(root)
+    if preserve and not exact:
         print(json.dumps({"preserve_ancestor_drafts": True,
                           "reason": "distinct pending evidence remains required",
                           "cancellation_requests": 0}))
@@ -70,6 +153,14 @@ def main():
         if result.returncode not in {0, 1}:
             raise RuntimeError("source ancestry is unavailable; refuse cancellation")
         return result.returncode == 0
+
+    if exact:
+        print(json.dumps({"exact_non_native_duplicates": retire_exact(exact, api, current_run, current_sha, ancestor),
+                          "cancellation_never_establishes_acceptance": True}), flush=True)
+    if preserve:
+        print(json.dumps({"preserve_ancestor_drafts": True,
+                          "reason": "all runs outside the explicit proven duplicate list remain preserved"}))
+        return
 
     outcomes = []
     for page in range(1, 4):

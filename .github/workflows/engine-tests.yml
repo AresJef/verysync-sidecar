@@ -19,7 +19,7 @@ jobs:
   retire-superseded-drafts:
     name: Retire only superseded draft native CI
     if: github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04-arm
+    runs-on: windows-2022
     timeout-minutes: 5
     permissions:
       contents: read

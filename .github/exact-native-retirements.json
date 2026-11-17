@@ -1,0 +1,20 @@
+{
+  "runs": [
+    {
+      "run_id": 44020189077,
+      "pr": 187,
+      "head_sha": "2ef54b50d3cad71c3e948502a82ec8ec17a91d36",
+      "equivalent_head_sha": "2b076bc21c972138d60431b545276bae24f9f803",
+      "expected_files": {
+        ".github/workflows/macos-timer-diagnostics.yml": "29a517691c44991b5c7064a130579031448021b9",
+        ".github/workflows/resource-collection.yml": "36309ec6ccf3a5b0451556e07a6f333a163bb75e",
+        "docs/public/resource-measurements.md": "4da98f2109359fa3890783c836abd43348b98a7f",
+        "scripts/measure-native-resources.py": "3d9e816cce0ebbd23035d0126e97e87cefae99fe",
+        "scripts/probe-macos-timers.py": "dee8c7692877c9a44683f86e4689ed25a52b2242",
+        "scripts/tests/test_macos_timer_probe.py": "50ce82976a525d59d18a1a69f22a6134e1f38458",
+        "scripts/tests/test_resource_measurement_quality.py": "9deb19962466e48be7cc43fe8c02ac7690054f25",
+        "tests/fixtures/resource-protocol.json": "11c3c1df70b948d70028121b604ee7afedf537e3"
+      }
+    }
+  ]
+}

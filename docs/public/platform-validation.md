@@ -148,8 +148,17 @@ results retain their original producer and test identities.
 
 When an ancestor draft still carries distinct required evidence, the explicit
 boolean in `.github/native-diagnostic-preservation.json` can preserve those runs.
-The retirement step then returns before credential access or cancellation API
-calls. This scheduling control does not accept any test or reduce the complete
+Without an explicit duplicate list, the retirement step returns before credential
+access or cancellation API calls. A bounded list in
+`.github/exact-native-retirements.json` can identify a specific redundant Engine
+run by exact run/PR/commit identities and the complete changed-path/blob map from
+its equivalent ancestor. Only a fixed set of observer/resource/documentation
+paths is allowed; library, native-case and Engine-workflow differences are
+refused. Every listed proof is checked before mutation, followed by fresh run
+and open-draft checks. Completed, newly ready or otherwise ineligible runs stay
+preserved and unaccepted. All unlisted native runs, resource/clock/quality runs
+and ready candidates remain preserved. The bounded operation uses only its CI
+job's ephemeral Actions token. This scheduling control does not accept any test or reduce the complete
 ready/manual catalog or final native gates. The current concurrency investigation
 preserves the separate priority and Windows sharing observations in PR #183.
 
