@@ -1,6 +1,8 @@
 """Frozen identity binds literal external compilation inputs, not just .rs bytes."""
 import importlib.util
 from pathlib import Path
+import re
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -12,6 +14,19 @@ SPEC.loader.exec_module(METRICS)
 
 
 class CompilationInputIdentity(unittest.TestCase):
+    def test_real_git_checkout_keeps_compiled_data_bytes_with_windows_autocrlf(self):
+        root = Path(__file__).resolve().parents[2]
+        documents = re.findall(r'^#!\[doc = include_str!\("\.\./([^"\n]+)"\)\]',
+                               (root / 'src/lib.rs').read_text(), re.MULTILINE)
+        self.assertEqual(len(documents), 35)
+        for name in documents + ['releases/verysync-v2.33.2.json']:
+            blob = subprocess.check_output(['git', 'show', 'HEAD:' + name], cwd=root)
+            checked_out = subprocess.check_output(
+                ['git', '-c', 'core.autocrlf=true', 'cat-file', '--filters',
+                 '--path=' + name, 'HEAD:' + name], cwd=root)
+            self.assertTrue(checked_out == blob,
+                            'Windows-style Git checkout changed compiled input bytes: ' + name)
+
     def fixture(self, root):
         files = {"Cargo.toml": b"manifest", "Cargo.lock": b"lock",
                  "src/lib.rs": b'#![doc = include_str!("../docs/guide.md")]\n'
