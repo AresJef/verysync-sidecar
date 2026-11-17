@@ -161,6 +161,11 @@ and ready candidates remain preserved. The bounded operation uses only its CI
 job's ephemeral Actions token. This scheduling control does not accept any test or reduce the complete
 ready/manual catalog or final native gates. The current concurrency investigation
 preserves the separate priority and Windows sharing observations in PR #183.
+The explicit `ci/exact-native-retirement-control-20261117-01a1ca9b` draft runs
+only this maintenance job within the Engine workflow, allowing distinct pending
+evidence to reach runners before redundant jobs. Its native jobs are skipped,
+not accepted. Converting it to ready for review or manually dispatching the
+workflow restores all ordinary Engine jobs and existing complete gates.
 
 The separate Mac observer-timer workflow compares the existing absolute Mach
 wait with a periodic kqueue timer using the Apple SDK's minimum-coalescing flag.
