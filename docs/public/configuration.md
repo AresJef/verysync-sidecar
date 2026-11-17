@@ -485,8 +485,10 @@ case also verifies persisted policy, unrelated configuration, identities,
 sentinel data and both normal owned tree/state exits. This establishes the
 observed scheduling effect in that scenario. Dial concurrency, incoming-request
 budgets, every folder type and performance remain separate concerns. The new
-case has local macOS ARM64 evidence; its six native platform gates and final
-integration remain required.
+case is verified on all six standard native AMD64/ARM64 profiles in
+[run 43986337276](https://github.com/AresJef/verysync-sidecar/actions/runs/43986337276),
+with the original producer and raw logs retained. Final integrated acceptance
+remains required.
 
 A configured paused folder can retain an empty runtime state as
 `FolderState::Unknown("")` in this baseline. Inspect the configuration's
@@ -659,3 +661,30 @@ The same run verifies all thirteen SOCKS5 authentication/connection/file/disable
 retention observations on those six profiles. These scoped results do not certify
 the general runtime policies listed above or complete integrated acceptance;
 the Intel Mac FTP runtime failure in that run remains a failure.
+
+
+## Pending native dial concurrency
+
+`GeneralOptionsPatch::max_dial_concurrent` selects the native concurrent-dial
+limit. Matching configuration readback is distinct from observing its effect.
+An admitted peer connection and a still-pending TLS handshake are different
+states; connection counts alone do not measure this limit.
+
+The isolated native test selects one owned peer identity with three controlled
+loopback TCP targets. Each target reads a native TLS ClientHello and deliberately
+withholds the server handshake. After an explicit normal restart, limits of one
+and two produce exactly one and two concurrently pending ClientHellos during
+a bounded observation inside the first handshake deadline. The peer remains
+unauthenticated and disconnected. A paused baseline has no dial attempts, and
+the following explicit pause and normal restart close every pending attempt.
+The fixtures do not authenticate, introduce another device, or claim a global
+limit across devices.
+
+The test then replaces the controlled targets with the actual owned peer,
+establishes an authenticated connection and transfers new synthetic Unicode-named
+file bytes. Original identities, keys, certificates, caller data and unrelated
+configuration remain intact; both owned process trees and state leases exit
+normally. The local macOS ARM64 case verifies this scenario. Six native CI
+profiles and final integration remain separate gates. This observation does not
+promise immediate application without restart, retry timing, request-budget
+effects, packet QoS or a performance improvement.

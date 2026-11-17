@@ -1644,3 +1644,6 @@ async fn configuration_policy_listener(core: &ManagedInstance) -> TestResult<std
 
 #[path = "common/folder_concurrency_cases.rs"]
 mod folder_concurrency_cases;
+
+#[path = "common/dial_concurrency_cases.rs"]
+mod dial_concurrency_cases;

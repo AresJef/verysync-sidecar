@@ -4,7 +4,7 @@
     "native-folder-concurrency-policy",
     "remote-version-archives",
     "ftp-disconnect-recovery",
-    "native-home-free-space-policy",
+    "native-dial-concurrency-policy",
     "native-sleep-prevention-policy"
   ]
 }
