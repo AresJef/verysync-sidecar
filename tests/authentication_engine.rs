@@ -1,4 +1,6 @@
 //! Actual management credential changes and explicit owned-client recovery.
+#[path = "common/explicit_tunnel_probe_cases.rs"]
+mod explicit_tunnel_probe_cases;
 #[path = "common/ldap_service.rs"]
 mod ldap_service;
 #[path = "common/managed_fixture.rs"]

@@ -1949,5 +1949,59 @@
     "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
     "label": "native-local-announcement-macos-address-diagnosis",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
   }
 ]

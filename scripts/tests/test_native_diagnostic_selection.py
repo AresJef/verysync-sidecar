@@ -14,17 +14,18 @@ SPEC.loader.exec_module(HELPER)
 
 
 class DiagnosticSelection(unittest.TestCase):
-    def test_current_macos_local_address_diagnosis_is_only_one_standard_native_profile(self):
+    def test_current_explicit_auxiliary_tunnel_probe_uses_all_six_native_profiles(self):
         selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['label'], 'native-local-announcement-macos-address-diagnosis')
-        self.assertEqual(rows[0]['package'], 'macos-amd64-standard')
-        self.assertEqual(rows[0]['runner'], 'macos-15-intel')
-        self.assertEqual(rows[0]['rust'], 'x86_64-apple-darwin')
-        self.assertEqual(rows[0]['target'], 'network')
-        self.assertEqual(rows[0]['filter'], 'local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart')
+        self.assertEqual(len(rows), 6)
+        self.assertEqual({row['package'] for row in rows}, set(HELPER.PROFILES) - {'windows-386-standard'})
+        self.assertTrue(all(row['label'] == 'native-explicit-auxiliary-tunnel-probe' and
+                            row['target'] == 'authentication_engine' and
+                            row['filter'] == 'explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports'
+                            for row in rows))
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
+        workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
+        self.assertEqual(workflow.count('      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm'), 2)
 
     def test_owned_functional_drafts_exclude_only_unrelated_native_jobs(self):
         workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
@@ -33,7 +34,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-backend-outage-20261118-01a1ca9b",
                        "test/native-lan-bandwidth-20261118-01a1ca9b",
                        "test/native-local-announcement-20261118-01a1ca9b",
-                       "test/macos-local-announcement-address-20261118-01a1ca9b"]:
+                       "test/macos-local-announcement-address-20261118-01a1ca9b",
+                       "test/native-explicit-tunnel-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -94,7 +96,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-backend-outage-20261118-01a1ca9b",
                        "test/native-lan-bandwidth-20261118-01a1ca9b",
                        "test/native-local-announcement-20261118-01a1ca9b",
-                       "test/macos-local-announcement-address-20261118-01a1ca9b"]:
+                       "test/macos-local-announcement-address-20261118-01a1ca9b",
+                       "test/native-explicit-tunnel-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -196,7 +199,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 218)
+        self.assertEqual(len(self.rows), 224)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -330,7 +333,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] == label and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 218)
+        self.assertEqual(len(self.rows), 224)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
