@@ -136,8 +136,9 @@ required.
 
 An owned draft can select current investigation labels in
 `.github/native-diagnostic-selection.json`. The current selection investigates
-folder-concurrency preparation on all six standard profiles and ownership of
-the failed Windows 386 CLI producer. Catalog tests
+actual sleep-prevention requests on both macOS and both Windows standard
+profiles. The 151-row complete catalog retains every earlier concurrency and
+failed-producer case alongside the two new Windows effect gates. Catalog tests
 independently retain the required profile/filter mappings for every earlier
 case; they do not force unrelated investigations into each draft. Missing
 selection uses the whole catalog; empty, duplicate,
