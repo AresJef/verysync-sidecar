@@ -1,0 +1,100 @@
+name: Owned TCP packet-class effects
+
+on:
+  pull_request:
+    paths:
+      - src/configuration.rs
+      - tests/host_control_engine.rs
+      - tests/common/packet_qos_cases.rs
+      - scripts/observe-owned-tcp-qos.py
+      - scripts/host-test-cargo.py
+      - scripts/tests/test_owned_tcp_qos.py
+      - scripts/tests/test_host_test_cargo.py
+      - .github/workflows/packet-qos-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owned-packet-qos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  observe:
+    name: Actual IPv4 TCP packet class (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            package: linux-amd64-standard
+          - runner: ubuntu-24.04-arm
+            package: linux-arm64-standard
+          - runner: macos-15-intel
+            package: macos-amd64-standard
+          - runner: macos-15
+            package: macos-arm64-standard
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+      VERYSYNC_TEST_ALLOW_PACKET_CAPTURE: github-actions-owned-loopback-headers
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Prepare normal runner toolchain and observer interpreter
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          python -c 'import os,sys; print("VERYSYNC_TEST_PACKET_PYTHON="+sys.executable, file=open(os.environ["GITHUB_ENV"], "a"))'
+          python -B -m unittest discover -s scripts/tests -p test_owned_tcp_qos.py
+      - name: Explicitly prepare this profile's private fixed core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Compile and pin the unelevated native case
+        run: >-
+          python scripts/host-test-cargo.py prepare
+          --case packet_qos_cases::native_packet_class_marks_owned_tcp_data_and_retains_real_files
+          --toolchain "$TEST_TOOLCHAIN" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe owned data headers during real authenticated transfers
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --cargo "$VERYSYNC_HOST_TEST_CARGO_SHIM" --test-target host_control_engine
+          --test-filter packet_qos_cases::native_packet_class_marks_owned_tcp_data_and_retains_real_files
+          --evidence-dir "${{ runner.temp }}/vs-owned-packet-class"
+      - name: Require one actual case and all original selections
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          text = (Path(os.environ["RUNNER_TEMP"]) / "vs-owned-packet-class/host-control-engine.log").read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in text
+          marker = "native packet-class evidence: "
+          phases = [json.loads(line.split(marker, 1)[1]) for line in text.splitlines() if marker in line]
+          assert [p["selected"] for p in phases] == [16, 32, 0]
+          for p in phases:
+              assert p["actual_selected_dscp_observed"] and p["actual_new_file_transfer_and_both_bytes_retained"]
+              assert p["actual_normal_restart_retained_policy_and_identity"] and p["actual_both_normal_owned_tree_and_state_exit"]
+              assert p["observer_elevated_only"] and p["actual_authenticated_source_port_bound_tcp_data_headers"] > 0
+          PY
+      - name: Require exact owned-core cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Retain sanitized native evidence without packets or private state
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: owned-packet-class-${{ matrix.package }}-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/vs-owned-packet-class/host-control-engine.log
+            ${{ runner.temp }}/vs-owned-packet-class/proxy-observations.json
