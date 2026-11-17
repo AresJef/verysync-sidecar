@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   collect:
-    if: (github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'resource-formal') && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository)
+    if: (github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'resource-formal') && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository)
     name: Resource coverage (${{ matrix.package }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25

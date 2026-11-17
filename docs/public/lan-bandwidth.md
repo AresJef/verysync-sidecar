@@ -21,9 +21,17 @@ removing the numeric limit. Both full source and destination payloads, actual
 peer disconnection, normal exit codes, stopped trees and released state are
 checked independently.
 
-The initial macOS ARM run passed these conditions. Six native CI profiles and
-the complete final candidate remain pending. Two original failed runs are
-retained: the diagnostic showed that the initial year-one connection timestamp
-was being sampled before initialization. No transfer window or assertion was
-relaxed. This case does not change the separate S4 v3 bandwidth protocol, imply
-cross-WAN validation, or promise throughput, latency or a universal token burst.
+The initial macOS ARM run and all six standard native macOS, Windows and Linux
+AMD64/ARM64 profiles passed these conditions in
+[the LAN inclusion run](https://github.com/AresJef/verysync-sidecar/actions/runs/44165398388).
+The producer is commit `d5b19a772018290327581d046c191447c29f8446`, with tree
+`f2b5ecf787c02aa21c56ca164c9210694725f0bb`. Original per-profile logs retain
+the official archive and binary identities, complete byte windows and normal
+cleanup. Additional architectures, minimum systems and the complete final
+candidate remain separate requirements.
+
+Two original local failed runs are retained: the diagnostic showed that the
+initial year-one connection timestamp was being sampled before initialization.
+No transfer window or assertion was relaxed. This case does not change the
+separate S4 v3 bandwidth protocol, imply cross-WAN validation, or promise
+throughput, latency or a universal token burst.

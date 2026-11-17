@@ -96,6 +96,25 @@ jobs:
                   assert "frozen source dependency differs" in str(error)
               else:
                   raise AssertionError("diagnostic pilot admitted as frozen preparation")
+              measured = [row for row in rows if row["phase"] == "measure"]
+              positions = [raw["before"][0]["read_start_ns"]] + [row["start_ns"] for row in measured] + [raw["after"][-1]["read_end_ns"]]
+              left, right = max(zip(positions, positions[1:]), key=lambda pair: pair[1]-pair[0])
+              assert right-left == quality["max_sample_gap_ns"]
+              overlap = [w for w in trace["waits"] if w["start_ns"] < right and w["end_ns"] > left]
+              active_gc, gc_cycles = [], []
+              for event in trace["gc_events"]:
+                  if event["phase"] == "start":
+                      active_gc.append(event)
+                  else:
+                      assert event["phase"] == "stop" and active_gc
+                      begin = active_gc.pop()
+                      assert begin["generation"] == event["generation"] and begin["at_ns"] <= event["at_ns"]
+                      gc_cycles.append((begin, event))
+              assert not active_gc
+              gc_overlap = sum(begin["at_ns"] < right and end["at_ns"] > left for begin, end in gc_cycles)
+              print(json.dumps({"role": "original complete worst-gap diagnosis only", "timer_backend": case["timer_backend"],
+                  "max_sample_gap_ns": right-left, "overlapping_native_waits": overlap, "overlapping_gc_cycles": gc_overlap,
+                  "no_cause_or_timer_adoption_inferred": True, "frozen_membership": False}))
               slow = sorted(trace["waits"], key=lambda w: w["end_ns"]-w["start_ns"], reverse=True)
               print(json.dumps({"role": "diagnosis only", "scenario": case["scenario"], "timer_backend": case["timer_backend"], "quality": quality["status"], "waits": len(slow),
                   "gc_events": len(trace["gc_events"]), "largest_three_waits": slow[:3],

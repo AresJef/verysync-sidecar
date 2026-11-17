@@ -15,6 +15,36 @@ SPEC.loader.exec_module(D)
 
 
 class NativeObserverDiagnosisContracts(unittest.TestCase):
+    def test_intel_wait_draft_scopes_other_jobs_and_preserves_ready_manual_and_forks(self):
+        root = Path(__file__).resolve().parents[2]
+        branch = 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b'
+        engine = (root / '.github/workflows/engine-tests.yml').read_text()
+        conditions = [x[len('    if: '):] for x in engine.splitlines()
+                      if x.startswith('    if: ') and branch in x]
+        self.assertEqual(len(conditions), 10)
+        resource = (root / '.github/workflows/resource-collection.yml').read_text()
+        conditions.append(next(x[len('    if: '):] for x in resource.splitlines()
+                               if x.startswith('    if: ')))
+        for event, draft, repo in [('pull_request', True, 'AresJef/verysync-sidecar'),
+                                  ('pull_request', False, 'AresJef/verysync-sidecar'),
+                                  ('pull_request', True, 'external/fork'),
+                                  ('workflow_dispatch', True, 'AresJef/verysync-sidecar')]:
+            github = SimpleNamespace(event_name=event, head_ref=branch,
+                repository='AresJef/verysync-sidecar', event=SimpleNamespace(
+                    action='synchronize', pull_request=SimpleNamespace(draft=draft,
+                        head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
+            for condition in conditions:
+                expression = re.sub(r'!(?!=)', 'not ', condition.replace('&&', ' and ').replace('||', ' or '))
+                def evaluate():
+                    return bool(eval(expression, {'__builtins__': {}}, {'github': github, 'false': False, 'true': True}))
+                actual = evaluate()
+                if event == 'pull_request' and draft and repo == github.repository:
+                    self.assertFalse(actual)
+                else:
+                    github.head_ref = 'unrelated'
+                    self.assertEqual(actual, evaluate())
+                    github.head_ref = branch
+
     def test_arm_owned_draft_selects_matching_runner_and_core_without_broadening_scope(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/native-observer-diagnosis.yml').read_text()
