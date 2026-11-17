@@ -468,6 +468,16 @@ public keys. Both new core generations accepted browsing and limits probes with
 verified host identity in the inspected build, even though upstream rclone
 supports a known-hosts configuration. No system SSH files or trust stores changed.
 
+The native job serializer can omit `insecureTls` when it is false. For SFTP and
+WebDAV, creation and endpoint-update verification recognize that known false
+default while preserving the omitted field in returned snapshots. An explicit
+true, null, malformed value or unrelated missing option still fails matching.
+This reconciliation neither enables a verification bypass nor establishes SSH
+server identity. The native strict HTTPS case separately requires a trusted
+chain and hostname, rejection of a wrong hostname and credentials, actual
+payloads across restart, and normal owned cleanup; incomplete runs remain
+unaccepted.
+
 
 ## HTTPS WebDAV certificate boundary
 

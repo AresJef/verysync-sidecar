@@ -159,6 +159,9 @@ impl StorageEndpoint {
     /// known_hosts. Static inspection of that exact core also finds an
     /// unconditional accept callback in its SFTP limits probe. This option
     /// must not be treated as a verified SSH host-key policy.
+    /// Native job snapshots can omit the false default. Creation/update
+    /// verification recognizes that omission only for these two endpoint types,
+    /// while returning the original snapshot without inserting a field.
     pub fn insecure_tls(mut self, allow: bool) -> Result<Self> {
         if !matches!(self.fs_type.as_str(), "sftp" | "webdav") {
             return Err(invalid(

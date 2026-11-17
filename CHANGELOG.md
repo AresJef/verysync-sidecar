@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Reconcile the native omitted `insecureTls: false` default for SFTP and WebDAV
+  job creation and endpoint updates. Keep the raw omission in returned snapshots;
+  explicit true, null, malformed values and unrelated missing settings still
+  fail matching. This does not establish SFTP host-key verification or retry an
+  uncertain write.
+
 - Replace Chrono with Jiff for verified native wire timestamps while retaining
   Rust 1.85. Preserve offset-based ordering and original request spelling; reject
   unsupported leap seconds and precision beyond nanoseconds, and retain floor
