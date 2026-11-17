@@ -166,7 +166,7 @@ async fn native_dial_concurrency_limits_one_device_pending_targets_and_recovers_
         )
         .await?;
     let before = a.client().configuration().await?;
-    for limit in [1_u32, 2] {
+    for limit in [1_i64, 2] {
         assert!(a.client().pause_device(&bid).await?.requested_fields_match);
         let canaries = Canaries::start().await?;
         assert!(

@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Preserve native signed general-option selections for temporary retention,
+  folder/dial concurrency, temporary-index block selection and traffic class.
+  Their fields and setters use `i64` in the unstable alpha API. Preserve
+  native normalization receipts, including a zero temporary-index selection
+  returning 2 and a nonmatching readback; runtime policy effects are separate.
+
 - Preserve signed native incoming-request budgets with an `i64` field and patch
   setter, including negative selections, zero and target-supported positive
   values. This changes the unstable alpha API. Configuration persistence and
