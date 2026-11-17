@@ -52,6 +52,17 @@ their dismissal remain unverified on VerySync.** Their candidate record fields
 are retained with unknown values available explicitly. Do not infer device
 approval, commercial authorization, or permanent device blocking from them.
 
+An empty pending list also does not prove that an unconfigured peer was refused.
+An isolated macOS ARM64 v2.33.2 case established an actual one-sided connection
+from another official core while the receiver still had no configuration entry
+for that peer. All 48 pending-device snapshots in the bounded observation stayed
+empty; dismissing the absent record returned `PendingOfferNotFound`. Receiver
+configuration, caller bytes and normal owned-tree/state release were preserved.
+The original positive nonempty-record requirement failed and remains unverified;
+this observation does not validate candidate record fields or every connection
+path, platform or authorization mode. Inspect live connections and persistent
+ignore rules independently when controlling peer access.
+
 `ignored_devices()`, `ignore_device()` and `unignore_device()` separately expose
 persistent ignored identities. Ignoring requires an unconfigured remote ID;
 the local ID is protected, and a configured peer must first be explicitly
