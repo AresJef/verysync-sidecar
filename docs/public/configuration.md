@@ -545,9 +545,9 @@ actual native-system image path. Powercfg's image attribution does not identify
 a unique requesting PID; the case does not invent one or accept an unowned
 legacy-driver entry as proof. Both private cores have the same selected policy.
 
-The initial idle baseline and post-transfer request release each have a separate
-150-second Windows observation bound. Their actual absence is required;
-expiration is a failure. The complete read-only `powercfg /query` snapshot must
+The initial idle baseline has a separate 150-second Windows observation bound;
+actual absence is required. The original post-transfer automatic-release window
+also remains 150 seconds. The complete read-only `powercfg /query` snapshot must
 remain unchanged, and the shared case preserves original keys/certificates,
 identities, files, unrelated sections and normal tree/state exits. Windows
 AMD64/ARM64 native jobs must still establish these effects. Parser contracts,
@@ -571,6 +571,29 @@ Request output is decoded strictly as UTF-8/ASCII or recognized UTF-16LE;
 unrecognized/truncated encodings remain errors. The complete `/query` protection
 snapshot is compared as original bytes. Actual direct-call timing and Windows
 policy enforcement still require the native jobs; no timeout was extended.
+
+The direct native observations in [run 44042060268](https://github.com/AresJef/verysync-sidecar/actions/runs/44042060268)
+take approximately 8–20 ms on both Windows architectures. They demonstrate the
+private image's actual `SYSTEM` request during enabled transfers. That request
+remains present past the original 150-second window after the receiver returns
+to idle; both original strict failures are retained. Automatic release within
+that window is unreliable for these fixed v2.33.2 artifacts.
+
+The Windows boundary case is limited to the two verified official AMD64/ARM64
+program fingerprints. Only an enabled-policy automatic-release timeout can
+enter this path; transfer deadlines, parser/I/O errors, unknown programs and
+false-policy requests remain failures. It independently requires both cores to
+report idle, zero need and exact file counts/bytes, then verifies every actual
+source/receiver file. It explicitly saves the disabled setting, normally stops
+both owned cores, observes release of the captured private-image request and
+starts both with the same persistent state and credentials. The final disabled
+phase must independently transfer another 8 MiB without a sleep request.
+All keys, identities, unrelated sections, caller bytes, unchanged power-plan
+bytes and final normal exits remain required. Changing the flag remains a
+configuration operation; these lifecycle calls are explicit. The case reports
+retention and explicit-stop release separately from automatic release. This new
+boundary path still requires actual Windows CI evidence. The macOS automatic
+release deadline remains ten seconds.
 
 ## Diagnostic preferences
 

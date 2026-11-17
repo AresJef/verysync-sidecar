@@ -679,6 +679,32 @@ jobs:
           --test-target "${{ matrix.target }}"
           --test-filter "${{ matrix.filter }}"
           --evidence-dir "${{ runner.temp }}/vs-windows-folder-opener-diagnosis"
+      - name: Require actual Windows requests, release boundary and complete data
+        if: matrix.label == 'native-windows-sleep-prevention-policy'
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          text = (Path(os.environ["RUNNER_TEMP"]) / "vs-windows-folder-opener-diagnosis/configuration-engine.log").read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in text
+          marker = "native idle-sleep policy evidence: "
+          phases = [json.loads(line.split(marker, 1)[1]) for line in text.splitlines() if marker in line]
+          assert [p["enabled"] for p in phases] == [False, True, False]
+          for phase in phases:
+              assert phase["actual_syncing_observed"] and phase["actual_file_bytes_transferred"]
+              assert phase["actual_system_idle_sleep_assertion_observed"] == phase["enabled"]
+              assert phase["actual_owned_windows_private_image_system_request_observed"] == phase["enabled"]
+              assert not phase["windows_request_unique_pid_attribution_claimed"]
+              if phase["native_request_retained_past_original_150s_idle_window"]:
+                  assert phase["enabled"] and not phase["actual_assertion_and_owned_helper_released_after_transfer"]
+                  assert phase["actual_explicit_disable_normal_stop_cleared_request"]
+                  assert phase["actual_persisted_restart_after_explicit_stop"]
+              else:
+                  assert phase["actual_assertion_and_owned_helper_released_after_transfer"]
+          assert "actual_three_transfers_and_source_receiver_bytes_retained=true" in text
+          assert "actual_both_normal_owned_tree_and_state_exit=true" in text
+          assert "host_power_settings_changed=false host_suspend_attempted=false" in text
+          PY
       - name: Require actual fixed URL and official-provider CLI upgrade effects
         if: matrix.target == 'upgrade_engine'
         run: >-
