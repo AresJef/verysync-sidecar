@@ -185,6 +185,15 @@ reviews a new preview before copying additional bytes. This is separate from
 interrupting active work. Native retries can outlast the default request timeout;
 choose a request bound explicitly when observing their final response. A deadline
 still leaves an uncertain outcome and never counts as a completed refusal.
+The independent idle-outage case passed for FTP, SFTP, SMB and WebDAV on all six
+standard native profiles in
+[the backend request run](https://github.com/AresJef/verysync-sidecar/actions/runs/44147287980).
+Both probe and browse returned completed native HTTP 500 errors. Source bytes,
+old run identity, the destination snapshot and destination-only data survived;
+reviewing the new preview did not copy, and separate explicit execution copied
+the additional complete payload. This does not claim that an interrupted old
+run finished, replace the in-flight recovery cases, or establish licensed
+watch/schedule behavior or complete final-source acceptance.
 
 Private recovery cases distinguish FTP's failed run and saved action errors from
 deliberately chosen owned termination for the other protocols. A peer failure can
@@ -512,15 +521,16 @@ policy must allow the real copy. Each completed copy must preserve the source,
 destination-only sentinel and files after registration removal, and both cores
 must exit normally. On the inspected macOS ARM build, both policies allowed
 the probe, browse and copy. This confirms the native identity limitation for
-that build; it does not verify the server's identity. The same portable case
-also accepted both policies, including the complete file copies, on fixed
-v2.33.2 Windows AMD64/ARM64 and Linux AMD64/ARM64 builds in
-[the native SFTP policy run](https://github.com/AresJef/verysync-sidecar/actions/runs/44144810067).
-These observations cover the explicit environment and private-profile trust
-candidates; they establish no supported server-identity verification mechanism.
-The macOS CI profiles and complete final-source platform acceptance remain
-pending. Password/private-key authentication and data integrity are separate
-requirements and must not be inferred from a host-policy observation.
+that build; it does not verify the server's identity. All six standard native
+macOS, Windows and Linux AMD64/ARM64 profiles in
+[the native SFTP policy run](https://github.com/AresJef/verysync-sidecar/actions/runs/44144810067)
+accepted both policies, including complete file copies and normal cleanup in
+two distinct core identities on each profile. These observations cover the
+explicit environment and private-profile trust candidates; they establish no
+supported server-identity verification mechanism. Password/private-key
+authentication and data integrity are separate requirements. Additional
+architectures, minimum systems and complete final-source platform acceptance
+remain separate and must not be inferred from these cases.
 
 The native job serializer can omit `insecureTls` when it is false. For SFTP and
 WebDAV, creation and endpoint-update verification recognize that known false
