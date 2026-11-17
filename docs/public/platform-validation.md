@@ -127,7 +127,7 @@ results are not positive runtime support evidence.
 
 ## Focused native diagnostics
 
-Source-bound focused results now include six-profile temporary-index threshold
+Earlier source-bound focused results include six-profile temporary-index threshold
 validation ([run 44040037108](https://github.com/AresJef/verysync-sidecar/actions/runs/44040037108)),
 six-profile full-index resend after the explicitly pinned test upgrade
 ([run 44044835585](https://github.com/AresJef/verysync-sidecar/actions/runs/44044835585)),

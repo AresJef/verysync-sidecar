@@ -778,18 +778,31 @@ The temporary-index threshold has a separate native-effect case. It selects
 `temp_index_min_blocks` as 1, 512, then 1 again across normal restarts. Each
 new 8 MiB transfer must have an actual indexed block count between those limits.
 During at least three seconds of incomplete transfer, the receiver's native
-temporary file must contain the exact first block, and the authenticated source
+temporary file must contain a complete 128 KiB block matching the exact source
+bytes at that block's offset, and the authenticated source
 observes that receiver's `fromTemporary` advertisement. The low threshold must
 advertise; the high threshold must withhold it. An explicit native null
 availability slice is recorded separately; missing/malformed fields and HTTP
 errors cannot count as absence. All source/receiver bytes, identities,
 credentials, unrelated sections, sentinel and both normal exits remain required.
-The local macOS ARM64 case passed all three phases in 120.48 seconds, with
-64 actual blocks per file and approximately 17, 28 and 25 seconds of partial
-coverage. It uses an explicitly selected in-order block pull and 256 KiB/s
-fixture send limit. All six standard native profiles passed this exact case
+The fixture keeps the native parallel pullers enabled, an explicitly selected
+in-order block preference and the original 256 KiB/s send limit. A stored block
+preference does not guarantee that block zero finishes first. The observer
+checks complete aligned blocks in the owned temporary file and rechecks the
+previously verified block on subsequent observations; holes, incomplete blocks
+and mismatched bytes never establish coverage.
+
+The earlier first-block-only case passed on all six standard native profiles
 in [run 44040037108](https://github.com/AresJef/verysync-sidecar/actions/runs/44040037108),
 including all three qualified partial-transfer windows and both normal exits.
+Later full-source runs retained short or absent first-block windows on macOS
+AMD64 and both Windows profiles. A synthetic out-of-order layout reproduced the
+observer's false negative, and an actual macOS run observed a later complete
+block while block zero was still unavailable. The corrected observer keeps the
+original 8 MiB payload, 45-second deadline, three-second/three-observation minimum,
+threshold sequence, native availability checks and all data/exit protections.
+Its six-profile revalidation remains required; earlier results keep their
+original producer and are not relabeled as the revised observer's results.
 This case does not establish an incoming-request memory cap, full-index resend
 after upgrade or a throughput gain.
 

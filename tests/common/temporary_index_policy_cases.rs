@@ -1,25 +1,51 @@
 //! The selected threshold changes actual temporary-block advertisement.
 use super::managed_fixture::{options, TestResult};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use verysync_sidecar::*;
 
-fn first_block_matches(path: &Path, bytes: &[u8]) -> TestResult<bool> {
+fn complete_block_matches(
+    path: &Path,
+    bytes: &[u8],
+    preferred_block: &mut Option<usize>,
+) -> TestResult<bool> {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
     };
-    let mut block = vec![0; 128 * 1024];
-    match file.read_exact(&mut block) {
-        Ok(()) => Ok(block == bytes[..block.len()]),
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(error) => Err(error.into()),
+    const BLOCK_SIZE: usize = 128 * 1024;
+    let block_count = bytes.len() / BLOCK_SIZE;
+    if block_count > 64 {
+        return Err("owned native block oracle exceeded its fixed workload bound".into());
     }
+    let preferred = preferred_block.filter(|index| *index < block_count);
+    let indices = preferred
+        .into_iter()
+        .chain((0..block_count).filter(|index| Some(*index) != preferred));
+    let mut block = vec![0; BLOCK_SIZE];
+    for index in indices {
+        let offset = index * BLOCK_SIZE;
+        file.seek(SeekFrom::Start(offset as u64))?;
+        match file.read_exact(&mut block) {
+            Ok(()) if block == bytes[offset..offset + BLOCK_SIZE] => {
+                *preferred_block = Some(index);
+                return Ok(true);
+            }
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => (),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(false)
 }
 
-fn actual_partial_block_present(directory: &Path, bytes: &[u8]) -> TestResult<bool> {
+fn actual_partial_block_present(
+    directory: &Path,
+    bytes: &[u8],
+    preferred_block: &mut Option<usize>,
+) -> TestResult<bool> {
     // The fixed native SyncTempName hashes the input name and places the file
     // below .verysync. Discover only bounded regular files in this owned
     // directory; a retention-compatible .vs.<name>.tmp is not its live path.
@@ -30,12 +56,48 @@ fn actual_partial_block_present(directory: &Path, bytes: &[u8]) -> TestResult<bo
         let entry = entry?;
         if entry.file_type()?.is_file()
             && entry.path().extension() == Some(std::ffi::OsStr::new("tmp"))
-            && first_block_matches(&entry.path(), bytes)?
+            && complete_block_matches(&entry.path(), bytes, preferred_block)?
         {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+#[test]
+fn partial_block_oracle_accepts_complete_out_of_order_bytes_and_rejects_holes() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let temporary = root.path().join(".verysync");
+    std::fs::create_dir(&temporary)?;
+    let block_size = 128 * 1024;
+    let mut expected = vec![0x41; block_size];
+    expected.extend(vec![0x72; block_size]);
+    let path = temporary.join("synthetic.tmp");
+    let mut preferred = None;
+    let mut partial = vec![0; block_size];
+    partial.extend(vec![0x72; block_size / 2]);
+    std::fs::write(&path, &partial)?;
+    assert!(!actual_partial_block_present(
+        root.path(),
+        &expected,
+        &mut preferred
+    )?);
+    partial.extend(vec![0x72; block_size / 2]);
+    std::fs::write(&path, &partial)?;
+    assert!(actual_partial_block_present(
+        root.path(),
+        &expected,
+        &mut preferred
+    )?);
+    assert_eq!(preferred, Some(1));
+    partial[block_size] ^= 1;
+    std::fs::write(&path, &partial)?;
+    assert!(!actual_partial_block_present(
+        root.path(),
+        &expected,
+        &mut preferred
+    )?);
+    Ok(())
 }
 
 #[tokio::test]
@@ -197,6 +259,16 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
             .index_file_info(&af.configuration.id, &TargetPath::local(&name))
             .await?;
         assert!(indexed.global.num_blocks > 1 && indexed.global.num_blocks < 512);
+        let receiver_folder = b.client().folder(&bf.configuration.id).await?;
+        println!(
+            "native temporary index phase configuration: {}",
+            serde_json::json!({"phase":phase,"selected":selected,
+                "blocks":indexed.global.num_blocks,
+                "copiers":receiver_folder.extra.get("copiers"),
+                "ants_puller":receiver_folder.extra.get("antsPullerEnabled"),
+                "session_puller":receiver_folder.extra.get("pullerSessionEnabled"),
+                "block_pull_order":receiver_folder.extra.get("blockPullOrder")})
+        );
         assert!(!received.join(&name).try_exists()?);
         b.client().resume_folder(&bf.configuration.id).await?;
         let mut partial_observations = 0;
@@ -204,12 +276,19 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
         let mut partial_span = Duration::ZERO;
         let mut advertised = false;
         let mut explicit_null_availability_seen = false;
-        tokio::time::timeout(Duration::from_secs(45), async {
+        let observation_started = Instant::now();
+        let mut syncing_observations = 0;
+        let mut incomplete_observations = 0;
+        let mut first_partial_ms = None;
+        let mut verified_partial_block = None;
+        let observed = tokio::time::timeout(Duration::from_secs(45), async {
             loop {
                 let state = b.client().folder_status(&bf.configuration.id).await?.state;
+                syncing_observations += usize::from(state == Some(FolderState::Syncing));
+                incomplete_observations += usize::from(!received.join(&name).try_exists()?);
                 if state == Some(FolderState::Syncing)
                     && !received.join(&name).try_exists()?
-                    && actual_partial_block_present(&received, &bytes)?
+                    && actual_partial_block_present(&received, &bytes, &mut verified_partial_block)?
                 {
                     let raw = a
                         .client()
@@ -240,6 +319,8 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
                     // source's authenticated observation, not just before it.
                     if !received.join(&name).try_exists()? {
                         partial_observations += 1;
+                        first_partial_ms
+                            .get_or_insert_with(|| observation_started.elapsed().as_millis());
                         let start = partial_started.get_or_insert_with(Instant::now);
                         partial_span = start.elapsed();
                         let active = info
@@ -263,9 +344,22 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
             }
             TestResult::Ok(())
         })
-        .await??;
+        .await;
+        println!(
+            "native temporary index observation window: {}",
+            serde_json::json!({"phase":phase,"selected":selected,
+                "elapsed_ms":observation_started.elapsed().as_millis(),
+                "syncing_observations":syncing_observations,
+                "incomplete_observations":incomplete_observations,
+                "first_partial_ms":first_partial_ms,
+                "verified_partial_block_index":verified_partial_block,
+                "partial_observations":partial_observations,
+                "partial_span_ms":partial_span.as_millis(),
+                "deadline_elapsed":observed.is_err()})
+        );
+        observed??;
         assert!(partial_observations >= 3 && partial_span >= Duration::from_secs(3),
-            "actual incomplete first-block transfer coverage too short: observations={partial_observations}, span={partial_span:?}");
+            "actual incomplete complete-block transfer coverage too short: observations={partial_observations}, span={partial_span:?}");
         assert_eq!(
             advertised,
             selected == 1,
@@ -276,7 +370,7 @@ async fn native_temporary_index_threshold_controls_partial_block_advertisement()
             "native temporary index threshold evidence: {}",
             serde_json::json!({
                 "selected":selected,"actual_file_blocks":indexed.global.num_blocks,
-                "actual_incomplete_first_block_bytes_verified":true,"actual_partial_observations":partial_observations,
+                "actual_incomplete_complete_block_bytes_verified":true,"actual_partial_observations":partial_observations,
                 "actual_partial_span_ms":partial_span.as_millis(),"actual_peer_temporary_availability_observed":advertised,
             "explicit_native_null_availability_observed":explicit_null_availability_seen,
                 "actual_normal_restart_retained_policy":true,"actual_new_file_bytes_received":true,

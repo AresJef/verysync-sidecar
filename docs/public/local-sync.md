@@ -359,15 +359,19 @@ let endpoint = StorageEndpoint::remote(StorageProtocol::Sftp, "sftp://127.0.0.1:
 # }
 ```
 
-A fixed v2.33.2 macOS ARM64 public-API case observed actual wrong-key rejection,
+A fixed v2.33.2 public-API case observed actual wrong-key rejection,
 key-authenticated browsing, exact preview/run identities, complete transferred
 bytes, source/destination-only retention, unregister-without-deletion and normal
-owned-tree exit. Final current-source native platform coverage remains pending.
+owned-tree exit on all six standard macOS, Windows and Linux AMD64/ARM64 profiles
+in [native run 44082376849](https://github.com/AresJef/verysync-sidecar/actions/runs/44082376849).
+The producer was `329e6680abd7dc5424e263ad2f41642112700642`, tree
+`5ab134ee957f7208391c2d99e8930c317049e5ac`. These selected cases passed inside a
+full run with other failures; they do not establish a complete final-source pass.
 Earlier escaped-key creation attempts were unknown outcomes because the SDK
 misclassified native omission of the empty password; those failed records remain
 historical evidence and are not rewritten as successful earlier tests.
 
-The native limits probe still rejects this valid backend encoding with HTTP500
+On those same six profiles, the native limits probe rejects this valid backend encoding with HTTP500
 and its `SSH private key: ssh: no key found` error. The SDK preserves that actual
 failure; it does not invent capability flags, substitute a password probe or
 claim that a successful listing validates the limits interface. Static inspection
@@ -475,8 +479,8 @@ true, null, malformed value or unrelated missing option still fails matching.
 This reconciliation neither enables a verification bypass nor establishes SSH
 server identity. The native strict HTTPS case separately requires a trusted
 chain and hostname, rejection of a wrong hostname and credentials, actual
-payloads across restart, and normal owned cleanup; incomplete runs remain
-unaccepted.
+payloads across restart, and normal owned cleanup. These effects passed on the
+six standard macOS, Windows and Linux AMD64/ARM64 native profiles described below.
 
 
 ## HTTPS WebDAV certificate boundary
@@ -493,10 +497,26 @@ uses the existing fingerprint-pinned public-CA loopback development fixture,
 with explicit private preparation and cleanup. It requires a correct hostname,
 rejects the same certificate through the loopback IP, retains credential
 validation, and verifies exact data before and after restart without TLS bypass.
-Its final native evidence is still pending. The SDK changes no system trust. The SDK installs no CA, changes no system
-trust store and makes no universal trust-configuration promise for the target
-kernel. Final source/platform acceptance and a correctly trusted identity retain
-their separate gates; configuration flags are not certificate verification proof.
+The dedicated case passed on all six standard macOS, Windows and Linux
+AMD64/ARM64 native profiles against v2.33.2 in
+[native run 44095566343](https://github.com/AresJef/verysync-sidecar/actions/runs/44095566343).
+The producer was `2097a64dc636c77ff215ee1e46f76574fbe9f258` (tree
+`10b859956ebe164c8af3fe9456c145c134854ae8`). Each profile verified the same
+fingerprint-pinned certificate, correct chain and hostname, native rejection of
+an incorrect hostname and credentials, and exact 262144-byte and 131072-byte
+payloads across restart. Registration removal retained the files and sentinel;
+owned processes, state locks and private peer files were released normally.
+
+Six separate cases also verified strict-flag creation, true-to-false updates,
+native false-default omission and same-identity restart for SFTP and WebDAV.
+WebDAV continued to reject an untrusted certificate after restart. These flag
+observations do not establish SFTP server identity.
+
+The SDK installs no CA, changes no system trust store and makes no universal
+trust-configuration promise for the target kernel. These observations apply to
+the pinned test endpoint and the selected modern hosted runners. Other platform,
+minimum-system and full final-source acceptance retain their separate gates;
+configuration flags alone are not certificate verification proof.
 
 
 ## SMB domain and guest boundary
@@ -520,4 +540,10 @@ and owned processes exit normally. The observations contain only policy match,
 username-presence, status and session flags, never NTLM hashes or passwords.
 These cases establish the selected native parameters and standalone protocol
 behavior. They do not claim Active Directory, Kerberos or arbitrary server guest
-permissions; final source/platform acceptance remains separate.
+permissions. The domain and guest arms passed on all six standard macOS, Windows
+and Linux AMD64/ARM64 profiles in
+[native run 44082376849](https://github.com/AresJef/verysync-sidecar/actions/runs/44082376849),
+producer `329e6680abd7dc5424e263ad2f41642112700642`, tree
+`5ab134ee957f7208391c2d99e8930c317049e5ac`. Other cases in that full run failed;
+these selected authentication effects retain their original producer and do not
+establish full final-source or minimum-system acceptance.

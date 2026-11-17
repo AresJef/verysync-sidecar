@@ -1,6 +1,6 @@
 {
   "draft_labels": [
-    "native-folder-concurrency-policy",
-    "native-partial-peer-shutdown"
+    "native-temporary-index-minimum-policy",
+    "native-gui-listener-boundary"
   ]
 }
