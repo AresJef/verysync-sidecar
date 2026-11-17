@@ -820,6 +820,22 @@ checks. The initial event count may exceed four because it counts native
 index updates, not distinct files. Complete integrated release acceptance
 remains pending.
 
+## IPv6 packet-class validation
+
+A separate CI case explicitly selects `::1` TCP listeners and the native
+`traffic_class` values 16, 32 and 0. The native cores and Rust caller remain
+unprivileged; only the bounded disposable-CI loopback header observer elevates.
+It binds positive-length data headers to the actual authenticated source port,
+uses explicit IPv6 filtering and checks the traffic-class octet. Native tcpdump
+omits a zero IPv6 class; only a complete IPv6 TCP header can establish that
+omission as zero. Missing, malformed or mismatched headers cannot pass.
+
+The original real-file, normal restart, identity, credential, unrelated
+configuration, sentinel and both normal process-tree/state exits remain required.
+Four Unix runtime outcomes are pending. Existing IPv4 results keep their original
+source identities. Neither packet case establishes router prioritization,
+Windows effects, an incoming-request memory cap or a throughput improvement.
+
 ## Signed incoming-request budgets
 
 `GeneralOptions::max_concurrent_incoming_request_kib` and its patch setter use
