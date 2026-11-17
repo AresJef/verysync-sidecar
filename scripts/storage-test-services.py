@@ -19,11 +19,11 @@ import threading
 import time
 
 
-def ready(protocol, port, tls=False):
+def ready(protocol, port, tls=False, *, public_ca=False):
     if not 0 < port <= 65535 or port == 18886:
         raise ValueError("invalid owned test endpoint")
     print(json.dumps({"ready": True, "protocol": protocol, "port": port, "tls": tls,
-                      "loopback_only": True,
+                      "loopback_only": True, "public_ca": public_ca,
                       "python_platform": sysconfig.get_platform()}), flush=True)
 
 
@@ -81,6 +81,8 @@ def ftp(config, root):
 
 
 def webdav(config, root):
+    if config.get("public_tls_manifest") is not None and config.get("tls") is not True:
+        raise ValueError("public-CA WebDAV fixture requires explicit TLS")
     from cheroot.wsgi import Server
     from wsgidav.wsgidav_app import WsgiDAVApp
     from wsgidav.fs_dav_provider import FileResource
@@ -133,26 +135,35 @@ def webdav(config, root):
         from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
         from cheroot.ssl.builtin import BuiltinSSLAdapter
 
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "synthetic loopback peer")])
-        now = datetime.now(timezone.utc)
-        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
-                .public_key(key.public_key()).serial_number(x509.random_serial_number())
-                .not_valid_before(now - timedelta(minutes=1))
-                .not_valid_after(now + timedelta(days=1))
-                .add_extension(x509.SubjectAlternativeName([
-                    x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
-                .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
-                .sign(key, hashes.SHA256()))
         cert_path = root.parent / "synthetic-webdav-cert.pem"
         key_path = root.parent / "synthetic-webdav-key.pem"
-        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-        key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
-                             serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
-        os.chmod(key_path, 0o600)
+        public_manifest = config.get("public_tls_manifest")
+        if public_manifest is not None:
+            import ldap_tls_fixture
+            ldap_tls_fixture.check_dns()
+            _, certificate, private_key = ldap_tls_fixture.load_manifest(public_manifest)
+            ldap_tls_fixture.write_private(cert_path, certificate)
+            ldap_tls_fixture.write_private(key_path, private_key)
+        else:
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "synthetic loopback peer")])
+            now = datetime.now(timezone.utc)
+            cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                    .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                    .not_valid_before(now - timedelta(minutes=1))
+                    .not_valid_after(now + timedelta(days=1))
+                    .add_extension(x509.SubjectAlternativeName([
+                        x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+                    .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+                    .sign(key, hashes.SHA256()))
+            cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+            key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                 serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+            os.chmod(key_path, 0o600)
         server.ssl_adapter = BuiltinSSLAdapter(str(cert_path), str(key_path), None)
     server.prepare()
-    ready("webdav", server.socket.getsockname()[1], config.get("tls", False))
+    ready("webdav", server.socket.getsockname()[1], config.get("tls", False),
+          public_ca=config.get("public_tls_manifest") is not None)
     server.serve()
 
 

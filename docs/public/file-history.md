@@ -183,6 +183,9 @@ Typed restore calls now refuse a request with `ArchiveRestorePrecondition`
 unless the selected archive timestamps precede a fresh `nowTime` reported by
 the target. RFC3339 offsets are compared as instants; the original native token
 is sent unchanged. The controller's wall clock and timezone are not consulted.
+Leap-second values and precision finer than nanoseconds are rejected rather than
+normalized or truncated. Whole-second archive comparisons use floor seconds,
+including native timestamps before the Unix epoch.
 Same-second/future timestamps, missing or unrecognized target clocks, and
 unrecognized archive timestamps produce no restoring POST. After inspecting the
 target, callers can make another explicit request once the precondition holds.

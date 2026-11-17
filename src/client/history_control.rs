@@ -21,15 +21,18 @@ fn archive_second(value: &str) -> Result<i64> {
             "native clock or archive timestamp is not bounded RFC3339",
         ));
     }
-    let time = chrono::DateTime::parse_from_rfc3339(value).map_err(|_| {
-        restore_precondition("native clock or archive timestamp is not verified RFC3339")
-    })?;
-    if time.timestamp_subsec_nanos() >= 1_000_000_000 {
+    if value.as_bytes().get(17..19) == Some(b"60") {
         return Err(restore_precondition(
             "native leap-second timestamps are not verified",
         ));
     }
-    Ok(time.timestamp())
+    let time = crate::timestamps::parse_rfc3339(value).ok_or_else(|| {
+        restore_precondition("native clock or archive timestamp is not verified RFC3339")
+    })?;
+    // Timestamp::as_second truncates negative fractions; native archive buckets
+    // use floor seconds, including instants before the Unix epoch.
+    i64::try_from(time.as_nanosecond().div_euclid(1_000_000_000))
+        .map_err(|_| restore_precondition("native timestamp is outside verified seconds"))
 }
 fn archive_components(value: &str, style: crate::PathStyle) -> Result<Vec<String>> {
     let path = TargetPath::remote(style, value)?;
@@ -529,5 +532,26 @@ impl Client {
                 },
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod timestamp_contracts {
+    use super::archive_second;
+    #[test]
+    fn archive_seconds_preserve_negative_fraction_floor_and_offset_equivalence() {
+        assert_eq!(archive_second("1969-12-31T23:59:59.500Z").unwrap(), -1);
+        assert_eq!(archive_second("1970-01-01T07:59:59.500+08:00").unwrap(), -1);
+        assert_eq!(archive_second("1970-01-01T00:00:00.999999999Z").unwrap(), 0);
+    }
+    #[test]
+    fn archive_seconds_never_normalize_leaps_or_discard_unknown_precision() {
+        for value in [
+            "2016-12-31T23:59:60Z",
+            "2026-11-17T03:00:00.1234567890Z",
+            "2026-11-17T03:00:00Z[UTC]",
+        ] {
+            assert!(archive_second(value).is_err());
+        }
     }
 }

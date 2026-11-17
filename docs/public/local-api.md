@@ -70,7 +70,8 @@ discovery or establishes WAN reachability, file durability or batch completion.
 
 `folder_history(page, filter)` sends one explicit bounded page and a JSON-encoded
 `LocalApiHistoryFilter`. Name/folder/action fields remain native selections;
-start/end must be RFC3339 with a valid ordering. The core itself ignores malformed
+start/end must be bounded RFC3339 with a valid ordering; leap seconds and
+precision finer than nanoseconds are rejected. Original spelling is preserved. The core itself ignores malformed
 filter JSON, so the SDK validates/encodes it before making a request. Native
 backend errors remain `Error::Api`; missing page containers are response errors.
 An explicit null record collection is preserved separately from an empty array.

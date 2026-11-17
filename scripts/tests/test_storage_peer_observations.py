@@ -14,6 +14,13 @@ PEER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PEER)
 
 
+class PublicHttpsPeerBoundary(unittest.TestCase):
+    def test_public_ca_manifest_cannot_be_advertised_by_a_plaintext_listener(self):
+        for tls in [False, None, "true", 1]:
+            with self.subTest(tls=tls), self.assertRaisesRegex(ValueError, "explicit TLS"):
+                PEER.webdav({"public_tls_manifest": "/unread/synthetic/manifest.json", "tls": tls}, Path("/uncreated"))
+
+
 class FtpObservationContracts(unittest.TestCase):
     def test_only_fixed_command_names_are_emitted_and_arguments_are_absent(self):
         stderr = io.StringIO()

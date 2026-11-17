@@ -1,5 +1,23 @@
 # Resource measurement evidence
 
+Protocol v25 binds the actual timestamp dependency repair: Chrono is replaced by
+Jiff while retaining Rust 1.85. Resource workloads, the v24 observer lifecycle,
+all quality/resource limits, four formal plus two independent fresh-process
+cycles, and finite acquisition quotas are unchanged. Every profile requires new
+counter/timer calibration and both complete opposite preparation orders. No
+v24 or earlier measurements are relabeled as v25 results.
+
+Intel returns to the original standard `macos-15-intel` environment with the
+scoped activity request. The separate macOS 26 v24 attempt had four insufficient
+streaming preparations, including an 887.625 ms gap and 5.927% metric-read cost,
+and no valid complete order; formal collection correctly did not start there.
+This environment selection is a new preparation candidate, not an identified
+cause, guaranteed fix or quality waiver. New v25 native preparation and formal
+acceptance remain pending.
+
+## Retained v24 observer configuration and evidence
+
+
 Protocol v24 adds a scoped process activity request to the Darwin measurement
 observer, after its owned native workers have started. It combines
 `NSActivityLatencyCritical` with `NSActivityUserInitiatedAllowingIdleSystemSleep`,

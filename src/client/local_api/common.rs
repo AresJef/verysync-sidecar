@@ -10,6 +10,7 @@ use std::{collections::BTreeMap, fmt};
 
 /// Explicit native history filters. Timestamp strings must be RFC3339; the SDK
 /// preserves their spelling and does not supply the controller's current time.
+/// Leap seconds and precision finer than nanoseconds are rejected.
 #[derive(Clone, Default, Serialize)]
 pub struct LocalApiHistoryFilter {
     /// Optional native name filter; matching semantics remain the target's.
@@ -54,10 +55,8 @@ impl LocalApiHistoryFilter {
                             reason: "history timestamps must be bounded RFC3339 values",
                         });
                     }
-                    chrono::DateTime::parse_from_rfc3339(v).map_err(|_| {
-                        Error::InvalidConfiguration {
-                            reason: "history timestamps must use RFC3339",
-                        }
+                    crate::timestamps::parse_rfc3339(v).ok_or_else(|| Error::InvalidConfiguration {
+                        reason: "history timestamps must use RFC3339",
                     })
                 })
                 .transpose()
