@@ -1,0 +1,104 @@
+name: Old Linux SDK runtime
+
+on:
+  push:
+    branches: [ci/linux-minimum-boot-20261119-01a1ca9b]
+    paths:
+      - .github/workflows/linux-minimum-runtime.yml
+      - scripts/prepare-linux-minimum-boot.py
+      - scripts/probes/build-linux-minimum-runtime.sh
+      - scripts/probes/linux_minimum_runtime.rs
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-minimum-boot-20261119-01a1ca9b'
+    name: Verify the fixed SDK and core on both offline x86-64 guests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    env:
+      PYPA_BUILD_IMAGE: quay.io/pypa/manylinux2014_x86_64@sha256:e6a785657009c612fe2a85fa933051d03a50ba62b1c5e47d62abcab546a2e423
+      EXACT_CANDIDATE: 83942f58532cbad796a1d89aaee1fe9e2b04df85
+      EXACT_CANDIDATE_TREE: 054c09ee2d25e7b8bc8f90fdc758c30fe4c5fd04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_CANDIDATE }}
+          path: verified-product
+          persist-credentials: false
+      - name: Build the unchanged candidate under the fixed GNU libc and compiler
+        run: |
+          set -euo pipefail
+          test "$(git -C verified-product rev-parse HEAD)" = "$EXACT_CANDIDATE"
+          test "$(git -C verified-product rev-parse 'HEAD^{tree}')" = "$EXACT_CANDIDATE_TREE"
+          test "$(uname -m)" = x86_64
+          test -z "$(git -C verified-product status --porcelain)"
+          printf 'product source=%s tree=%s\n' "$EXACT_CANDIDATE" "$EXACT_CANDIDATE_TREE"
+          rustup toolchain install 1.85.0 --profile minimal --no-self-update
+          sysroot="$(rustc +1.85.0 --print sysroot)"
+          work="$RUNNER_TEMP/vs-minimum-runtime"
+          mkdir -m 0700 "$work"
+          mkdir "$work/build" "$work/official-core" "$work/runs"
+          docker pull --platform linux/amd64 "$PYPA_BUILD_IMAGE"
+          docker image inspect --format '{{.Id}} {{.Architecture}} {{json .RepoDigests}}' "$PYPA_BUILD_IMAGE"
+          docker run --rm --platform linux/amd64 --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/verified-product,dst=/candidate,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/scripts/probes,dst=/support,readonly" \
+            --mount "type=bind,src=$sysroot,dst=/toolchain,readonly" \
+            --mount "type=bind,src=$work/build,dst=/evidence" \
+            "$PYPA_BUILD_IMAGE" /bin/bash /support/build-linux-minimum-runtime.sh
+      - name: Boot and verify native Rust effects independently on both kernels
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-minimum-runtime"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 seabios
+          qemu-system-x86_64 --version
+          python3 -B verified-product/scripts/prepare-test-engine.py prepare \
+            --package linux-amd64-standard --parent "$work/official-core" > "$work/native-program-receipt.json"
+          overall=0
+          for suite in squeeze wheezy; do
+            root="$work/runs/$suite"
+            if [ "$suite" = squeeze ]; then release=2.6.32-5-amd64; else release=3.2.0-4-amd64; fi
+            if ! python3 -B scripts/prepare-linux-minimum-boot.py "$suite" --destination "$root" \
+              --runtime-dir "$work/build/guest-runtime" --engine-receipt "$work/native-program-receipt.json"; then
+              overall=1
+              continue
+            fi
+            status=0
+            timeout 170s qemu-system-x86_64 -machine pc,accel=tcg -cpu qemu64 -m 512 -smp 1 \
+              -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
+              -kernel "$root/$suite/bzImage" -initrd "$root/$suite/initramfs.cpio.gz" \
+              -append 'console=ttyS0 rdinit=/init panic=1' > "$root/guest-console.log" 2>&1 || status=$?
+            tr -d '\r' < "$root/guest-console.log" > "$root/guest-console.txt"
+            cat "$root/guest-console.txt"
+            echo "Guest $suite emulator_exit=$status"
+            if [ "$status" -ne 0 ] \
+              || ! grep -Fx "VS_MINIMUM_BOOT_OK kernel=$release loopback=127.0.0.1" "$root/guest-console.txt" \
+              || ! grep -Fx 'VS_MINIMUM_CORE_VERSION_OK v2.33.2' "$root/guest-console.txt" \
+              || ! grep -Fx 'VS_MINIMUM_SDK_RUNTIME glibc=2.17 uid=1000' "$root/guest-console.txt" \
+              || ! grep -E '^VS_MINIMUM_SDK_OK \{' "$root/guest-console.txt" \
+              || grep -E 'VS_MINIMUM_BOOT_FAILURE|Kernel panic - not syncing' "$root/guest-console.txt"; then
+              overall=1
+            fi
+          done
+          exit "$overall"
+      - name: Retain original consoles and source checksums
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: linux-minimum-runtime-evidence
+          path: |
+            ${{ runner.temp }}/vs-minimum-runtime/runs/*/guest-console.log
+            ${{ runner.temp }}/vs-minimum-runtime/runs/*/prepared-boot-fixture.json
+            ${{ runner.temp }}/vs-minimum-runtime/build/*sha256.txt
+            ${{ runner.temp }}/vs-minimum-runtime/build/linked-libraries.txt
+            ${{ runner.temp }}/vs-minimum-runtime/build/symbol-versions.txt
+            ${{ runner.temp }}/vs-minimum-runtime/native-program-receipt.json
+          if-no-files-found: warn
