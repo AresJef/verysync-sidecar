@@ -1,0 +1,95 @@
+name: Windows AMD64 full upgrade suite with route observations
+
+on:
+  push:
+    branches: [ci/windows-amd64-full-upgrade-route-20261119-01a1ca9b]
+    paths:
+      - .github/workflows/windows-amd64-full-upgrade-route.yml
+      - scripts/run-isolated-engine-tests.py
+
+permissions:
+  contents: read
+
+jobs:
+  provider:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/windows-amd64-full-upgrade-route-20261119-01a1ca9b'
+    name: Check the real upgrade route with bounded relay timing
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Bind the probe to the exact candidate and runner architecture
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ARCH" = X64
+          base="$(git rev-parse HEAD^)"
+          tree="$(git rev-parse "$base^{tree}")"
+          test "$tree" = fe22191751451e950a4fa1932f06d129c817341e
+          test -z "$(git diff "$base" HEAD -- src Cargo.toml Cargo.lock releases tests docs)"
+          printf 'checked candidate=%s tree=%s\n' "$base" "$tree"
+          git log -1 --format='%H %T %P'
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare both pinned programs privately
+        run: |
+          python scripts/prepare-test-engine.py prepare --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          python scripts/prepare-test-engine.py prepare --upgrade-source --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Require every original upgrade case
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-full-upgrade-route"
+      - name: Check exact baseline fixture cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Check exact older fixture cleanup
+        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Read the public metadata directly after the original suite
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: |
+          python - <<'PY'
+          import hashlib
+          import ipaddress
+          import json
+          import subprocess
+
+          fields = ["remote_ip", "http_code", "time_namelookup", "time_connect", "time_appconnect", "time_starttransfer", "time_total", "size_download"]
+          for family in ("--ipv4", "--ipv6"):
+              cmd = [
+                  "curl.exe", "-q", family, "--noproxy", "*", "--proto", "=https",
+                  "--connect-timeout", "4", "--max-time", "8", "--silent", "--show-error",
+                  "--output", "NUL", "--write-out", "|".join("%{" + field + "}" for field in fields),
+                  "https://upgrades.verysync.cn/meta.json",
+              ]
+              try:
+                  run = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+              except subprocess.TimeoutExpired:
+                  print("post-suite official metadata: " + json.dumps({"family": family, "probe_timeout": True}))
+                  continue
+              row = dict(zip(fields, run.stdout.strip().split("|")))
+              address = row.pop("remote_ip", "")
+              if address:
+                  ipaddress.ip_address(address)
+              row.update({"family": family, "exit": run.returncode,
+                          "provider_address_key": hashlib.sha256(address.encode("ascii")).hexdigest()[:16] if address else None})
+              print("post-suite official metadata: " + json.dumps(row, sort_keys=True))
+          PY
+      - name: Retain the bounded timing observation
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-amd64-full-upgrade-route
+          path: ${{ runner.temp }}/vs-full-upgrade-route/proxy-observations.json
+          if-no-files-found: warn

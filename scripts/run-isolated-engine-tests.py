@@ -422,6 +422,7 @@ class BlockRequest(socketserver.StreamRequestHandler):
             started = time.monotonic()
             tunnel = None
             outcome = "relay_deadline"
+            phase = "connect_provider"
             if official:
                 with self.server.guard:
                     if len(self.server.upgrade_tunnels) < 64:
@@ -429,6 +430,11 @@ class BlockRequest(socketserver.StreamRequestHandler):
                                   "connected": False, "completed": False,
                                   "connect_s": None, "elapsed_s": None,
                                   "client_bytes": 0, "provider_bytes": 0,
+                                  "first_client_bytes_s": None, "last_client_bytes_s": None,
+                                  "first_provider_bytes_s": None, "last_provider_bytes_s": None,
+                                  "provider_family": None, "provider_address_key": None,
+                                  "client_forwarded_bytes": 0, "provider_forwarded_bytes": 0,
+                                  "final_io_phase": None,
                                   "outcome": "pending"}
                         self.server.upgrade_tunnels.append(tunnel)
                     else:
@@ -440,6 +446,10 @@ class BlockRequest(socketserver.StreamRequestHandler):
                         with self.server.guard:
                             tunnel["connected"] = True
                             tunnel["connect_s"] = round(time.monotonic() - started, 3)
+                            tunnel["provider_family"] = upstream.family.name
+                            address = upstream.getpeername()[0]
+                            tunnel["provider_address_key"] = hashlib.sha256(address.encode("ascii")).hexdigest()[:16]
+                    phase = "send_connect_response"
                     self.wfile.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     self.wfile.flush()
                     with self.server.guard:
@@ -449,17 +459,28 @@ class BlockRequest(socketserver.StreamRequestHandler):
                             self.server.forwarded += 1
                     deadline = time.monotonic() + 30
                     while time.monotonic() < deadline:
+                        phase = "wait_for_either_socket"
                         readable, _, _ = select.select([self.request, upstream], [], [], 0.2)
                         for source in readable:
+                            source_side = "client" if source is self.request else "provider"
+                            phase = f"read_{source_side}"
                             data = source.recv(65536)
                             if not data:
                                 outcome = "client_eof" if source is self.request else "provider_eof"
                                 return
                             if tunnel is not None:
+                                at = round(time.monotonic() - started, 3)
                                 with self.server.guard:
-                                    field = "client_bytes" if source is self.request else "provider_bytes"
-                                    tunnel[field] += len(data)
+                                    tunnel[f"{source_side}_bytes"] += len(data)
+                                    first = f"first_{source_side}_bytes_s"
+                                    if tunnel[first] is None:
+                                        tunnel[first] = at
+                                    tunnel[f"last_{source_side}_bytes_s"] = at
+                            phase = "write_to_provider" if source is self.request else "write_to_client"
                             (upstream if source is self.request else self.request).sendall(data)
+                            if tunnel is not None:
+                                with self.server.guard:
+                                    tunnel[f"{source_side}_forwarded_bytes"] += len(data)
                 return
             except (OSError, ValueError) as error:
                 outcome = ("socket_timeout" if isinstance(error, TimeoutError) else
@@ -473,6 +494,7 @@ class BlockRequest(socketserver.StreamRequestHandler):
                         tunnel["completed"] = True
                         tunnel["elapsed_s"] = round(time.monotonic() - started, 3)
                         tunnel["outcome"] = outcome
+                        tunnel["final_io_phase"] = phase
         # Retain only a hostname and method, never credentials, queries or headers.
         key = (method, host if host and len(host) <= 253 else "unparsed")
         with self.server.guard:
