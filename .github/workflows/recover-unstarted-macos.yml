@@ -1,0 +1,229 @@
+name: Recover the eight unstarted macOS diagnostic cases
+
+on:
+  push:
+    branches: [ci/recover-unstarted-candidate-macos-20261119-01a1ca9b]
+    paths: [.github/workflows/recover-unstarted-macos.yml]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native-diagnostic-plan:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/recover-unstarted-candidate-macos-20261119-01a1ca9b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Select the exact original rows whose hosted runners were unassigned
+        id: plan
+        run: |
+          printf 'matrix=%s\n' '{"include":[{"package":"macos-arm64-standard","runner":"macos-15","rust":"aarch64-apple-darwin","target":"configuration_engine","label":"default-ignore-template","filter":"native_default_ignore_template","trace":"0"},{"package":"macos-amd64-standard","runner":"macos-15-intel","rust":"x86_64-apple-darwin","target":"configuration_engine","label":"narrow-config-reads","filter":"native_narrow_configuration_reads_preserve_identity_folders_and_state","trace":"0"},{"package":"macos-arm64-standard","runner":"macos-15","rust":"aarch64-apple-darwin","target":"file_transfer_engine","label":"process-failure-recovery","filter":"public_owned_process_failure_retains_partial_download_and_recovers_explicitly","trace":"0"},{"package":"macos-arm64-standard","runner":"macos-15","rust":"aarch64-apple-darwin","target":"devices","label":"device-control-acceptance","filter":"actual_","trace":"0"},{"package":"macos-arm64-standard","runner":"macos-15","rust":"aarch64-apple-darwin","target":"files_engine","filter":"public_native_thumbnails","label":"thumbnail-cache","trace":"0"},{"package":"macos-arm64-standard","runner":"macos-15","rust":"aarch64-apple-darwin","target":"configuration_engine","filter":"native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data","label":"native-socks5-proxy","trace":"0"},{"package":"macos-arm64-standard","runner":"macos-15","rust":"aarch64-apple-darwin","target":"upgrade_engine","filter":"native_full_index_upgrade_policy_changes_actual_unchanged_index_resend","label":"native-full-index-upgrade-policy","trace":"0"},{"package":"macos-arm64-standard","runner":"macos-15","rust":"aarch64-apple-darwin","target":"sync_observation","filter":"lan_bandwidth_cases::actual_lan_bandwidth_toggle_changes_enforcement_and_preserves_bytes","label":"native-lan-bandwidth-inclusion","trace":"0"}]}' >> "$GITHUB_OUTPUT"
+
+  windows-folder-opener-diagnosis:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/recover-unstarted-candidate-macos-20261119-01a1ca9b'
+    name: Native helper diagnosis (${{ matrix.package }} / ${{ matrix.label || matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    needs: native-diagnostic-plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.native-diagnostic-plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
+      VERYSYNC_TEST_OPENER_TRACE: ${{ matrix.trace }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: 83942f58532cbad796a1d89aaee1fe9e2b04df85
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Prepare the explicit x64 protocol-peer interpreter on Windows ARM
+        if: (matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine' || matrix.target == 'authentication_engine') && matrix.package == 'windows-arm64-standard'
+        id: storage_tools_python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+          architecture: x64
+          update-environment: false
+      - name: Prepare private protocol-peer tools for storage and management cases
+        if: matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine' || matrix.target == 'authentication_engine'
+        env:
+          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
+        run: >-
+          python scripts/prepare-storage-test-environment.py
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require Cargo artifact and separate Winsock preflight contracts
+        run: python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+      - name: Install the explicit Windows x86 assembly build prerequisite
+        if: matrix.package == 'windows-386-standard'
+        shell: pwsh
+        run: |
+          choco install nasm --version=2.16.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory = Join-Path $env:ProgramFiles 'NASM'
+          $nasmBinary = Join-Path $nasmDirectory 'nasm.exe'
+          & $nasmBinary -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install native Rust and fetch locked dependencies
+        run: |
+          if [[ "${{ matrix.package }}" == "windows-386-standard" ]]; then
+            rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --force-non-host
+          else
+            rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          fi
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed private core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Prepare the pinned private certificate for both strict LDAP transport cases
+        if: matrix.target == 'ldap_trusted_ca_engine' || matrix.label == 'trusted-https-identity'
+        run: >-
+          python scripts/prepare-ldap-tls-fixture.py prepare
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Prepare the pinned older source for the focused official-provider case
+        if: matrix.target == 'upgrade_engine'
+        run: >-
+          python scripts/prepare-test-engine.py prepare --upgrade-source
+          --package "${{ matrix.package }}" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe actual Windows x86 socket-provider guard inputs without changing them
+        if: matrix.package == 'windows-386-standard'
+        run: |
+          python - <<'PY'
+          import ctypes, importlib.util, json, os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('owned_opener_guard', 'scripts/run-isolated-engine-tests.py')
+          helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
+          query = ctypes.WinDLL('kernel32', use_last_error=True).GetSystemWow64DirectoryW
+          query.argtypes = [ctypes.POINTER(ctypes.c_wchar), ctypes.c_uint]; query.restype = ctypes.c_uint
+          for capacity in [260, 32768]:
+              buffer = ctypes.create_unicode_buffer(capacity); returned = query(buffer, capacity)
+              print('native WOW64 buffer control: '+json.dumps({'capacity': capacity,
+                    'returned': returned, 'filled_utf16_units': len(buffer.value.encode('utf-16-le', 'surrogatepass'))//2,
+                    'metadata_only': True}), flush=True)
+          paths = [('host-system32', Path(os.environ['SYSTEMROOT']) / 'System32' / 'mswsock.dll'),
+                   ('queried-wow64', helper.windows_wow64_directory() / 'mswsock.dll')]
+          for label, path in paths:
+              row = {'label': label, 'path': str(path), 'absolute': path.is_absolute(),
+                     'exists': path.exists(), 'is_file': path.is_file(),
+                     'is_symlink': path.is_symlink(), 'is_junction': path.is_junction(),
+                     'host_python_pointer_bits': ctypes.sizeof(ctypes.c_void_p)*8,
+                     'metadata_only': True, 'guard_overridden': False}
+              try:
+                  row.update(resolved_path=str(path.resolve(strict=True)),
+                             pe_machine=hex(helper.windows_pe_machine(path)))
+                  if path.is_symlink(): row['link_target'] = os.readlink(path)
+              except OSError as error:
+                  row.update(error_type=type(error).__name__, error=str(error)[:240])
+              print('native socket-provider guard metadata: '+json.dumps(row), flush=True)
+          PY
+      - name: Verify actual copy strategy and data on the isolated Linux receiver
+        if: matrix.label == 'native-copy-range-syscalls'
+        run: |
+          set -euo pipefail
+          if ! command -v strace >/dev/null; then
+            tool_dir=$(mktemp -d "$RUNNER_TEMP/vs-strace.XXXXXX")
+            (
+              cd "$tool_dir"
+              apt-get download strace
+              dpkg-deb -x ./strace_*.deb "$tool_dir/unpacked"
+            )
+            export PATH="$tool_dir/unpacked/usr/bin:$PATH"
+          fi
+          python scripts/run-native-copy-range-test.py --toolchain "$TEST_TOOLCHAIN" \
+            --evidence-dir "$RUNNER_TEMP/vs-native-copy-range"
+      - name: Preserve original native effects, strict predicates and deadlines
+        if: matrix.target != 'disk_full_engine' && matrix.target != 'upgrade_engine' && matrix.label != 'native-official-tracker-registration' && matrix.label != 'native-core-preference-current-contract' && matrix.label != 'native-copy-range-syscalls'
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target "${{ matrix.target }}"
+          --test-filter "${{ matrix.filter }}"
+          --evidence-dir "${{ runner.temp }}/vs-windows-folder-opener-diagnosis"
+      - name: Verify explicitly authorized official tracker registration and controlled disconnect
+        if: matrix.label == 'native-official-tracker-registration'
+        run: >-
+          python scripts/run-official-tracker-test.py --toolchain "$TEST_TOOLCHAIN"
+          --allow-official-tracker
+          --evidence-dir "${{ runner.temp }}/vs-official-tracker"
+      - name: Verify six original core preference cases on the current native source
+        if: matrix.label == 'native-core-preference-current-contract'
+        run: |
+          set -euo pipefail
+          vs_failed=0
+          for vs_case in \
+            native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart \
+            native_crash_preferences_preserve_fixed_usage_fields_and_survive_restart \
+            native_system_preferences_write_real_event_audit_and_preserve_target_selections \
+            native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart \
+            native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data \
+            native_narrow_configuration_reads_preserve_identity_folders_and_state
+          do
+            vs_status=0
+            python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+              --test-target configuration_engine --test-filter "$vs_case" \
+              --evidence-dir "${{ runner.temp }}/vs-current-preferences/$vs_case" || vs_status=$?
+            printf 'native core preference command receipt: {"case":"%s","exit_code":%s}\n' "$vs_case" "$vs_status"
+            if [ "$vs_status" -ne 0 ]; then vs_failed=1; fi
+          done
+          exit "$vs_failed"
+      - name: Require actual Windows requests, release boundary and complete data
+        if: matrix.label == 'native-windows-sleep-prevention-policy'
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          text = (Path(os.environ["RUNNER_TEMP"]) / "vs-windows-folder-opener-diagnosis/configuration-engine.log").read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in text
+          marker = "native idle-sleep policy evidence: "
+          phases = [json.loads(line.split(marker, 1)[1]) for line in text.splitlines() if marker in line]
+          assert [p["enabled"] for p in phases] == [False, True, False]
+          for phase in phases:
+              assert phase["actual_syncing_observed"] and phase["actual_file_bytes_transferred"]
+              assert phase["actual_system_idle_sleep_assertion_observed"] == phase["enabled"]
+              assert phase["actual_owned_windows_private_image_system_request_observed"] == phase["enabled"]
+              assert not phase["windows_request_unique_pid_attribution_claimed"]
+              if phase["native_request_retained_past_original_150s_idle_window"]:
+                  assert phase["enabled"] and not phase["actual_assertion_and_owned_helper_released_after_transfer"]
+                  assert phase["actual_explicit_disable_normal_stop_cleared_request"]
+                  assert phase["actual_persisted_restart_after_explicit_stop"]
+              else:
+                  assert phase["actual_assertion_and_owned_helper_released_after_transfer"]
+          assert "actual_three_transfers_and_source_receiver_bytes_retained=true" in text
+          assert "actual_both_normal_owned_tree_and_state_exit=true" in text
+          assert "host_power_settings_changed=false host_suspend_attempted=false" in text
+          PY
+      - name: Require actual fixed URL and official-provider CLI upgrade effects
+        if: matrix.target == 'upgrade_engine'
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --test-filter "${{ matrix.filter }}"
+          --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-focused-official-provider"
+      - name: Require real native disk-full effects and verified volume cleanup
+        if: matrix.target == 'disk_full_engine'
+        run: >-
+          python scripts/run-bounded-disk-full-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --evidence-dir "${{ runner.temp }}/vs-focused-disk-full"
+      - name: Remove only the exact prepared private LDAP certificate fixture
+        if: always() && (matrix.target == 'ldap_trusted_ca_engine' || matrix.label == 'trusted-https-identity')
+        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "${{ runner.temp }}"
+      - name: Require exact owned-executable cleanup after the original result
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+
+      - name: Require exact older owned-executable cleanup
+        if: always() && matrix.target == 'upgrade_engine'
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
