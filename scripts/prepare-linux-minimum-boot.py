@@ -79,14 +79,15 @@ def prepare_runtime(runtime, engine_receipt):
         ("etc/group", stat.S_IFREG | 0o644,b"root:x:0:\nvs-guest:x:1000:\n",0,0),
         ("etc/hosts", stat.S_IFREG | 0o644,b"127.0.0.1 localhost\n",0,0),
         ("bin/verysync", stat.S_IFREG | 0o755,native_core,0,0),
+        (".vs-entropy-seed", stat.S_IFREG | 0o400,os.urandom(64),0,0),
     ]
 
     hashes = {"bin/verysync":digest}
     for source in sorted(runtime.iterdir()):
         assert source.is_file() and not source.is_symlink()
         assert 0 < source.stat().st_size < 100_000_000
-        if source.name == "vs-sdk-probe":
-            destination = "bin/vs-sdk-probe"
+        if source.name in {"vs-sdk-probe", "vs-entropy-control"}:
+            destination = "bin/" + source.name
         else:
             assert re.fullmatch(r"(lib|ld-)[A-Za-z0-9_.+-]+",source.name)
             destination = "lib64/"+source.name
@@ -95,7 +96,8 @@ def prepare_runtime(runtime, engine_receipt):
         assert struct.unpack_from("<H",data,18)[0] == 62
         files.append((destination, stat.S_IFREG | 0o755,data,0,0))
         hashes[destination] = dig(data)
-    assert {"lib64/libc.so.6","lib64/ld-linux-x86-64.so.2","bin/vs-sdk-probe"} <= hashes.keys()
+    assert {"lib64/libc.so.6","lib64/ld-linux-x86-64.so.2",
+            "bin/vs-sdk-probe","bin/vs-entropy-control"} <= hashes.keys()
     return files, hashes
 
 
@@ -112,7 +114,22 @@ echo "VS_MINIMUM_CORE_VERSION_OK v2.33.2"
 libc_version=$(/lib64/libc.so.6) || fail fixture_libc
 case "$libc_version" in *"version 2.17"*) ;; *) fail fixture_libc ;; esac
 echo "VS_MINIMUM_GLIBC_VERSION glibc=2.17"
-/bin/vs-sdk-probe {program_sha} || fail sdk_runtime
+case " $(/bin/busybox cat /proc/cmdline) " in
+    *" vs_minimum_entropy=natural "*) entropy_mode=natural ;;
+    *" vs_minimum_entropy=seeded "*) entropy_mode=seeded ;;
+    *) fail entropy_mode ;;
+esac
+echo "VS_MINIMUM_ENTROPY_MODE $entropy_mode"
+/bin/vs-entropy-control before || fail entropy_measurement
+if [ "$entropy_mode" = seeded ]; then
+    /bin/vs-entropy-control seed < /.vs-entropy-seed || fail entropy_seed
+fi
+/bin/busybox rm /.vs-entropy-seed || fail entropy_seed_removal
+/bin/vs-entropy-control before_sdk || fail entropy_measurement
+sdk_status=0
+/bin/vs-sdk-probe {program_sha} || sdk_status=$?
+/bin/vs-entropy-control after_sdk || fail entropy_measurement
+[ "$sdk_status" -eq 0 ] || fail sdk_runtime
 '''
     return f"""#!/bin/busybox sh
 export PATH=/bin

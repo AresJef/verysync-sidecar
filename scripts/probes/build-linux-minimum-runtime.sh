@@ -22,6 +22,8 @@ interpreter=$(readelf -l "$binary" | sed -n 's/.*Requesting program interpreter:
 test "$interpreter" = /lib64/ld-linux-x86-64.so.2
 install -m 755 "$binary" "$guest/vs-sdk-probe"
 install -m 755 "$interpreter" "$guest/ld-linux-x86-64.so.2"
+gcc -std=gnu11 -Wall -Wextra -Werror -O2 /support/linux_guest_entropy.c -o "$guest/vs-entropy-control"
+test "$(readelf -l "$guest/vs-entropy-control" | sed -n 's/.*Requesting program interpreter: \([^]]*\)\].*/\1/p')" = "$interpreter"
 ldd "$binary" | tee /evidence/linked-libraries.txt
 if grep -F 'not found' /evidence/linked-libraries.txt; then exit 1; fi
 while read -r dependency; do
@@ -35,6 +37,7 @@ while read -r dependency; do
 done < <(awk '$2 == "=>" && $3 ~ /^\// {print $3}' /evidence/linked-libraries.txt)
 test -f "$guest/libc.so.6"
 readelf --version-info "$binary" > /evidence/symbol-versions.txt
+readelf --version-info "$guest/vs-entropy-control" >> /evidence/symbol-versions.txt
 highest=$(grep -Eo 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' /evidence/symbol-versions.txt | sort -Vu | tail -n 1)
 test "$(printf '%s\n' "$highest" GLIBC_2.17 | sort -V | tail -n 1)" = GLIBC_2.17
 sha256sum "$guest"/* > /evidence/guest-runtime-sha256.txt

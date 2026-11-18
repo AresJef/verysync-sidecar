@@ -102,7 +102,23 @@ async fn verify_guest(hash: [u8; 32]) -> ProbeResult<()> {
         endpoint,
     )?;
     println!("VS_MINIMUM_SDK_PHASE starting");
-    let mut core = ManagedInstance::start(options).await?;
+    let mut core = match ManagedInstance::start(options).await {
+        Ok(core) => core,
+        Err(error) => {
+            let settings = state.join("setting.dat").is_file();
+            let key_generated = state.join("key.pem").is_file();
+            let configured = state.join(".verysync-sidecar-configured").is_file();
+            let core_log_created = state.join(".verysync-sidecar-core.log").is_file();
+            let exact_programs = owned_images(&program).map(|pids| pids.len()).ok();
+            println!(
+                "VS_MINIMUM_SDK_START_FAILURE {}",
+                json!({"settings_created":settings,"key_generated":key_generated,
+                    "configuration_completed":configured,"core_log_created":core_log_created,
+                    "exact_programs_running":exact_programs})
+            );
+            return Err(error.into());
+        }
+    };
     require(
         core.program_info().version == "v2.33.2",
         "unexpected actual core version",
