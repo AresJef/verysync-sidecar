@@ -14,8 +14,8 @@ SPEC.loader.exec_module(HELPER)
 
 
 class DiagnosticSelection(unittest.TestCase):
-    def test_current_admission_cleanup_runs_only_original_linux_failure(self):
-        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+    def test_original_admission_cleanup_remains_a_focused_linux_gate(self):
+        selection = {'draft_labels': ['native-incoming-admission-linux-cleanup']}
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 1)
         self.assertEqual({row['package'] for row in rows}, {'linux-amd64-standard'})
@@ -26,6 +26,25 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
         workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
         self.assertEqual(workflow.count('      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm'), 2)
+
+    def test_tracker_requires_six_specialist_commands_and_keeps_original_network_coverage(self):
+        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+        rows = HELPER.select(self.rows, selection, draft=True)
+        self.assertEqual(len(rows), 6)
+        self.assertEqual({r['package'] for r in rows}, set(HELPER.PROFILES) - {'windows-386-standard'})
+        self.assertTrue(all(r['label'] == 'native-official-tracker-registration' and r['target'] == 'network'
+                            and r['filter'] == 'tracker_observation_cases::native_tracker_registers_and_exposes_controlled_disconnect'
+                            for r in rows))
+        self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
+        workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
+        self.assertIn('--test-target network --allow-private-discovery --test-filter actual_', workflow)
+        sources = ['tests/network.rs', 'tests/common/network_limit_effects.rs', 'tests/common/local_announcement_cases.rs']
+        original = sum(len(re.findall(r'async fn actual_[A-Za-z0-9_]+', (ROOT / p).read_text())) for p in sources)
+        self.assertEqual(original, 7)
+        block = workflow.split('      - name: Verify explicitly authorized official tracker registration and controlled disconnect\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn("if: matrix.label == 'native-official-tracker-registration'", block)
+        self.assertIn('--allow-official-tracker', block)
+        self.assertIn("matrix.label != 'native-official-tracker-registration'", workflow)
 
     def test_ready_keeps_all_six_admission_commands_after_cleanup_change(self):
         rows = HELPER.select(self.rows, {"draft_labels": ["native-incoming-admission-cap", "native-incoming-admission-linux-cleanup"]}, draft=True)
@@ -56,7 +75,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-admission-staged-deadlines-20261118-01a1ca9b",
                        "test/native-admission-linux-cleanup-20261118-01a1ca9b",
                        "test/native-admission-readonly-exit-20261118-01a1ca9b",
-                       "test/native-admission-reconciled-caller-20261118-01a1ca9b"]:
+                       "test/native-admission-reconciled-caller-20261118-01a1ca9b",
+                       "test/native-official-tracker-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -127,7 +147,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-admission-staged-deadlines-20261118-01a1ca9b",
                        "test/native-admission-linux-cleanup-20261118-01a1ca9b",
                        "test/native-admission-readonly-exit-20261118-01a1ca9b",
-                       "test/native-admission-reconciled-caller-20261118-01a1ca9b"]:
+                       "test/native-admission-reconciled-caller-20261118-01a1ca9b",
+                       "test/native-official-tracker-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -229,7 +250,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 236)
+        self.assertEqual(len(self.rows), 242)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -363,7 +384,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] == label and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 236)
+        self.assertEqual(len(self.rows), 242)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

@@ -184,3 +184,13 @@ identity, key, configuration and normal-exit checks all remain. Earlier strict
 ten-second failures retain their original results. The new Linux result must
 be recorded against its own source, and the final integrated candidate still
 requires the complete native matrix.
+
+
+The focused caller-flow producer at PR #229 (source
+`08cbd5089b394d2a73cc83c1dffac3c89e0fe420`, run 44222289144) passed on Linux
+AMD64 in 93.54s. All four shutdown calls met their original ten-second deadline
+in this run, so its reconciliation count is zero. Both saturated phases and all
+four support snapshots, exact file bytes, identities, keys, configuration and
+normal exits passed. This run does not itself exercise the timeout branch; the
+separate failed PR #228 producer retains the actual read-only late-exit evidence.
+Neither set is relabelled as a complete current-source six-platform matrix.

@@ -96,3 +96,8 @@ are checked. This is a test-only routing mechanism, not a production helper or
 an OS-wide no-egress guarantee. It does not establish public provider operation,
 global announcements, LAN discovery, NAT traversal, UDP, relay or cross-WAN
 support. Enabling discovery in an application can emit network traffic.
+
+
+Official tracker registration and controlled disconnect use an explicitly opted-in
+specialist fixture; see [official tracker validation](official-tracker-validation.md).
+They remain separate from private-peer networking and cross-WAN acceptance.
