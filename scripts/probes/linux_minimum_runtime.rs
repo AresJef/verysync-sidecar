@@ -7,10 +7,11 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fs;
+use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use verysync_sidecar::{
     CreateFolderOptions, Error as SidecarError, FolderId, LocalProgram, ManagedInstance,
     ManagedOptions, ManagementEndpoint, ResourceTransferOptions, TargetPath,
@@ -20,6 +21,7 @@ type ProbeResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 const USER: u32 = 1000;
 const PROGRAM: &str = "/bin/verysync";
 const DATA: &str = "/vs-data";
+const MANAGEMENT_PORT: u16 = 18_435;
 
 fn require(condition: bool, reason: &'static str) -> ProbeResult<()> {
     if condition {
@@ -87,6 +89,54 @@ fn owned_images(program: &Path) -> ProbeResult<Vec<u32>> {
     Ok(pids)
 }
 
+fn listening_on_management_port(table: &str) -> Option<bool> {
+    fs::read_to_string(table).ok().map(|sockets| {
+        sockets.lines().skip(1).any(|line| {
+            let mut columns = line.split_whitespace();
+            let local = columns.nth(1);
+            let state = columns.nth(1);
+            state == Some("0A")
+                && local
+                    .and_then(|address| address.rsplit_once(':'))
+                    .and_then(|(_, port)| u16::from_str_radix(port, 16).ok())
+                    == Some(MANAGEMENT_PORT)
+        })
+    })
+}
+
+fn startup_observation(state: &Path, program: &Path, elapsed: Duration) {
+    let mut log = Vec::new();
+    let read_log = fs::File::open(state.join(".verysync-sidecar-core.log"))
+        .and_then(|file| file.take(65_536).read_to_end(&mut log))
+        .ok();
+    let log = String::from_utf8_lossy(&log).to_ascii_lowercase();
+    let log_indicators: Vec<_> = [
+        ("listener_start", "gui and api listening"),
+        ("permission_denied", "permission denied"),
+        ("missing_path", "no such file or directory"),
+        ("address_in_use", "address already in use"),
+        ("invalid_syscall", "function not implemented"),
+        ("unsupported_kernel", "kernel too old"),
+        ("go_panic", "panic:"),
+        ("go_fatal", "fatal error:"),
+        ("go_signal", "sigsegv"),
+        ("db_error", "database error"),
+    ]
+    .into_iter()
+    .filter_map(|(label, phrase)| log.contains(phrase).then_some(label))
+    .collect();
+    let pids = owned_images(program).ok();
+    println!(
+        "VS_MINIMUM_SDK_START_OBSERVATION {}",
+        json!({"elapsed_ms":elapsed.as_millis(),
+            "exact_programs_running":pids.as_ref().map(Vec::len),
+            "configured":state.join(".verysync-sidecar-configured").is_file(),
+            "ipv4_management_port_listening":listening_on_management_port("/proc/net/tcp"),
+            "ipv6_management_port_listening":listening_on_management_port("/proc/net/tcp6"),
+            "private_core_log_bytes_read":read_log,"log_indicators":log_indicators})
+    );
+}
+
 async fn verify_guest(hash: [u8; 32]) -> ProbeResult<()> {
     let root = Path::new(DATA);
     let program = fs::canonicalize(PROGRAM)?;
@@ -95,14 +145,30 @@ async fn verify_guest(hash: [u8; 32]) -> ProbeResult<()> {
         "unexpected program before startup",
     )?;
     let state = root.join("state");
-    let endpoint = ManagementEndpoint::http("http://127.0.0.1:18435/")?;
+    let endpoint = ManagementEndpoint::http(&format!("http://127.0.0.1:{MANAGEMENT_PORT}/"))?;
     let options = ManagedOptions::new(
         LocalProgram::new(&program)?.expected_sha256(hash),
         state.clone(),
         endpoint,
     )?;
     println!("VS_MINIMUM_SDK_PHASE starting");
-    let mut core = match ManagedInstance::start(options).await {
+    let start_time = Instant::now();
+    let observation_state = state.clone();
+    let observation_program = program.clone();
+    let observer = tokio::spawn(async move {
+        for interval in [4, 6, 12] {
+            tokio::time::sleep(Duration::from_secs(interval)).await;
+            startup_observation(
+                &observation_state,
+                &observation_program,
+                start_time.elapsed(),
+            );
+        }
+    });
+    let started = ManagedInstance::start(options).await;
+    observer.abort();
+    let _ = observer.await;
+    let mut core = match started {
         Ok(core) => core,
         Err(error) => {
             let settings = state.join("setting.dat").is_file();
@@ -118,6 +184,7 @@ async fn verify_guest(hash: [u8; 32]) -> ProbeResult<()> {
                 })),
                 _ => None,
             };
+            startup_observation(&state, &program, start_time.elapsed());
             println!(
                 "VS_MINIMUM_SDK_START_FAILURE {}",
                 json!({"settings_created":settings,"key_generated":key_generated,
