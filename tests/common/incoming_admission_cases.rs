@@ -410,6 +410,7 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
         r2.core.shutdown(Duration::from_secs(10)),
     );
     let mut first_error = None;
+    let mut failed_actors = Vec::new();
     for (actor, result) in [
         ("sender", exits.0),
         ("receiver-0", exits.1),
@@ -430,6 +431,7 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
                 );
             }
             Err(error) => {
+                failed_actors.push(actor);
                 println!(
                     "native incoming admission normal-stop failure: {}",
                     serde_json::json!({"actor":actor,"deadline_seconds":10,"normal_exit_not_accepted":true})
@@ -441,6 +443,35 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
         }
     }
     if let Some(error) = first_error {
+        for actor in failed_actors {
+            let started = std::time::Instant::now();
+            let observation = match actor {
+                "sender" => tokio::time::timeout(Duration::from_secs(20), a.wait_for_exit()).await,
+                "receiver-0" => {
+                    tokio::time::timeout(Duration::from_secs(20), r0.core.wait_for_exit()).await
+                }
+                "receiver-1" => {
+                    tokio::time::timeout(Duration::from_secs(20), r1.core.wait_for_exit()).await
+                }
+                "receiver-2" => {
+                    tokio::time::timeout(Duration::from_secs(20), r2.core.wait_for_exit()).await
+                }
+                _ => return Err("unknown owned actor".into()),
+            };
+            let observed = match observation {
+                Ok(Ok(exit)) => {
+                    serde_json::json!({"actual_exit_observed":true,"code":exit.code,"forced":exit.forced,"tree_stopped":exit.tree_stopped,"state_released":exit.state_released})
+                }
+                Ok(Err(error)) => {
+                    serde_json::json!({"exit_observation_error":true,"managed_failure_reason":match error { Error::ManagedFailure { reason } => Some(reason), _ => None }})
+                }
+                Err(_) => serde_json::json!({"readonly_observation_deadline_expired":true}),
+            };
+            println!(
+                "native incoming admission readonly exit diagnosis: {}",
+                serde_json::json!({"actor":actor,"original_stop_deadline_seconds":10,"readonly_wait_bound_seconds":20,"elapsed_ms":started.elapsed().as_millis(),"new_shutdown_request_sent":false,"force_requested":false,"original_failure_preserved":true,"observed":observed})
+            );
+        }
         return Err(error.into());
     }
     std::fs::remove_dir_all(root)?;
