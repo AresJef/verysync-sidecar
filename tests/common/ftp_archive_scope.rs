@@ -63,7 +63,7 @@ fn matches_receipt(receipt: &Value, binary_sha: &str, version: &str, os: &str, a
         return false;
     }
     let Ok(fingerprints) = serde_json::from_str::<Value>(include_str!(
-        "../fixtures/verysync-v2.33.2-standard-binaries.json"
+        "../../releases/verysync-v2.33.2-standard-binaries.json"
     )) else {
         return false;
     };
@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn standard_receipt_scope_rejects_legacy_unknown_and_mismatched_artifacts() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../fixtures/verysync-v2.33.2-standard-binaries.json"
+            "../../releases/verysync-v2.33.2-standard-binaries.json"
         ))
         .unwrap();
         for row in fixture["packages"].as_array().unwrap() {
