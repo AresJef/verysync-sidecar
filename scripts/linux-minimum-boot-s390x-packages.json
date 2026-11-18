@@ -21,5 +21,28 @@
       "size": "8069088",
       "sha256": "55c193a1ef6e34403a216a9c2e21f77678595747011e89f781ff06c8c91bc10f"
     }
+  ],
+  "stretch": [
+    {
+      "package": "busybox-static",
+      "version": "1:1.22.0-19+b3",
+      "filename": "pool/main/b/busybox/busybox-static_1.22.0-19+b3_s390x.deb",
+      "size": "813432",
+      "sha256": "976d0855b79c51c81acf65034afc328edf1c392586a26a66282521338bbc440a"
+    },
+    {
+      "package": "ca-certificates",
+      "version": "20200601~deb9u1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20200601~deb9u1_all.deb",
+      "size": "159692",
+      "sha256": "d6fc9275de84bdf598b3703a50935dc69d2e80105317a44f6cba465c073f88f9"
+    },
+    {
+      "package": "linux-image-4.9.0-13-s390x",
+      "version": "4.9.228-1",
+      "filename": "pool/main/l/linux/linux-image-4.9.0-13-s390x_4.9.228-1_s390x.deb",
+      "size": "24712074",
+      "sha256": "0926474f148b56f221c00dadce931be7477970fee37d08bb1784d7534ee3d866"
+    }
   ]
 }

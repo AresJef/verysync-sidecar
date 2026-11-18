@@ -16,7 +16,7 @@ KERNELS = {
     "amd64": {"squeeze": "2.6.32-5-amd64", "wheezy": "3.2.0-4-amd64"},
     "i386": {"squeeze": "2.6.32-5-686", "wheezy": "3.2.0-4-686-pae"},
     "arm64": {"jessie": "3.16.0-6-arm64"},
-    "s390x": {"wheezy": "3.2.0-4-s390x"},
+    "s390x": {"wheezy": "3.2.0-4-s390x", "stretch": "4.9.0-13-s390x"},
 }
 ELF_FORMAT = {
     "amd64": (2, 62, "<"), "i386": (1, 3, "<"), "arm64": (2, 183, "<"),
@@ -85,9 +85,9 @@ def write_newc(files):
         cpio.extend(b"\0"*((-len(cpio))%4))
     return bytes(cpio)
 
-def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
+def checked_native_program(engine_receipt, architecture):
     engine = json.loads(engine_receipt.read_text())
-    package, runtime_lib, interpreter = RUNTIME[architecture]
+    package, _, _ = RUNTIME[architecture]
     assert (engine["package"], engine["version"]) == (package, "v2.33.2")
     binary = Path(engine["binary"])
     assert binary.is_file() and 1_000_000 < binary.stat().st_size < 150_000_000
@@ -95,7 +95,12 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
     digest = engine["binary_sha256"]
     assert re.fullmatch(r"[a-f0-9]{64}", digest) and dig(native_core) == digest
     check_elf(native_core, architecture)
+    return native_core, digest
 
+
+def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
+    native_core, digest = checked_native_program(engine_receipt, architecture)
+    _, runtime_lib, interpreter = RUNTIME[architecture]
     files = [(name, stat.S_IFDIR | mode, b"", 0, 0)
              for name,mode in (("dev/pts",0o755),("etc",0o755),("etc/ssl",0o755),("etc/ssl/certs",0o755),
                                (runtime_lib,0o755),("tmp",0o1777),
@@ -136,9 +141,28 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
     return files, hashes
 
 
-def boot_init(expected, program_sha=None, ca_sha=None, runtime_lib="lib64"):
+def boot_init(expected, program_sha=None, ca_sha=None, runtime_lib="lib64", vx_control=False):
     runtime = ""
-    if program_sha is not None:
+    if vx_control:
+        runtime = f'''auxv=$(/bin/busybox od -A n -v -t u8 /proc/self/auxv) || fail auxv_read
+set -- $auxv
+hwcap=
+while [ "$#" -ge 2 ]; do
+    if [ "$1" = 16 ]; then hwcap=$2; break; fi
+    shift 2
+done
+case "$hwcap" in ""|*[!0-9]*) fail hwcap_missing ;; esac
+vxrs=$(( (hwcap & 2048) != 0 ))
+echo "VS_S390X_CPU_CAP hwcap=$hwcap vxrs=$vxrs"
+actual_program_sha=$(/bin/busybox sha256sum /bin/verysync) || fail program_sha
+case "$actual_program_sha" in "{program_sha} "*) ;; *) fail program_sha ;; esac
+status=0
+version=$(/bin/verysync version --home /version-state 2>&1) || status=$?
+echo "VS_S390X_VERSION_EXIT status=$status"
+echo "$version"
+echo "VS_S390X_VERSION_CONTROL_DONE"
+'''
+    elif program_sha is not None:
         runtime = f'''/bin/busybox mount -t devpts -o gid=5,mode=0620 devpts /dev/pts || fail devpts_mount
 [ -c /dev/ptmx ] || fail private_pty
 echo "VS_MINIMUM_PTY_READY devpts=true ptmx=true"
@@ -211,17 +235,26 @@ parser.add_argument("--local-package-dir", type=Path,
                     help="Use already downloaded packages after the same byte checks")
 parser.add_argument("--runtime-dir", type=Path)
 parser.add_argument("--engine-receipt", type=Path)
+parser.add_argument("--s390x-version-control", action="store_true")
 args = parser.parse_args()
 if args.distribution not in KERNELS[args.architecture]:
     parser.error("unsupported distribution and architecture combination")
-if (args.runtime_dir is None) != (args.engine_receipt is None):
+if args.s390x_version_control:
+    if args.architecture != "s390x" or args.engine_receipt is None or args.runtime_dir is not None:
+        parser.error("s390x version control needs only the fixed s390x engine receipt")
+elif (args.runtime_dir is None) != (args.engine_receipt is None):
     parser.error("provide both the fixed native engine receipt and runtime directory")
 os.umask(0o077)
 WORK = args.destination.resolve()
 WORK.mkdir(mode=0o700)
 manifest_suffix = "" if args.architecture == "amd64" else f"-{args.architecture}"
 manifest = Path(__file__).with_name(f"linux-minimum-boot{manifest_suffix}-packages.json")
-records = json.loads(manifest.read_text())[args.distribution]
+catalog = json.loads(manifest.read_text())
+records = catalog[args.distribution]
+if args.s390x_version_control:
+    # Use the same static diagnostic shell in both kernels.
+    old_shell, = [row for row in catalog["wheezy"] if row["package"] == "busybox-static"]
+    records = [old_shell if row["package"] == "busybox-static" else row for row in records]
 by_name = {}
 for package in records:
     if package["package"] == "ca-certificates" and args.runtime_dir is None:
@@ -272,6 +305,16 @@ files=[(name,stat.S_IFDIR|0o755,b"",0,0) for name in ("bin","dev","proc","sys")]
 files += [("dev/console",stat.S_IFCHR|0o600,b"",5,1),("dev/null",stat.S_IFCHR|0o666,b"",1,3),
           ("bin/busybox",stat.S_IFREG|0o755,busybox,0,0)]
 runtime_hashes = {}
+if args.s390x_version_control:
+    native_core, program_sha = checked_native_program(args.engine_receipt, args.architecture)
+    files.extend([
+        ("bin/verysync", stat.S_IFREG | 0o755, native_core, 0, 0),
+        ("version-state", stat.S_IFDIR | 0o700, b"", 0, 0),
+        ("tmp", stat.S_IFDIR | 0o1777, b"", 0, 0),
+        ("dev/random", stat.S_IFCHR | 0o666, b"", 1, 8),
+        ("dev/urandom", stat.S_IFCHR | 0o666, b"", 1, 9),
+    ])
+    runtime_hashes["bin/verysync"] = program_sha
 if args.runtime_dir is not None:
     ca_member = "usr/share/ca-certificates/mozilla/DigiCert_Global_Root_CA.crt"
     platform_ca = verified_members(by_name[distribution,"ca-certificates"], {ca_member:16384})[ca_member]
@@ -282,7 +325,7 @@ if args.runtime_dir is not None:
     )
     files.extend(runtime_files)
 files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
-            runtime_hashes.get("candidate_debian_platform_ca"), runtime_lib),0,0))
+            runtime_hashes.get("candidate_debian_platform_ca"), runtime_lib, args.s390x_version_control),0,0))
 ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)

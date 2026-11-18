@@ -1,0 +1,111 @@
+name: Compare the fixed s390x program on two actual historical kernels
+
+on:
+  push:
+    branches: [ci/s390x-vx-old-kernel-comparison-20261119-01a1ca9b]
+    paths: [.github/workflows/linux-s390x-vx-control.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  native-vector-control:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/s390x-vx-old-kernel-comparison-20261119-01a1ca9b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      PRODUCT_SOURCE: 83942f58532cbad796a1d89aaee1fe9e2b04df85
+      PRODUCT_TREE: 054c09ee2d25e7b8bc8f90fdc758c30fe4c5fd04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.PRODUCT_SOURCE }}
+          path: verified-product
+          persist-credentials: false
+      - name: Prepare the exact fixed program and archived kernels
+        run: |
+          set -euo pipefail
+          test "$(git -C verified-product rev-parse HEAD)" = "$PRODUCT_SOURCE"
+          test "$(git -C verified-product rev-parse 'HEAD^{tree}')" = "$PRODUCT_TREE"
+          printf 'product source=%s tree=%s\n' "$PRODUCT_SOURCE" "$PRODUCT_TREE"
+          work="$RUNNER_TEMP/vs-s390x-vx"
+          mkdir -pm 0700 "$work/official-core"
+          python3 -B verified-product/scripts/prepare-test-engine.py prepare \
+            --package linux-s390x-standard --parent "$work/official-core" > "$work/program-receipt.json"
+          for suite in wheezy stretch; do
+            python3 -B scripts/prepare-linux-minimum-boot.py "$suite" --architecture s390x \
+              --destination "$work/$suite" --s390x-version-control --engine-receipt "$work/program-receipt.json"
+          done
+          python3 - "$work" <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          first, second = [
+              json.loads((root / suite / "prepared-boot-fixture.json").read_text())
+              for suite in ("wheezy", "stretch")
+          ]
+          assert first["busybox_sha256"] == second["busybox_sha256"]
+          assert first["runtime_payload_sha256"] == second["runtime_payload_sha256"]
+          assert first["kernel_sha256"] != second["kernel_sha256"]
+          assert first["qemu_network_adapters"] == second["qemu_network_adapters"] == 0
+          print("Matched diagnostic shell and exact official program; kernel inputs differ.")
+          PY
+      - name: Compare guest AT_HWCAP and the fixed program version exit
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-s390x-vx"
+          sources="$work/ubuntu-official-sources.list"
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-security main' > "$sources"
+          apt_options=(-o "Dir::Etc::sourcelist=$sources" -o Dir::Etc::sourceparts=/dev/null
+            -o Acquire::Retries=1 -o Acquire::https::Timeout=25)
+          timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
+          timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends qemu-system-s390x qemu-system-data
+          dpkg-query -L qemu-system-s390x | grep -Fx /usr/bin/qemu-system-s390x
+          qemu-system-s390x --version
+          overall=0
+          for suite in wheezy stretch; do
+            root="$work/$suite/$suite"
+            raw="$work/$suite/console.log"
+            console="$work/$suite/console.txt"
+            status=0
+            timeout --kill-after=8s 90s qemu-system-s390x -machine s390-ccw-virtio,accel=tcg -cpu max -m 512 -smp 1 \
+              -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
+              -kernel "$root/image" -initrd "$root/initramfs.cpio.gz" \
+              -append 'console=ttyS1 rdinit=/init panic=1' > "$raw" 2>&1 || status=$?
+            tr -d '\r' < "$raw" > "$console"
+            cat "$console"
+            printf 'Guest %s emulator_exit=%s\n' "$suite" "$status"
+            if [ "$status" -ne 0 ] || ! grep -aFxq VS_S390X_VERSION_CONTROL_DONE "$console" \
+               || grep -aqE 'Kernel panic|VS_MINIMUM_BOOT_FAILURE' "$console"; then
+              overall=1
+              continue
+            fi
+            if [ "$suite" = wheezy ]; then
+              grep -aFxq 'VS_MINIMUM_BOOT_OK kernel=3.2.0-4-s390x loopback=127.0.0.1' "$console" \
+                && grep -aEq '^VS_S390X_CPU_CAP hwcap=[0-9]+ vxrs=0$' "$console" \
+                && grep -aFxq 'VS_S390X_VERSION_EXIT status=1' "$console" \
+                && grep -aqF 'This CPU has no floating point hardware' "$console" || overall=1
+            else
+              grep -aFxq 'VS_MINIMUM_BOOT_OK kernel=4.9.0-13-s390x loopback=127.0.0.1' "$console" \
+                && grep -aEq '^VS_S390X_CPU_CAP hwcap=[0-9]+ vxrs=1$' "$console" \
+                && grep -aFxq 'VS_S390X_VERSION_EXIT status=0' "$console" \
+                && grep -aEq '(^|[[:space:]])v2\.33\.2([[:space:]]|$)' "$console" || overall=1
+            fi
+          done
+          exit "$overall"
+      - name: Preserve only raw guest consoles and fixture checksums
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: s390x-vx-two-kernels
+          path: |
+            ${{ runner.temp }}/vs-s390x-vx/*/console.log
+            ${{ runner.temp }}/vs-s390x-vx/*/prepared-boot-fixture.json
+          if-no-files-found: warn
