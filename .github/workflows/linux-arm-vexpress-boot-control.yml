@@ -1,0 +1,62 @@
+name: Boot the pinned offline Debian Wheezy vexpress guest
+
+on:
+  push:
+    branches: [ci/linux-arm-vexpress-old-boot-20261119-01a1ca9b]
+    paths:
+      - .github/workflows/linux-arm-vexpress-boot-control.yml
+      - scripts/prepare-linux-minimum-boot.py
+      - scripts/linux-minimum-boot-arm-vexpress-packages.json
+
+permissions:
+  contents: read
+
+jobs:
+  boot:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-arm-vexpress-old-boot-20261119-01a1ca9b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Exercise the exact older kernel and its serial shutdown
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-wheezy-vexpress"
+          python3 -B scripts/prepare-linux-minimum-boot.py wheezy --architecture arm-vexpress --destination "$work"
+          root="$work/wheezy"
+          printf '%s  %s\n' 'b0040ec429ee61dc87d7f070b72586a069b74ea9cde2a79fd269db33c68c518e' "$root/zImage" | sha256sum --check --strict
+          sources="$work/ubuntu-official-sources.list"
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-security main universe' > "$sources"
+          apt_options=(-o "Dir::Etc::sourcelist=$sources" -o Dir::Etc::sourceparts=/dev/null
+            -o Acquire::Retries=1 -o Acquire::https::Timeout=25)
+          timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
+          timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends qemu-system-arm qemu-system-data
+          dpkg-query -L qemu-system-arm | grep -Fx /usr/bin/qemu-system-arm
+          qemu-system-arm --version
+          status=0
+          timeout --kill-after=8s 90s qemu-system-arm -machine vexpress-a9,accel=tcg -cpu cortex-a9 -m 512 -smp 1 \
+            -nodefaults -display none -audio none -serial stdio -monitor none -nic none -no-reboot \
+            -kernel "$root/zImage" -initrd "$root/initramfs.cpio.gz" \
+            -append 'console=ttyAMA0 rdinit=/init panic=1' > "$work/guest-console.log" 2>&1 || status=$?
+          tr -d '\r' < "$work/guest-console.log" > "$work/guest-console.txt"
+          cat "$work/guest-console.txt"
+          printf 'Guest emulator_exit=%s\n' "$status"
+          test "$status" -eq 0
+          grep -aFxq 'VS_MINIMUM_BOOT_OK kernel=3.2.0-4-vexpress loopback=127.0.0.1' "$work/guest-console.txt"
+          grep -aFxq 'VS_ARM_VEXPRESS_CONTROL armv7l lo' "$work/guest-console.txt"
+          grep -aFq 'Restarting system' "$work/guest-console.txt"
+          if grep -aqE 'Kernel panic|VS_MINIMUM_BOOT_FAILURE' "$work/guest-console.txt"; then exit 1; fi
+      - name: Preserve the original serial transcript
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wheezy-vexpress-boot-control
+          path: |
+            ${{ runner.temp }}/vs-wheezy-vexpress/guest-console.log
+            ${{ runner.temp }}/vs-wheezy-vexpress/prepared-boot-fixture.json
+          if-no-files-found: warn

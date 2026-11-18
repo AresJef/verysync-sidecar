@@ -1,0 +1,18 @@
+{
+  "wheezy": [
+    {
+      "package": "linux-image-3.2.0-4-vexpress",
+      "version": "3.2.78-1",
+      "filename": "pool/main/l/linux/linux-image-3.2.0-4-vexpress_3.2.78-1_armhf.deb",
+      "size": "11290402",
+      "sha256": "aa4a099fa84a3e9498c6a5c8f3c243724b4e6b9d6d6c806d6a7dd54885c6b157"
+    },
+    {
+      "package": "busybox-static",
+      "version": "1:1.20.0-7",
+      "filename": "pool/main/b/busybox/busybox-static_1.20.0-7_armel.deb",
+      "size": "865964",
+      "sha256": "efcddd59034ceae843ff2bb59cf7e092a83c1783b91b3a3bd7bd5348306376eb"
+    }
+  ]
+}

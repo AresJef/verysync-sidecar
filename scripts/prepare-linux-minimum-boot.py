@@ -16,17 +16,20 @@ KERNELS = {
     "amd64": {"squeeze": "2.6.32-5-amd64", "wheezy": "3.2.0-4-amd64"},
     "i386": {"squeeze": "2.6.32-5-686", "wheezy": "3.2.0-4-686-pae"},
     "armel": {"wheezy": "3.2.0-4-versatile", "stretch": "4.9.0-13-armmp"},
+    "arm-vexpress": {"wheezy": "3.2.0-4-vexpress"},
     "arm64": {"jessie": "3.16.0-6-arm64"},
     "s390x": {"wheezy": "3.2.0-4-s390x", "stretch": "4.9.0-13-s390x"},
 }
 ELF_FORMAT = {
     "amd64": (2, 62, "<"), "i386": (1, 3, "<"), "armel": (1, 40, "<"), "arm64": (2, 183, "<"),
+    "arm-vexpress": (1, 40, "<"),
     "s390x": (2, 22, ">"),
 }
 RUNTIME = {
     "amd64": ("linux-amd64-standard", "lib64", "lib64/ld-linux-x86-64.so.2"),
     "i386": ("linux-386-standard", "lib", "lib/ld-linux.so.2"),
     "armel": ("linux-arm-standard", "lib", "lib/ld-linux.so.3"),
+    "arm-vexpress": ("linux-armv6-standard", "lib", "lib/ld-linux.so.3"),
     "arm64": ("linux-arm64-standard", "lib64", "lib/ld-linux-aarch64.so.1"),
     "s390x": ("linux-s390x-standard", "lib64", "lib/ld64.so.1"),
 }
@@ -144,9 +147,9 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
 
 
 def boot_init(expected, program_sha=None, ca_sha=None, runtime_lib="lib64",
-              vx_control=False, armel_control=False, armel_stretch=False):
+              vx_control=False, armel_control=False, armel_stretch=False, legacy_armv7=False):
     runtime = ""
-    shutdown = "reboot" if armel_control or armel_stretch else "poweroff"
+    shutdown = "reboot" if armel_control or armel_stretch or legacy_armv7 else "poweroff"
     if vx_control:
         runtime = f'''auxv=$(/bin/busybox od -A n -v -t u8 /proc/self/auxv) || fail auxv_read
 set -- $auxv
@@ -243,6 +246,13 @@ sdk_status=0
 /bin/vs-entropy-control after_sdk || fail entropy_measurement
 [ "$sdk_status" -eq 0 ] || fail sdk_runtime
 '''
+    elif legacy_armv7:
+        runtime = '''machine=$(/bin/busybox uname -m) || fail machine_identity
+[ "$machine" = armv7l ] || fail machine_identity
+adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
+[ "$adapters" = lo ] || fail external_guest_adapter
+echo "VS_ARM_VEXPRESS_CONTROL armv7l lo"
+'''
     return f"""#!/bin/busybox sh
 export PATH=/bin
 fail() {{
@@ -276,6 +286,8 @@ parser.add_argument("--armel-version-control", action="store_true")
 args = parser.parse_args()
 if args.distribution not in KERNELS[args.architecture]:
     parser.error("unsupported distribution and architecture combination")
+if args.architecture == "arm-vexpress" and (args.runtime_dir is not None or args.engine_receipt is not None):
+    parser.error("the legacy vexpress fixture currently runs only the isolated boot control")
 if args.armel_version_control:
     if args.architecture != "armel" or args.distribution != "wheezy" or args.engine_receipt is None or args.runtime_dir is not None:
         parser.error("ARMEL version control needs only the fixed ARMEL engine receipt")
@@ -331,10 +343,11 @@ required_platform = {
     "amd64": {"CONFIG_X86_64", "CONFIG_SERIAL_8250_CONSOLE"},
     "i386": {"CONFIG_X86_32", "CONFIG_SERIAL_8250_CONSOLE"},
     "armel": {"CONFIG_AEABI", "CONFIG_CPU_ARM926T", "CONFIG_ARCH_VERSATILE", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
+    "arm-vexpress": {"CONFIG_AEABI", "CONFIG_CPU_V7", "CONFIG_ARCH_VEXPRESS", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
     "arm64": {"CONFIG_ARM64", "CONFIG_ARCH_VEXPRESS", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
     "s390x": {"CONFIG_S390", "CONFIG_64BIT", "CONFIG_SCLP_VT220_CONSOLE"},
 }
-if args.architecture == "armel":
+if args.architecture in {"armel", "arm-vexpress"}:
     kernel_filename = "zImage"
     assert kernel[0x24:0x28] == bytes.fromhex("18286f01")
     if armel_stretch:
@@ -384,7 +397,8 @@ if args.runtime_dir is not None:
     files.extend(runtime_files)
 files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
             runtime_hashes.get("candidate_debian_platform_ca"), runtime_lib,
-            args.s390x_version_control, args.armel_version_control, armel_stretch),0,0))
+            args.s390x_version_control, args.armel_version_control, armel_stretch,
+            args.architecture == "arm-vexpress"),0,0))
 ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)
