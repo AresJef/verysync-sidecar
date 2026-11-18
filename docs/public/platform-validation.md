@@ -119,10 +119,21 @@ The guest then restarted and QEMU exited normally. A separate user-mode
 comparison on the same host reproduced SIGILL on ARM926 and returned
 `v2.33.2` on ARM1176 and Cortex-A9. The inspected ELF attributes report
 ARMv6 and `arm1136j-s` alongside the Go build metadata `GOARM=5`.
-Rust SDK operation on an older 32-bit ARM kernel and the minimum native ISA
-still require their own evidence.
+The minimum native ISA still requires separate evidence.
 [Full-system ARM926 result](https://github.com/AresJef/verysync-sidecar/actions/runs/44417958259)
 · [Matched CPU comparison](https://github.com/AresJef/verysync-sidecar/actions/runs/44418527982)
+
+A separate full-system Cortex-A9 fixture booted Debian's `4.9.0-13-armmp`
+kernel with ARMEL glibc 2.24 and Rust 1.85.0's ARMv5TE GNU target. With the
+archived Debian CA and default TLS, the Rust client authenticated to the fixed
+v2.33.2 core, created a directory, wrote actual file bytes and downloaded 29
+hash-verified bytes after the core restarted with its identity and data intact. The owned
+program and state shut down normally. With the CA absent, the native health
+endpoint still returned HTTP 200 and the SDK reached its original management
+deadline, then released the exact program and state. Both QEMU guests had
+only loopback and closed normally. Minimum native OS and kernel claims
+remain pending.
+[Debian Stretch ARMEL runtime effects](https://github.com/AresJef/verysync-sidecar/actions/runs/44423671149)
 
 The three ARM jobs passed their selected real core/controller management, file,
 startup, cancellation and host-exit effects on source 712ea2e. Each Unix case
