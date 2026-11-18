@@ -14,12 +14,12 @@ SPEC.loader.exec_module(HELPER)
 
 
 class DiagnosticSelection(unittest.TestCase):
-    def test_current_prepared_admission_case_uses_all_six_native_profiles(self):
+    def test_current_admission_cleanup_runs_only_original_linux_failure(self):
         selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
         rows = HELPER.select(self.rows, selection, draft=True)
-        self.assertEqual(len(rows), 6)
-        self.assertEqual({row['package'] for row in rows}, set(HELPER.PROFILES) - {'windows-386-standard'})
-        self.assertTrue(all(row['label'] == 'native-incoming-admission-cap' and
+        self.assertEqual(len(rows), 1)
+        self.assertEqual({row['package'] for row in rows}, {'linux-amd64-standard'})
+        self.assertTrue(all(row['label'] == 'native-incoming-admission-linux-cleanup' and
                             row['target'] == 'configuration_engine' and
                             row['filter'] == 'incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files'
                             for row in rows))
@@ -27,8 +27,8 @@ class DiagnosticSelection(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
         self.assertEqual(workflow.count('      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm'), 2)
 
-    def test_ready_keeps_all_six_admission_commands_after_preparation_change(self):
-        rows = HELPER.select(self.rows, {"draft_labels": ["native-incoming-admission-cap"]}, draft=True)
+    def test_ready_keeps_all_six_admission_commands_after_cleanup_change(self):
+        rows = HELPER.select(self.rows, {"draft_labels": ["native-incoming-admission-cap", "native-incoming-admission-linux-cleanup"]}, draft=True)
         self.assertEqual(len(rows), 6)
         self.assertEqual({row["package"] for row in rows}, set(HELPER.PROFILES) - {"windows-386-standard"})
         self.assertTrue(all(row["filter"] == "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files" for row in rows))
@@ -53,7 +53,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-incoming-admission-cap-20261118-01a1ca9b",
                        "test/native-admission-timeout-stage-20261118-01a1ca9b",
                        "test/native-admission-prepared-index-20261118-01a1ca9b",
-                       "test/native-admission-staged-deadlines-20261118-01a1ca9b"]:
+                       "test/native-admission-staged-deadlines-20261118-01a1ca9b",
+                       "test/native-admission-linux-cleanup-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -121,7 +122,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-incoming-admission-cap-20261118-01a1ca9b",
                        "test/native-admission-timeout-stage-20261118-01a1ca9b",
                        "test/native-admission-prepared-index-20261118-01a1ca9b",
-                       "test/native-admission-staged-deadlines-20261118-01a1ca9b"]:
+                       "test/native-admission-staged-deadlines-20261118-01a1ca9b",
+                       "test/native-admission-linux-cleanup-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
