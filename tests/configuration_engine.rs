@@ -1661,3 +1661,6 @@ mod general_integer_domain_cases;
 
 #[path = "common/temporary_index_policy_cases.rs"]
 mod temporary_index_policy_cases;
+
+#[path = "common/incoming_admission_cases.rs"]
+mod incoming_admission_cases;
