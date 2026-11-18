@@ -1,5 +1,5 @@
 //! Observe actual reuse of a previously transferred regular file.
-use super::{configuration_policy_listener, name_policy_connection_pair, options, TestResult};
+use super::{configuration_policy_listener, options, TestResult};
 use std::{
     fs::{self, OpenOptions},
     io::{Seek, SeekFrom, Write},
@@ -24,17 +24,15 @@ fn sample(mut value: u64) -> Vec<u8> {
     data
 }
 
-async fn peer_counter(client: &Client, peer: &DeviceId) -> TestResult<(String, u64)> {
+async fn peer_counter(client: &Client, peer: &DeviceId) -> TestResult<Option<(String, u64)>> {
     let mut snapshot = client.connections().await?;
-    let live = snapshot
-        .connections
-        .remove(peer)
-        .filter(|peer| peer.connected)
-        .ok_or("the expected direct peer is not connected")?;
-    Ok((
-        live.started_at.ok_or("peer connection time is missing")?,
-        live.in_bytes_total.ok_or("peer receive count is missing")?,
-    ))
+    Ok(snapshot.connections.remove(peer).and_then(|live| {
+        let start = live.started_at?;
+        if !live.connected || start.is_empty() || start == "0001-01-01T00:00:00Z" {
+            return None;
+        }
+        Some((start, live.in_bytes_total?))
+    }))
 }
 
 async fn receive_exact(
@@ -84,8 +82,6 @@ async fn native_copy_range_methods_reuse_old_blocks_and_preserve_bytes() -> Test
             .create_device(&CreateDeviceOptions::new(peer.clone()).settings(settings))
             .await?;
     }
-    name_policy_connection_pair(&sender, &receiver, true).await?;
-
     let mut receipts = Vec::new();
     for (name, method, seed) in [
         ("standard", CopyRangeMethod::Standard, 5_814_137),
@@ -156,7 +152,17 @@ async fn native_copy_range_methods_reuse_old_blocks_and_preserve_bytes() -> Test
         sender.client().resume_folder(&source_folder).await?;
         receiver.client().resume_folder(&destination_folder).await?;
 
-        let before = peer_counter(receiver.client(), &sender_id).await?;
+        // Folder changes can reconnect the direct peer. Wait for the native generation
+        // and counter before introducing any fixture bytes to this folder.
+        let before = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Some(counter) = peer_counter(receiver.client(), &sender_id).await? {
+                    return TestResult::Ok(counter);
+                }
+                tokio::time::sleep(Duration::from_millis(75)).await;
+            }
+        })
+        .await??;
         let mut data = sample(seed);
         fs::write(&source, &data)?;
         sender
@@ -164,7 +170,9 @@ async fn native_copy_range_methods_reuse_old_blocks_and_preserve_bytes() -> Test
             .request_scan_subpaths(&source_folder, &[TargetPath::local(PAYLOAD)])
             .await?;
         receive_exact(receiver.client(), &destination_folder, &destination, &data).await?;
-        let first = peer_counter(receiver.client(), &sender_id).await?;
+        let first = peer_counter(receiver.client(), &sender_id)
+            .await?
+            .ok_or("peer epoch missing after full transfer")?;
 
         let change = FILE_LEN - CHANGED_LEN;
         for byte in &mut data[change..] {
@@ -180,7 +188,9 @@ async fn native_copy_range_methods_reuse_old_blocks_and_preserve_bytes() -> Test
             .request_scan_subpaths(&source_folder, &[TargetPath::local(PAYLOAD)])
             .await?;
         receive_exact(receiver.client(), &destination_folder, &destination, &data).await?;
-        let second = peer_counter(receiver.client(), &sender_id).await?;
+        let second = peer_counter(receiver.client(), &sender_id)
+            .await?
+            .ok_or("peer epoch missing after partial transfer")?;
         assert_eq!(
             before.0, first.0,
             "peer reconnected during initial transfer"
