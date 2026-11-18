@@ -126,10 +126,10 @@ the introducer's withdrawal removed the association and the introduced device
 from the receiver. The test verified the existing file bytes and normal exits
 of all three instances.
 
-The withdrawal regression configures one connection per peer and checks that
-the introducer still has a live connection to the third device before it shuts
-down. Earlier runs with parallel connections observed a graceful-shutdown
-timeout after successful withdrawal on macOS ARM64 and Windows AMD64.
+After the withdrawal and file checks, the regression pauses the fixture's peer
+connections and confirms their disconnection before checking normal exits.
+Other runs observed a graceful-shutdown timeout with active peer connections
+after successful withdrawal on macOS ARM64 and Windows AMD64.
 
 In a second three-instance run, the receiver kept the introduced device, its
 source and its folder association with `skip_introduction_removals(true)`.
