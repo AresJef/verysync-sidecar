@@ -209,7 +209,7 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
             a.client()
                 .update_bandwidth_configuration(
                     &BandwidthPatch::default()
-                        .max_send_kib_per_second(1)
+                        .max_send_kib_per_second(512)
                         .limit_in_lan(true)
                 )
                 .await?
@@ -271,6 +271,18 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
                 if all_syncing { break; }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
+            stage = "verify-all-three-new-indexes";
+            for receiver in &receivers {
+                let status = receiver.core.client().folder_status(&receiver.folder).await?;
+                assert_eq!(status.global_files, Some(phase as u64 + 1));
+                assert_eq!(status.local_files, Some(phase as u64));
+                let indexed = receiver.core.client().index_file_info(&receiver.folder, &TargetPath::local(&name)).await?;
+                assert_eq!(indexed.global.size, 96 * 1024 * 1024);
+                assert_eq!(indexed.global.num_blocks, 768);
+            }
+            stage = "hold-admitted-responses-after-index-preparation";
+            assert!(a.client().update_bandwidth_configuration(&BandwidthPatch::default().max_send_kib_per_second(1).limit_in_lan(true)).await?.requested_fields_match);
+            println!("native incoming admission index preparation: {}", serde_json::json!({"selected":selected,"all_three_native_new_file_indexes_confirmed":true,"native_file_bytes":100663296_u64,"native_num_blocks":768,"bootstrap_send_kib":512,"observed_send_kib":1,"original_phase_deadline_seconds":30}));
             tokio::time::sleep(Duration::from_secs(1)).await;
             for index in 0..2 {
                 if index == 1 { tokio::time::sleep(Duration::from_millis(500)).await; }
@@ -299,6 +311,16 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
             }
             stage = "release-limit";
             assert!(a.client().update_bandwidth_configuration(&BandwidthPatch::default().max_send_kib_per_second(0).limit_in_lan(true)).await?.requested_fields_match);
+            stage = "normal-restart-after-unlimited-policy";
+            a.restart(Duration::from_secs(30)).await?;
+            assert_eq!(a.client().instance().device_id, aid);
+            assert!(!source_pids.contains(&a.process_id()));
+            source_pids.push(a.process_id());
+            assert_eq!(a.client().bandwidth_configuration().await?.max_send_kib_per_second, 0);
+            assert_eq!(a.client().general_options().await?.max_concurrent_incoming_request_kib, selected);
+            stage = "connect-fresh-unlimited-epoch";
+            for receiver in &receivers { super::name_policy_connection_pair(&a, &receiver.core, true).await?; }
+            println!("native incoming admission unthrottled epoch: {}", serde_json::json!({"selected":selected,"actual_explicit_owned_restart":true,"same_identity_and_selected_cap":true,"saved_send_kib":0,"all_three_authenticated_peers_connected":true,"hot_unlimit_alone_claimed":false,"original_phase_deadline_seconds":30}));
             stage = "wait-exact-bytes-and-idle";
             loop {
                 let mut all_complete = true;

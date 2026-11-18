@@ -2064,7 +2064,7 @@
     "rust": "x86_64-apple-darwin",
     "target": "configuration_engine",
     "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
-    "label": "native-incoming-admission-timeout-diagnosis",
+    "label": "native-incoming-admission-cap",
     "trace": "0"
   },
   {
@@ -2073,7 +2073,7 @@
     "rust": "aarch64-apple-darwin",
     "target": "configuration_engine",
     "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
-    "label": "native-incoming-admission-timeout-diagnosis",
+    "label": "native-incoming-admission-cap",
     "trace": "0"
   },
   {
@@ -2100,7 +2100,7 @@
     "rust": "x86_64-pc-windows-msvc",
     "target": "configuration_engine",
     "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
-    "label": "native-incoming-admission-timeout-diagnosis",
+    "label": "native-incoming-admission-cap",
     "trace": "0"
   },
   {
@@ -2109,7 +2109,7 @@
     "rust": "aarch64-pc-windows-msvc",
     "target": "configuration_engine",
     "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
-    "label": "native-incoming-admission-timeout-diagnosis",
+    "label": "native-incoming-admission-cap",
     "trace": "0"
   }
 ]
