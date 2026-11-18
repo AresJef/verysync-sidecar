@@ -39,7 +39,10 @@ After observation, the caller explicitly saves the unlimited send setting,
 normally restarts the same owned sender and authenticates a fresh connection
 epoch to all three peers. The persisted identity and selected cap must remain
 unchanged, with new owned PIDs and no forced stop. Every file must complete with
-exact source and receiver bytes within the original 30-second phase deadline.
+exact source and receiver bytes. Preparation and saturated observation have a
+30-second bound; recovery, fresh connections and full-file completion have a
+separate 30-second bound. The earlier single 30-second aggregate fixture bound
+is explicitly replaced, with its failures retained.
 This fixture does not claim that changing a rate setting cancels already waiting
 native writes on an existing connection. Identities, keys,
 certificates, unrelated configuration and a caller sentinel must remain intact.
@@ -93,3 +96,26 @@ independent of outstanding rate-limited writes. The six-profile regression of
 this revised fixture remains required; the earlier transport and preparation
 failures are preserved, and no deadline, payload or admission predicate is
 relaxed.
+
+## Functional fixture timing
+
+The prepared-index and fresh-epoch producer at PR #225 (source
+`e634f8684f565836a3bfe41a64cf3c741a81a714`, run 44211326062) passed on Linux
+AMD64. The other five profiles confirmed the new indexes, the two 32 MiB
+admission snapshots, and the normal restart and authenticated connections, but
+expired at full-file completion. For example, Windows AMD64 recorded its second
+snapshot at 00:56:11.408 UTC and the fresh epoch at 00:56:28.295; the aggregate
+deadline expired at 00:56:29.040. Almost no time remained to finish three 96 MiB
+files after the native profiling and restart operations.
+
+The revised functional test therefore composes two explicitly bounded stages:
+30 seconds for receiver preparation and the saturated observations, then
+30 seconds for recovery and exact-byte completion. A failure reports which
+stage expired and the current receiver state. This changes the fixture's prior
+aggregate bound; it does not preserve or relabel that old timing result. There
+is no throughput or total-memory performance claim in this admission test.
+The 32/64 MiB selections, 96 MiB unique payloads, four strict admitted-request
+snapshots, blocking demand, unrelated configuration, identities and required
+normal exits remain necessary. The separate frozen resource/performance
+protocol and its original negative results are unchanged. Each final-source
+native profile remains independently required.

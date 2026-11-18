@@ -282,7 +282,7 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
             }
             stage = "hold-admitted-responses-after-index-preparation";
             assert!(a.client().update_bandwidth_configuration(&BandwidthPatch::default().max_send_kib_per_second(1).limit_in_lan(true)).await?.requested_fields_match);
-            println!("native incoming admission index preparation: {}", serde_json::json!({"selected":selected,"all_three_native_new_file_indexes_confirmed":true,"native_file_bytes":100663296_u64,"native_num_blocks":768,"bootstrap_send_kib":512,"observed_send_kib":1,"original_phase_deadline_seconds":30}));
+            println!("native incoming admission index preparation: {}", serde_json::json!({"selected":selected,"all_three_native_new_file_indexes_confirmed":true,"native_file_bytes":100663296_u64,"native_num_blocks":768,"bootstrap_send_kib":512,"observed_send_kib":1,"observation_deadline_seconds":30}));
             tokio::time::sleep(Duration::from_secs(1)).await;
             for index in 0..2 {
                 if index == 1 { tokio::time::sleep(Duration::from_millis(500)).await; }
@@ -311,6 +311,21 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
             }
             stage = "release-limit";
             assert!(a.client().update_bandwidth_configuration(&BandwidthPatch::default().max_send_kib_per_second(0).limit_in_lan(true)).await?.requested_fields_match);
+            TestResult::Ok(())
+        }).await;
+        if !matches!(&phase_result, Ok(Ok(()))) {
+            diagnose_failure(
+                &receivers,
+                &name,
+                selected,
+                stage,
+                "observation",
+                phase_result.is_err(),
+            )
+            .await;
+        }
+        phase_result??;
+        let completion_result = tokio::time::timeout(Duration::from_secs(30), async {
             stage = "normal-restart-after-unlimited-policy";
             a.restart(Duration::from_secs(30)).await?;
             assert_eq!(a.client().instance().device_id, aid);
@@ -320,7 +335,7 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
             assert_eq!(a.client().general_options().await?.max_concurrent_incoming_request_kib, selected);
             stage = "connect-fresh-unlimited-epoch";
             for receiver in &receivers { super::name_policy_connection_pair(&a, &receiver.core, true).await?; }
-            println!("native incoming admission unthrottled epoch: {}", serde_json::json!({"selected":selected,"actual_explicit_owned_restart":true,"same_identity_and_selected_cap":true,"saved_send_kib":0,"all_three_authenticated_peers_connected":true,"hot_unlimit_alone_claimed":false,"original_phase_deadline_seconds":30}));
+            println!("native incoming admission unthrottled epoch: {}", serde_json::json!({"selected":selected,"actual_explicit_owned_restart":true,"same_identity_and_selected_cap":true,"saved_send_kib":0,"all_three_authenticated_peers_connected":true,"hot_unlimit_alone_claimed":false,"completion_deadline_seconds":30}));
             stage = "wait-exact-bytes-and-idle";
             loop {
                 let mut all_complete = true;
@@ -333,29 +348,18 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
             }
             TestResult::Ok(())
         }).await;
-        if !matches!(&phase_result, Ok(Ok(()))) {
-            let mut states = Vec::new();
-            for receiver in &receivers {
-                let observation = match tokio::time::timeout(
-                    Duration::from_secs(2),
-                    receiver.core.client().folder_status(&receiver.folder),
-                )
-                .await
-                {
-                    Ok(Ok(status)) => {
-                        serde_json::json!({"state":status.state,"global_files":status.global_files,"global_bytes":status.global_bytes,"local_files":status.local_files,"local_bytes":status.local_bytes,"need_files":status.need_files,"need_bytes":status.need_bytes,"completed_file_present":receiver.path.join(&name).is_file()})
-                    }
-                    Ok(Err(_)) => serde_json::json!({"query_failed":true}),
-                    Err(_) => serde_json::json!({"diagnostic_query_deadline":true}),
-                };
-                states.push(observation);
-            }
-            println!(
-                "native incoming admission failure diagnosis: {}",
-                serde_json::json!({"selected":selected,"stage":stage,"original_phase_deadline_seconds":30,"receivers":states,"outer_timeout":phase_result.is_err(),"diagnosis_is_not_pass":true})
-            );
+        if !matches!(&completion_result, Ok(Ok(()))) {
+            diagnose_failure(
+                &receivers,
+                &name,
+                selected,
+                stage,
+                "recovery-and-completion",
+                completion_result.is_err(),
+            )
+            .await;
         }
-        phase_result??;
+        completion_result??;
         for receiver in &receivers {
             assert!(
                 receiver
@@ -369,7 +373,7 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
         payloads.push((name, bytes));
         println!(
             "native incoming admission completed phase: {}",
-            serde_json::json!({"selected":selected,"source_and_all_three_receivers_actual_bytes":true,"saturated_admitted_request_cap_observed":true})
+            serde_json::json!({"selected":selected,"source_and_all_three_receivers_actual_bytes":true,"saturated_admitted_request_cap_observed":true,"observation_deadline_seconds":30,"recovery_completion_deadline_seconds":30,"previous_aggregate30_preserved":false})
         );
     }
     same_sections(&a, &before).await?;
@@ -459,4 +463,34 @@ async fn inspect_admission(
     stdout.reopen()?.take(4097).read_to_string(&mut output)?;
     assert!(output.len() <= 4096);
     Ok(serde_json::from_str(output.trim())?)
+}
+
+async fn diagnose_failure(
+    receivers: &[Receiver],
+    name: &str,
+    selected: i64,
+    stage: &str,
+    phase: &str,
+    outer_timeout: bool,
+) {
+    let mut states = Vec::new();
+    for receiver in receivers {
+        let observation = match tokio::time::timeout(
+            Duration::from_secs(2),
+            receiver.core.client().folder_status(&receiver.folder),
+        )
+        .await
+        {
+            Ok(Ok(status)) => {
+                serde_json::json!({"state":status.state,"global_files":status.global_files,"global_bytes":status.global_bytes,"local_files":status.local_files,"local_bytes":status.local_bytes,"need_files":status.need_files,"need_bytes":status.need_bytes,"completed_file_present":receiver.path.join(name).is_file()})
+            }
+            Ok(Err(_)) => serde_json::json!({"query_failed":true}),
+            Err(_) => serde_json::json!({"diagnostic_query_deadline":true}),
+        };
+        states.push(observation);
+    }
+    println!(
+        "native incoming admission failure diagnosis: {}",
+        serde_json::json!({"selected":selected,"stage":stage,"phase":phase,"stage_deadline_seconds":30,"previous_aggregate_phase_seconds":30,"previous_aggregate30_preserved":false,"receivers":states,"outer_timeout":outer_timeout,"diagnosis_is_not_pass":true})
+    );
 }
