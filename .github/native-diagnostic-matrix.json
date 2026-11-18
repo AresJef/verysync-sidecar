@@ -2264,5 +2264,14 @@
     "filter": "probe_pending_device_after_unknown_native_announcement",
     "label": "native-pending-announcement-source",
     "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_copy_ownership_from_parent_changes_received_group_and_preserves_data",
+    "label": "native-parent-group-control",
+    "trace": "0"
   }
 ]
