@@ -1092,7 +1092,7 @@
     "rust": "x86_64-apple-darwin",
     "target": "configuration_engine",
     "filter": "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer",
-    "label": "native-dial-concurrency-policy",
+    "label": "native-dial-missing-original-gates",
     "trace": "0"
   },
   {
@@ -1101,7 +1101,7 @@
     "rust": "aarch64-apple-darwin",
     "target": "configuration_engine",
     "filter": "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer",
-    "label": "native-dial-concurrency-policy",
+    "label": "native-dial-missing-original-gates",
     "trace": "0"
   },
   {
@@ -1110,7 +1110,7 @@
     "rust": "x86_64-unknown-linux-gnu",
     "target": "configuration_engine",
     "filter": "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer",
-    "label": "native-dial-concurrency-policy",
+    "label": "native-dial-missing-original-gates",
     "trace": "0"
   },
   {
@@ -1362,7 +1362,7 @@
     "rust": "aarch64-apple-darwin",
     "target": "configuration_engine",
     "filter": "native_temporary_index_threshold_controls_partial_block_advertisement",
-    "label": "native-temporary-index-minimum-policy",
+    "label": "native-temp-advertisement-missing-original-gate",
     "trace": "0"
   },
   {

@@ -54,3 +54,28 @@ executable cleanup. The full final integrated candidate and all other network
 capabilities remain independent acceptance requirements. No user account,
 trial subscription, purchase, vendor contact or real synchronization folder is
 part of this fixture.
+
+
+## Six native results
+
+The actual merge source `1ddf7e90d19130e261c3ab22e834047c16d9d8fb`
+(tree `25818f0698056eba43d025ac5b89ece2bc070e9f`) passed the six specialist
+cases in [PR #230](https://github.com/AresJef/verysync-sidecar/pull/230),
+[Engine run 44224241988](https://github.com/AresJef/verysync-sidecar/actions/runs/44224241988).
+Both Quality jobs in run 44224241975 also passed.
+
+| Native profile | Passed / failed / ignored | Case seconds |
+| --- | --- | ---: |
+| macOS AMD64 | 1 / 0 / 0 | 23.40 |
+| macOS ARM64 | 1 / 0 / 0 | 19.54 |
+| Linux AMD64 | 1 / 0 / 0 | 16.19 |
+| Linux ARM64 | 1 / 0 / 0 | 24.55 |
+| Windows AMD64 | 1 / 0 / 0 | 26.92 |
+| Windows ARM64 | 1 / 0 / 0 | 23.44 |
+
+Each original log was checked against its actual fixed archive/executable
+SHA-256, native toolchain and merge source. All six observed the required
+registration and native error within the observation bound, restored the full
+original configuration and protected state, and passed exact owned-executable
+cleanup. These results establish the scoped registration/error controls on
+those runners; complete final-candidate and WAN acceptance remain required.
