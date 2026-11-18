@@ -1,0 +1,87 @@
+name: Frozen v29 concurrent Intel timer diagnosis
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/macos-intel-concurrent-observer.yml
+      - scripts/diagnose-concurrent-observer.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v29-concurrent-intel-observation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'ci/v29-intel-concurrent-20261118-01a1ca9b'
+    name: Compare simultaneous timers under frozen large-stream pilots
+    runs-on: macos-15-intel
+    timeout-minutes: 24
+    defaults:
+      run:
+        shell: bash
+        working-directory: frozen
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: diagnostic
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: 49a11348b71a28069ce3f1680a196036c1b2508a
+          path: frozen
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Verify and build the original native workload
+        run: |
+          test "$(git rev-parse HEAD)" = 49a11348b71a28069ce3f1680a196036c1b2508a
+          test "$(git rev-parse 'HEAD^{tree}')" = ef7818b39e4510557a906d62fdd8c2c838cc3627
+          test "$(uname -m)" = x86_64
+          python -m pip install -r scripts/resource-test-requirements.txt
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          python -B scripts/preflight-native-resources.py --check-source \
+            --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN" \
+            --cargo "$(command -v cargo)"
+          cargo +"$TEST_TOOLCHAIN" test --release --no-run --features engine-tests,download --test resource_usage_engine --locked
+          library="$RUNNER_TEMP/verysync-darwin-owned-sample.dylib"
+          xcrun clang -O2 -Wall -Wextra -Werror -dynamiclib scripts/darwin-owned-sample.c -o "$library"
+          printf 'VERYSYNC_DARWIN_METRICS_LIBRARY=%s\n' "$library" >> "$GITHUB_ENV"
+      - name: Prepare only the fixed isolated Intel program
+        run: >-
+          python -B scripts/prepare-test-engine.py prepare --package macos-amd64-standard
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Compare four pilots with the independent timer off, on, on and off
+        run: >-
+          python -B "$GITHUB_WORKSPACE/diagnostic/scripts/diagnose-concurrent-observer.py"
+          --source "$GITHUB_WORKSPACE/frozen" --cargo "$(command -v cargo)"
+          --toolchain "$TEST_TOOLCHAIN" --scenario stream-large
+          --evidence-dir "$RUNNER_TEMP/v29-intel-concurrent"
+      - name: Verify exact private engine cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python -B scripts/prepare-test-engine.py check-cleanup
+      - name: Upload diagnostic samples and observer timings
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: v29-intel-concurrent-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/v29-intel-concurrent/concurrent-observer-summary.json
+            ${{ runner.temp }}/v29-intel-concurrent/*/witness*.json
+            ${{ runner.temp }}/v29-intel-concurrent/*/*-console.log
+            ${{ runner.temp }}/v29-intel-concurrent/*/native-exit.json
+            ${{ runner.temp }}/v29-intel-concurrent/*/pilot/preparation-result.json
+            ${{ runner.temp }}/v29-intel-concurrent/*/pilot/quality-result.json
+            ${{ runner.temp }}/v29-intel-concurrent/*/pilot/events.jsonl
+            ${{ runner.temp }}/v29-intel-concurrent/*/pilot/samples.jsonl
+            ${{ runner.temp }}/v29-intel-concurrent/*/pilot/safe-error.json
