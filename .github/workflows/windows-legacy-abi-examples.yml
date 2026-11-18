@@ -1,0 +1,131 @@
+name: Windows legacy controller example compatibility
+
+on:
+  push:
+    branches: [ci/windows-legacy-abi-examples-exact-root-20261119-01a1ca9b]
+    paths: [.github/workflows/windows-legacy-abi-examples.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-legacy-examples:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/windows-legacy-abi-examples-exact-root-20261119-01a1ca9b'
+    name: Execute legacy Windows Rust examples (${{ matrix.target }})
+    runs-on: windows-2022
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: i686-win7-windows-msvc
+            machine: 332
+            package: windows-386-legacy
+          - target: x86_64-win7-windows-msvc
+            machine: 34404
+            package: windows-amd64-legacy
+    env:
+      EXACT_PRODUCT: 6f9387c2f89ab47707e13709761f991b2c27d022
+      EXACT_PRODUCT_TREE: 0da709764415662a0c023a7e7a617a026bf43a72
+      LEGACY_PACKAGE: ${{ matrix.package }}
+      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
+      LEGACY_RUST_TARGET: ${{ matrix.target }}
+      LEGACY_PE_MACHINE: ${{ matrix.machine }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_PRODUCT }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Bind the named modern host, source, tree and original fixture tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Expected an isolated hosted VM' }
+          $source = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $source -ne $env:EXACT_PRODUCT) { throw 'Unexpected component source' }
+          $tree = git rev-parse 'HEAD^{tree}'
+          if ($LASTEXITCODE -ne 0 -or $tree -ne $env:EXACT_PRODUCT_TREE) { throw 'Unexpected component tree' }
+          $os = Get-CimInstance -ClassName Win32_OperatingSystem
+          if ($os.BuildNumber -ne '20348' -or -not [Environment]::Is64BitOperatingSystem) { throw 'Unexpected hosted OS build' }
+          Write-Output ("Modern Windows host: edition=$($os.Caption) build=$($os.BuildNumber), package=$env:LEGACY_PACKAGE, candidate=$source, tree=$tree")
+          python -B -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare Rust sources and locked default dependencies
+        run: |
+          $targetDirectory = Join-Path $env:RUNNER_TEMP 'vs-win7-rust-build'
+          "CARGO_TARGET_DIR=$targetDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          rustup toolchain install $env:TEST_TOOLCHAIN --profile minimal --component rust-src
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc "+$env:TEST_TOOLCHAIN" -vV
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo "+$env:TEST_TOOLCHAIN" fetch --locked --target $env:LEGACY_RUST_TARGET --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare the pinned MSVC assembly prerequisite
+        run: |
+          choco install nasm --version=2.16.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory = Join-Path $env:ProgramFiles 'NASM'
+          & (Join-Path $nasmDirectory 'nasm.exe') -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Link the four original examples with default TLS
+        env:
+          RUSTC_BOOTSTRAP: '1'
+        run: |
+          cargo "+$env:TEST_TOOLCHAIN" build --locked -Z "build-std=std,panic_abort" --target $env:LEGACY_RUST_TARGET --example manage_owned --example connect_existing --example create_folder --example manage_existing
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Record the linked architecture and bytes without executing the examples
+        run: |
+          $source = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $source -notmatch '^[0-9a-f]{40}$') { throw 'Cannot identify checkout' }
+          $targetRoot = Join-Path $env:CARGO_TARGET_DIR $env:LEGACY_RUST_TARGET
+          foreach ($example in @('manage_owned', 'connect_existing', 'create_folder', 'manage_existing')) {
+            $exe = Join-Path $targetRoot "debug/examples/$example.exe"
+            $file = Get-Item -LiteralPath $exe -ErrorAction Stop
+            $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($file.FullName))
+            try {
+              if ($reader.ReadUInt16() -ne 0x5a4d) { throw "Missing MZ: $example" }
+              $reader.BaseStream.Position = 0x3c
+              $offset = $reader.ReadUInt32()
+              if ($offset -lt 64 -or $offset -gt ($file.Length - 24)) { throw "Invalid PE offset: $example" }
+              $reader.BaseStream.Position = $offset
+              if ($reader.ReadUInt32() -ne 0x4550) { throw "Missing PE signature: $example" }
+              $machine = $reader.ReadUInt16()
+              if ($machine -ne [int]$env:LEGACY_PE_MACHINE) { throw "Mismatched PE architecture: $example" }
+            } finally {
+              $reader.Dispose()
+            }
+            $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            $receipt = @{source=$source; target=$env:LEGACY_RUST_TARGET; example=$example; length=$file.Length; machine=$machine; sha256=$digest; runtime_executed=$false}
+            Write-Output ("Legacy Rust PE receipt: " + ($receipt | ConvertTo-Json -Compress))
+          }
+          "VERYSYNC_TEST_EXAMPLE_DIR=$(Join-Path $targetRoot 'debug/examples')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Explicitly prepare the matching fixed official legacy program
+        run: |
+          python -B scripts/prepare-test-engine.py prepare --package $env:LEGACY_PACKAGE --parent $env:RUNNER_TEMP --github-env $env:GITHUB_ENV
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run the original attached example control with retained file bytes
+        run: |
+          python -B scripts/run-isolated-engine-tests.py --toolchain $env:TEST_TOOLCHAIN --test-target example_control --evidence-dir (Join-Path $env:RUNNER_TEMP 'legacy-attach')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $log = Join-Path $env:RUNNER_TEMP 'legacy-attach/example-control.log'
+          if (-not (Select-String -LiteralPath $log -SimpleMatch 'compiled example evidence:' -Quiet)) { throw 'Attached effects were not observed' }
+      - name: Clean up the exact program after attached control
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python -B scripts/prepare-test-engine.py check-cleanup
+      - name: Run the original owned example persistence reconnection and exit
+        run: |
+          python -B scripts/run-isolated-engine-tests.py --toolchain $env:TEST_TOOLCHAIN --test-target managed_lifetime --test-filter compiled_owned_example_persists_reconnects_stops_and_reuses_identity --evidence-dir (Join-Path $env:RUNNER_TEMP 'legacy-owned')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $log = Join-Path $env:RUNNER_TEMP 'legacy-owned/managed-lifetime.log'
+          if (-not (Select-String -LiteralPath $log -SimpleMatch 'compiled owned example evidence:' -Quiet)) { throw 'Owned effects were not observed' }
+      - name: Clean up the exact program after owned execution
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python -B scripts/prepare-test-engine.py check-cleanup
