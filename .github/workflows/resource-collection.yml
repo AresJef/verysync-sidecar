@@ -61,6 +61,11 @@ jobs:
           rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
           rustc +"$TEST_TOOLCHAIN" -vV
           cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Verify frozen preparation inputs before preparing the engine
+        run: >-
+          python scripts/preflight-native-resources.py --check-source
+          --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
+          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
       - name: Verify measurement quality and complete-group contracts
         run: |
           python -m unittest discover -s scripts/tests -p 'test_resource_*.py'

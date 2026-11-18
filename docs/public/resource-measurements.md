@@ -177,8 +177,18 @@ a fresh absolute `--evidence-dir`. A pilot also requires `--cargo`, the explicit
 fixed-program test environment, and a registered `--scenario`. Preparation is
 never mixed into formal samples.
 
-The frozen configuration is `tests/fixtures/resource-protocol.json`. After explicit
-fixed-core preparation and release compilation, collect with:
+The frozen configuration is `tests/fixtures/resource-protocol.json`. The workflow
+checks the frozen source inputs and actual Rust version before preparing the
+engine or building the workload. To check a local checkout, run the preflight
+with `--check-source`.
+
+```console
+python scripts/preflight-native-resources.py --check-source \
+  --protocol tests/fixtures/resource-protocol.json \
+  --cargo /absolute/path/to/cargo --toolchain 1.85.0
+```
+
+After explicit fixed-core preparation and release compilation, run the collector.
 
 ```console
 python scripts/collect-native-resources.py --stage all \
