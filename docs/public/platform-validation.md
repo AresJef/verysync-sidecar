@@ -25,9 +25,26 @@ targets with the matching fixed v2.33.2 archives. The suites exercised
 management and file effects, startup, cancellation, state reuse and owned host
 exit. The two x86 compatibility jobs also exercised peer lifecycle and
 key-based sharing. The same candidate linked the `connect_existing` and
-`manage_owned` examples for both Win7 targets on Windows Server 2022. Actual
-legacy Windows execution and the complete feature matrix remain pending.
+`manage_owned` examples for both Win7 targets on Windows Server 2022.
+Execution on older Windows releases and the complete feature matrix remain
+pending.
 [Candidate additional-platform results](https://github.com/AresJef/verysync-sidecar/actions/runs/44337786187)
+
+## Windows legacy program examples on a modern runner
+
+Source `6f9387c` built four original examples with Rust 1.85, default TLS
+features and the custom standard libraries for the two Win7 targets. Each
+example set then controlled the matching fixed v2.33.2 legacy program on
+Windows Server 2022 build 20348 through explicit loopback HTTP. The
+`i686-win7-windows-msvc` set ran under WOW64 and the
+`x86_64-win7-windows-msvc` set ran as a native x64 process.
+
+The two runtime cases per target exercised authenticated attachment, folder
+creation and removal with unchanged file digests, and managed persistence
+across example exits. The owned example also verified reconnection to the same
+identity, normal termination and exact process cleanup. Windows 7/8 and
+Server 2008/2012 execution, minimum OS support and full feature validation
+remain pending. [Both legacy program jobs](https://github.com/AresJef/verysync-sidecar/actions/runs/44388241515)
 
 ## Older Linux guest kernels
 
@@ -50,6 +67,17 @@ its health request and released the exact process and state lock after the SDK
 deadline. The upstream minimum, other Linux architectures, remaining
 minimum-system checks and final same-source suites retain separate evidence
 requirements.
+
+For s390x, the official v2.33.2 executable refused version initialization on
+Debian's `3.2.0-4-s390x` guest. The Go 1.23.10 runtime requires the vector
+facility bit in the kernel's `AT_HWCAP` report. Identical program and shell
+bytes on the same QEMU CPU reported that bit clear on Debian 3.2 and set on
+Debian `4.9.0-13-s390x`. In this contrast the earlier guest reached its
+deadline and the latter printed the expected version and exited normally.
+Full Rust SDK management, file and lifetime checks on the vector-capable
+guest remain pending. [Original startup refusal](https://github.com/AresJef/verysync-sidecar/actions/runs/44381696057)
+· [Guest-specific CPU and version results](https://github.com/AresJef/verysync-sidecar/actions/runs/44389860206)
+· [Go 1.23.10 startup check](https://raw.githubusercontent.com/golang/go/go1.23.10/src/runtime/os_linux_s390x.go)
 
 The additional platform workflow uses a 32-bit Rust host toolchain and matching
 32-bit core for Linux x86 on an x64 Linux host and Windows x86 through WOW64.
