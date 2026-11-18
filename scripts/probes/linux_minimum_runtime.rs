@@ -170,6 +170,69 @@ async fn read_native_health_code() -> Option<u16> {
     .flatten()
 }
 
+fn bootstrap_observation(state: &Path, program: &Path) -> serde_json::Value {
+    let expected_dirs = ["tmp", "roaming", "local", "profile"];
+    let ready_dirs: Vec<_> = expected_dirs
+        .into_iter()
+        .filter(|name| state.join(name).is_dir())
+        .collect();
+    let cli_capture_sizes: Option<Vec<_>> = fs::read_dir(state).ok().map(|directory| {
+        directory
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| {
+                entry.file_name().to_str().is_some_and(|name| {
+                    name.starts_with(".verysync-sidecar-cli-") && name.ends_with(".tmp")
+                })
+            })
+            .take(8)
+            .filter_map(|entry| entry.metadata().ok().map(|metadata| metadata.len()))
+            .collect()
+    });
+    let executable_read_offsets: Option<Vec<_>> = fs::read_dir("/proc/self/fd").ok().map(|fds| {
+        fds.filter_map(std::result::Result::ok)
+            .filter(|entry| fs::read_link(entry.path()).ok().as_deref() == Some(program))
+            .take(8)
+            .filter_map(|entry| {
+                let path = Path::new("/proc/self/fdinfo").join(entry.file_name());
+                fs::read_to_string(path)
+                    .ok()?
+                    .lines()
+                    .find_map(|line| line.strip_prefix("pos:")?.trim().parse::<u64>().ok())
+            })
+            .collect()
+    });
+    // The guest contains only this SDK probe and its isolated native core. Read
+    // only our own threads, and retain neither syscall arguments nor raw data.
+    let own_thread_waits: Option<Vec<_>> = fs::read_dir("/proc/self/task").ok().map(|tasks| {
+        tasks
+            .filter_map(std::result::Result::ok)
+            .take(16)
+            .map(|entry| {
+                let path = entry.path();
+                let wchan = fs::read_to_string(path.join("wchan")).ok().and_then(|raw| {
+                    let value = raw.trim();
+                    (value.len() <= 100
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
+                    .then(|| value.to_owned())
+                });
+                let syscall = fs::read_to_string(path.join("syscall"))
+                    .ok()
+                    .and_then(|raw| raw.split_whitespace().next()?.parse::<i64>().ok());
+                json!({"wchan":wchan,"syscall_number":syscall})
+            })
+            .collect()
+    });
+    json!({"leased_state":state.join(".verysync-sidecar-lease").is_file(),
+        "private_subdirectories":ready_dirs,
+        "executable_read_offsets":executable_read_offsets,
+        "cli_capture_sizes":cli_capture_sizes,
+        "native_key_present":state.join("key.pem").is_file(),
+        "native_settings_present":state.join("setting.dat").is_file(),
+        "own_thread_waits":own_thread_waits})
+}
+
 async fn startup_observation(state: &Path, program: &Path, elapsed: Duration) {
     let mut log = Vec::new();
     let read_log = fs::File::open(state.join(".verysync-sidecar-core.log"))
@@ -192,6 +255,7 @@ async fn startup_observation(state: &Path, program: &Path, elapsed: Duration) {
     .filter_map(|(label, phrase)| log.contains(phrase).then_some(label))
     .collect();
     let pids = owned_images(program).ok();
+    let bootstrap = bootstrap_observation(state, program);
     let ipv4_listening = listening_on_management_port("/proc/net/tcp");
     let health_code = if ipv4_listening == Some(true) {
         read_native_health_code().await
@@ -206,7 +270,8 @@ async fn startup_observation(state: &Path, program: &Path, elapsed: Duration) {
             "ipv4_management_port_listening":ipv4_listening,
             "ipv6_management_port_listening":listening_on_management_port("/proc/net/tcp6"),
             "native_health_http_status":health_code,
-            "private_core_log_bytes_read":read_log,"log_indicators":log_indicators})
+            "private_core_log_bytes_read":read_log,"log_indicators":log_indicators,
+            "bootstrap":bootstrap})
     );
 }
 
