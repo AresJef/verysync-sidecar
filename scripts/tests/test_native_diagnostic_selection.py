@@ -165,7 +165,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "ci/api-compatibility-tooling-20261118-01a1ca9b",
                        "test/native-storage-backend-acceptance-20261118-01a1ca9b",
                        "fix/storage-backend-receipt-checker-20261118-01a1ca9b",
-                       "ci/darwin-owned-process-read-20261118-01a1ca9b"]:
+                       "ci/darwin-owned-process-read-20261118-01a1ca9b",
+                       "ci/win7-default-abi-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(

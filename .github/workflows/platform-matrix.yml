@@ -16,6 +16,79 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  windows-legacy-build:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false || (github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'ci/win7-default-abi-20261118-01a1ca9b')
+    name: Link legacy Windows Rust examples (${{ matrix.target }})
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: i686-win7-windows-msvc
+            machine: 332
+          - target: x86_64-win7-windows-msvc
+            machine: 34404
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
+      LEGACY_RUST_TARGET: ${{ matrix.target }}
+      LEGACY_PE_MACHINE: ${{ matrix.machine }}
+      CARGO_TARGET_DIR: ${{ runner.temp }}/vs-win7-rust-build
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Prepare Rust sources and locked default dependencies
+        run: |
+          rustup toolchain install $env:TEST_TOOLCHAIN --profile minimal --component rust-src
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc "+$env:TEST_TOOLCHAIN" -vV
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo "+$env:TEST_TOOLCHAIN" fetch --locked --target $env:LEGACY_RUST_TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare the pinned MSVC assembly prerequisite
+        run: |
+          choco install nasm --version=2.16.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory = Join-Path $env:ProgramFiles 'NASM'
+          & (Join-Path $nasmDirectory 'nasm.exe') -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Link the default TLS managed and attached examples
+        env:
+          RUSTC_BOOTSTRAP: '1'
+        run: |
+          cargo "+$env:TEST_TOOLCHAIN" build --locked -Z "build-std=std,panic_abort" --target $env:LEGACY_RUST_TARGET --example manage_owned --example connect_existing
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Record the linked architecture and bytes without executing the examples
+        run: |
+          $source = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $source -notmatch '^[0-9a-f]{40}$') { throw 'Cannot identify checkout' }
+          $targetRoot = Join-Path $env:CARGO_TARGET_DIR $env:LEGACY_RUST_TARGET
+          foreach ($example in @('manage_owned', 'connect_existing')) {
+            $exe = Join-Path $targetRoot "debug/examples/$example.exe"
+            $file = Get-Item -LiteralPath $exe -ErrorAction Stop
+            $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($file.FullName))
+            try {
+              if ($reader.ReadUInt16() -ne 0x5a4d) { throw "Missing MZ: $example" }
+              $reader.BaseStream.Position = 0x3c
+              $offset = $reader.ReadUInt32()
+              if ($offset -lt 64 -or $offset -gt ($file.Length - 24)) { throw "Invalid PE offset: $example" }
+              $reader.BaseStream.Position = $offset
+              if ($reader.ReadUInt32() -ne 0x4550) { throw "Missing PE signature: $example" }
+              $machine = $reader.ReadUInt16()
+              if ($machine -ne [int]$env:LEGACY_PE_MACHINE) { throw "Mismatched PE architecture: $example" }
+            } finally {
+              $reader.Dispose()
+            }
+            $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            $receipt = @{source=$source; target=$env:LEGACY_RUST_TARGET; example=$example; length=$file.Length; machine=$machine; sha256=$digest; runtime_executed=$false}
+            Write-Output ("Legacy Rust PE receipt: " + ($receipt | ConvertTo-Json -Compress))
+          }
+
   x86-compatibility:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     name: ${{ matrix.package }} (${{ matrix.execution }})
