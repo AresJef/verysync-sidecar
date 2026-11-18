@@ -3,7 +3,7 @@ use super::{associate, connected, options, private_tcp, received, TestResult};
 use std::{fs, path::PathBuf, time::Duration};
 use verysync_sidecar::{
     Client, DeviceAdvancedPatch, DeviceId, DevicePatch, DeviceTransport, FolderId,
-    IntroductionSource, JoinFolderOptions, ManagedInstance, TargetPath,
+    IntroductionSource, JoinFolderOptions, ManagedInstance, PeerConnectionType, TargetPath,
 };
 
 async fn set_introducer(client: &Client, via: &DeviceId, trusted: bool, keep: bool) -> TestResult {
@@ -22,6 +22,7 @@ async fn set_introducer(client: &Client, via: &DeviceId, trusted: bool, keep: bo
 
 async fn reconnect(client: &Client, via: &DeviceId) -> TestResult {
     assert!(client.pause_device(via).await?.configuration.paused);
+    eprintln!("native introducer reconnect: waiting for paused peer disconnect");
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if !client
@@ -38,6 +39,7 @@ async fn reconnect(client: &Client, via: &DeviceId) -> TestResult {
     })
     .await??;
     assert!(!client.resume_device(via).await?.configuration.paused);
+    eprintln!("native introducer reconnect: waiting for resumed peer connection");
     connected(client, via).await?;
     Ok(())
 }
@@ -106,6 +108,19 @@ async fn observe_introduction(keep: bool, probe_direct_data: bool) -> TestResult
     let receiver_address = private_tcp(receiver.client()).await?;
     let introducer_address = private_tcp(introducer.client()).await?;
     let third_address = private_tcp(third.client()).await?;
+    let follow_withdrawal = !keep && !probe_direct_data;
+    // Use a single explicit dial path per pair in the withdrawal fixture.
+    // VerySync can open multiple registered connections from one address.
+    let introducer_dial_address = if follow_withdrawal {
+        "dynamic"
+    } else {
+        receiver_address.as_str()
+    };
+    let third_dial_address = if follow_withdrawal {
+        "dynamic"
+    } else {
+        introducer_address.as_str()
+    };
     let key = introducer.client().generate_share().await?;
     let receiver_path = root.join("received");
     let source_path = root.join("source");
@@ -141,7 +156,7 @@ async fn observe_introduction(keep: bool, probe_direct_data: bool) -> TestResult
             &introducer,
             source_folder,
             &receiver_id,
-            receiver_address.as_str(),
+            introducer_dial_address,
         ),
         (
             &introducer,
@@ -149,14 +164,25 @@ async fn observe_introduction(keep: bool, probe_direct_data: bool) -> TestResult
             &third_id,
             third_address.as_str(),
         ),
-        (
-            &third,
-            third_folder,
-            &introducer_id,
-            introducer_address.as_str(),
-        ),
+        (&third, third_folder, &introducer_id, third_dial_address),
     ] {
         associate(node.client(), directory, peer, endpoint, true).await?;
+        if follow_withdrawal {
+            let single_connection = DevicePatch::default()
+                .advanced_configuration(DeviceAdvancedPatch::default().num_connections(1))?;
+            let update = node
+                .client()
+                .update_device(peer, &single_connection)
+                .await?;
+            assert!(update.requested_fields_match);
+            assert_eq!(
+                update
+                    .configuration
+                    .advanced_configuration()?
+                    .num_connections,
+                Some(1)
+            );
+        }
     }
     // Establish the withdrawal policy before the first direct peer session.
     set_introducer(receiver.client(), &introducer_id, false, keep).await?;
@@ -188,7 +214,13 @@ async fn observe_introduction(keep: bool, probe_direct_data: bool) -> TestResult
         );
     }
     connected(receiver.client(), &introducer_id).await?;
-    connected(third.client(), &introducer_id).await?;
+    let third_connection = connected(third.client(), &introducer_id).await?;
+    if follow_withdrawal {
+        assert_eq!(
+            third_connection.connection_type,
+            Some(PeerConnectionType::TcpServer)
+        );
+    }
     received(
         "untrusted-introducer-baseline",
         receiver.client(),
@@ -413,6 +445,16 @@ async fn observe_introduction(keep: bool, probe_direct_data: bool) -> TestResult
         ("introducer", &mut introducer),
         ("third", &mut third),
     ] {
+        if follow_withdrawal && role == "introducer" {
+            let connections = node.client().connections().await?;
+            assert!(
+                connections.connections.get(&third_id).is_some_and(|peer| {
+                    peer.connected && peer.connection_type == Some(PeerConnectionType::TcpClient)
+                }),
+                "the introducer needs a live outbound connection during shutdown"
+            );
+            eprintln!("native introducer shutdown: live outbound third-peer connection observed");
+        }
         eprintln!("native introducer shutdown: requesting normal exit for {role}");
         let stop = node.shutdown(Duration::from_secs(10)).await?;
         assert!(

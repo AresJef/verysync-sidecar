@@ -72,6 +72,33 @@ class ResourceCollectionContracts(unittest.TestCase):
         self.assertEqual(results[0], [row for row in results[1] if row['package'].startswith('windows-')])
         self.assertTrue(all(value == results[1] for value in results[1:]))
 
+    def test_owned_introduction_draft_leaves_resource_collection_to_the_frozen_candidate(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/resource-collection.yml').read_text()
+        expression = next(line[len('    if: '):] for line in workflow.splitlines()
+                          if line.startswith('    if: '))
+        expression = expression.replace('github.event.pull_request.labels.*.name', 'labels')
+        expression = re.sub(r'!(?!=)', 'not ', expression.replace('&&', ' and ').replace('||', ' or '))
+        repository = 'AresJef/verysync-sidecar'
+        branch = 'test/native-introduction-encryption-20261118-01a1ca9b'
+        for event, draft, head, origin, labels, expected in [
+            ('pull_request', True, branch, repository, [], False),
+            ('pull_request', True, branch, repository, ['resource-formal'], True),
+            ('pull_request', False, branch, repository, [], True),
+            ('pull_request', True, branch, 'external/fork', [], True),
+            ('pull_request', True, 'unrelated', repository, [], True),
+            ('workflow_dispatch', True, branch, repository, [], True),
+        ]:
+            with self.subTest(event=event, draft=draft, head=head, origin=origin, labels=labels):
+                action = 'labeled' if labels else 'synchronize'
+                github = SimpleNamespace(event_name=event, head_ref=head, repository=repository,
+                    event=SimpleNamespace(action=action, label=SimpleNamespace(name=next(iter(labels), None)),
+                        pull_request=SimpleNamespace(draft=draft,
+                            head=SimpleNamespace(repo=SimpleNamespace(full_name=origin)))))
+                actual = eval(expression, {'__builtins__': {}}, {'github': github, 'labels': labels,
+                    'contains': lambda values, value: value in values})
+                self.assertEqual(actual, expected)
+
     def test_host_text_newlines_cannot_change_durable_record_bytes(self):
         original = COLLECT.tempfile.NamedTemporaryFile
         def windows_text_default(*args, **kwargs):
