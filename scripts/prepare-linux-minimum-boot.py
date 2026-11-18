@@ -15,7 +15,7 @@ import tarfile
 KERNELS = {
     "amd64": {"squeeze": "2.6.32-5-amd64", "wheezy": "3.2.0-4-amd64"},
     "i386": {"squeeze": "2.6.32-5-686", "wheezy": "3.2.0-4-686-pae"},
-    "armel": {"wheezy": "3.2.0-4-versatile"},
+    "armel": {"wheezy": "3.2.0-4-versatile", "stretch": "4.9.0-13-armmp"},
     "arm64": {"jessie": "3.16.0-6-arm64"},
     "s390x": {"wheezy": "3.2.0-4-s390x", "stretch": "4.9.0-13-s390x"},
 }
@@ -144,9 +144,9 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
 
 
 def boot_init(expected, program_sha=None, ca_sha=None, runtime_lib="lib64",
-              vx_control=False, armel_control=False):
+              vx_control=False, armel_control=False, armel_stretch=False):
     runtime = ""
-    shutdown = "reboot" if armel_control else "poweroff"
+    shutdown = "reboot" if armel_control or armel_stretch else "poweroff"
     if vx_control:
         runtime = f'''auxv=$(/bin/busybox od -A n -v -t u8 /proc/self/auxv) || fail auxv_read
 set -- $auxv
@@ -182,7 +182,15 @@ echo "$version"
 echo "VS_ARMEL_VERSION_CONTROL_DONE"
 '''
     elif program_sha is not None:
-        runtime = f'''/bin/busybox mount -t devpts -o gid=5,mode=0620 devpts /dev/pts || fail devpts_mount
+        libc_number = "2.24" if armel_stretch else "2.17"
+        if armel_stretch:
+            runtime = '''machine=$(/bin/busybox uname -m) || fail machine_identity
+[ "$machine" = armv7l ] || fail machine_identity
+adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
+[ "$adapters" = lo ] || fail external_guest_adapter
+echo "VS_ARMEL_STRETCH_GUEST armv7l lo"
+'''
+        runtime += f'''/bin/busybox mount -t devpts -o gid=5,mode=0620 devpts /dev/pts || fail devpts_mount
 [ -c /dev/ptmx ] || fail private_pty
 echo "VS_MINIMUM_PTY_READY devpts=true ptmx=true"
 /bin/busybox chown 1000:1000 /vs-data || fail guest_permissions
@@ -193,8 +201,8 @@ version=$(/bin/verysync version --home /version-state) || fail fixed_program_ver
 case "$version" in *v2.33.2*) ;; *) fail fixed_program_version ;; esac
 echo "VS_MINIMUM_CORE_VERSION_OK v2.33.2"
 libc_version=$(/{runtime_lib}/libc.so.6) || fail fixture_libc
-case "$libc_version" in *"version 2.17"*) ;; *) fail fixture_libc ;; esac
-echo "VS_MINIMUM_GLIBC_VERSION glibc=2.17"
+case "$libc_version" in *"version {libc_number}"*) ;; *) fail fixture_libc ;; esac
+echo "VS_MINIMUM_GLIBC_VERSION glibc={libc_number}"
 case " $(/bin/busybox cat /proc/cmdline) " in
     *" vs_minimum_entropy=natural "*) entropy_mode=natural ;;
     *" vs_minimum_entropy=seeded "*) entropy_mode=seeded ;;
@@ -260,13 +268,13 @@ args = parser.parse_args()
 if args.distribution not in KERNELS[args.architecture]:
     parser.error("unsupported distribution and architecture combination")
 if args.armel_version_control:
-    if args.architecture != "armel" or args.engine_receipt is None or args.runtime_dir is not None:
+    if args.architecture != "armel" or args.distribution != "wheezy" or args.engine_receipt is None or args.runtime_dir is not None:
         parser.error("ARMEL version control needs only the fixed ARMEL engine receipt")
 elif args.s390x_version_control:
     if args.architecture != "s390x" or args.engine_receipt is None or args.runtime_dir is not None:
         parser.error("s390x version control needs only the fixed s390x engine receipt")
-elif args.architecture == "armel" and args.runtime_dir is not None:
-    parser.error("ARMEL SDK runtime has no prepared libc fixture")
+elif args.architecture == "armel" and args.distribution != "stretch" and args.runtime_dir is not None:
+    parser.error("ARMEL SDK runtime needs the prepared Stretch libc fixture")
 elif (args.runtime_dir is None) != (args.engine_receipt is None):
     parser.error("provide both the fixed native engine receipt and runtime directory")
 os.umask(0o077)
@@ -299,8 +307,17 @@ release = KERNELS[args.architecture][distribution]
 _, runtime_lib, _ = RUNTIME[args.architecture]
 kernel_name, config_name = "boot/vmlinuz-"+release, "boot/config-"+release
 kernel_deb = by_name[distribution,"linux-image-"+release]
-members = verified_members(kernel_deb, {kernel_name:12*1024*1024,config_name:1024*1024})
+armel_stretch = args.architecture == "armel" and distribution == "stretch"
+required_kernel_members = {kernel_name:12*1024*1024,config_name:1024*1024}
+dtb_filename = "vexpress-v2p-ca9.dtb"
+if armel_stretch:
+    dtb_member = f"usr/lib/linux-image-{release}/{dtb_filename}"
+    required_kernel_members[dtb_member] = 256*1024
+members = verified_members(kernel_deb, required_kernel_members)
 kernel,config = members[kernel_name],members[config_name]
+if armel_stretch:
+    dtb = members[dtb_member]
+    assert dtb[:4] == bytes.fromhex("d00dfeed")
 required_platform = {
     "amd64": {"CONFIG_X86_64", "CONFIG_SERIAL_8250_CONSOLE"},
     "i386": {"CONFIG_X86_32", "CONFIG_SERIAL_8250_CONSOLE"},
@@ -311,6 +328,9 @@ required_platform = {
 if args.architecture == "armel":
     kernel_filename = "zImage"
     assert kernel[0x24:0x28] == bytes.fromhex("18286f01")
+    if armel_stretch:
+        required_platform["armel"] = {"CONFIG_AEABI", "CONFIG_CPU_V7", "CONFIG_ARCH_VEXPRESS",
+                                      "CONFIG_SERIAL_AMBA_PL011_CONSOLE"}
 elif args.architecture == "arm64":
     kernel_filename = "Image"
     assert kernel[0x38:0x3c] == b"ARM\x64"
@@ -355,11 +375,13 @@ if args.runtime_dir is not None:
     files.extend(runtime_files)
 files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
             runtime_hashes.get("candidate_debian_platform_ca"), runtime_lib,
-            args.s390x_version_control, args.armel_version_control),0,0))
+            args.s390x_version_control, args.armel_version_control, armel_stretch),0,0))
 ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)
 (root / kernel_filename).write_bytes(kernel)
+if armel_stretch:
+    (root / dtb_filename).write_bytes(dtb)
 (root/"initramfs.cpio.gz").write_bytes(ramdisk)
 (root/"kernel-config").write_bytes(config)
 receipt = {"distribution":distribution,"architecture":args.architecture,"expected_uname_release":release,
@@ -369,5 +391,7 @@ receipt = {"distribution":distribution,"architecture":args.architecture,"expecte
             "expected_serial_marker":"VS_MINIMUM_BOOT_OK kernel="+release+" loopback=127.0.0.1",
             "qemu_network_adapters":0,"boot_performed":False,
             "runtime_payload_sha256":runtime_hashes}
+if armel_stretch:
+    receipt.update({"dtb_filename": dtb_filename, "dtb_sha256": dig(dtb), "guest_libc": "glibc 2.24"})
 (WORK/"prepared-boot-fixture.json").write_text(json.dumps(receipt,indent=2)+"\n")
 print(json.dumps(receipt))

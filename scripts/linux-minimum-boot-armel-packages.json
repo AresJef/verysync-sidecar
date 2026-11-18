@@ -21,5 +21,65 @@
       "size": "13802776",
       "sha256": "2bb4a22a57ffc0470164978e4e253a6975fe2af3c2ac64d3f509a38f8f244f03"
     }
+  ],
+  "stretch": [
+    {
+      "package": "linux-image-4.9.0-13-armmp",
+      "version": "4.9.228-1",
+      "filename": "pool/main/l/linux/linux-image-4.9.0-13-armmp_4.9.228-1_armhf.deb",
+      "size": "30767074",
+      "sha256": "17668bed405007849a0f97cb7560342c0f11d26c9259e03a8a00bb824bc125f1"
+    },
+    {
+      "package": "busybox-static",
+      "version": "1:1.22.0-19+b3",
+      "filename": "pool/main/b/busybox/busybox-static_1.22.0-19+b3_armel.deb",
+      "size": "746332",
+      "sha256": "8143abdeb39e0920896c1b3dda151854ef9fddb686568fd682660a9111c5187b"
+    },
+    {
+      "package": "ca-certificates",
+      "version": "20200601~deb9u1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20200601~deb9u1_all.deb",
+      "size": "159692",
+      "sha256": "d6fc9275de84bdf598b3703a50935dc69d2e80105317a44f6cba465c073f88f9"
+    }
+  ],
+  "stretch-sysroot": [
+    {
+      "package": "libatomic1",
+      "version": "6.3.0-18+deb9u1",
+      "filename": "pool/main/g/gcc-6/libatomic1_6.3.0-18+deb9u1_armel.deb",
+      "size": "6962",
+      "sha256": "806f203d1035c80dd328ed60dbc2eb84947ad398cf93ad0ac4b499bcc82b64d0"
+    },
+    {
+      "package": "libgcc1",
+      "version": "1:6.3.0-18+deb9u1",
+      "filename": "pool/main/g/gcc-6/libgcc1_6.3.0-18+deb9u1_armel.deb",
+      "size": "40298",
+      "sha256": "387f00835349688e6ca6f50610de202be10b498855a6f7e39a90204701448763"
+    },
+    {
+      "package": "libc6",
+      "version": "2.24-11+deb9u4",
+      "filename": "pool/main/g/glibc/libc6_2.24-11+deb9u4_armel.deb",
+      "size": "2360162",
+      "sha256": "601950cfcf0e9f705d9a2bff65351dd6e86759cb6573d5ca6ba6cbe98ffaf5d8"
+    },
+    {
+      "package": "libc6-dev",
+      "version": "2.24-11+deb9u4",
+      "filename": "pool/main/g/glibc/libc6-dev_2.24-11+deb9u4_armel.deb",
+      "size": "2044612",
+      "sha256": "cd747f52bf0e39a7fd4f7e41508239c779079c40bc39a466372f5bba10c0933f"
+    },
+    {
+      "package": "linux-libc-dev",
+      "version": "4.9.228-1",
+      "filename": "pool/main/l/linux/linux-libc-dev_4.9.228-1_armel.deb",
+      "size": "1487536",
+      "sha256": "c2200708e1f31ee6362293bdfafc58938340b0b415a3aaf6aa50c4aaa4d2293a"
+    }
   ]
 }
