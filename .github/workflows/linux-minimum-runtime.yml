@@ -2,7 +2,7 @@ name: Old Linux SDK runtime
 
 on:
   push:
-    branches: [ci/linux-minimum-boot-20261119-01a1ca9b, ci/linux-i386-minimum-runtime-20261119-01a1ca9b, ci/linux-arm64-old-runtime-20261119-01a1ca9b, ci/linux-s390x-old-runtime-20261119-01a1ca9b]
+    branches: [ci/linux-minimum-boot-20261119-01a1ca9b, ci/linux-i386-minimum-runtime-20261119-01a1ca9b, ci/linux-arm64-old-runtime-20261119-01a1ca9b, ci/linux-s390x-stretch-runtime-20261119-01a1ca9b]
     paths:
       - .github/workflows/linux-minimum-runtime.yml
       - scripts/prepare-linux-minimum-boot.py
@@ -23,13 +23,13 @@ jobs:
       (github.ref_name == 'ci/linux-minimum-boot-20261119-01a1ca9b' ||
        github.ref_name == 'ci/linux-i386-minimum-runtime-20261119-01a1ca9b' ||
        github.ref_name == 'ci/linux-arm64-old-runtime-20261119-01a1ca9b' ||
-       github.ref_name == 'ci/linux-s390x-old-runtime-20261119-01a1ca9b')
+       github.ref_name == 'ci/linux-s390x-stretch-runtime-20261119-01a1ca9b')
     name: Verify the fixed SDK and core on pinned offline Debian guests
     runs-on: ${{ github.ref_name == 'ci/linux-arm64-old-runtime-20261119-01a1ca9b' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ github.ref_name == 'ci/linux-s390x-old-runtime-20261119-01a1ca9b' && 40 || 22 }}
+    timeout-minutes: ${{ github.ref_name == 'ci/linux-s390x-stretch-runtime-20261119-01a1ca9b' && 40 || 22 }}
     env:
       GUEST_ARCH: >-
-        ${{ github.ref_name == 'ci/linux-s390x-old-runtime-20261119-01a1ca9b' && 's390x' ||
+        ${{ github.ref_name == 'ci/linux-s390x-stretch-runtime-20261119-01a1ca9b' && 's390x' ||
         github.ref_name == 'ci/linux-arm64-old-runtime-20261119-01a1ca9b' && 'arm64' ||
         github.ref_name == 'ci/linux-i386-minimum-runtime-20261119-01a1ca9b' && 'i386' || 'amd64' }}
       EXACT_CANDIDATE: 83942f58532cbad796a1d89aaee1fe9e2b04df85
@@ -135,7 +135,7 @@ jobs:
               package=linux-arm64-standard
               ;;
             s390x)
-              suites=(wheezy)
+              suites=(stretch)
               vm_package=(qemu-system-s390x qemu-system-data)
               machine=s390-ccw-virtio
               serial=ttyS1
