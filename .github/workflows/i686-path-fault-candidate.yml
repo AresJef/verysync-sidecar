@@ -1,0 +1,130 @@
+name: Verify current path and failure behavior with fixed 32-bit programs
+
+on:
+  push:
+    branches: [ci/i686-path-fault-candidate-20261119-01a1ca9b]
+    paths: [.github/workflows/i686-path-fault-candidate.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  x86-path-and-fault:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/i686-path-fault-candidate-20261119-01a1ca9b'
+    name: ${{ matrix.package }} (${{ matrix.execution }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: linux-386-standard
+            runner: ubuntu-24.04
+            rust: i686-unknown-linux-gnu
+            execution: x86 on x64 Linux
+          - package: windows-386-standard
+            runner: windows-2022
+            rust: i686-pc-windows-msvc
+            execution: WOW64
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: c661d51e0576603543da273913a5919e62df000b
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Check the exact reviewed candidate and disposable host
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_ARCH" = X64
+          test "$(git rev-parse HEAD)" = c661d51e0576603543da273913a5919e62df000b
+          test "$(git rev-parse 'HEAD^{tree}')" = fe22191751451e950a4fa1932f06d129c817341e
+          git show -s --format='path fault candidate=%H tree=%T'
+      - name: Install the explicit 32-bit Linux compiler and loader
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes gcc-multilib g++-multilib libc6-dev-i386 lib32z1
+          dpkg-query -W gcc-multilib g++-multilib libc6-dev-i386 lib32z1
+      - name: Install the explicit Windows x86 assembly build prerequisite
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm --version=2.16.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory = Join-Path $env:ProgramFiles 'NASM'
+          $nasmBinary = Join-Path $nasmDirectory 'nasm.exe'
+          & $nasmBinary -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Record compatibility host and install the 32-bit Rust host toolchain
+        run: |
+          python -c 'import os, platform, struct; print({"runner_arch": os.environ["RUNNER_ARCH"], "python_machine": platform.machine(), "python_bits": struct.calcsize("P") * 8})'
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --force-non-host
+          rustc +"$TEST_TOOLCHAIN" -vV
+          rustc +"$TEST_TOOLCHAIN" --print cfg
+      - name: Check exact extraction, selection and isolated-runner contracts
+        run: |
+          python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+          python -m unittest discover -s scripts/tests -p test_prepare_test_examples.py
+          python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+      - name: Fetch locked dependencies before isolated execution
+        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed 32-bit official core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Run the original full file transfer path and fault suite
+        id: transfer
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_transfer_engine --evidence-dir "${{ runner.temp }}/vs-i686-transfer"
+      - name: Verify exact executable cleanup before the next isolated case
+        id: transfer_cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Run the original real bounded-volume disk-full recovery
+        id: disk_full
+        continue-on-error: true
+        if: always() && !cancelled() && steps.transfer_cleanup.outcome == 'success'
+        run: >-
+          python scripts/run-bounded-disk-full-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --evidence-dir "${{ runner.temp }}/vs-i686-disk-full"
+      - name: Verify final exact executable cleanup
+        id: final_cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require both actual suite results and both cleanup results
+        if: always()
+        env:
+          TRANSFER: ${{ steps.transfer.outcome }}
+          DISK_FULL: ${{ steps.disk_full.outcome }}
+          TRANSFER_CLEANUP: ${{ steps.transfer_cleanup.outcome }}
+          FINAL_CLEANUP: ${{ steps.final_cleanup.outcome }}
+        run: |
+          set -euo pipefail
+          for outcome in "$TRANSFER" "$DISK_FULL" "$TRANSFER_CLEANUP" "$FINAL_CLEANUP"; do
+            test "$outcome" = success
+          done
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          transfer = (root / "vs-i686-transfer/file-transfer-engine.log").read_text(encoding="utf-8")
+          disk = (root / "vs-i686-disk-full/native/disk-full-engine.log").read_text(encoding="utf-8")
+          assert "test result: ok. 6 passed; 0 failed; 0 ignored;" in transfer
+          for marker in ("native path boundary evidence: {", "native process failure recovery evidence: {", "public resource cancellation evidence: {"):
+              assert transfer.count(marker) == 1, marker
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in disk
+          assert disk.count("native disk-full evidence: {") == 1
+          print("Original path, cancellation, process recovery and disk-full cases ran.")
+          PY
