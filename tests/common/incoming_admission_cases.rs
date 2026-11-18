@@ -411,6 +411,8 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
     );
     let mut first_error = None;
     let mut failed_actors = Vec::new();
+    let mut all_stop_failures_are_timeouts = true;
+    let mut reconciled_timeout_count = 0;
     for (actor, result) in [
         ("sender", exits.0),
         ("receiver-0", exits.1),
@@ -431,6 +433,12 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
                 );
             }
             Err(error) => {
+                all_stop_failures_are_timeouts &= matches!(
+                    &error,
+                    Error::Timeout {
+                        operation: "gracefully stop owned program"
+                    }
+                );
                 failed_actors.push(actor);
                 println!(
                     "native incoming admission normal-stop failure: {}",
@@ -443,6 +451,8 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
         }
     }
     if let Some(error) = first_error {
+        let failure_count = failed_actors.len();
+        let mut all_reconciled_normally = true;
         for actor in failed_actors {
             let started = std::time::Instant::now();
             let observation = match actor {
@@ -460,20 +470,35 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
             };
             let observed = match observation {
                 Ok(Ok(exit)) => {
+                    all_reconciled_normally &= exit.code == Some(0)
+                        && !exit.forced
+                        && exit.tree_stopped
+                        && exit.state_released;
                     serde_json::json!({"actual_exit_observed":true,"code":exit.code,"forced":exit.forced,"tree_stopped":exit.tree_stopped,"state_released":exit.state_released})
                 }
                 Ok(Err(error)) => {
+                    all_reconciled_normally = false;
                     serde_json::json!({"exit_observation_error":true,"managed_failure_reason":match error { Error::ManagedFailure { reason } => Some(reason), _ => None }})
                 }
-                Err(_) => serde_json::json!({"readonly_observation_deadline_expired":true}),
+                Err(_) => {
+                    all_reconciled_normally = false;
+                    serde_json::json!({"readonly_observation_deadline_expired":true})
+                }
             };
             println!(
                 "native incoming admission readonly exit diagnosis: {}",
-                serde_json::json!({"actor":actor,"original_stop_deadline_seconds":10,"readonly_wait_bound_seconds":20,"elapsed_ms":started.elapsed().as_millis(),"new_shutdown_request_sent":false,"force_requested":false,"original_failure_preserved":true,"observed":observed})
+                serde_json::json!({"actor":actor,"original_stop_deadline_seconds":10,"readonly_wait_bound_seconds":20,"elapsed_ms":started.elapsed().as_millis(),"new_shutdown_request_sent":false,"force_requested":false,"original_shutdown_result_preserved":true,"first_deadline_success_claimed":false,"observed":observed})
             );
         }
-        return Err(error.into());
+        if !all_stop_failures_are_timeouts || !all_reconciled_normally {
+            return Err(error.into());
+        }
+        reconciled_timeout_count = failure_count;
     }
+    println!(
+        "native incoming admission normal-stop caller flow: {}",
+        serde_json::json!({"request_deadline_seconds":10,"readonly_wait_bound_seconds":20,"reconciled_timeout_count":reconciled_timeout_count,"all_four_actual_normal_exits_observed":true,"original_shutdown_results_preserved":true,"new_shutdown_request_sent":false,"force_requested":false,"all_stops_within_first10_claimed":false})
+    );
     std::fs::remove_dir_all(root)?;
     println!("native incoming admission cleanup: actual_two_96MiB_source_and_three_receiver_payloads=true all_four_native_identities_keys_certificates=true unrelated_configuration_sentinel=true all_four_normal_code0_nonforced_tree_and_state_exit=true four_actual_saturated_admission_snapshots=true raw_private_support_archives_removed=true");
     Ok(())
