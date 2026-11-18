@@ -107,9 +107,9 @@
       "controller_target_candidates": [
         "armv5te-unknown-linux-gnueabi"
       ],
-      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
-      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
-      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "runtime_abi_note": "Unknown minimum native ISA. The static ARM ELF reports CPU architecture v6 and arm1136j-s alongside GOARM=5. ARM926 execution fails with SIGILL.",
+      "mapping_note": "Selected ARMEL Rust tests used the fixed package on ARM1176 user-mode QEMU. The ARM1176 and Cortex-A9 version controls passed. See the platform validation guide for the exact tested conditions.",
+      "minimum_os_note": "The fixed native core returns SIGILL on ARM926 in an offline Debian 3.2.0-4-versatile full-system QEMU guest. The SDK minimum kernel/libc and minimum native ISA remain unverified.",
       "minimum_os_runtime_verified": false
     },
     {

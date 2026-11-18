@@ -113,6 +113,17 @@ controller target. This is not an automatic CPU fallback, native ARM evidence,
 or a minimum-ARMv5 claim. The package's actual minimum native ISA remains
 unverified; its `GOARM=5` metadata alone does not establish that requirement.
 
+The same fixed executable also returned SIGILL in a full-system ARM926
+Versatile guest after Debian `3.2.0-4-versatile` booted with only loopback.
+The guest then restarted and QEMU exited normally. A separate user-mode
+comparison on the same host reproduced SIGILL on ARM926 and returned
+`v2.33.2` on ARM1176 and Cortex-A9. The inspected ELF attributes report
+ARMv6 and `arm1136j-s` alongside the Go build metadata `GOARM=5`.
+Rust SDK operation on an older 32-bit ARM kernel and the minimum native ISA
+still require their own evidence.
+[Full-system ARM926 result](https://github.com/AresJef/verysync-sidecar/actions/runs/44417958259)
+· [Matched CPU comparison](https://github.com/AresJef/verysync-sidecar/actions/runs/44418527982)
+
 The three ARM jobs passed their selected real core/controller management, file,
 startup, cancellation and host-exit effects on source 712ea2e. Each Unix case
 observed an exact-core inventory of zero, one during the controlled panic, then
