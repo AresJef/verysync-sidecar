@@ -82,7 +82,8 @@ jobs:
             if [ "$status" -ne 0 ] \
               || ! grep -Fx "VS_MINIMUM_BOOT_OK kernel=$release loopback=127.0.0.1" "$root/guest-console.txt" \
               || ! grep -Fx 'VS_MINIMUM_CORE_VERSION_OK v2.33.2' "$root/guest-console.txt" \
-              || ! grep -Fx 'VS_MINIMUM_SDK_RUNTIME glibc=2.17 uid=1000' "$root/guest-console.txt" \
+              || ! grep -Fx 'VS_MINIMUM_GLIBC_VERSION glibc=2.17' "$root/guest-console.txt" \
+              || ! grep -Fx 'VS_MINIMUM_SDK_RUNTIME uid=1000 loaded_fixture_libc=true' "$root/guest-console.txt" \
               || ! grep -E '^VS_MINIMUM_SDK_OK \{' "$root/guest-console.txt" \
               || grep -E 'VS_MINIMUM_BOOT_FAILURE|Kernel panic - not syncing' "$root/guest-console.txt"; then
               overall=1

@@ -109,6 +109,9 @@ case "$actual_program_sha" in "{program_sha} "*) ;; *) fail program_sha ;; esac
 version=$(/bin/verysync version --home /version-state) || fail fixed_program_version
 case "$version" in *v2.33.2*) ;; *) fail fixed_program_version ;; esac
 echo "VS_MINIMUM_CORE_VERSION_OK v2.33.2"
+libc_version=$(/lib64/libc.so.6) || fail fixture_libc
+case "$libc_version" in *"version 2.17"*) ;; *) fail fixture_libc ;; esac
+echo "VS_MINIMUM_GLIBC_VERSION glibc=2.17"
 /bin/vs-sdk-probe {program_sha} || fail sdk_runtime
 '''
     return f"""#!/bin/busybox sh

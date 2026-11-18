@@ -7,7 +7,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 use verysync_sidecar::{
     CreateFolderOptions, FolderId, LocalProgram, ManagedInstance, ManagedOptions,
@@ -27,36 +29,33 @@ fn require(condition: bool, reason: &'static str) -> ProbeResult<()> {
     }
 }
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn enter_guest_user() -> ProbeResult<()> {
-    // The guest init is the only privileged caller. Drop all guest groups and
-    // root credentials before creating the SDK runtime or starting the core.
-    unsafe {
-        let version = std::ffi::CStr::from_ptr(libc::gnu_get_libc_version());
+fn verify_guest_user() -> ProbeResult<()> {
+    let status = fs::read_to_string("/proc/self/status")?;
+    for name in ["Uid:", "Gid:"] {
+        let line = status
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .ok_or("guest process identity is missing")?;
+        let actual: Vec<_> = line.split_whitespace().collect();
         require(
-            version.to_bytes() == b"2.17",
-            "runtime glibc differed from the fixed 2.17 build baseline",
-        )?;
-        require(libc::geteuid() == 0, "guest init privileges were required")?;
-        if libc::setgroups(0, std::ptr::null()) != 0
-            || libc::setgid(USER) != 0
-            || libc::setuid(USER) != 0
-        {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        require(
-            libc::geteuid() == USER && libc::getegid() == USER,
-            "guest UID/GID differed",
+            actual == ["1000"; 4],
+            "guest process did not have the fixed UID/GID",
         )?;
     }
-    println!("VS_MINIMUM_SDK_RUNTIME glibc=2.17 uid={USER}");
+    require(
+        status.lines().any(|line| {
+            line.strip_prefix("Groups:")
+                .is_some_and(|groups| groups.trim().is_empty())
+        }),
+        "guest process retained supplementary groups",
+    )?;
+    let maps = fs::read_to_string("/proc/self/maps")?;
+    require(
+        maps.lines().any(|line| line.ends_with(" /lib64/libc.so.6")),
+        "SDK process did not map the fixture libc",
+    )?;
+    println!("VS_MINIMUM_SDK_RUNTIME uid={USER} loaded_fixture_libc=true");
     Ok(())
-}
-
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-fn enter_guest_user() -> ProbeResult<()> {
-    let _ = USER;
-    Err("this fixture requires a Linux GNU guest".into())
 }
 
 fn selected_hash() -> ProbeResult<[u8; 32]> {
@@ -207,10 +206,35 @@ async fn verify_guest(hash: [u8; 32]) -> ProbeResult<()> {
 }
 
 fn main() -> ProbeResult<()> {
+    require(
+        cfg!(all(target_os = "linux", target_env = "gnu")),
+        "this fixture requires a Linux GNU guest",
+    )?;
     let hash = selected_hash()?;
-    enter_guest_user()?;
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(verify_guest(hash))
+    match std::env::args().nth(2).as_deref() {
+        None => {
+            let status = Command::new(std::env::current_exe()?)
+                .arg(
+                    std::env::args()
+                        .nth(1)
+                        .ok_or("explicit fixed engine SHA-256 required")?,
+                )
+                .arg("--guest-user")
+                .uid(USER)
+                .gid(USER)
+                .status()?;
+            require(
+                status.success(),
+                "unprivileged SDK fixture returned failure",
+            )
+        }
+        Some("--guest-user") => {
+            verify_guest_user()?;
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(verify_guest(hash))
+        }
+        Some(_) => Err("unknown fixture mode".into()),
+    }
 }
