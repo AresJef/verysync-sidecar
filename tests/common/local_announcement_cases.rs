@@ -181,8 +181,9 @@ async fn probe_pending_device_after_unknown_native_announcement() -> TestResult 
 }
 
 /// After a failed dynamic discovery result, compare the exact endpoint with
-/// transport reachability and an explicit address. The caller still returns
-/// the original failure. This is enabled only on the dedicated CI branch.
+/// transport reachability, an explicitly triggered dynamic redial and an
+/// explicit address. The caller still returns the original failure. This is
+/// enabled only on the dedicated CI branch.
 async fn compare_owned_advertised_endpoint(
     sender: &ManagedInstance,
     receiver: &ManagedInstance,
@@ -226,6 +227,29 @@ async fn compare_owned_advertised_endpoint(
     if !reachable {
         return Ok(());
     }
+
+    let client = sender.client();
+    let before = client.device(receiver_id).await?;
+    if before.addresses == ["dynamic"] && !before.paused {
+        client.pause_device(receiver_id).await?;
+        let paused = client.device(receiver_id).await?.paused;
+        client.resume_device(receiver_id).await?;
+        let resumed = client.device(receiver_id).await?;
+        let dynamic_after_resume = resumed.addresses == ["dynamic"] && !resumed.paused;
+        let redial = tokio::time::timeout(Duration::from_secs(12), async {
+            connection(client, receiver_id, true).await?;
+            connection(receiver.client(), sender_id, true).await
+        })
+        .await
+        .is_ok_and(|result| result.is_ok());
+        eprintln!(
+            "VS_ANNOUNCE_CONTROL pause_readback={paused} dynamic_after_resume={dynamic_after_resume} authenticated_dynamic_redial={redial}"
+        );
+        if redial {
+            return Ok(());
+        }
+    }
+
     let explicit = format!("tcp://{address}");
     sender
         .client()

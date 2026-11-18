@@ -1,8 +1,8 @@
-name: macOS Intel announcement diagnosis
+name: macOS Intel dynamic redial diagnosis
 
 on:
   push:
-    branches: [ci/macos-intel-announce-control-20261119-01a1ca9b]
+    branches: [ci/macos-intel-owned-redial-20261119-01a1ca9b]
     paths:
       - .github/workflows/macos-intel-announce-control.yml
       - tests/common/local_announcement_cases.rs
@@ -12,10 +12,10 @@ permissions:
 
 jobs:
   diagnose:
-    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/macos-intel-announce-control-20261119-01a1ca9b'
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/macos-intel-owned-redial-20261119-01a1ca9b'
     runs-on: macos-15-intel
     timeout-minutes: 15
-    name: Compare an exact endpoint after the isolated dynamic-announcement case
+    name: Compare dynamic redial and an exact endpoint after the isolated original case
     env:
       VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
       VS_OWNED_ANNOUNCE_ENDPOINT_CONTROL: enabled
@@ -24,6 +24,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          fetch-depth: 8
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
@@ -32,6 +33,9 @@ jobs:
           set -euo pipefail
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$(uname -m)" = x86_64
+          base=83942f58532cbad796a1d89aaee1fe9e2b04df85
+          test "$(git rev-parse "$base^{tree}")" = 054c09ee2d25e7b8bc8f90fdc758c30fe4c5fd04
+          git diff --exit-code "$base" HEAD -- src Cargo.toml Cargo.lock releases
           rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --no-self-update
           cargo "+$TEST_TOOLCHAIN" fetch --locked
           python3 -B scripts/prepare-test-engine.py prepare --package macos-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
