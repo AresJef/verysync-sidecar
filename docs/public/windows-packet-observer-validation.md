@@ -46,7 +46,8 @@ an explicitly recognized empty filter table. It adds one uniquely named rule
 for both prebound source/destination ports and the exact loopback address,
 records its actual filter ID, and uses a 128-byte packet snapshot and a 16 MiB
 circular log. Unknown state, unknown ownership or unrelated filters stop the
-attempt. Cleanup removes only the recorded filter and stops only the session
+attempt. Cleanup first reconfirms that the whole filter table contains only the owned
+rule, then uses the native whole-table removal; it stops only the session
 started by this diagnostic; uncertain start outcomes require its own log name.
 
 Two independently bounded IPv4/IPv6 phases each transfer and verify 1 MiB of
@@ -56,3 +57,33 @@ counts/class bytes without raw packet contents. Capture files stay private and
 are removed. Missing headers, unsupported link formats or cleanup failures are
 inconclusive diagnostics with a failing result, never a VerySync capability
 verdict. The actual fixed-program 16/32/0 class test remains separate.
+
+
+The actual merge source `903efe0f98784ab2bf59e26b135065cfa8c87aa1`
+(tree `b79aee50a3d776bad0a4c57f290727fd35953bca`) produced two failed
+diagnostic jobs in [PR #234](https://github.com/AresJef/verysync-sidecar/pull/234),
+[run 44232438620](https://github.com/AresJef/verysync-sidecar/actions/runs/44232438620).
+All four generated IPv4/IPv6 flows delivered exactly 1 MiB, stopped the monitor,
+restored an empty filter table and removed private captures. Both Windows
+architectures reported zero captured packets and metadata-only pcapng files.
+These are inconclusive observer failures, with zero VerySync cases. Neither
+native class support nor a native inability to mark packets is established.
+The unchanged loopback observer is not retried to seek a passing result.
+
+The native filter-removal command also revealed a fixture assumption error:
+it clears every filter even when an ID is supplied. The original VMs began
+empty and contained only the owned rule, so actual cleanup removed no unrelated
+rule. The corrected helper explicitly reconfirms whole-table ownership before
+using this native operation; additional or unknown rules prevent removal.
+The original source/results and this correction remain separate.
+
+The diagnostic is retained for explicit manual reproduction. A required Windows
+VerySync packet-class gate remains open and must use a validated observer or an
+actual controlled external receiver, with the original 16/32/0 selections,
+complete file bytes, protected state and normal owned exits. An observer failure
+does not waive that gate or complete the configuration group.
+
+The failed loopback observer is retained as an explicit `workflow_dispatch`
+reproduction tool. Ordinary pull requests do not repeat that unchanged native
+capture path. The required Windows VerySync wire-class acceptance remains open;
+this diagnostic scheduling change grants no support or acceptance credit.

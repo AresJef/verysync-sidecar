@@ -1,12 +1,9 @@
 name: Windows owned packet observer feasibility
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/windows-packet-observer.yml
-      - scripts/probe-windows-packet-tools.py
-      - scripts/probe-windows-loopback-packets.py
-      - scripts/tests/test_windows_loopback_packets.py
+  # Both original native jobs produced no loopback packets. Preserve this
+  # diagnostic as an explicit reproduction tool, not an unchanged PR retry.
+  # The required Windows VerySync 16/32/0 wire-class gate remains open.
   workflow_dispatch:
 
 permissions:
