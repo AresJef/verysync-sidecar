@@ -76,6 +76,7 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
     std::fs::write(&sentinel, b"controlled buffer caller bytes")?;
     let source = root.join("source");
     std::fs::create_dir(&source)?;
+    println!("native incoming admission setup stage: start-sender");
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     prepare(&a).await?;
     let aid = a.client().instance().device_id.clone();
@@ -88,6 +89,7 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
         .await?;
     let mut receivers = Vec::new();
     for index in 0..3 {
+        println!("native incoming admission setup stage: start-receiver-{index}");
         let core = ManagedInstance::start(options(&root.join(format!("b-{index}")))?).await?;
         prepare(&core).await?;
         let id = core.client().instance().device_id.clone();
@@ -173,6 +175,10 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
                     .requested_fields_match
             );
         }
+        println!(
+            "native incoming admission phase setup stage: {}",
+            serde_json::json!({"selected": selected, "stage": "restart-sender"})
+        );
         a.restart(Duration::from_secs(30)).await?;
         assert_eq!(a.client().instance().device_id, aid);
         assert_eq!(
@@ -184,6 +190,10 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
         );
         assert!(!source_pids.contains(&a.process_id()));
         source_pids.push(a.process_id());
+        println!(
+            "native incoming admission phase setup stage: {}",
+            serde_json::json!({"selected": selected, "stage": "connect-all-peers"})
+        );
         for receiver in &receivers {
             super::name_policy_connection_pair(&a, &receiver.core, true).await?;
             assert!(
@@ -231,6 +241,10 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
         assert_eq!(current.len(), 768);
         all_hashes.extend(current);
         std::fs::write(source.join(&name), &bytes)?;
+        println!(
+            "native incoming admission phase setup stage: {}",
+            serde_json::json!({"selected": selected, "stage": "scan-and-index-new-file"})
+        );
         a.client().request_scan(&af.configuration.id).await?;
         let indexed = a
             .client()
@@ -242,11 +256,13 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
             "native incoming admission geometry: {}",
             serde_json::json!({"selected":selected,"native_file_bytes":indexed.global.size,"native_num_blocks":indexed.global.num_blocks,"actual_three_distinct_authenticated_receiver_identities":true})
         );
-        tokio::time::timeout(Duration::from_secs(30), async {
+        let mut stage = "resume-receivers";
+        let phase_result = tokio::time::timeout(Duration::from_secs(30), async {
             for receiver in &receivers {
                 assert!(!receiver.path.join(&name).is_file());
                 assert!(receiver.core.client().resume_folder(&receiver.folder).await?.requested_fields_match);
             }
+            stage = "wait-all-syncing";
             loop {
                 let mut all_syncing = true;
                 for receiver in &receivers {
@@ -262,9 +278,11 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
                     assert_eq!(receiver.core.client().folder_status(&receiver.folder).await?.state, Some(FolderState::Syncing));
                     assert!(!receiver.path.join(&name).is_file());
                 }
+                stage = if index == 0 { "support-snapshot-0" } else { "support-snapshot-1" };
                 let profile = a.client().collect_core_support_bundle().await?;
                 let archive = evidence.join(format!("cap-{selected}-admission-{index}.zip"));
                 std::fs::write(&archive, profile.body_bytes())?;
+                stage = if index == 0 { "inspect-snapshot-0" } else { "inspect-snapshot-1" };
                 let inspected = inspect_admission(&root, &archive, selected).await?;
                 assert_eq!(inspected["admitted_bytes"].as_u64(), Some(selected as u64 * 1024));
                 assert!(inspected["waiting_for_admission_count"].as_u64().is_some_and(|count| count > 0));
@@ -279,7 +297,9 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
                 assert_eq!(receiver.core.client().folder_status(&receiver.folder).await?.state, Some(FolderState::Syncing));
                 assert!(!receiver.path.join(&name).is_file());
             }
+            stage = "release-limit";
             assert!(a.client().update_bandwidth_configuration(&BandwidthPatch::default().max_send_kib_per_second(0).limit_in_lan(true)).await?.requested_fields_match);
+            stage = "wait-exact-bytes-and-idle";
             loop {
                 let mut all_complete = true;
                 for receiver in &receivers {
@@ -290,7 +310,30 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
             TestResult::Ok(())
-        }).await??;
+        }).await;
+        if !matches!(&phase_result, Ok(Ok(()))) {
+            let mut states = Vec::new();
+            for receiver in &receivers {
+                let observation = match tokio::time::timeout(
+                    Duration::from_secs(2),
+                    receiver.core.client().folder_status(&receiver.folder),
+                )
+                .await
+                {
+                    Ok(Ok(status)) => {
+                        serde_json::json!({"state":status.state,"global_files":status.global_files,"global_bytes":status.global_bytes,"local_files":status.local_files,"local_bytes":status.local_bytes,"need_files":status.need_files,"need_bytes":status.need_bytes,"completed_file_present":receiver.path.join(&name).is_file()})
+                    }
+                    Ok(Err(_)) => serde_json::json!({"query_failed":true}),
+                    Err(_) => serde_json::json!({"diagnostic_query_deadline":true}),
+                };
+                states.push(observation);
+            }
+            println!(
+                "native incoming admission failure diagnosis: {}",
+                serde_json::json!({"selected":selected,"stage":stage,"original_phase_deadline_seconds":30,"receivers":states,"outer_timeout":phase_result.is_err(),"diagnosis_is_not_pass":true})
+            );
+        }
+        phase_result??;
         for receiver in &receivers {
             assert!(
                 receiver
