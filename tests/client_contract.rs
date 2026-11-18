@@ -33,6 +33,43 @@ fn capabilities_catalog_keeps_planned_work_separate_from_verified_interfaces() {
 }
 
 #[test]
+fn capabilities_catalog_records_native_peer_encryption_and_introduction() {
+    use verysync_sidecar::{
+        library_capabilities, Capability, ImplementationStatus, VerificationStatus,
+    };
+
+    for (capability, effect) in [
+        (
+            Capability::FolderPeerEncryption,
+            "exact recovery from an encrypted replica",
+        ),
+        (Capability::DeviceIntroduction, "direct TCP"),
+    ] {
+        let mut entries = library_capabilities()
+            .iter()
+            .filter(|entry| entry.capability == capability);
+        let entry = entries.next().expect("capability is absent");
+        assert!(entries.next().is_none());
+        assert_eq!(entry.implementation, ImplementationStatus::Typed);
+        let VerificationStatus::NativeEvidence {
+            engine_version,
+            evidence_url,
+            scope,
+        } = entry.verification
+        else {
+            panic!("{capability:?} should carry its native evidence");
+        };
+        assert_eq!(engine_version, "v2.33.2");
+        assert_eq!(
+            evidence_url,
+            "https://github.com/AresJef/verysync-sidecar/actions/runs/44292513846"
+        );
+        assert!(scope.contains("macOS, Windows and Linux AMD64/ARM64"));
+        assert!(scope.contains(effect));
+    }
+}
+
+#[test]
 fn connection_without_a_tokio_runtime_returns_an_error() -> Result<(), Box<dyn std::error::Error>> {
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     let endpoint = ManagementEndpoint::http(&format!("http://{}", listener.local_addr()?))?;

@@ -1,4 +1,6 @@
 //! Native logical-node relay evidence; this is not a WAN bandwidth benchmark.
+#[path = "common/introducer_cases.rs"]
+mod introducer_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/three_node_diagnostic.rs"]

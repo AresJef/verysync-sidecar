@@ -118,6 +118,34 @@ changes a certificate identity nor proves official-account ownership.
 If selected advanced values have an invalid native type after an acknowledged
 create, update or template write, the result is `MutationOutcomeUnknown`.
 
+With VerySync v2.33.2 on the six standard macOS, Windows and Linux AMD64/ARM64
+profiles, three isolated instances sharing one group verified native
+introductions. The receiving instance added the third
+device, recorded the trusted peer as its introduction source and added the
+folder association after reconnecting. With `skip_introduction_removals(false)`,
+the introducer's withdrawal removed the association and the introduced device
+from the receiver. The test verified the existing file bytes and normal exits
+of all three instances.
+
+After the withdrawal and file checks, the regression pauses the fixture's peer
+connections and confirms their disconnection before checking normal exits.
+Other runs observed a graceful-shutdown timeout with active peer connections
+after successful withdrawal on macOS ARM64 and Windows AMD64.
+
+In a second three-instance run, the receiver kept the introduced device, its
+source and its folder association with `skip_introduction_removals(true)`.
+The setting was in place before the first connection. After withdrawal, the
+receiver restarted with the same identity and received a new file from the
+introducer in the fresh session.
+
+A third run gave the receiver an explicit loopback address for the already
+introduced device and established a direct connection. With the introducer's
+folder paused, the receiver obtained a new file from that device and verified
+its complete bytes. The original introduction source and folder association
+remained present when the receiver configured the address.
+`Capability::DeviceIntroduction` records this scope in `library_capabilities()`.
+[Native workflow](https://github.com/AresJef/verysync-sidecar/actions/runs/44292513846)
+
 ```no_run
 use verysync_sidecar::{Client, DeviceAdvancedPatch, DeviceId, DevicePatch};
 

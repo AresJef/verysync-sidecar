@@ -33,6 +33,8 @@ mod device_options_contracts;
 mod device_removal_contracts;
 #[path = "common/folder_options_contracts.rs"]
 mod folder_options_contracts;
+#[path = "common/folder_peer_encryption_contracts.rs"]
+mod folder_peer_encryption_contracts;
 #[path = "common/folder_policy_contracts.rs"]
 mod folder_policy_contracts;
 

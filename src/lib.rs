@@ -186,8 +186,9 @@ pub use hardware::{
 };
 pub use ignores::{IgnoreDefaults, IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
 pub use invitations::{
-    DeviceIgnoreUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
-    PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
+    DeviceIgnoreUpdate, FolderPeerEncryptionUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder,
+    IgnoredFolderUpdate, PendingDeviceInfo, PendingDismissal, PendingFolderOffer,
+    PendingFolderOffers,
 };
 pub use ldap::{GuiAuthModeUpdate, LdapConfiguration, LdapPatch, LdapTransport};
 pub use licenses::{
