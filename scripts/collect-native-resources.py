@@ -43,6 +43,7 @@ def verify_group(manifest, directory, protocol_hash, stage, metrics):
     if manifest["order"] != order or [x["scenario"] for x in manifest["slots"]] != order:
         raise ValueError("complete original-order coverage differs")
     identities, artifacts = [], set()
+    reader_libraries = set()
     for slot in manifest["slots"]:
         folder = directory / slot["directory"]
         if set(slot["sha256"]) != {"preparation-result.json", "samples.jsonl", "events.jsonl", "quality-result.json"}:
@@ -56,10 +57,14 @@ def verify_group(manifest, directory, protocol_hash, stage, metrics):
             raise ValueError("accepted attempt role/configuration differs")
         if any(report["source"].get(key) != value for key, value in protocol["source_inputs"].items()):
             raise ValueError("accepted source dependency differs")
+        metrics.check_metric_reader(report, protocol)
+        reader_libraries.add(report["source"].get("darwin_reader_library_sha256"))
         if metrics.summarize(report, rows)["status"] != "VALID":
             raise ValueError("accepted attempt no longer validates")
         identities.extend((p["pid"], p["creation_time"]) for p in report["identities"])
         artifacts.add(bytes(report["events"][0]["controller_sha256"]).hex())
+    if len(reader_libraries) != 1:
+        raise ValueError("accepted group mixed native metric reader artifacts")
     if len(set(identities)) != len(identities) or len(artifacts) != 1:
         raise ValueError("fresh process or loaded-artifact coverage differs")
     return identities, artifacts

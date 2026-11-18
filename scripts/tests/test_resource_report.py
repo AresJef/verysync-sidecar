@@ -22,7 +22,7 @@ def save(path, value):
     path.write_bytes((json.dumps(value, indent=2)+"\n").encode("utf-8"))
 
 
-def add_darwin_activity(report, protocol):
+def add_darwin_receipts(report, protocol):
     policy=protocol.get("observer_process_activity")
     if policy is not None:
         receipt={"scope":"observer-process-only","worker_started_before_begin":True,
@@ -31,6 +31,11 @@ def add_darwin_activity(report, protocol):
                  "idle_sleep_disabled":False,"display_sleep_disabled":False,"system_settings_changed":False}
         report['observer_process_activity']=receipt
         report['observer_process_activity_after']={**receipt,'ended':True}
+    if "darwin_metric_reader" in protocol:
+        library = "f" * 64
+        report["source"]["darwin_reader_library_sha256"] = library
+        report["metric_reader"] = {"kind": "darwin-proc-taskallinfo", "owned_processes": 2,
+                                   "library_sha256": library}
 
 
 def dataset(root, *, windows_paths=False, changed_source=False, reused_process=False, readiness=None):
@@ -58,6 +63,8 @@ def dataset(root, *, windows_paths=False, changed_source=False, reused_process=F
                                    "rss_touched_bytes": 16777216, "rss_growth_bytes": 16777216},
                       observer_thread_policy={"policy": "unchanged", "scope": "observer-thread-only"},
                       observer_process_activity={"scope":"not-applicable","started":False})
+        if "darwin_metric_reader" in protocol:
+            report["metric_reader"] = {"kind": "psutil"}
         if changed:
             report["source"]["sampler_sha256"] = "wrong"
         report["identities"] = copy.deepcopy(report["before"])
@@ -160,7 +167,7 @@ class ResourceReportContracts(unittest.TestCase):
             folder = next((root / "formal").rglob("preparation-result.json")).parent
             report = REPORT.read(folder / "preparation-result.json")
             report["calibration"]["platform"] = "macOS-synthetic-test-only"
-            add_darwin_activity(report,protocol)
+            add_darwin_receipts(report,protocol)
             expected = protocol["observer_policy"].get("darwin_qos_class", 0x19)
             policy = "darwin-user-interactive" if expected == 0x21 else "darwin-user-initiated"
             report["observer_thread_policy"].update(requested=expected, observed=expected,
@@ -180,7 +187,7 @@ class ResourceReportContracts(unittest.TestCase):
             report=REPORT.read(folder/'preparation-result.json')
             report['calibration']['platform']='macOS-synthetic-test-only'
             report['observer_thread_policy'].update(requested=33,observed=33,policy='darwin-user-interactive',worker_started_before_assignment=True)
-            add_darwin_activity(report,protocol);save(folder/'preparation-result.json',report)
+            add_darwin_receipts(report,protocol);save(folder/'preparation-result.json',report)
             REPORT.check_attempt(folder,protocol,'formal',METRICS)
             report['observer_process_activity_after']['ended']=False;save(folder/'preparation-result.json',report)
             with self.assertRaisesRegex(ValueError,'process activity'):REPORT.check_attempt(folder,protocol,'formal',METRICS)
@@ -195,7 +202,7 @@ class ResourceReportContracts(unittest.TestCase):
             folder = next((root / "formal").rglob("preparation-result.json")).parent
             report = REPORT.read(folder / "preparation-result.json")
             report["calibration"]["platform"] = "macOS-synthetic-test-only"
-            add_darwin_activity(report,protocol)
+            add_darwin_receipts(report,protocol)
             report["observer_thread_policy"].update(requested=0x21, observed=0x21,
                 policy="darwin-user-interactive", worker_started_before_assignment=True)
             save(folder / "preparation-result.json", report)

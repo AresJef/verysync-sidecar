@@ -140,6 +140,7 @@ def check_attempt(folder, protocol, stage, metrics):
         elif observer["policy"] != "unchanged":
             raise ValueError("non-Darwin observer scheduling changed")
     check_observer_activity(report, protocol)
+    metrics.check_metric_reader(report, protocol)
     source = report["source"]
     if source["profile"] != "release" or not source["rustc_version"].startswith("rustc "+protocol["rust_release"]+" "):
         raise ValueError("frozen compiler/profile differs")
@@ -245,6 +246,10 @@ def profile_report(label, root, protocol, fingerprint, collector, metrics, prepa
             if (bytes(report["events"][0]["controller_sha256"]).hex() not in artifacts
                     or report["events"][0]["engine_sha256"] not in engine_hashes):
                 raise ValueError("preparation executed different binaries")
+            if ("darwin_metric_reader" in protocol
+                    and report["source"].get("darwin_reader_library_sha256")
+                    != sources[0].get("darwin_reader_library_sha256")):
+                raise ValueError("preparation used a different Darwin metric library")
         if len(set(identities)) != len(identities):
             raise ValueError("preparation reused an accepted process")
         prepared = prep_summary["ready"]

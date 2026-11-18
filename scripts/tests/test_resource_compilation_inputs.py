@@ -19,7 +19,8 @@ class CompilationInputIdentity(unittest.TestCase):
         documents = re.findall(r'^#!\[doc = include_str!\("\.\./([^"\n]+)"\)\]',
                                (root / 'src/lib.rs').read_text(), re.MULTILINE)
         self.assertEqual(len(documents), 35)
-        for name in documents + ['releases/verysync-v2.33.2.json']:
+        native_reader = ['scripts/darwin-owned-sample.c', 'scripts/darwin_owned_reader.py']
+        for name in documents + ['releases/verysync-v2.33.2.json'] + native_reader:
             blob = subprocess.check_output(['git', 'show', 'HEAD:' + name], cwd=root)
             checked_out = subprocess.check_output(
                 ['git', '-c', 'core.autocrlf=true', 'cat-file', '--filters',
@@ -37,6 +38,8 @@ class CompilationInputIdentity(unittest.TestCase):
                  "tests/common/resource_faults.rs": b"fault fixture",
                  "tests/common/resource_fixture.rs": b"resource fixture helpers",
                  "scripts/measure-native-resources.py": b"sampler",
+                 "scripts/darwin-owned-sample.c": b"native reader",
+                 "scripts/darwin_owned_reader.py": b"reader binding",
                  "scripts/macos-observer-activity.py": b"activity",
                  "scripts/run-isolated-engine-tests.py": b"wrapper"}
         for name, data in files.items():

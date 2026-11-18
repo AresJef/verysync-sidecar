@@ -1,6 +1,6 @@
 {
-  "protocol_id": "VS045-native-resources-v28",
-  "version": 28,
+  "protocol_id": "VS045-native-resources-v29",
+  "version": 29,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
@@ -8,11 +8,13 @@
   "source_inputs": {
     "rust_sources_sha256": "e5adb80fe2917bd6a4960bd1cf23044bb6559410ab7f7b16c6da1e772c6f76fb",
     "cargo_lock_sha256": "b8ba854b681e9ece06db946aa8bdbe6d7330c5d3fedaa36dac99d0d851ebd670",
-    "sampler_sha256": "eeb177d8bcf94b9647ff16603f7eaa19d086cd1bd9226f7019220cc5cdf45364",
+    "sampler_sha256": "7e5d83edfcf064ac57656089997fae5e8456dce8a47c2cb1992b20872deccd25",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a",
-    "observer_activity_sha256": "f8ca7901ddf906b7ae640c9489ab7a643c32cc5b107f1898ccffb45aec3ef172"
+    "observer_activity_sha256": "f8ca7901ddf906b7ae640c9489ab7a643c32cc5b107f1898ccffb45aec3ef172",
+    "darwin_reader_source_sha256": "8f2f1a90d91715941854558136bb26944c3f54c9843ec6613b8bae532fe0c51f",
+    "darwin_reader_binding_sha256": "fd3c339457be1f3dcef18a26c08e043eba573da9a0b2aec9e803cfc4e43bb1e0"
   },
-  "collector_sha256": "bbdec05319ce82d2e001d96598cf50bf50405e2d56e68c13e5b7d64bde3ec6e8",
+  "collector_sha256": "e5ca89d38f629ad639f59374aff3647d025fe50024fccc70f1bdf1674af8841e",
   "scenarios": {
     "idle": {
       "bytes_each": 8192,
@@ -130,12 +132,12 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "965702efb9291a5e13971e552e76dfa912dbc05cc73d642bc8150f6d06984913",
-    "retained": "The v27 protocol, preparation observations and rejected attempts keep their original source identities. Preparation creates zero formal samples. Historical project time and all formal deadlines and limits remain in force.",
-    "changes": "Bind the integrated encryption and introduction candidate and its compiled inputs. Check the same frozen source inputs and actual Rust compiler before starting a native preparation attempt. CI also checks before engine preparation and workload compilation. Every raw attempt still has the original source and quality checks.",
-    "unchanged": "Nativev2.33.2, Rust1.85, all runtime workloads/measurement/timing/buffering semantics, dependency lock, wrapper, QOS33/criticalkqueue/activity, standardnativeprofiles,10ms/50ms5%/25snap500ms,16MiB/8MiB gates,4formal+2independent complete fresh orders,900s/3attempts/180span/120estimate30save and1completeVALIDorder of2preparation. No quality or stability exception."
+    "previous_protocol_sha256": "0af14b8e694fdefb5f956f1525ce40ba1fcb0aef6ab317334ec5e80bc57461a1",
+    "retained": "The v28 protocol and all original observations remain historical evidence. Repeat exact calibration and full opposite-order preparation before any v29 formal collection.",
+    "changes": "Read owned Darwin worker identity, RSS and CPU in one native call. Bind the source and Python adapter, require the compiled library receipt across stages, and revalidate both workers before admitting samples. The CI supervisor accommodates cold preparation and the fixed inner collection window.",
+    "unchanged": "Workloads, order, repetitions, RSS and CPU semantics, sampled resources, native timers, acquisition limits, quality and acceptance thresholds retain their original values."
   },
-  "preflight_sha256": "3af24487934351b14b94a9039eb280218766bf414352ac792f36a73f8758b953",
+  "preflight_sha256": "3406a833f6ff011aadec0d8b40622609862f9e99b328c6aa3b1cc460eba4bc92",
   "observer_policy": {
     "darwin": "Request QOS_CLASS_USER_INTERACTIVE0x21 only on the short-lived observer thread after the real controller and engine are ready; retain exact requested/observed class and policy name. No worker or global priority changes.",
     "other_systems": "unchanged",
@@ -162,7 +164,7 @@
     "retain_quality_rejections": true,
     "formal_samples_from_preparation": 0
   },
-  "reporter_sha256": "00295dfb2d8cd0f4027310f4dd38d0382ab1930bc5019ba1fe422a53731c4dc4",
+  "reporter_sha256": "bbaabebd5a7e2aceab3fbc75f3e3af7034eb01de9cce4d3bf1c2bb88dddec5a6",
   "observer_process_activity": {
     "darwin_options": 1095232389119,
     "darwin": "Explicit measurement-role observer-process activity after actual native workers exist; end exact token before persisting final raw receipt. ThreadQOS33/critical-kqueue remain unchanged.",
@@ -170,5 +172,6 @@
     "other_systems": "No activity requested; Foundation never loaded by this path.",
     "required_receipts": "before started/notended and after ended, exactoptions/owner/scope/role; native creation/end failure isERROR, never absence or zero.",
     "scope": "Observer eligibility setup, no claim about root cause or guaranteed scheduling/quality."
-  }
+  },
+  "darwin_metric_reader": "proc-taskallinfo"
 }

@@ -398,6 +398,8 @@ def source_identity(cargo, toolchain):
     return {"source_commit": git("HEAD"), "source_tree": git("HEAD^{tree}"),
             "rust_sources_sha256": source_hash.hexdigest(), "cargo_lock_sha256": digest(root / "Cargo.lock"),
             "sampler_sha256": digest(__file__),
+            "darwin_reader_source_sha256": digest(Path(__file__).with_name("darwin-owned-sample.c")),
+            "darwin_reader_binding_sha256": digest(Path(__file__).with_name("darwin_owned_reader.py")),
             "observer_activity_sha256": digest(Path(__file__).with_name("macos-observer-activity.py")),
             "wrapper_sha256": digest(Path(__file__).with_name("run-isolated-engine-tests.py")),
             "toolchain": toolchain, "cargo_version": subprocess.check_output(
@@ -407,6 +409,48 @@ def source_identity(cargo, toolchain):
             "build_environment_sha256": {key: hashlib.sha256(os.environ.get(key, "").encode()).hexdigest()
                 for key in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTC_WRAPPER", "CARGO_PROFILE_RELEASE_OPT_LEVEL"]},
             "profile": "release"}
+
+
+def check_metric_reader(report, protocol):
+    if "darwin_metric_reader" not in protocol:
+        return
+    if protocol["darwin_metric_reader"] != "proc-taskallinfo":
+        raise ValueError("unrecognized Darwin metric reader policy")
+    receipt = report.get("metric_reader", {})
+    if not report["calibration"]["platform"].startswith("macOS"):
+        if receipt == {"kind": "psutil"} and "darwin_reader_library_sha256" not in report["source"]:
+            return
+        raise ValueError("non-Darwin metric reader differs from the frozen protocol")
+    library = receipt.get("library_sha256")
+    if (receipt.get("kind") != "darwin-proc-taskallinfo"
+            or receipt.get("owned_processes") != 2
+            or not isinstance(library, str) or re.fullmatch("[0-9a-f]{64}", library) is None
+            or report["source"].get("darwin_reader_library_sha256") != library):
+        raise ValueError("Darwin metric reader identity or ownership differs")
+
+
+def prepare_metric_reader(protocol):
+    if "darwin_metric_reader" not in protocol:
+        return None, None
+    if protocol["darwin_metric_reader"] != "proc-taskallinfo":
+        raise ValueError("unrecognized Darwin metric reader policy")
+    if sys.platform != "darwin":
+        return None, None
+    from darwin_owned_reader import OwnedReader
+    library = Path(os.environ.get("VERYSYNC_DARWIN_METRICS_LIBRARY", ""))
+    if not library.is_absolute() or not library.is_file() or library.is_symlink():
+        raise ValueError("frozen Darwin metric reader requires a compiled regular library")
+    return OwnedReader(library), digest(library)
+
+
+def bind_metric_processes(reader, processes, parent):
+    bindings = {}
+    for process in processes:
+        ancestors = process.parents()
+        if not ancestors or parent not in ancestors:
+            raise RuntimeError("metric process is outside the isolated fixture tree")
+        bindings[process.pid] = reader.bind(process, ancestors[0].pid, snapshot)
+    return lambda process: reader.snapshot(process, bindings[process.pid])
 
 
 def summarize(report, rows, quality=QUALITY):
@@ -531,10 +575,10 @@ def main():
     phase = "prepare"
     report.update(scenario=args.scenario, repeats=args.repeats, interval_ms=args.interval_ms,
                   events=[], identities=None, source=source_identity(args.cargo, args.toolchain))
+    protocol = json.loads(args.protocol.read_text()) if args.protocol else {}
     if args.stage in {"formal", "independent"}:
         if args.protocol is None:
             raise ValueError("formal attempts require the frozen protocol")
-        protocol = json.loads(args.protocol.read_text())
         if (protocol["scenarios"][args.scenario]["repeats"] != args.repeats
                 or protocol["interval_ms"] != args.interval_ms or protocol["quality"] != QUALITY):
             raise ValueError("attempt differs from frozen measurement parameters")
@@ -545,6 +589,12 @@ def main():
             raise ValueError("actual compiler differs from frozen release")
         report.update(protocol_sha256=digest(args.protocol), formal_sample=True,
                       acceptance="raw attempt only; requires a complete accepted group manifest")
+    metric_reader, reader_library_sha = prepare_metric_reader(protocol)
+    read_snapshot = snapshot
+    if metric_reader is not None:
+        report["source"]["darwin_reader_library_sha256"] = reader_library_sha
+    elif "darwin_metric_reader" in protocol:
+        report["metric_reader"] = {"kind": "psutil"}
     with (args.evidence_dir / "console.log").open("wb") as console, BufferedSamples(args.evidence_dir / "samples.jsonl") as samples:
         child = subprocess.Popen(command, env=env, stdout=console, stderr=subprocess.STDOUT)
         previous_record_ns = previous_wait_ns = None
@@ -568,7 +618,13 @@ def main():
                                 if args.stage in {"formal", "independent"} and value["engine_version"].lstrip("v") != protocol["engine_version"].lstrip("v"):
                                     raise ValueError("actual engine version differs from frozen baseline")
                                 processes = owned_processes(value)
-                                report["identities"] = [snapshot(p) for p in processes]
+                                if metric_reader is not None:
+                                    read_snapshot = bind_metric_processes(
+                                        metric_reader, processes, dependency().Process(child.pid))
+                                    report["metric_reader"] = {"kind": "darwin-proc-taskallinfo",
+                                                               "owned_processes": len(processes),
+                                                               "library_sha256": reader_library_sha}
+                                report["identities"] = [read_snapshot(p) for p in processes]
                                 # The controller and owned engine already exist;
                                 # neither inherits this observer's new QoS.
                                 report["observer_thread_policy"] = observer_thread_policy(worker_started=True)
@@ -581,10 +637,10 @@ def main():
                                 events.with_suffix(".ack").write_text(nonce)
                             elif kind == "begin":
                                 phase = "measure"
-                                report["before"] = [snapshot(p) for p in processes]
+                                report["before"] = [read_snapshot(p) for p in processes]
                                 events.with_suffix(".begin-ack").write_text(nonce)
                             elif kind == "end":
-                                report["after"] = [snapshot(p) for p in processes]
+                                report["after"] = [read_snapshot(p) for p in processes]
                                 events.with_suffix(".end-ack").write_text(nonce)
                                 phase = "after"
                             elif kind == "complete":
@@ -592,7 +648,7 @@ def main():
                 journal_poll_ns = time.perf_counter_ns()-journal_poll_start
                 if processes is not None and phase in {"baseline", "measure"}:
                     row = {"phase": phase, "start_ns": time.perf_counter_ns(),
-                           "controller": snapshot(processes[0]), "engine": snapshot(processes[1]),
+                           "controller": read_snapshot(processes[0]), "engine": read_snapshot(processes[1]),
                            "end_ns": time.perf_counter_ns(), "previous_timer_expirations": ticker.expirations,
                            "journal_poll_ns": journal_poll_ns, "previous_record_buffer_ns": previous_record_ns,
                            "previous_timer_wait_ns": previous_wait_ns}
@@ -623,6 +679,7 @@ def main():
         return report["exit_code"]
     if [e["kind"] for e in report["events"]] != ["ready", "begin", "end", "complete"]:
         raise RuntimeError("incomplete native correctness journal")
+    check_metric_reader(report, protocol)
     rows = [json.loads(line) for line in (args.evidence_dir / "samples.jsonl").read_text().splitlines()]
     result = summarize(report, rows)
     (args.evidence_dir / "quality-result.json").write_text(json.dumps(result, indent=2) + "\n")
