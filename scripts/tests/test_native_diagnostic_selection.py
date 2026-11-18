@@ -105,8 +105,8 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertIn('async fn ' + row['filter'] + '(', source)
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_parent_group_control_is_one_isolated_linux_profile(self):
-        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+    def test_parent_group_control_is_one_isolated_linux_profile(self):
+        selection = {'draft_labels': ['native-parent-group-control']}
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 1)
         row = rows[0]
@@ -114,6 +114,18 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(row['target'], 'configuration_engine')
         self.assertEqual(row['filter'], 'native_copy_ownership_from_parent_changes_received_group_and_preserves_data')
         source = (ROOT / 'tests/common/ownership_cases.rs').read_text()
+        self.assertIn('async fn ' + row['filter'] + '(', source)
+        self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
+
+    def test_current_receive_permissions_are_one_isolated_linux_profile(self):
+        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+        rows = HELPER.select(self.rows, selection, draft=True)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row['package'], 'linux-amd64-standard')
+        self.assertEqual(row['target'], 'configuration_engine')
+        self.assertEqual(row['filter'], 'native_receiver_permission_selection_controls_actual_file_modes')
+        source = (ROOT / 'tests/common/file_permission_cases.rs').read_text()
         self.assertIn('async fn ' + row['filter'] + '(', source)
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
@@ -198,6 +210,7 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-xattr-filter-20261118-01a1ca9b",
                        "test/native-pending-announcement-20261118-01a1ca9b",
                        "test/native-parent-group-control-20261118-01a1ca9b",
+                       "test/native-receiver-permissions-20261118-01a1ca9b",
                        "ci/windows-packet-observer-feasibility-20261118-01a1ca9b",
                        "ci/windows-loopback-header-feasibility-20261118-01a1ca9b",
                        "test/controlled-acceptance-node-20261118-01a1ca9b",
@@ -390,7 +403,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 254)
+        self.assertEqual(len(self.rows), 255)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -524,7 +537,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] in selection["draft_labels"] and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 254)
+        self.assertEqual(len(self.rows), 255)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
