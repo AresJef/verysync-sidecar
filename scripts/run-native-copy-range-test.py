@@ -31,13 +31,13 @@ def owned_calls(trace, root_pid):
             thread = THREAD.match(line)
             if thread:
                 pending.append(int(thread[1]))
-            yield line
+            yield tid, line
 
 
 def copies(trace, root_pid, source, target):
     return [
         int(call[3])
-        for line in owned_calls(trace, root_pid)
+        for _, line in owned_calls(trace, root_pid)
         if (call := COPY.match(line)) and Path(call[1]) == source and target(Path(call[2]))
     ]
 
@@ -115,13 +115,28 @@ def main():
         raise RuntimeError("the Rust fixture identity must belong to the explicit trace root")
     trace = trace_lines(root / "receiver")
     receiver_calls = list(owned_calls(trace, data["receiver_pid"]))
+    owned_threads = {tid for tid, _ in receiver_calls}
+    traces = {}
     all_fixture_range_calls = 0
     for file in root.glob("receiver.*"):
         if file.suffix[1:].isdigit():
-            all_fixture_range_calls += sum(
-                "copy_file_range(" in line and str(fixture) in line
-                for line in file.read_text(encoding="utf-8").splitlines()
-            )
+            owned = int(file.suffix[1:]) in owned_threads
+            for line in file.read_text(encoding="utf-8").splitlines():
+                if str(fixture) not in line:
+                    continue
+                operation = line.split("(", 1)[0]
+                if operation not in ("copy_file_range", "rename", "renameat", "renameat2"):
+                    continue
+                if operation == "copy_file_range":
+                    all_fixture_range_calls += 1
+                relative = line.replace(str(fixture), "<fixture>")
+                arm = next((arm for arm in ("standard", "copy-file-range") if f"/receiver-{arm}/" in line),
+                           "other owned fixture path")
+                key = (operation, arm, owned)
+                entry = traces.setdefault(key, {"operation": operation, "fixture_arm": arm,
+                                               "receiver_thread": owned, "count": 0,
+                                               "first_owned_fixture_path_example": relative[:600]})
+                entry["count"] += 1
     rows = []
     for arm in ("standard", "copy-file-range"):
         folder = fixture / f"receiver-{arm}"
@@ -131,7 +146,7 @@ def main():
             lambda dest: dest.parent == folder and dest.name != PAYLOAD and PAYLOAD in dest.name,
         )
         installs = 0
-        for line in receiver_calls:
+        for _, line in receiver_calls:
             if RENAME.match(line):
                 paths = re.findall(r'"([^"]+)"', line)
                 if len(paths) == 2 and Path(paths[1]) == installed and PAYLOAD in Path(paths[0]).name:
@@ -145,6 +160,7 @@ def main():
         "threaded_copy_oracle_passed": True,
     }), flush=True)
     print("native copy range syscall effects: " + json.dumps(rows), flush=True)
+    print("native traced fixture path samples: " + json.dumps(list(traces.values())), flush=True)
     if any(row["receiver_installs"] < 2 for row in rows):
         raise RuntimeError("did not attribute both actual file installs to owned receiver threads")
     if rows[0]["attempts"] != 0 or rows[1]["copied_bytes"] < data["file_bytes"] // 2 or rows[1]["errors"]:
