@@ -1,0 +1,93 @@
+name: Recover the last three unstarted Mac cases on one runner
+
+on:
+  push:
+    branches: [ci/recover-three-macos-cases-serial-20261119-01a1ca9b]
+    paths: [.github/workflows/recover-three-macos-cases.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  recover-original-cases:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/recover-three-macos-cases-serial-20261119-01a1ca9b'
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      EXACT_SOURCE: 83942f58532cbad796a1d89aaee1fe9e2b04df85
+      EXACT_TREE: 054c09ee2d25e7b8bc8f90fdc758c30fe4c5fd04
+      TEST_TOOLCHAIN: 1.85.0-aarch64-apple-darwin
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
+      VERYSYNC_TEST_OPENER_TRACE: '0'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_SOURCE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Prepare the exact original candidate and native baseline
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "$EXACT_SOURCE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_TREE"
+          printf 'original source=%s tree=%s\n' "$EXACT_SOURCE" "$EXACT_TREE"
+          python3 -B -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --no-self-update
+          cargo "+$TEST_TOOLCHAIN" fetch --locked
+          python3 -B scripts/prepare-test-engine.py prepare --package macos-arm64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Preserve the original device control suite
+        id: devices
+        timeout-minutes: 20
+        continue-on-error: true
+        run: >-
+          python3 -B scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --test-filter actual_
+          --evidence-dir "$RUNNER_TEMP/vs-three-macos/devices"
+      - name: Require exact owned-executable cleanup after device control
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python3 -B scripts/prepare-test-engine.py check-cleanup
+      - name: Preserve the original native thumbnail cache suite
+        id: thumbnails
+        timeout-minutes: 20
+        continue-on-error: true
+        run: >-
+          python3 -B scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target files_engine --test-filter public_native_thumbnails
+          --evidence-dir "$RUNNER_TEMP/vs-three-macos/thumbnails"
+      - name: Require exact owned-executable cleanup after thumbnails
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python3 -B scripts/prepare-test-engine.py check-cleanup
+      - name: Prepare the matching original upgrade source separately
+        run: >-
+          python3 -B scripts/prepare-test-engine.py prepare --upgrade-source --package macos-arm64-standard
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Preserve the original real index upgrade effects
+        id: upgrade
+        timeout-minutes: 20
+        continue-on-error: true
+        run: >-
+          python3 -B scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --test-filter native_full_index_upgrade_policy_changes_actual_unchanged_index_resend
+          --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "$RUNNER_TEMP/vs-three-macos/upgrade"
+      - name: Require exact owned-executable cleanup after upgrade
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python3 -B scripts/prepare-test-engine.py check-cleanup
+      - name: Require exact older owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
+        run: python3 -B scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Require the three original cases and every cleanup to pass
+        if: always()
+        env:
+          DEVICES: ${{ steps.devices.outcome }}
+          THUMBNAILS: ${{ steps.thumbnails.outcome }}
+          UPGRADE: ${{ steps.upgrade.outcome }}
+        run: |
+          set -euo pipefail
+          printf 'original case outcomes devices=%s thumbnails=%s upgrade=%s\n' "$DEVICES" "$THUMBNAILS" "$UPGRADE"
+          test "$DEVICES" = success && test "$THUMBNAILS" = success && test "$UPGRADE" = success
