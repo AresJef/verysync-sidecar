@@ -70,9 +70,30 @@ jobs:
           apt_options=(-o "Dir::Etc::sourcelist=$sources" -o Dir::Etc::sourceparts=/dev/null
             -o Acquire::Retries=1 -o Acquire::https::Timeout=25)
           timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
-          timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends qemu-system-arm qemu-system-data
+          timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends qemu-system-arm qemu-system-data qemu-user
           dpkg-query -L qemu-system-arm | grep -Fx /usr/bin/qemu-system-arm
           qemu-system-arm --version
+
+          dpkg-query -L qemu-user | grep -Fx /usr/bin/qemu-arm
+          core=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["binary"])' "$work/program-receipt.json")
+          printf '%s  %s\n' "$PROGRAM_SHA" "$core" | sha256sum --check --strict
+          if command -v go >/dev/null; then go version -m "$core" || true; fi
+          readelf -A "$core"
+          ulimit -c 0
+          for cpu in arm926 arm1176 cortex-a9; do
+            state="$work/usermode-$cpu"
+            mkdir -m 0700 "$state"
+            printf 'VS_ARMEL_USERMODE_BEGIN cpu=%s\n' "$cpu"
+            status=0
+            timeout --kill-after=3s 20s sudo unshare --net --setgid "$(id -g)" --setuid "$(id -u)" \
+              env -i PATH=/usr/bin:/bin HOME="$state" /bin/bash -euc '
+                adapters=$(ip -o link show | awk -F": " "{print \$2}")
+                test "$adapters" = lo
+                printf "VS_ARMEL_USERMODE_NET %s\n" "$adapters"
+                exec /usr/bin/qemu-arm -cpu "$1" "$2" version --home "$3"
+              ' armel-comparison "$cpu" "$core" "$state" || status=$?
+            printf 'VS_ARMEL_USERMODE_EXIT cpu=%s status=%s\n' "$cpu" "$status"
+          done
 
           root="$work/guest/wheezy"
           raw="$work/guest-console.log"
