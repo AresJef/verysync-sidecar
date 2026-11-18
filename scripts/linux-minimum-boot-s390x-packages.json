@@ -1,0 +1,25 @@
+{
+  "wheezy": [
+    {
+      "package": "ca-certificates",
+      "version": "20130119+deb7u1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20130119+deb7u1_all.deb",
+      "size": "209900",
+      "sha256": "3494ecfd607e4233d8d1a656eceb6bd109d756bc0afe9d3b29dfc0acc4fe19cf"
+    },
+    {
+      "package": "busybox-static",
+      "version": "1:1.20.0-7",
+      "filename": "pool/main/b/busybox/busybox-static_1.20.0-7_s390x.deb",
+      "size": "973454",
+      "sha256": "cce7e2e73a4e38b363972e51a278101efcc09677039d60d809de171dd9657c7c"
+    },
+    {
+      "package": "linux-image-3.2.0-4-s390x",
+      "version": "3.2.78-1",
+      "filename": "pool/main/l/linux/linux-image-3.2.0-4-s390x_3.2.78-1_s390x.deb",
+      "size": "8069088",
+      "sha256": "55c193a1ef6e34403a216a9c2e21f77678595747011e89f781ff06c8c91bc10f"
+    }
+  ]
+}

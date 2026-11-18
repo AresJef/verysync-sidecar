@@ -16,12 +16,17 @@ KERNELS = {
     "amd64": {"squeeze": "2.6.32-5-amd64", "wheezy": "3.2.0-4-amd64"},
     "i386": {"squeeze": "2.6.32-5-686", "wheezy": "3.2.0-4-686-pae"},
     "arm64": {"jessie": "3.16.0-6-arm64"},
+    "s390x": {"wheezy": "3.2.0-4-s390x"},
 }
-ELF_FORMAT = {"amd64": (2, 62), "i386": (1, 3), "arm64": (2, 183)}
+ELF_FORMAT = {
+    "amd64": (2, 62, "<"), "i386": (1, 3, "<"), "arm64": (2, 183, "<"),
+    "s390x": (2, 22, ">"),
+}
 RUNTIME = {
     "amd64": ("linux-amd64-standard", "lib64", "lib64/ld-linux-x86-64.so.2"),
     "i386": ("linux-386-standard", "lib", "lib/ld-linux.so.2"),
     "arm64": ("linux-arm64-standard", "lib64", "lib/ld-linux-aarch64.so.1"),
+    "s390x": ("linux-s390x-standard", "lib64", "lib/ld64.so.1"),
 }
 dig = lambda payload: hashlib.sha256(payload).hexdigest()
 
@@ -48,23 +53,24 @@ def verified_members(package, required):
     return payloads
 
 def check_elf(data, architecture):
-    elf_class, machine = ELF_FORMAT[architecture]
-    assert data[:6] == b"\x7fELF" + bytes((elf_class, 1))
-    assert struct.unpack_from("<H", data, 18)[0] == machine
+    elf_class, machine, order = ELF_FORMAT[architecture]
+    assert data[:6] == b"\x7fELF" + bytes((elf_class, 1 if order == "<" else 2))
+    assert struct.unpack_from(order + "H", data, 18)[0] == machine
 
 
 def check_static_busybox(busybox, architecture):
     check_elf(busybox, architecture)
-    if ELF_FORMAT[architecture][0] == 2:
-        table = struct.unpack_from("<Q", busybox, 32)[0]
-        size, count = struct.unpack_from("<HH", busybox, 54)
+    elf_class, _, order = ELF_FORMAT[architecture]
+    if elf_class == 2:
+        table = struct.unpack_from(order + "Q", busybox, 32)[0]
+        size, count = struct.unpack_from(order + "HH", busybox, 54)
         assert size == 56
     else:
-        table = struct.unpack_from("<I", busybox, 28)[0]
-        size, count = struct.unpack_from("<HH", busybox, 42)
+        table = struct.unpack_from(order + "I", busybox, 28)[0]
+        size, count = struct.unpack_from(order + "HH", busybox, 42)
         assert size == 32
     assert 0 < count < 64 and table + size*count < len(busybox)
-    types = [struct.unpack_from("<I",busybox,table+i*size)[0] for i in range(count)]
+    types = [struct.unpack_from(order + "I", busybox, table + i * size)[0] for i in range(count)]
     assert 3 not in types  # No PT_INTERP.
 
 def write_newc(files):
@@ -241,10 +247,14 @@ required_platform = {
     "amd64": {"CONFIG_X86_64", "CONFIG_SERIAL_8250_CONSOLE"},
     "i386": {"CONFIG_X86_32", "CONFIG_SERIAL_8250_CONSOLE"},
     "arm64": {"CONFIG_ARM64", "CONFIG_ARCH_VEXPRESS", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
+    "s390x": {"CONFIG_S390", "CONFIG_64BIT", "CONFIG_SCLP_VT220_CONSOLE"},
 }
 if args.architecture == "arm64":
     kernel_filename = "Image"
     assert kernel[0x38:0x3c] == b"ARM\x64"
+elif args.architecture == "s390x":
+    kernel_filename = "image"
+    assert kernel[0x10008:0x1000E] == b"S390EP"
 else:
     kernel_filename = "bzImage"
     assert kernel[0x202:0x206] == b"HdrS"

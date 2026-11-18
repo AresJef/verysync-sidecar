@@ -1,0 +1,52 @@
+name: Boot the archived s390x Linux kernel in isolation
+
+on:
+  push:
+    branches: [ci/linux-s390x-old-boot-20261119-01a1ca9b]
+    paths: [.github/workflows/linux-s390x-old-boot.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  start-guest:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-s390x-old-boot-20261119-01a1ca9b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Prepare the archived kernel and static shell
+        run: |
+          set -euo pipefail
+          printf 'harness %s %s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+          python3 -B scripts/prepare-linux-minimum-boot.py wheezy --architecture s390x \
+            --destination "$RUNNER_TEMP/vs-s390x-boot"
+      - name: Verify the exact guest kernel, loopback and clean emulator exit
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-misc qemu-system-data
+          qemu-system-s390x --version
+          work="$RUNNER_TEMP/vs-s390x-boot"
+          status=0
+          timeout 75s qemu-system-s390x -machine s390-ccw-virtio,accel=tcg -cpu max -m 512 -smp 1 \
+            -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
+            -kernel "$work/wheezy/image" -initrd "$work/wheezy/initramfs.cpio.gz" \
+            -append 'console=ttyS1 rdinit=/init panic=1' > "$work/s390x-console.log" 2>&1 || status=$?
+          tr -d '\r' < "$work/s390x-console.log" > "$work/normalized-console.txt"
+          cat "$work/normalized-console.txt"
+          printf 's390x boot-only emulator exit=%s\n' "$status"
+          test "$status" -eq 0
+          grep -aFxq 'VS_MINIMUM_BOOT_OK kernel=3.2.0-4-s390x loopback=127.0.0.1' "$work/normalized-console.txt"
+          ! grep -aqE 'Kernel panic|VS_MINIMUM_BOOT_FAILURE' "$work/normalized-console.txt"
+      - name: Retain the original guest console and fixture identity
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: linux-s390x-old-boot-evidence
+          path: |
+            ${{ runner.temp }}/vs-s390x-boot/s390x-console.log
+            ${{ runner.temp }}/vs-s390x-boot/prepared-boot-fixture.json
+          if-no-files-found: warn
