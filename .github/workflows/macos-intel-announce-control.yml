@@ -1,8 +1,8 @@
-name: macOS Intel dynamic redial diagnosis
+name: macOS Intel receiver-first announcement diagnosis
 
 on:
   push:
-    branches: [ci/macos-intel-owned-redial-20261119-01a1ca9b]
+    branches: [ci/macos-intel-receiver-first-20261119-01a1ca9b]
     paths:
       - .github/workflows/macos-intel-announce-control.yml
       - tests/common/local_announcement_cases.rs
@@ -12,10 +12,10 @@ permissions:
 
 jobs:
   diagnose:
-    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/macos-intel-owned-redial-20261119-01a1ca9b'
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/macos-intel-receiver-first-20261119-01a1ca9b'
     runs-on: macos-15-intel
     timeout-minutes: 15
-    name: Compare dynamic redial and an exact endpoint after the isolated original case
+    name: Require the original dynamic effects when the receiver starts first
     env:
       VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
       VS_OWNED_ANNOUNCE_ENDPOINT_CONTROL: enabled

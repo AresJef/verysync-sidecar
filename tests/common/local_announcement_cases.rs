@@ -348,9 +348,11 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
     for core in [&a, &b] {
         setup(core.client(), port, &multicast, true).await?;
     }
-    restart_normal(&mut a, &a_state, &b_id).await?;
     restart_normal(&mut b, &b_state, &a_id).await?;
     let receiver_ports = tcp_ports(b.client()).await?;
+    // Vary only the fixture order. The initiating peer still uses dynamic
+    // discovery and has the original automatic connection and transfer gates.
+    restart_normal(&mut a, &a_state, &b_id).await?;
     let found = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
             let snapshot = a.client().connections().await?;
