@@ -156,3 +156,31 @@ and still returns the original test failure. This observation is neither a
 second shutdown attempt nor acceptance of a late exit as meeting the original
 ten-second condition. The Linux-only run determines whether normal exit arrives
 late, remains unobserved or fails containment/state cleanup.
+
+
+## Normal exit after a shutdown deadline
+
+The read-only diagnosis at PR #228 (source
+`a111352f7d68450f61e1a9f79c3ac75fb55f9256`, run 44219933965) preserved the
+105.58-second failed test. Two actors met the ten-second shutdown deadline.
+The other two returned the original timeout; subsequent `wait_for_exit()` calls
+observed normal code-zero, non-forced exits with stopped trees and released
+state after 14ms and 2ms respectively. These observations do not identify the
+underlying scheduling cause or make those shutdown calls successful.
+
+The next focused fixture exercises that documented caller flow as a whole.
+It starts four independent ten-second shutdown calls concurrently and retains
+each result. Only the exact typed timeout for `gracefully stop owned program`
+may be followed by a read-only `wait_for_exit()` bounded to twenty seconds for
+that actor. Every actor must actually exit with code zero, no force, a stopped
+process tree and released state. Other shutdown errors, observation errors,
+abnormal exits or another expired observation deadline still fail the test.
+No second shutdown request or force is issued. Receipts report the original
+timeouts and explicitly make no claim that every stop met the first deadline.
+
+This uses the existing public API; it changes neither the SDK shutdown contract
+nor the separate owned-process stop gates. The required admission, exact-byte,
+identity, key, configuration and normal-exit checks all remain. Earlier strict
+ten-second failures retain their original results. The new Linux result must
+be recorded against its own source, and the final integrated candidate still
+requires the complete native matrix.
