@@ -183,6 +183,18 @@ echo "VS_ARMEL_VERSION_CONTROL_DONE"
 '''
     elif program_sha is not None:
         libc_number = "2.24" if armel_stretch else "2.17"
+        entropy_setup = '''case " $(/bin/busybox cat /proc/cmdline) " in
+    *" vs_minimum_entropy=natural "*) entropy_mode=natural ;;
+    *" vs_minimum_entropy=seeded "*) entropy_mode=seeded ;;
+    *) fail entropy_mode ;;
+esac
+echo "VS_MINIMUM_ENTROPY_MODE $entropy_mode"
+/bin/vs-entropy-control before || fail entropy_measurement
+if [ "$entropy_mode" = seeded ]; then
+    /bin/vs-entropy-control seed < /.vs-entropy-seed || fail entropy_seed
+fi
+/bin/busybox rm /.vs-entropy-seed || fail entropy_seed_removal
+'''
         if armel_stretch:
             runtime = '''machine=$(/bin/busybox uname -m) || fail machine_identity
 [ "$machine" = armv7l ] || fail machine_identity
@@ -197,23 +209,20 @@ echo "VS_MINIMUM_PTY_READY devpts=true ptmx=true"
 /bin/busybox chmod 0700 /vs-data || fail guest_permissions
 actual_program_sha=$(/bin/busybox sha256sum /bin/verysync) || fail program_sha
 case "$actual_program_sha" in "{program_sha} "*) ;; *) fail program_sha ;; esac
+'''
+        if armel_stretch:
+            runtime += entropy_setup
+        runtime += f'''
 version=$(/bin/verysync version --home /version-state) || fail fixed_program_version
 case "$version" in *v2.33.2*) ;; *) fail fixed_program_version ;; esac
 echo "VS_MINIMUM_CORE_VERSION_OK v2.33.2"
 libc_version=$(/{runtime_lib}/libc.so.6) || fail fixture_libc
 case "$libc_version" in *"version {libc_number}"*) ;; *) fail fixture_libc ;; esac
 echo "VS_MINIMUM_GLIBC_VERSION glibc={libc_number}"
-case " $(/bin/busybox cat /proc/cmdline) " in
-    *" vs_minimum_entropy=natural "*) entropy_mode=natural ;;
-    *" vs_minimum_entropy=seeded "*) entropy_mode=seeded ;;
-    *) fail entropy_mode ;;
-esac
-echo "VS_MINIMUM_ENTROPY_MODE $entropy_mode"
-/bin/vs-entropy-control before || fail entropy_measurement
-if [ "$entropy_mode" = seeded ]; then
-    /bin/vs-entropy-control seed < /.vs-entropy-seed || fail entropy_seed
-fi
-/bin/busybox rm /.vs-entropy-seed || fail entropy_seed_removal
+'''
+        if not armel_stretch:
+            runtime += entropy_setup
+        runtime += f'''
 /bin/vs-entropy-control before_sdk || fail entropy_measurement
 unset SSL_CERT_FILE SSL_CERT_DIR
 case " $(/bin/busybox cat /proc/cmdline) " in
