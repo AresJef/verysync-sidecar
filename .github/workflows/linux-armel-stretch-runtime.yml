@@ -3,7 +3,11 @@ name: Exercise the fixed Rust controller in an offline Debian ARMEL guest
 on:
   push:
     branches: [ci/linux-armel-stretch-runtime-20261119-01a1ca9b]
-    paths: [.github/workflows/linux-armel-stretch-runtime.yml]
+    paths:
+      - .github/workflows/linux-armel-stretch-runtime.yml
+      - scripts/linux-minimum-boot-armel-packages.json
+      - scripts/prepare-linux-minimum-boot.py
+      - scripts/probes/build-linux-armel-stretch-runtime.sh
 
 permissions:
   contents: read
