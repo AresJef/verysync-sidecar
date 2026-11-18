@@ -1,8 +1,8 @@
 name: Darwin idle reader diagnosis
 
 on:
-  push:
-    branches: [ci/darwin-idle-reader-20261118-01a1ca9b]
+  pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - scripts/diagnose-darwin-idle-read.py
       - scripts/darwin-owned-sample.c
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   idle:
-    if: github.repository == 'AresJef/verysync-sidecar' && github.ref_name == 'ci/darwin-idle-reader-20261118-01a1ca9b'
+    if: github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == 'AresJef/verysync-sidecar' && github.head_ref == 'ci/darwin-idle-reader-20261118-01a1ca9b'
     name: Owned Intel idle reader paired diagnosis
     runs-on: macos-15-intel
     timeout-minutes: 20
@@ -66,4 +66,5 @@ jobs:
             ${{ runner.temp }}/vs-idle-reader/**/samples.jsonl
             ${{ runner.temp }}/vs-idle-reader/**/events.jsonl
             ${{ runner.temp }}/vs-idle-reader/**/safe-error.json
-            ${{ runner.temp }}/vs-idle-reader/**/*.log
+            ${{ runner.temp }}/vs-idle-reader/**/console.log
+            ${{ runner.temp }}/vs-idle-reader/*.console.log
