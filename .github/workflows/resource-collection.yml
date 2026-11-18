@@ -14,6 +14,8 @@ on:
       - tests/common/managed_fixture.rs
       - tests/fixtures/resource-protocol.json
       - scripts/measure-native-resources.py
+      - scripts/darwin-owned-sample.c
+      - scripts/darwin_owned_reader.py
       - scripts/macos-observer-activity.py
       - scripts/tests/test_macos_observer_activity.py
       - scripts/collect-native-resources.py
@@ -36,7 +38,8 @@ jobs:
     if: (github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'resource-formal') && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'test/native-introduction-encryption-20261118-01a1ca9b' || contains(github.event.pull_request.labels.*.name, 'resource-formal'))
     name: Resource coverage (${{ matrix.package }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+    # Allow cold preparation, the full frozen acquisition window, and evidence saving.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -72,6 +75,12 @@ jobs:
           python -m unittest discover -s scripts/tests -p 'test_macos_timer_probe.py'
           python -m unittest discover -s scripts/tests -p 'test_macos_observer_activity.py'
           python -m unittest discover -s scripts/tests -p 'test_native_observer_diagnosis.py'
+      - name: Build the frozen Darwin snapshot helper
+        if: runner.os == 'macOS'
+        run: |
+          library="$RUNNER_TEMP/verysync-darwin-owned-sample.dylib"
+          xcrun clang -O2 -Wall -Wextra -Werror -dynamiclib scripts/darwin-owned-sample.c -o "$library"
+          printf 'VERYSYNC_DARWIN_METRICS_LIBRARY=%s\n' "$library" >> "$GITHUB_ENV"
       - name: Explicitly prepare this profile's fixed private core
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"

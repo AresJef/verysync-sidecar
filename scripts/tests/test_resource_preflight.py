@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shutil
 from types import SimpleNamespace
 import tempfile
@@ -36,6 +37,41 @@ def noisy(root, cycles=(0,)):
 
 
 class ResourcePreparationContracts(unittest.TestCase):
+    def test_darwin_reader_policy_rejects_missing_changed_and_mixed_runtime_receipts(self):
+        policy = {"darwin_metric_reader": "proc-taskallinfo"}
+        binary = "a" * 64
+        report = {"calibration": {"platform": "macOS-15-x86_64"},
+                  "source": {"darwin_reader_library_sha256": binary}}
+        METRICS.check_metric_reader(report, {})
+        with self.assertRaisesRegex(ValueError, "Darwin metric reader identity"):
+            METRICS.check_metric_reader(report, policy)
+        report["metric_reader"] = {"kind": "darwin-proc-taskallinfo", "owned_processes": 2,
+                                   "library_sha256": binary}
+        METRICS.check_metric_reader(report, policy)
+        report["metric_reader"]["library_sha256"] = "b" * 64
+        with self.assertRaisesRegex(ValueError, "Darwin metric reader identity"):
+            METRICS.check_metric_reader(report, policy)
+        report["calibration"]["platform"] = "Windows"
+        with self.assertRaisesRegex(ValueError, "non-Darwin"):
+            METRICS.check_metric_reader(report, policy)
+        report["metric_reader"] = {"kind": "psutil"}
+        with self.assertRaisesRegex(ValueError, "non-Darwin"):
+            METRICS.check_metric_reader(report, policy)
+        del report["source"]["darwin_reader_library_sha256"]
+        METRICS.check_metric_reader(report, policy)
+
+    def test_workflow_leaves_room_for_acquisition_after_a_cold_preparation(self):
+        root = Path(__file__).resolve().parents[2]
+        protocol = REPORT.read(root / "tests/fixtures/resource-protocol.json")
+        workflow = (root / ".github/workflows/resource-collection.yml").read_text()
+        collect = workflow.split("\n  collect:\n", 1)[1]
+        minutes = re.search(r"^    timeout-minutes: (\d+)$", collect, re.MULTILINE)
+        self.assertIsNotNone(minutes)
+        setup_and_preparation = 15 * 60
+        acquisition_and_save = (protocol["acquisition_window_s"]
+                                + protocol["maximum_group_span_s"] + protocol["save_reserve_s"])
+        self.assertGreaterEqual(int(minutes.group(1)) * 60, setup_and_preparation + acquisition_and_save)
+
     def test_stale_source_stops_before_any_native_preparation_attempt(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

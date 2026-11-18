@@ -56,7 +56,8 @@ def main():
             for slot, scenario in enumerate(order):
                 target = args.evidence_dir / f"cycle-{cycle}-slot-{slot}-{scenario}"
                 command = [sys.executable, "-B", str(Path(__file__).with_name("measure-native-resources.py")),
-                           "--stage", "pilot", "--cargo", str(args.cargo), "--toolchain", args.toolchain,
+                           "--stage", "pilot", "--protocol", str(args.protocol),
+                           "--cargo", str(args.cargo), "--toolchain", args.toolchain,
                            "--scenario", scenario, "--repeats", str(protocol["scenarios"][scenario]["repeats"]),
                            "--interval-ms", str(protocol["interval_ms"]), "--evidence-dir", str(target)]
                 started = time.monotonic()
