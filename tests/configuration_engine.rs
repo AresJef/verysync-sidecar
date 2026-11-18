@@ -14,6 +14,9 @@ mod folder_options_cases;
 mod folder_policy_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[cfg(target_os = "linux")]
+#[path = "common/ownership_cases.rs"]
+mod ownership_cases;
 #[path = "common/process_priority.rs"]
 mod process_priority;
 use managed_fixture::{options, TestResult};
