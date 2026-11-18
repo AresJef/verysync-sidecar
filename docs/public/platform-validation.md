@@ -29,7 +29,7 @@ key-based sharing. The same candidate linked the `connect_existing` and
 legacy Windows execution and the complete feature matrix remain pending.
 [Candidate additional-platform results](https://github.com/AresJef/verysync-sidecar/actions/runs/44337786187)
 
-## Linux x86 and x86-64 guest kernels
+## Older Linux guest kernels
 
 Source `83942f5` used the matching fixed VerySync v2.33.2 and a Rust 1.85
 default-TLS controller linked against glibc 2.17. Each offline full-system QEMU
@@ -41,6 +41,7 @@ identity and folder, and normal process exit with the state lock released.
 | --- | --- | --- |
 | `x86_64-unknown-linux-gnu` | `2.6.32-5-amd64`, `3.2.0-4-amd64` | [x86-64 results](https://github.com/AresJef/verysync-sidecar/actions/runs/44367172923) |
 | `i686-unknown-linux-gnu` | `2.6.32-5-686`, `3.2.0-4-686-pae` | [32-bit results](https://github.com/AresJef/verysync-sidecar/actions/runs/44369946963) |
+| `aarch64-unknown-linux-gnu` | `3.16.0-6-arm64` | [ARM64 results](https://github.com/AresJef/verysync-sidecar/actions/runs/44373632836) |
 
 Each guest had initialized entropy, a working Unix PTY and a root CA from the
 corresponding Debian archive. In each CA-absent control, the default TLS
