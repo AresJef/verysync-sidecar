@@ -3,7 +3,19 @@ use serde_json::Value;
 use std::{io::Read, path::Path};
 use verysync_sidecar::ManagedInstance;
 
-pub fn observed_standard_package(core: &ManagedInstance) -> Option<String> {
+#[derive(PartialEq, Eq)]
+pub struct ArchiveRefusalProfile {
+    pub package: String,
+    pub hosted_runner: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct HostedFixture<'a> {
+    package: &'a str,
+    runner: &'a str,
+}
+
+pub fn observed_refusal_profile(core: &ManagedInstance) -> Option<ArchiveRefusalProfile> {
     let binary = core.selected_program().path().canonicalize().ok()?;
     let receipt = read_receipt(&binary)?;
     let sha: String = core
@@ -12,17 +24,91 @@ pub fn observed_standard_package(core: &ManagedInstance) -> Option<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    if !matches_receipt(
-        &receipt,
-        &sha,
-        &core.program_info().version,
-        std::env::consts::OS,
-        std::env::consts::ARCH,
+    let version = &core.program_info().version;
+    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+    let hosted_runner = if matches_receipt(&receipt, &sha, version, os, arch) {
+        None
+    } else {
+        let (package, runner) = declared_hosted_fixture()?;
+        let fixture = HostedFixture {
+            package: &package,
+            runner: &runner,
+        };
+        Some(matched_additional_runner(
+            &receipt,
+            &sha,
+            version,
+            os,
+            arch,
+            Some(fixture),
+        )?)
+    };
+    Some(ArchiveRefusalProfile {
+        package: receipt["package"].as_str()?.to_owned(),
+        hosted_runner,
+    })
+}
+
+fn github_hosted_x64(actions: &str, runner_environment: &str, architecture: &str) -> bool {
+    actions == "true" && runner_environment == "github-hosted" && architecture == "X64"
+}
+
+fn declared_hosted_fixture() -> Option<(String, String)> {
+    // Set by the private hosted archive workflow after checking its actual host.
+    if !github_hosted_x64(
+        &std::env::var("GITHUB_ACTIONS").ok()?,
+        &std::env::var("RUNNER_ENVIRONMENT").ok()?,
+        &std::env::var("RUNNER_ARCH").ok()?,
     ) {
         return None;
     }
-    receipt["package"].as_str().map(str::to_owned)
+    Some((
+        std::env::var("VERYSYNC_TEST_FTP_ARCHIVE_PROFILE").ok()?,
+        std::env::var("VERYSYNC_TEST_FTP_ARCHIVE_RUNNER").ok()?,
+    ))
 }
+
+fn matched_additional_runner(
+    receipt: &Value,
+    binary_sha: &str,
+    version: &str,
+    os: &str,
+    arch: &str,
+    fixture: Option<HostedFixture<'_>>,
+) -> Option<String> {
+    let HostedFixture { package, runner } = fixture?;
+    if receipt["package"] != package
+        || receipt["version"] != version
+        || version != "v2.33.2"
+        || receipt["binary_sha256"] != binary_sha
+    {
+        return None;
+    }
+    let fingerprints: Value = serde_json::from_str(include_str!(
+        "../../releases/verysync-v2.33.2-ftp-archive-refusal-profiles.json"
+    ))
+    .ok()?;
+    let catalog: Value =
+        serde_json::from_str(include_str!("../../releases/verysync-v2.33.2.json")).ok()?;
+    let known = fingerprints["profiles"]
+        .as_array()?
+        .iter()
+        .find(|row| row["id"] == package)?;
+    let official = catalog["packages"]
+        .as_array()?
+        .iter()
+        .find(|row| row["id"] == package)?;
+    (fingerprints["version"] == version
+        && catalog["version"] == version
+        && known["runner"] == runner
+        && known["target_os"] == os
+        && known["target_arch"] == arch
+        && known["binary_sha256"] == binary_sha
+        && receipt["archive_sha256"] == official["sha256"]
+        && receipt["archive_sha256"] == known["archive_sha256"])
+        .then(|| runner.to_owned())
+}
+
 fn read_receipt(binary: &Path) -> Option<Value> {
     let path = binary.parent()?.join("receipt.json");
     let metadata = std::fs::symlink_metadata(&path).ok()?;
@@ -96,6 +182,94 @@ fn matches_receipt(receipt: &Value, binary_sha: &str, version: &str, os: &str, a
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn additional_ftp_refusal_requires_the_exact_receipt_and_explicit_host_scope() {
+        let profiles: Value = serde_json::from_str(include_str!(
+            "../../releases/verysync-v2.33.2-ftp-archive-refusal-profiles.json"
+        ))
+        .unwrap();
+        let rows = profiles["profiles"].as_array().unwrap();
+        assert_eq!(rows.len(), 15);
+        for row in rows {
+            let package = row["id"].as_str().unwrap();
+            let runner = row["runner"].as_str().unwrap();
+            let os = row["target_os"].as_str().unwrap();
+            let arch = row["target_arch"].as_str().unwrap();
+            let sha = row["binary_sha256"].as_str().unwrap();
+            let receipt = serde_json::json!({
+                "package": package, "version": "v2.33.2",
+                "archive_sha256": row["archive_sha256"], "binary_sha256": sha,
+            });
+            let fixture = HostedFixture { package, runner };
+            let matched = |report: &Value, fixture| {
+                matched_additional_runner(report, sha, "v2.33.2", os, arch, fixture)
+            };
+            assert_eq!(matched(&receipt, Some(fixture)).as_deref(), Some(runner));
+            assert!(matched(&receipt, None).is_none());
+            assert!(!matches_receipt(&receipt, sha, "v2.33.2", os, arch));
+            for other in [
+                HostedFixture {
+                    package: "unknown",
+                    runner,
+                },
+                HostedFixture {
+                    package,
+                    runner: "unverified-host",
+                },
+            ] {
+                assert!(matched(&receipt, Some(other)).is_none());
+            }
+            for field in ["package", "version", "archive_sha256", "binary_sha256"] {
+                let mut invalid = receipt.clone();
+                invalid[field] = "not-the-witnessed-value".into();
+                assert!(
+                    matched(&invalid, Some(fixture)).is_none(),
+                    "{package}: {field}"
+                );
+            }
+            assert!(matched_additional_runner(
+                &receipt,
+                &"0".repeat(64),
+                "v2.33.2",
+                os,
+                arch,
+                Some(fixture)
+            )
+            .is_none());
+            assert!(
+                matched_additional_runner(&receipt, sha, "v2.33.1", os, arch, Some(fixture))
+                    .is_none()
+            );
+            assert!(matched_additional_runner(
+                &receipt,
+                sha,
+                "v2.33.2",
+                "freebsd",
+                arch,
+                Some(fixture)
+            )
+            .is_none());
+            assert!(matched_additional_runner(
+                &receipt,
+                sha,
+                "v2.33.2",
+                os,
+                "riscv32",
+                Some(fixture)
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
+    fn absent_or_non_hosted_runner_identity_keeps_the_original_ftp_case() {
+        assert!(github_hosted_x64("true", "github-hosted", "X64"));
+        assert!(!github_hosted_x64("", "github-hosted", "X64"));
+        assert!(!github_hosted_x64("true", "self-hosted", "X64"));
+        assert!(!github_hosted_x64("true", "github-hosted", "ARM64"));
+        assert!(!github_hosted_x64("true", "", "X64"));
+    }
+
     #[test]
     fn standard_receipt_scope_rejects_legacy_unknown_and_mismatched_artifacts() {
         let fixture: Value = serde_json::from_str(include_str!(

@@ -1,0 +1,126 @@
+{
+  "version": "v2.33.2",
+  "original_run": "https://github.com/AresJef/verysync-sidecar/actions/runs/44408051901",
+  "profiles": [
+    {
+      "id": "linux-386-standard",
+      "target_os": "linux",
+      "target_arch": "x86",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "26a5230a414ffc82a3b63d82e2d3ca615784048a4cc8d06e1f8c17ea8beab26a",
+      "binary_sha256": "1e55d6a3c30f2afc241664dd513726b8cce34235f981804b1e579163eb2b8177"
+    },
+    {
+      "id": "linux-arm-standard",
+      "target_os": "linux",
+      "target_arch": "arm",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "005ace647231cc8714b8d944dc8bc4376f4d86dd1198eae61e25ef99112a31a6",
+      "binary_sha256": "bcdfb410216b1b48f79e61124a6a8cafdd085b54f54548c4848561afee36fb43"
+    },
+    {
+      "id": "linux-armhf-standard",
+      "target_os": "linux",
+      "target_arch": "arm",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "125c102243131fe5118886258e594082b2a1e32a134dbebd60c27ada32b6a3dd",
+      "binary_sha256": "c891f85b15fe3868d98b39f57448efb112046cbea8888dd2484e7f3b05016709"
+    },
+    {
+      "id": "linux-armv6-standard",
+      "target_os": "linux",
+      "target_arch": "arm",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "f427e4d3132837112c1a1fca2a92164ed1afe4d5c1f701e3af44d648f6ff3b3b",
+      "binary_sha256": "a31ddc25222cd68245597ca5ed0f165f404b8d7f47f024b03d85800db9d22972"
+    },
+    {
+      "id": "linux-loong64-standard",
+      "target_os": "linux",
+      "target_arch": "loongarch64",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "f7962ecc018e95aef29d36fd5066b757ce0e718895ef74fa625c80b598af5bd5",
+      "binary_sha256": "aab116062eaa025955dec2da3ce8679e96fc88c6e34eea3efbba983aceab474b"
+    },
+    {
+      "id": "linux-mips-standard",
+      "target_os": "linux",
+      "target_arch": "mips",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "16ee91434add7aaafe4aa201d2c547d7f4af8abf804056e06b00d2b80c883ee3",
+      "binary_sha256": "8549baa17ce60d57fa721713da6a858aa4543bb5fb0ae46d7a25b84c736de076"
+    },
+    {
+      "id": "linux-mips64-standard",
+      "target_os": "linux",
+      "target_arch": "mips64",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "a0126792577e5a08fbe92a5483bfacfe3a028ded396625423b2141deecd0c33f",
+      "binary_sha256": "876ccb24de0c20ebacc0999d07ab1ed3658a2d21d63cd68cbfdae1beebc80f69"
+    },
+    {
+      "id": "linux-mips64le-standard",
+      "target_os": "linux",
+      "target_arch": "mips64",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "501bd626b514da1722bd19ceea88c05ffe0846e38da0367ebe87dc2cd5d99281",
+      "binary_sha256": "0a0167e6016d12d18726603bcf1f926ef8af8f0c2cea5de352c0db1636f15afd"
+    },
+    {
+      "id": "linux-mipsle-standard",
+      "target_os": "linux",
+      "target_arch": "mips",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "7b2e51ec5b017350dd37497a8203f1effc2e98059ccec104944dfbe82a9c6536",
+      "binary_sha256": "ac6b4491a11d7486edc3d6c5c40bc33fc85268d879290ef14bb8b17564422d58"
+    },
+    {
+      "id": "linux-ppc64le-standard",
+      "target_os": "linux",
+      "target_arch": "powerpc64",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "c1115c498d40fcf6c1e0cfadd5176fa5230fce56cb937e61c76a210ffa7565f7",
+      "binary_sha256": "d285229f125ecba770627f580eabb6257f9ba503a9ef169171d9d8facda32145"
+    },
+    {
+      "id": "linux-riscv64-standard",
+      "target_os": "linux",
+      "target_arch": "riscv64",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "00700d8428856fd64f46cf4623a76ad39c31d3e391a7c948a12fd12c3ff1439d",
+      "binary_sha256": "15048497b9be02c26b9a80d028e853bb30ce250c684011f8b8d1109311d9c9bd"
+    },
+    {
+      "id": "linux-s390x-standard",
+      "target_os": "linux",
+      "target_arch": "s390x",
+      "runner": "ubuntu-24.04",
+      "archive_sha256": "eeed0798a651e2a1a20da77dfa7d05e1cc8f8648c3712c45738b2be12242c3a2",
+      "binary_sha256": "9c82504430c882457b9c2cae1e5baeecfc23e0e130aadf223f54118befcad181"
+    },
+    {
+      "id": "windows-386-legacy",
+      "target_os": "windows",
+      "target_arch": "x86",
+      "runner": "windows-2022",
+      "archive_sha256": "4e0647a2e5218f9e783b66b5979ca8576ea64f6d540071a41a6f4f0a87c84c93",
+      "binary_sha256": "9e3a4780b286a4ebd1170b8b3a706912a8716b9557deb96d9a4a677dcf87e385"
+    },
+    {
+      "id": "windows-386-standard",
+      "target_os": "windows",
+      "target_arch": "x86",
+      "runner": "windows-2022",
+      "archive_sha256": "f612b0b86edd2498ea45983c2bb43b3c768130f6003af5fa83150abc043de2e8",
+      "binary_sha256": "41537131334eab5edd421e9221dd4b92cfdf4f1381dae88fe62c3cee4c942ef7"
+    },
+    {
+      "id": "windows-amd64-legacy",
+      "target_os": "windows",
+      "target_arch": "x86_64",
+      "runner": "windows-2022",
+      "archive_sha256": "a2fd595d96d9aefe41028df367cfddbbba7e73e7d26652ea03efb1db94e80cae",
+      "binary_sha256": "6b54ab175c7110eb2a2b81cc4cde790a7486064b5f082aba1f2cc0275b232b13"
+    }
+  ]
+}

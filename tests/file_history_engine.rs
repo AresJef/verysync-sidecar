@@ -286,12 +286,11 @@ async fn remote_archive_case(
     tokio::time::sleep(Duration::from_millis(1100)).await;
     std::fs::write(source.join(name), new)?;
     a.client().request_scan(&af.id).await?;
-    // Only the six observed standard artifacts qualify. Same-width legacy,
-    // unknown or unproven artifacts keep the original positive requirement.
-    let standard_package = if protocol == verysync_sidecar::StorageProtocol::Ftp {
+    // The refusal check requires both exact artifacts and their observed scope.
+    let refusal_profile = if protocol == verysync_sidecar::StorageProtocol::Ftp {
         match (
-            ftp_archive_scope::observed_standard_package(&a),
-            ftp_archive_scope::observed_standard_package(&b),
+            ftp_archive_scope::observed_refusal_profile(&a),
+            ftp_archive_scope::observed_refusal_profile(&b),
         ) {
             (Some(first), Some(second)) if first == second => Some(first),
             _ => None,
@@ -299,7 +298,7 @@ async fn remote_archive_case(
     } else {
         None
     };
-    if protocol == verysync_sidecar::StorageProtocol::Ftp && standard_package.is_some() {
+    if let Some(profile) = refusal_profile {
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let errors = b
@@ -352,7 +351,10 @@ async fn remote_archive_case(
             "actual_no_upload_command_in_observed_window":true,
             "actual_peer_observation_credentials_redacted":true,
             "native_target_os":std::env::consts::OS,"native_target_arch":std::env::consts::ARCH,
-            "verified_standard_package":standard_package,"actual_fixed_archive_and_binary_fingerprints_matched":true,
+            "verified_standard_package":profile.hosted_runner.is_none().then_some(profile.package.as_str()),
+            "verified_additional_package":profile.hosted_runner.is_some().then_some(profile.package.as_str()),
+            "verified_hosted_runner":profile.hosted_runner,
+            "actual_fixed_archive_and_binary_fingerprints_matched":true,
             "observed_command_names":commands,
             "actual_typed_location_readback":true,"actual_native_archive_not_found_error":true,
             "actual_nonzero_pull_error_counter":true,"actual_receiver_old_bytes_retained":true,
