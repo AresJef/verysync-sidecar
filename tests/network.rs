@@ -7,6 +7,8 @@ mod local_announcement_cases;
 mod managed_fixture;
 #[path = "common/network_limit_effects.rs"]
 mod network_limit_effects;
+#[path = "common/tracker_observation_cases.rs"]
+mod tracker_observation_cases;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 use std::time::Duration;
