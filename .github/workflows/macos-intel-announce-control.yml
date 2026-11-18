@@ -1,0 +1,47 @@
+name: macOS Intel announcement diagnosis
+
+on:
+  push:
+    branches: [ci/macos-intel-announce-control-20261119-01a1ca9b]
+    paths:
+      - .github/workflows/macos-intel-announce-control.yml
+      - tests/common/local_announcement_cases.rs
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/macos-intel-announce-control-20261119-01a1ca9b'
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    name: Compare an exact endpoint after the isolated dynamic-announcement case
+    env:
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VS_OWNED_ANNOUNCE_ENDPOINT_CONTROL: enabled
+      TEST_TOOLCHAIN: 1.85.0-x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Prepare exact AMD64 core and Rust inputs on the disposable runner
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = x86_64
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --no-self-update
+          cargo "+$TEST_TOOLCHAIN" fetch --locked
+          python3 -B scripts/prepare-test-engine.py prepare --package macos-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Preserve the original 45-second condition and actual network effects
+        run: >-
+          python3 -B scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target network
+          --test-filter actual_local_announcements_discover_dynamic_peers_and_stop_after_restart
+          --allow-private-discovery
+          --evidence-dir "$RUNNER_TEMP/vs-mac-announce-control"
+      - name: Confirm exact native fixture cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python3 -B scripts/prepare-test-engine.py check-cleanup
