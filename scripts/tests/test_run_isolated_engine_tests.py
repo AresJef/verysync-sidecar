@@ -197,6 +197,11 @@ class ProxyContracts(unittest.TestCase):
                             self.assertEqual(record["client_bytes"], len(sent))
                             self.assertEqual(record["provider_bytes"], len(received))
                             self.assertGreaterEqual(record["elapsed_s"], record["connect_s"])
+                            self.assertEqual(record["final_io_phase"], "read_client")
+                            for side in ("client", "provider"):
+                                self.assertLessEqual(record["connect_s"], record[f"first_{side}_bytes_s"])
+                                self.assertLessEqual(record[f"first_{side}_bytes_s"], record[f"last_{side}_bytes_s"])
+                                self.assertLessEqual(record[f"last_{side}_bytes_s"], record["elapsed_s"])
                             serialized = json.dumps(record)
                             self.assertNotIn(sent.decode(), serialized)
                             self.assertNotIn(received.decode(), serialized)
@@ -225,6 +230,9 @@ class ProxyContracts(unittest.TestCase):
                 self.assertEqual(records[0]["outcome"], "socket_timeout")
                 self.assertEqual(records[0]["client_bytes"], 0)
                 self.assertEqual(records[0]["provider_bytes"], 0)
+                self.assertEqual(records[0]["final_io_phase"], "connect_provider")
+                self.assertIsNone(records[0]["first_provider_bytes_s"])
+                self.assertIsNone(records[0]["last_provider_bytes_s"])
                 self.assertNotIn("synthetic-private-header", json.dumps(records))
                 self.assertEqual(proxy.errors, 0)
             finally:

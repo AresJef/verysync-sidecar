@@ -305,6 +305,34 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                 );
                 return Ok(());
             }
+            Err(error @ Error::Timeout { .. }) => {
+                let management_online =
+                    tokio::time::timeout(Duration::from_secs(1), core.client().system_status())
+                        .await
+                        .is_ok_and(|status| {
+                            status.is_ok_and(|status| status.device_id == identity)
+                        });
+                let normal_exit = core
+                    .shutdown(Duration::from_secs(10))
+                    .await
+                    .is_ok_and(|exit| {
+                        exit.tree_stopped
+                            && exit.state_released
+                            && !exit.forced
+                            && exit.code == Some(0)
+                    });
+                let original_program = std::fs::read(&program)
+                    .is_ok_and(|bytes| <[u8; 32]>::from(Sha256::digest(bytes)) == old_sha);
+                let original_data = std::fs::read(data.join("retained.bin"))
+                    .is_ok_and(|bytes| bytes == b"native upgrade retained bytes");
+                eprintln!(
+                    "provider deadline effects: {}",
+                    serde_json::json!({"management_responded_with_same_identity_in_one_second":management_online,
+                        "original_program_sha_retained":original_program,"sample_bytes_retained":original_data,
+                        "normal_owned_exit":normal_exit})
+                );
+                return Err(error.into());
+            }
             Err(error) => return Err(error.into()),
         }
     }
