@@ -1,5 +1,7 @@
 {
   "draft_labels": [
-    "native-official-tracker-registration"
+    "native-dial-missing-original-gates",
+    "native-dial-concurrency-policy",
+    "native-temp-advertisement-missing-original-gate"
   ]
 }

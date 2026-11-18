@@ -28,7 +28,7 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertEqual(workflow.count('      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm'), 2)
 
     def test_tracker_requires_six_specialist_commands_and_keeps_original_network_coverage(self):
-        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+        selection = {'draft_labels': ['native-official-tracker-registration']}
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 6)
         self.assertEqual({r['package'] for r in rows}, set(HELPER.PROFILES) - {'windows-386-standard'})
@@ -45,6 +45,20 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertIn("if: matrix.label == 'native-official-tracker-registration'", block)
         self.assertIn('--allow-official-tracker', block)
         self.assertIn("matrix.label != 'native-official-tracker-registration'", workflow)
+
+    def test_current_draft_covers_missing_verdicts_and_changed_signed_dial_api(self):
+        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+        rows = HELPER.select(self.rows, selection, draft=True)
+        self.assertEqual(len(rows), 7)
+        dial = 'native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer'
+        temp = 'native_temporary_index_threshold_controls_partial_block_advertisement'
+        self.assertEqual({(r['package'], r['filter']) for r in rows}, {
+            ('macos-amd64-standard', dial), ('macos-arm64-standard', dial),
+            ('linux-amd64-standard', dial), ('linux-arm64-standard', dial),
+            ('windows-amd64-standard', dial), ('windows-arm64-standard', dial),
+            ('macos-arm64-standard', temp)})
+        self.assertTrue(all(r['target'] == 'configuration_engine' and r['trace'] == '0' for r in rows))
+        self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
     def test_ready_keeps_all_six_admission_commands_after_cleanup_change(self):
         rows = HELPER.select(self.rows, {"draft_labels": ["native-incoming-admission-cap", "native-incoming-admission-linux-cleanup"]}, draft=True)
@@ -76,7 +90,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-admission-linux-cleanup-20261118-01a1ca9b",
                        "test/native-admission-readonly-exit-20261118-01a1ca9b",
                        "test/native-admission-reconciled-caller-20261118-01a1ca9b",
-                       "test/native-official-tracker-20261118-01a1ca9b"]:
+                       "test/native-official-tracker-20261118-01a1ca9b",
+                       "test/native-missing-policy-evidence-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -148,7 +163,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-admission-linux-cleanup-20261118-01a1ca9b",
                        "test/native-admission-readonly-exit-20261118-01a1ca9b",
                        "test/native-admission-reconciled-caller-20261118-01a1ca9b",
-                       "test/native-official-tracker-20261118-01a1ca9b"]:
+                       "test/native-official-tracker-20261118-01a1ca9b",
+                       "test/native-missing-policy-evidence-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -319,9 +335,9 @@ class DiagnosticSelection(unittest.TestCase):
                             for row in folders))
 
     def test_ready_catalog_retains_pending_tls_dials_and_real_recovery_on_six_profiles(self):
-        selection = {"draft_labels": ["native-dial-concurrency-policy"]}
+        selection = {"draft_labels": ["native-dial-concurrency-policy", "native-dial-missing-original-gates"]}
         actual = HELPER.select(self.rows, selection, draft=True)
-        dials = [row for row in actual if row.get("label") == "native-dial-concurrency-policy"]
+        dials = [row for row in actual if row.get("label") in selection["draft_labels"]]
         self.assertEqual(len(actual), 6)
         self.assertEqual(len(dials), 6)
         self.assertEqual(len({row["package"] for row in dials}), 6)
@@ -374,14 +390,14 @@ class DiagnosticSelection(unittest.TestCase):
              "public_backend_requests_preserve_actual_outage_errors_and_data"),
             ({"draft_labels": ["native-sftp-server-identity"]}, "native-sftp-server-identity", "local_sync_protocol_engine",
              "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies"),
-            ({"draft_labels": ["native-temporary-index-minimum-policy"]},
+            ({"draft_labels": ["native-temporary-index-minimum-policy", "native-temp-advertisement-missing-original-gate"]},
              "native-temporary-index-minimum-policy", "configuration_engine",
              "native_temporary_index_threshold_controls_partial_block_advertisement"),
         ]:
             rows = HELPER.select(self.rows, selection, draft=True)
             self.assertEqual(len(rows), 6)
             self.assertEqual({r["package"] for r in rows}, set(HELPER.PROFILES) - {"windows-386-standard"})
-            self.assertTrue(all(r["label"] == label and r["target"] == target and
+            self.assertTrue(all(r["label"] in selection["draft_labels"] and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
         self.assertEqual(len(self.rows), 242)
