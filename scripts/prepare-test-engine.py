@@ -149,7 +149,12 @@ def prepare(args):
     if packages[0].get(scope_field) is not True:
         raise ValueError("test package is outside the selected fixed catalog scope")
     package = packages[0]
-    root = "-".join(["verysync", package["os"], package["upstream_arch"], manifest["version"]])
+    archive_format = package["archive_format"]
+    suffix = {"zip": ".zip", "tar.gz": ".tar.gz"}.get(archive_format)
+    name = package["filename"]
+    if suffix is None or not name.endswith(suffix) or len(name) == len(suffix):
+        raise ValueError("fixed archive name does not match its format")
+    root = name.removesuffix(suffix)
     parent = Path(args.parent).resolve(strict=True)
     if not parent.is_dir():
         raise ValueError("explicit test parent must be a directory")
@@ -157,12 +162,12 @@ def prepare(args):
     directory = Path(tempfile.mkdtemp(prefix="verysync-test-engine-", dir=parent))
     directory.chmod(0o700)
     try:
-        archive = Path(args.archive).resolve(strict=True) if args.archive else directory / package["filename"]
+        archive = Path(args.archive).resolve(strict=True) if args.archive else directory / name
         if not args.archive:
             download(package, archive)
         if archive.stat().st_size != package["bytes"] or sha256(archive) != package["sha256"]:
             raise ValueError("official archive size/SHA-256 mismatch; nothing will be executed")
-        binary = extract_executable(archive, directory, root, package["executable_name"], package["archive_format"])
+        binary = extract_executable(archive, directory, root, package["executable_name"], archive_format)
         binary_hash = sha256(binary)
         receipt = {"package": package["id"], "version": manifest["version"],
                    "url": package["url"], "archive_sha256": package["sha256"],

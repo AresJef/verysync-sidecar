@@ -1,6 +1,7 @@
 """Safety contracts for the explicit CI download helper, with synthetic archives."""
 import importlib.util
 import ctypes
+import json
 import os
 from pathlib import Path
 import shutil
@@ -183,6 +184,32 @@ class ExtractionContracts(unittest.TestCase):
 
 
 class CatalogSelectionContracts(unittest.TestCase):
+    def test_prepare_uses_the_exact_fixed_legacy_archive_root(self):
+        for arch in ("386", "amd64"):
+            with self.subTest(architecture=arch), tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp)
+                archive_root = f"verysync-windows-{arch}-v2.33.2.legacy"
+                archive = parent / (archive_root + ".zip")
+                payload = b"synthetic Windows test executable"
+                with zipfile.ZipFile(archive, "w") as output:
+                    output.writestr(f"{archive_root}/verysync.exe", payload)
+                    output.writestr(f"verysync-windows-{arch}-v2.33.2/verysync.exe", b"wrong member")
+                record = {
+                    "id": f"windows-{arch}-legacy", "os": "windows", "upstream_arch": arch,
+                    "archive_format": "zip", "executable_name": "verysync.exe",
+                    "in_scope": True, "filename": archive.name,
+                    "url": f"https://dl-cn.verysync.com/releases/legacy/v2.33.2/{archive.name}",
+                    "bytes": archive.stat().st_size, "sha256": HELPER.sha256(archive),
+                }
+                manifest = json.dumps({"version": "v2.33.2", "packages": [record]})
+                args = SimpleNamespace(package=record["id"], parent=parent, archive=archive,
+                                       github_env=None, upgrade_source=False)
+                with patch.object(Path, "read_text", return_value=manifest), patch("builtins.print"):
+                    HELPER.prepare(args)
+                matches = list(parent.glob("verysync-test-engine-*/verysync.exe"))
+                self.assertEqual(len(matches), 1)
+                self.assertEqual(matches[0].read_bytes(), payload)
+
     def test_non_alpha_in_scope_package_uses_only_its_fixed_download_and_cleans_failure(self):
         class StopBeforeDownload(Exception):
             pass
