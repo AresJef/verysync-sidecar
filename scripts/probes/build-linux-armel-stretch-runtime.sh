@@ -16,6 +16,17 @@ done
 test -f "$sysroot/lib/$abi/ld-2.24.so"
 test -f "$sysroot/lib/$abi/libc-2.24.so"
 test -f "$sysroot/usr/lib/$abi/libc.so"
+for link in "$sysroot/usr/lib/$abi/"*.so; do
+  if [[ ! -L "$link" ]]; then continue; fi
+  destination=$(readlink "$link")
+  if [[ "$destination" == "/lib/$abi/"* ]]; then
+    test -f "$sysroot$destination"
+    ln -sfn -- "../../../${destination#/}" "$link"
+    test -f "$link"
+  fi
+done
+test -f "$sysroot/usr/lib/$abi/libm.so"
+test -f "$sysroot/usr/lib/$abi/libdl.so"
 ln -s "../../../lib/$abi/libgcc_s.so.1" "$sysroot/usr/lib/$abi/libgcc_s.so"
 ln -s "libatomic.so.1" "$sysroot/usr/lib/$abi/libatomic.so"
 
