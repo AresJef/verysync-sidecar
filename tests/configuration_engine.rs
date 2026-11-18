@@ -5,6 +5,9 @@ mod default_ignore_cases;
 mod default_versioning_cases;
 #[path = "common/device_options_cases.rs"]
 mod device_options_cases;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "common/extended_attribute_cases.rs"]
+mod extended_attribute_cases;
 #[path = "common/folder_options_cases.rs"]
 mod folder_options_cases;
 #[path = "common/folder_policy_cases.rs"]

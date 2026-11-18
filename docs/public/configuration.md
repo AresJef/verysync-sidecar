@@ -205,6 +205,16 @@ native matching syntax, rather than being compiled as controller-side regular
 expressions. Rule order, permit flags, explicit size selectors and unknown native
 filter fields are retained. Patterns and unknown values are hidden from Debug.
 
+For a transfer between compatible filesystems, set
+`send_extended_attributes(true)` on the sending folder and
+`sync_extended_attributes(true)` on the receiving folder. The fixed v2.33.2
+macOS ARM64 test transferred an ordinary file with two overlapping filter
+rules. Reversing the exact deny and wildcard permit changed whether the
+overlapping attribute appeared on the recipient. The other attribute and
+file contents were preserved in each transfer. This evidence covers that
+filesystem and peer combination. Ownership and copy strategy have their own
+runtime checks.
+
 ```no_run
 use verysync_sidecar::{
     BlockPullOrder, Client, CopyRangeMethod, CreateFolderOptions,

@@ -2219,5 +2219,41 @@
     "filter": "native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart",
     "label": "native-core-preference-current-contract",
     "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_extended_attribute_filter_uses_first_rule_and_preserves_files",
+    "label": "native-extended-attribute-filter",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_extended_attribute_filter_uses_first_rule_and_preserves_files",
+    "label": "native-extended-attribute-filter",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_extended_attribute_filter_uses_first_rule_and_preserves_files",
+    "label": "native-extended-attribute-filter",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_extended_attribute_filter_uses_first_rule_and_preserves_files",
+    "label": "native-extended-attribute-filter",
+    "trace": "0"
   }
 ]

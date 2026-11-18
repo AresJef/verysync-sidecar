@@ -60,8 +60,8 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(r['target'] == 'configuration_engine' and r['trace'] == '0' for r in rows))
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_core_preferences_run_six_original_cases_per_native_profile(self):
-        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+    def test_core_preferences_run_six_original_cases_per_native_profile(self):
+        selection = {'draft_labels': ['native-core-preference-current-contract']}
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 6)
         self.assertEqual({r['package'] for r in rows}, set(HELPER.PROFILES) - {'windows-386-standard'})
@@ -80,6 +80,18 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertIn("matrix.label != 'native-core-preference-current-contract'", workflow)
         source = (ROOT / 'tests/configuration_engine.rs').read_text()
         self.assertTrue(all(re.search(r'#\[tokio::test\]\s+async fn ' + case + r'\(', source) for case in cases))
+
+    def test_current_attribute_filter_draft_uses_four_unix_profiles(self):
+        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+        rows = HELPER.select(self.rows, selection, draft=True)
+        expected = {'macos-amd64-standard', 'macos-arm64-standard', 'linux-amd64-standard', 'linux-arm64-standard'}
+        self.assertEqual(len(rows), len(expected))
+        self.assertEqual({row['package'] for row in rows}, expected)
+        case = 'native_extended_attribute_filter_uses_first_rule_and_preserves_files'
+        self.assertTrue(all(row['target'] == 'configuration_engine' and row['filter'] == case for row in rows))
+        source = (ROOT / 'tests/common/extended_attribute_cases.rs').read_text()
+        self.assertIn('async fn ' + case + '(', source)
+        self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
     def test_metadata_only_owned_draft_keeps_native_plan_for_ready_manual_and_forks(self):
         workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
@@ -159,6 +171,7 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-official-tracker-20261118-01a1ca9b",
                        "test/native-missing-policy-evidence-20261118-01a1ca9b",
                        "test/native-core-preferences-current-20261118-01a1ca9b",
+                       "test/native-xattr-filter-20261118-01a1ca9b",
                        "ci/windows-packet-observer-feasibility-20261118-01a1ca9b",
                        "ci/windows-loopback-header-feasibility-20261118-01a1ca9b",
                        "test/controlled-acceptance-node-20261118-01a1ca9b",
@@ -351,7 +364,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 248)
+        self.assertEqual(len(self.rows), 252)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -485,7 +498,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] in selection["draft_labels"] and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 248)
+        self.assertEqual(len(self.rows), 252)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
