@@ -1,0 +1,66 @@
+name: Verify receiver-ready automatic discovery on the ARM64 Mac candidate
+
+on:
+  push:
+    branches: [ci/receiver-ready-single-macos-arm64-20261119-01a1ca9b]
+    paths: [.github/workflows/receiver-ready-macos-arm64-only.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  automatic-discovery:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/receiver-ready-single-macos-arm64-20261119-01a1ca9b'
+    name: Automatic native announcements (macOS ARM64)
+    runs-on: macos-15
+    timeout-minutes: 18
+    env:
+      EXACT_CANDIDATE: d5802063ae4ed1512ac4418d316d6a27e1c2b258
+      EXACT_TREE: b757414fd7bea0243f6cc6753c2cac1af4f85ee3
+      EXACT_PACKAGE: macos-arm64-standard
+      EXACT_HOST_ARCH: arm64
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_CANDIDATE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Verify the exact candidate, runtime and dependencies
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = "$EXACT_HOST_ARCH"
+          test "$(git rev-parse HEAD)" = "$EXACT_CANDIDATE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_TREE"
+          printf 'candidate source=%s tree=%s\n' "$EXACT_CANDIDATE" "$EXACT_TREE"
+          case "$EXACT_HOST_ARCH" in
+            x86_64) target=x86_64-apple-darwin ;;
+            arm64) target=aarch64-apple-darwin ;;
+            *) exit 2 ;;
+          esac
+          toolchain="1.85.0-$target"
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+          cargo "+$toolchain" fetch --locked
+          printf 'TEST_TOOLCHAIN=%s\n' "$toolchain" >> "$GITHUB_ENV"
+          python3 -B scripts/prepare-test-engine.py prepare --package "$EXACT_PACKAGE" --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Require the original automatic and shutdown effects twice in fresh fixtures
+        run: |
+          set -euo pipefail
+          overall=0
+          for trial in 1 2; do
+            result=0
+            python3 -B scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+              --test-target network \
+              --test-filter local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart \
+              --evidence-dir "$RUNNER_TEMP/vs-macos-announcement-candidate/$trial" || result=$?
+            python3 -B scripts/prepare-test-engine.py check-cleanup
+            printf 'candidate automatic discovery trial=%s result=%s\n' "$trial" "$result"
+            if [ "$result" -ne 0 ]; then overall=1; fi
+          done
+          exit "$overall"
+      - name: Require exact final owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python3 -B scripts/prepare-test-engine.py check-cleanup
