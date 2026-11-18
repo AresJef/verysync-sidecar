@@ -119,3 +119,24 @@ snapshots, blocking demand, unrelated configuration, identities and required
 normal exits remain necessary. The separate frozen resource/performance
 protocol and its original negative results are unchanged. Each final-source
 native profile remains independently required.
+
+## Independent owned-instance shutdown
+
+The staged fixture at PR #226 (source
+`3c43ae1de7d242c9e5c140b2e26c9db20e9a46ff`, run 44213760582) passed completely
+on both macOS profiles, Linux ARM64 and both Windows profiles. Linux AMD64
+completed both admission phases, exact file bytes and identity/configuration
+checks, then reached the ten-second deadline while gracefully stopping an owned
+instance. That original failure remains preserved; it is not a cap failure or a
+complete test pass.
+
+The follow-up sends the four independent normal-stop requests concurrently and
+records each actor's result. Each still has its own original ten-second deadline
+and must return code zero, no force, a stopped process tree and released state.
+All four results are awaited, including when one fails. This is a test cleanup
+ordering change; the focused Linux native run must verify its effect. A local
+pass alone does not establish the cause of the original timeout. The local preparation passed in 95.69s with
+four explicit successful actor receipts. The owned draft scopes only the
+original Linux AMD64 failure; all 236 ready/manual/fork commands and their
+original runners remain present. The final integrated candidate still requires
+its complete platform and feature gates.

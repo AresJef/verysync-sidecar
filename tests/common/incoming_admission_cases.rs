@@ -399,11 +399,49 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
         }
     }
     assert_eq!(std::fs::read(sentinel)?, b"controlled buffer caller bytes");
-    let exit = a.shutdown(Duration::from_secs(10)).await?;
-    assert!(exit.code == Some(0) && !exit.forced && exit.tree_stopped && exit.state_released);
-    for receiver in &mut receivers {
-        let exit = receiver.core.shutdown(Duration::from_secs(10)).await?;
-        assert!(exit.code == Some(0) && !exit.forced && exit.tree_stopped && exit.state_released);
+    let [r0, r1, r2] = receivers.as_mut_slice() else {
+        return Err("exactly three owned receivers required".into());
+    };
+    println!("native incoming admission cleanup stage: four independent normal-stop requests");
+    let exits = tokio::join!(
+        a.shutdown(Duration::from_secs(10)),
+        r0.core.shutdown(Duration::from_secs(10)),
+        r1.core.shutdown(Duration::from_secs(10)),
+        r2.core.shutdown(Duration::from_secs(10)),
+    );
+    let mut first_error = None;
+    for (actor, result) in [
+        ("sender", exits.0),
+        ("receiver-0", exits.1),
+        ("receiver-1", exits.2),
+        ("receiver-2", exits.3),
+    ] {
+        match result {
+            Ok(exit) => {
+                println!(
+                    "native incoming admission normal-stop receipt: {}",
+                    serde_json::json!({"actor":actor,"deadline_seconds":10,"code":exit.code,"forced":exit.forced,"tree_stopped":exit.tree_stopped,"state_released":exit.state_released})
+                );
+                assert!(
+                    exit.code == Some(0)
+                        && !exit.forced
+                        && exit.tree_stopped
+                        && exit.state_released
+                );
+            }
+            Err(error) => {
+                println!(
+                    "native incoming admission normal-stop failure: {}",
+                    serde_json::json!({"actor":actor,"deadline_seconds":10,"normal_exit_not_accepted":true})
+                );
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error.into());
     }
     std::fs::remove_dir_all(root)?;
     println!("native incoming admission cleanup: actual_two_96MiB_source_and_three_receiver_payloads=true all_four_native_identities_keys_certificates=true unrelated_configuration_sentinel=true all_four_normal_code0_nonforced_tree_and_state_exit=true four_actual_saturated_admission_snapshots=true raw_private_support_archives_removed=true");
