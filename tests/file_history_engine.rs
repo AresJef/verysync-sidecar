@@ -381,6 +381,34 @@ async fn remote_archive_case(
                 ftp_peer_events(&peer).ok().map(|value| value.0)
             } else { None }})
         );
+        if protocol == verysync_sidecar::StorageProtocol::Ftp {
+            let status =
+                tokio::time::timeout(Duration::from_secs(2), b.client().folder_status(&bf.id))
+                    .await
+                    .ok()
+                    .and_then(|response| response.ok());
+            let events = ftp_peer_events(&peer).ok();
+            let (source_exit, receiver_exit) = tokio::join!(
+                a.shutdown(Duration::from_secs(10)),
+                b.shutdown(Duration::from_secs(10)),
+            );
+            let normal_exits = [source_exit, receiver_exit].iter().all(|exit| {
+                exit.as_ref().is_ok_and(|r| {
+                    r.tree_stopped && r.state_released && !r.forced && r.code == Some(0)
+                })
+            });
+            let peer_stopped = peer.stop().is_ok();
+            eprintln!(
+                "private FTP positive-deadline diagnostics: {}",
+                serde_json::json!({
+                    "actual_nonzero_pull_error_counter": status.and_then(|status| status.pull_errors).map(|n| n > 0),
+                    "owned_peer_authentication_accepted": events.as_ref().map(|(accepted, _)| *accepted),
+                    "observed_command_names": events.map(|(_, commands)| commands),
+                    "actual_both_normal_owned_tree_exits": normal_exits,
+                    "actual_owned_peer_stopped": peer_stopped,
+                })
+            );
+        }
         return Err(error);
     }
 
