@@ -115,7 +115,7 @@ owned-tree/state release. Each profile's complete file-history target passed all
 11 tests in the linked run. These archive results do not establish verified
 server host identity or a concurrency or network-timeout bound.
 
-FTP URI readback succeeds, but the first remote generation fails with the exact
+FTP URI readback succeeds. The first remote generation fails with the exact
 native `simple versioner: archive: file does not exist` error on all six standard
 macOS/Linux/Windows AMD64/ARM64 profiles using the dedicated pyftpdlib2.2.0
 peer. Original positive-case failures retain old receiver bytes, new source bytes
@@ -129,16 +129,30 @@ records command names without arguments or credentials, and preserves the origin
 server command handler. All six standard profiles passed this strict observed
 refusal case in the linked run, independently of their positive SFTP archive cases.
 
-This is a faithful native-refusal contract, not positive FTP archival. The
-underlying cause remains unresolved. Acceptance tests apply this exception only
-with the fixed standard
-package's verified preparation receipt, catalog archive SHA-256 and known official
-executable fingerprint, matched to both actual owned cores. Matching the system
-and architecture alone is insufficient. The explicit test preparation helper
-creates this receipt; missing, invalid or mismatched proof keeps the positive
-archival requirement. Same-width legacy packages and all other unobserved
-packages retain positive FTP archival/restoration requirements. Other FTP servers,
+The original FTP positive case reached the same first-generation error on
+fifteen additional fixed-package profiles. This includes two x86 compatibility
+profiles, eleven Linux user-mode QEMU profiles, and both Windows legacy ABIs
+on Server 2022. All fifteen recorded accepted peer authentication, USER/PASS,
+zero upload commands in the observation window, retained source and receiver
+files, an empty remote archive, and normal exit and cleanup. Password and
+key-file SFTP archive and restore were verified on each profile. The first
+generic ARM password run archived and listed actual data before the sender
+reached its original shutdown deadline. A separate run with the same deadline
+verified restoration and normal shutdown. The cause of the first timeout
+remains unknown.
+[Additional FTP and SFTP results](https://github.com/AresJef/verysync-sidecar/actions/runs/44408051901)
+· [Generic ARM shutdown and restoration](https://github.com/AresJef/verysync-sidecar/actions/runs/44409737075/job/135174354222)
+
+The first-generation refusal check covers the six standard profiles and the
+fifteen additional profiles on the measured x64 GitHub-hosted runner images
+with the dedicated FTP peer. It matches both owned cores to their verified
+preparation receipts, catalog archive SHA-256 and known official executable
+fingerprints. The additional profiles also require the observed runner image
+and target OS and architecture. Tests with missing or mismatched proof retain
+the positive archival requirement. The underlying cause of the native refusal
+remains unresolved. Minimum operating-system execution and other FTP servers,
 authentication methods and native URI query selections have independent gates.
+[Strict hosted FTP and SFTP regression](https://github.com/AresJef/verysync-sidecar/actions/runs/44413217678)
 
 Changing location preserves policy parameters and unknown fields. The SDK does
 not migrate existing archives; native retention can clean the selected location.
