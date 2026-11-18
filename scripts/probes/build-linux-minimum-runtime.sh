@@ -2,6 +2,12 @@
 set -euo pipefail
 
 test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.17'
+target=${1:-x86_64-unknown-linux-gnu}
+case "$target" in
+  x86_64-unknown-linux-gnu) expected_loader=/lib64/ld-linux-x86-64.so.2 ;;
+  i686-unknown-linux-gnu) expected_loader=/lib/ld-linux.so.2 ;;
+  *) exit 2 ;;
+esac
 export PATH="/toolchain/bin:$PATH"
 export RUSTC=/toolchain/bin/rustc
 export CARGO_HOME=/evidence/cargo
@@ -12,16 +18,17 @@ cp -R /candidate/. /evidence/project/
 cp /support/linux_minimum_runtime.rs /evidence/project/examples/linux_minimum_runtime.rs
 cd /evidence/project
 rustc --version
+rustc -vV | grep -Fx "host: $target"
 gcc --version | sed -n '1p'
-cargo build --locked --release --target x86_64-unknown-linux-gnu --example linux_minimum_runtime
-binary="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/examples/linux_minimum_runtime"
+cargo build --locked --release --target "$target" --example linux_minimum_runtime
+binary="$CARGO_TARGET_DIR/$target/release/examples/linux_minimum_runtime"
 mkdir /evidence/guest-runtime
 guest=/evidence/guest-runtime
 
 interpreter=$(readelf -l "$binary" | sed -n 's/.*Requesting program interpreter: \([^]]*\)\].*/\1/p')
-test "$interpreter" = /lib64/ld-linux-x86-64.so.2
+test "$interpreter" = "$expected_loader"
 install -m 755 "$binary" "$guest/vs-sdk-probe"
-install -m 755 "$interpreter" "$guest/ld-linux-x86-64.so.2"
+install -m 755 "$interpreter" "$guest/${interpreter##*/}"
 gcc -std=gnu11 -Wall -Wextra -Werror -O2 /support/linux_guest_entropy.c -o "$guest/vs-entropy-control"
 test "$(readelf -l "$guest/vs-entropy-control" | sed -n 's/.*Requesting program interpreter: \([^]]*\)\].*/\1/p')" = "$interpreter"
 ldd "$binary" | tee /evidence/linked-libraries.txt

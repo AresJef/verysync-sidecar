@@ -1,0 +1,48 @@
+{
+  "squeeze": [
+    {
+      "package": "ca-certificates",
+      "version": "20090814+nmu3squeeze1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20090814+nmu3squeeze1_all.deb",
+      "size": "145802",
+      "sha256": "68cfa6f7a2ff0c87e581c320582a9daff892fe9090c56b2913ce7e2630fdad2d"
+    },
+    {
+      "package": "busybox-static",
+      "version": "1:1.17.1-8",
+      "filename": "pool/main/b/busybox/busybox-static_1.17.1-8_i386.deb",
+      "size": "729982",
+      "sha256": "47a45eca73897049af930303f1cd7976303ad26a74ac4bd3063c808f9cf3a36d"
+    },
+    {
+      "package": "linux-image-2.6.32-5-686",
+      "version": "2.6.32-48squeeze6",
+      "filename": "pool/main/l/linux-2.6/linux-image-2.6.32-5-686_2.6.32-48squeeze6_i386.deb",
+      "size": "27452286",
+      "sha256": "5f257474555d68c5c436ef020a6d4dcafa5ff4bb311e77a87aef197e1c01b3ee"
+    }
+  ],
+  "wheezy": [
+    {
+      "package": "ca-certificates",
+      "version": "20130119+deb7u1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20130119+deb7u1_all.deb",
+      "size": "209900",
+      "sha256": "3494ecfd607e4233d8d1a656eceb6bd109d756bc0afe9d3b29dfc0acc4fe19cf"
+    },
+    {
+      "package": "busybox-static",
+      "version": "1:1.20.0-7",
+      "filename": "pool/main/b/busybox/busybox-static_1.20.0-7_i386.deb",
+      "size": "876744",
+      "sha256": "172c88a32b34ccce0fb50468325729ee8409f236986e75c113b8305036548a14"
+    },
+    {
+      "package": "linux-image-3.2.0-4-686-pae",
+      "version": "3.2.78-1",
+      "filename": "pool/main/l/linux/linux-image-3.2.0-4-686-pae_3.2.78-1_i386.deb",
+      "size": "22978334",
+      "sha256": "a88e876e82c0567bb00e470688978ef84f1d232dbc3b6b73099dc7e6e0ca7e18"
+    }
+  ]
+}

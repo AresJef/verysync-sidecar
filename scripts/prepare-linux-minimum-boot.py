@@ -12,7 +12,10 @@ import struct
 import subprocess
 import tarfile
 
-KERNELS = {"squeeze": "2.6.32-5-amd64", "wheezy": "3.2.0-4-amd64"}
+KERNELS = {
+    "amd64": {"squeeze": "2.6.32-5-amd64", "wheezy": "3.2.0-4-amd64"},
+    "i386": {"squeeze": "2.6.32-5-686", "wheezy": "3.2.0-4-686-pae"},
+}
 dig = lambda payload: hashlib.sha256(payload).hexdigest()
 
 def verified_members(package, required):
@@ -37,12 +40,23 @@ def verified_members(package, required):
     assert set(payloads) == set(required)
     return payloads
 
-def check_static_busybox(busybox):
-    assert busybox[:6] == b"\x7fELF\x02\x01"
-    assert struct.unpack_from("<H", busybox,18)[0] == 62  # EM_X86_64
-    table = struct.unpack_from("<Q",busybox,32)[0]
-    size,count = struct.unpack_from("<HH",busybox,54)
-    assert size == 56 and 0 < count < 64 and table + size*count < len(busybox)
+def check_elf(data, architecture):
+    elf_class, machine = (2, 62) if architecture == "amd64" else (1, 3)
+    assert data[:6] == b"\x7fELF" + bytes((elf_class, 1))
+    assert struct.unpack_from("<H", data, 18)[0] == machine
+
+
+def check_static_busybox(busybox, architecture):
+    check_elf(busybox, architecture)
+    if architecture == "amd64":
+        table = struct.unpack_from("<Q", busybox, 32)[0]
+        size, count = struct.unpack_from("<HH", busybox, 54)
+        assert size == 56
+    else:
+        table = struct.unpack_from("<I", busybox, 28)[0]
+        size, count = struct.unpack_from("<HH", busybox, 42)
+        assert size == 32
+    assert 0 < count < 64 and table + size*count < len(busybox)
     types = [struct.unpack_from("<I",busybox,table+i*size)[0] for i in range(count)]
     assert 3 not in types  # No PT_INTERP.
 
@@ -58,19 +72,21 @@ def write_newc(files):
         cpio.extend(b"\0"*((-len(cpio))%4))
     return bytes(cpio)
 
-def prepare_runtime(runtime, engine_receipt, platform_ca):
+def prepare_runtime(runtime, engine_receipt, platform_ca, architecture, runtime_lib):
     engine = json.loads(engine_receipt.read_text())
-    assert (engine["package"],engine["version"]) == ("linux-amd64-standard","v2.33.2")
+    package = "linux-amd64-standard" if architecture == "amd64" else "linux-386-standard"
+    interpreter = "ld-linux-x86-64.so.2" if architecture == "amd64" else "ld-linux.so.2"
+    assert (engine["package"], engine["version"]) == (package, "v2.33.2")
     binary = Path(engine["binary"])
     assert binary.is_file() and 1_000_000 < binary.stat().st_size < 150_000_000
     native_core = binary.read_bytes()
     digest = engine["binary_sha256"]
     assert re.fullmatch(r"[a-f0-9]{64}", digest) and dig(native_core) == digest
-    assert native_core[:6] == b"\x7fELF\x02\x01" and struct.unpack_from("<H", native_core, 18)[0] == 62
+    check_elf(native_core, architecture)
 
     files = [(name, stat.S_IFDIR | mode, b"", 0, 0)
              for name,mode in (("dev/pts",0o755),("etc",0o755),("etc/ssl",0o755),("etc/ssl/certs",0o755),
-                               ("lib64",0o755),("tmp",0o1777),
+                               (runtime_lib,0o755),("tmp",0o1777),
                                ("vs-data",0o755),("version-state",0o700))]
     files += [(name, stat.S_IFCHR | 0o666, b"", 1, minor)
               for name, minor in (("dev/random",8),("dev/urandom",9),("dev/zero",5))]
@@ -93,18 +109,17 @@ def prepare_runtime(runtime, engine_receipt, platform_ca):
             destination = "bin/" + source.name
         else:
             assert re.fullmatch(r"(lib|ld-)[A-Za-z0-9_.+-]+",source.name)
-            destination = "lib64/"+source.name
+            destination = runtime_lib + "/" + source.name
         data = source.read_bytes()
-        assert data[:6] == b"\x7fELF\x02\x01"
-        assert struct.unpack_from("<H",data,18)[0] == 62
+        check_elf(data, architecture)
         files.append((destination, stat.S_IFREG | 0o755,data,0,0))
         hashes[destination] = dig(data)
-    assert {"lib64/libc.so.6","lib64/ld-linux-x86-64.so.2",
+    assert {f"{runtime_lib}/libc.so.6", f"{runtime_lib}/{interpreter}",
             "bin/vs-sdk-probe","bin/vs-entropy-control"} <= hashes.keys()
     return files, hashes
 
 
-def boot_init(expected, program_sha=None, ca_sha=None):
+def boot_init(expected, program_sha=None, ca_sha=None, runtime_lib="lib64"):
     runtime = ""
     if program_sha is not None:
         runtime = f'''/bin/busybox mount -t devpts -o gid=5,mode=0620 devpts /dev/pts || fail devpts_mount
@@ -117,7 +132,7 @@ case "$actual_program_sha" in "{program_sha} "*) ;; *) fail program_sha ;; esac
 version=$(/bin/verysync version --home /version-state) || fail fixed_program_version
 case "$version" in *v2.33.2*) ;; *) fail fixed_program_version ;; esac
 echo "VS_MINIMUM_CORE_VERSION_OK v2.33.2"
-libc_version=$(/lib64/libc.so.6) || fail fixture_libc
+libc_version=$(/{runtime_lib}/libc.so.6) || fail fixture_libc
 case "$libc_version" in *"version 2.17"*) ;; *) fail fixture_libc ;; esac
 echo "VS_MINIMUM_GLIBC_VERSION glibc=2.17"
 case " $(/bin/busybox cat /proc/cmdline) " in
@@ -172,7 +187,8 @@ exit 0
 """.encode()
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("distribution", choices=KERNELS)
+parser.add_argument("distribution", choices=KERNELS["amd64"])
+parser.add_argument("--architecture", choices=KERNELS, default="amd64")
 parser.add_argument("--destination", required=True, type=Path)
 parser.add_argument("--local-package-dir", type=Path,
                     help="Use already downloaded packages after the same byte checks")
@@ -184,7 +200,8 @@ if (args.runtime_dir is None) != (args.engine_receipt is None):
 os.umask(0o077)
 WORK = args.destination.resolve()
 WORK.mkdir(mode=0o700)
-manifest = Path(__file__).with_name("linux-minimum-boot-packages.json")
+manifest_suffix = "" if args.architecture == "amd64" else "-i386"
+manifest = Path(__file__).with_name(f"linux-minimum-boot{manifest_suffix}-packages.json")
 records = json.loads(manifest.read_text())[args.distribution]
 by_name = {}
 for package in records:
@@ -201,20 +218,24 @@ for package in records:
                        check=True)
     by_name[args.distribution,package["package"]] = dict(package,local_path=str(destination))
 distribution = args.distribution
-release=KERNELS[distribution]
+release = KERNELS[args.architecture][distribution]
+runtime_lib = "lib64" if args.architecture == "amd64" else "lib"
 kernel_name, config_name = "boot/vmlinuz-"+release, "boot/config-"+release
 kernel_deb = by_name[distribution,"linux-image-"+release]
 members = verified_members(kernel_deb, {kernel_name:12*1024*1024,config_name:1024*1024})
 kernel,config = members[kernel_name],members[config_name]
 assert kernel[0x202:0x206] == b"HdrS"
-check = {"CONFIG_X86_64","CONFIG_BLK_DEV_INITRD","CONFIG_BINFMT_ELF","CONFIG_PROC_FS",
+arch_config = "CONFIG_X86_64" if args.architecture == "amd64" else "CONFIG_X86_32"
+check = {arch_config,"CONFIG_BLK_DEV_INITRD","CONFIG_BINFMT_ELF","CONFIG_PROC_FS",
          "CONFIG_SYSFS","CONFIG_INET","CONFIG_SERIAL_8250_CONSOLE"}
+if args.architecture == "i386" and distribution == "wheezy":
+    check.add("CONFIG_X86_PAE")
 if args.runtime_dir is not None:
     check.add("CONFIG_UNIX98_PTYS")
 config_set = {x for x in config.decode().splitlines() if not x.startswith("#")}
 assert all(key+"=y" in config_set for key in check), (distribution,check-set(x.split("=")[0] for x in config_set))
 busybox = verified_members(by_name[distribution,"busybox-static"], {"bin/busybox":2500000})["bin/busybox"]
-check_static_busybox(busybox)
+check_static_busybox(busybox, args.architecture)
 files=[(name,stat.S_IFDIR|0o755,b"",0,0) for name in ("bin","dev","proc","sys")]
 files += [("dev/console",stat.S_IFCHR|0o600,b"",5,1),("dev/null",stat.S_IFCHR|0o666,b"",1,3),
           ("bin/busybox",stat.S_IFREG|0o755,busybox,0,0)]
@@ -224,17 +245,19 @@ if args.runtime_dir is not None:
     platform_ca = verified_members(by_name[distribution,"ca-certificates"], {ca_member:16384})[ca_member]
     assert platform_ca.strip().startswith(b"-----BEGIN CERTIFICATE-----")
     assert platform_ca.strip().endswith(b"-----END CERTIFICATE-----")
-    runtime_files, runtime_hashes = prepare_runtime(args.runtime_dir,args.engine_receipt,platform_ca)
+    runtime_files, runtime_hashes = prepare_runtime(
+        args.runtime_dir, args.engine_receipt, platform_ca, args.architecture, runtime_lib,
+    )
     files.extend(runtime_files)
 files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
-            runtime_hashes.get("candidate_debian_platform_ca")),0,0))
+            runtime_hashes.get("candidate_debian_platform_ca"), runtime_lib),0,0))
 ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)
 (root/"bzImage").write_bytes(kernel)
 (root/"initramfs.cpio.gz").write_bytes(ramdisk)
 (root/"kernel-config").write_bytes(config)
-receipt = {"distribution":distribution,"expected_uname_release":release,
+receipt = {"distribution":distribution,"architecture":args.architecture,"expected_uname_release":release,
             "bzimage_sha256":dig(kernel),"initramfs_sha256":dig(ramdisk),
             "kernel_config_sha256":dig(config),"busybox_sha256":dig(busybox),
             "required_kernel_options":sorted(check),"exact_guest_initramfs":str(root/"initramfs.cpio.gz"),

@@ -55,8 +55,13 @@ fn verify_guest_user() -> ProbeResult<()> {
         "guest process retained supplementary groups",
     )?;
     let maps = fs::read_to_string("/proc/self/maps")?;
+    let library = if cfg!(target_arch = "x86") {
+        " /lib/libc.so.6"
+    } else {
+        " /lib64/libc.so.6"
+    };
     require(
-        maps.lines().any(|line| line.ends_with(" /lib64/libc.so.6")),
+        maps.lines().any(|line| line.ends_with(library)),
         "SDK process did not map the fixture libc",
     )?;
     println!("VS_MINIMUM_SDK_RUNTIME uid={USER} loaded_fixture_libc=true");

@@ -2,10 +2,11 @@ name: Old Linux SDK runtime
 
 on:
   push:
-    branches: [ci/linux-minimum-boot-20261119-01a1ca9b]
+    branches: [ci/linux-minimum-boot-20261119-01a1ca9b, ci/linux-i386-minimum-runtime-20261119-01a1ca9b]
     paths:
       - .github/workflows/linux-minimum-runtime.yml
       - scripts/prepare-linux-minimum-boot.py
+      - scripts/linux-minimum-boot-i386-packages.json
       - scripts/probes/build-linux-minimum-runtime.sh
       - scripts/probes/linux_guest_entropy.c
       - scripts/probes/linux_minimum_runtime.rs
@@ -15,12 +16,15 @@ permissions:
 
 jobs:
   runtime:
-    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-minimum-boot-20261119-01a1ca9b'
-    name: Verify the fixed SDK and core on both offline x86-64 guests
+    if: >-
+      github.repository == 'AresJef/verysync-sidecar' &&
+      (github.ref_name == 'ci/linux-minimum-boot-20261119-01a1ca9b' ||
+       github.ref_name == 'ci/linux-i386-minimum-runtime-20261119-01a1ca9b')
+    name: Verify the fixed SDK and core on both offline Debian guests
     runs-on: ubuntu-24.04
     timeout-minutes: 22
     env:
-      PYPA_BUILD_IMAGE: quay.io/pypa/manylinux2014_x86_64@sha256:e6a785657009c612fe2a85fa933051d03a50ba62b1c5e47d62abcab546a2e423
+      GUEST_ARCH: ${{ github.ref_name == 'ci/linux-i386-minimum-runtime-20261119-01a1ca9b' && 'i386' || 'amd64' }}
       EXACT_CANDIDATE: 83942f58532cbad796a1d89aaee1fe9e2b04df85
       EXACT_CANDIDATE_TREE: 054c09ee2d25e7b8bc8f90fdc758c30fe4c5fd04
     steps:
@@ -40,43 +44,70 @@ jobs:
           test "$(uname -m)" = x86_64
           test -z "$(git -C verified-product status --porcelain)"
           printf 'product source=%s tree=%s\n' "$EXACT_CANDIDATE" "$EXACT_CANDIDATE_TREE"
-          rustup toolchain install 1.85.0 --profile minimal --no-self-update
-          sysroot="$(rustc +1.85.0 --print sysroot)"
           work="$RUNNER_TEMP/vs-minimum-runtime"
           mkdir -m 0700 "$work"
           mkdir "$work/build" "$work/official-core" "$work/runs"
-          docker pull --platform linux/amd64 "$PYPA_BUILD_IMAGE"
-          docker image inspect --format '{{.Id}} {{.Architecture}} {{json .RepoDigests}}' "$PYPA_BUILD_IMAGE"
-          docker run --rm --platform linux/amd64 --cap-drop ALL --security-opt no-new-privileges \
+          case "$GUEST_ARCH" in
+            amd64)
+              image=quay.io/pypa/manylinux2014_x86_64@sha256:e6a785657009c612fe2a85fa933051d03a50ba62b1c5e47d62abcab546a2e423
+              rustup toolchain install 1.85.0 --profile minimal --no-self-update
+              sysroot="$(rustc +1.85.0 --print sysroot)"
+              platform=amd64
+              target=x86_64-unknown-linux-gnu
+              ;;
+            i386)
+              image=quay.io/pypa/manylinux2014_i686@sha256:7ff084c274da66ed891df826b97cd5bb1b1d36db2cc86e4f052ce47cb4b69ead
+              archive=rust-1.85.0-i686-unknown-linux-gnu
+              curl --proto '=https' --fail --silent --show-error --connect-timeout 10 --max-time 120 \
+                --max-filesize 300000000 --output "$work/$archive.tar.xz" \
+                "https://static.rust-lang.org/dist/2025-02-20/$archive.tar.xz"
+              (cd "$work" && printf '%s  %s\n' 6087c260a0c400283d55a4648d5a35983b17701c4b5cc1b5243f7ea11d5e0059 "$archive.tar.xz" | sha256sum --check)
+              tar -xJf "$work/$archive.tar.xz" -C "$work"
+              sysroot="$work/toolchain"
+              "$work/$archive/install.sh" --prefix="$sysroot" --disable-ldconfig
+              platform=386
+              target=i686-unknown-linux-gnu
+              ;;
+            *) exit 2 ;;
+          esac
+          docker pull --platform "linux/$platform" "$image"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$platform"
+          docker image inspect --format '{{.Id}} {{.Architecture}} {{json .RepoDigests}}' "$image"
+          docker run --rm --platform "linux/$platform" --cap-drop ALL --security-opt no-new-privileges \
             --user "$(id -u):$(id -g)" \
             --mount "type=bind,src=$GITHUB_WORKSPACE/verified-product,dst=/candidate,readonly" \
             --mount "type=bind,src=$GITHUB_WORKSPACE/scripts/probes,dst=/support,readonly" \
             --mount "type=bind,src=$sysroot,dst=/toolchain,readonly" \
             --mount "type=bind,src=$work/build,dst=/evidence" \
-            "$PYPA_BUILD_IMAGE" /bin/bash /support/build-linux-minimum-runtime.sh
+            "$image" /bin/bash /support/build-linux-minimum-runtime.sh "$target"
       - name: Compare platform trust and verify native Rust effects on both kernels
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/vs-minimum-runtime"
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 seabios
-          qemu-system-x86_64 --version
+          case "$GUEST_ARCH" in
+            amd64) qemu=qemu-system-x86_64; cpu=qemu64; package=linux-amd64-standard ;;
+            i386) qemu=qemu-system-i386; cpu=qemu32,+pae; package=linux-386-standard ;;
+            *) exit 2 ;;
+          esac
+          "$qemu" --version
           python3 -B verified-product/scripts/prepare-test-engine.py prepare \
-            --package linux-amd64-standard --parent "$work/official-core" > "$work/native-program-receipt.json"
+            --package "$package" --parent "$work/official-core" > "$work/native-program-receipt.json"
           overall=0
           for suite in squeeze wheezy; do
             root="$work/runs/$suite"
-            if [ "$suite" = squeeze ]; then release=2.6.32-5-amd64; else release=3.2.0-4-amd64; fi
-            if ! python3 -B scripts/prepare-linux-minimum-boot.py "$suite" --destination "$root" \
+            if ! python3 -B scripts/prepare-linux-minimum-boot.py "$suite" --architecture "$GUEST_ARCH" --destination "$root" \
               --runtime-dir "$work/build/guest-runtime" --engine-receipt "$work/native-program-receipt.json"; then
               overall=1
               continue
             fi
+            release=$(python3 -B -c 'import json,sys; print(json.load(open(sys.argv[1]))["expected_uname_release"])' "$root/prepared-boot-fixture.json")
             for trust in absent debian; do
               log="$root/guest-console-$trust.log"
               console="$root/guest-console-$trust.txt"
               status=0
-              timeout 170s qemu-system-x86_64 -machine pc,accel=tcg -cpu qemu64 -m 512 -smp 1 \
+              timeout 170s "$qemu" -machine pc,accel=tcg -cpu "$cpu" -m 512 -smp 1 \
                 -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
                 -kernel "$root/$suite/bzImage" -initrd "$root/$suite/initramfs.cpio.gz" \
                 -append "console=ttyS0 rdinit=/init vs_minimum_entropy=seeded vs_minimum_certs=$trust panic=1" > "$log" 2>&1 || status=$?
