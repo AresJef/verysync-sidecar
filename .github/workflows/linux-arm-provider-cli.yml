@@ -1,0 +1,72 @@
+name: Linux ARM64 official upgrade provider diagnosis
+
+on:
+  push:
+    branches: [ci/linux-arm-provider-cli-20261119-01a1ca9b]
+    paths: [.github/workflows/linux-arm-provider-cli.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  official-cli:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-arm-provider-cli-20261119-01a1ca9b'
+    name: Verify the original CLI case and observe public provider availability
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    env:
+      TEST_TOOLCHAIN: 1.85.0-aarch64-unknown-linux-gnu
+      EXACT_CANDIDATE: 83942f58532cbad796a1d89aaee1fe9e2b04df85
+      EXACT_CANDIDATE_TREE: 054c09ee2d25e7b8bc8f90fdc758c30fe4c5fd04
+      OFFICIAL_METADATA: https://upgrades.verysync.cn/meta.json
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_CANDIDATE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Bind the unchanged candidate and prepare both pinned official builds
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          test "$(git rev-parse HEAD)" = "$EXACT_CANDIDATE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_CANDIDATE_TREE"
+          git log -1 --format='%H %T %P'
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --no-self-update
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          python scripts/prepare-test-engine.py prepare --package linux-arm64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          python scripts/prepare-test-engine.py prepare --upgrade-source --package linux-arm64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Preserve the original real check and upgrade, with before and after observations
+        run: |
+          set -euo pipefail
+          observe_direct_metadata() {
+            local phase=$1 status=0 result
+            result=$(curl --proto '=https' --noproxy '*' --connect-timeout 5 --max-time 8 \
+              --max-filesize 5000000 --silent --output /dev/null \
+              --write-out 'http_code=%{http_code} tls_verify=%{ssl_verify_result} connect_s=%{time_connect} tls_s=%{time_appconnect} bytes=%{size_download}' \
+              "$OFFICIAL_METADATA") || status=$?
+            printf 'provider_metadata_control phase=%s curl_exit=%s %s\n' "$phase" "$status" "$result"
+          }
+          observe_direct_metadata before
+          native=0
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive \
+            --test-filter stopped_owner_cli_checks_and_upgrades_the_dedicated_program \
+            --evidence-dir "$RUNNER_TEMP/vs-provider-cli-route" || native=$?
+          observe_direct_metadata after
+          exit "$native"
+      - name: Confirm exact baseline cleanup
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Confirm exact older program cleanup
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Retain the original scoped proxy diagnostics
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: linux-arm64-provider-cli-route
+          path: ${{ runner.temp }}/vs-provider-cli-route/proxy-observations.json
+          if-no-files-found: warn
