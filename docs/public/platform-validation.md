@@ -29,24 +29,26 @@ key-based sharing. The same candidate linked the `connect_existing` and
 legacy Windows execution and the complete feature matrix remain pending.
 [Candidate additional-platform results](https://github.com/AresJef/verysync-sidecar/actions/runs/44337786187)
 
-## Linux x86-64 guest kernels
+## Linux x86 and x86-64 guest kernels
 
-With fixed VerySync v2.33.2 and a Rust 1.85 default-TLS controller linked
-against glibc 2.17, offline full-system QEMU guests passed on Debian kernels
-`2.6.32-5-amd64` and `3.2.0-4-amd64`. Both verified loopback management
-authentication, folder creation, native file write and download with matching
-bytes, restart with the same identity and folder, and normal process exit
-with the state lock released. The guests had initialized entropy, a working
-Unix PTY and a root CA from the corresponding Debian archive. In the
-CA-absent control, the default TLS client failed to initialize, even for
-loopback HTTP. The engine still answered its health request and released the
-exact process and state lock after the SDK deadline.
-[Fixed-candidate guest runtime results](https://github.com/AresJef/verysync-sidecar/actions/runs/44367172923)
+Source `83942f5` used the matching fixed VerySync v2.33.2 and a Rust 1.85
+default-TLS controller linked against glibc 2.17. Each offline full-system QEMU
+guest verified loopback management authentication, folder creation, native
+file write and download with matching bytes and digest, restart with the same
+identity and folder, and normal process exit with the state lock released.
 
-This establishes the listed operations on those two kernel and libc
-combinations in full-system emulation. The upstream minimum, other Linux
-architectures, remaining minimum-system checks and final same-source suites
-retain their separate evidence requirements.
+| Controller target | Debian guest kernels | Runtime evidence |
+| --- | --- | --- |
+| `x86_64-unknown-linux-gnu` | `2.6.32-5-amd64`, `3.2.0-4-amd64` | [x86-64 results](https://github.com/AresJef/verysync-sidecar/actions/runs/44367172923) |
+| `i686-unknown-linux-gnu` | `2.6.32-5-686`, `3.2.0-4-686-pae` | [32-bit results](https://github.com/AresJef/verysync-sidecar/actions/runs/44369946963) |
+
+Each guest had initialized entropy, a working Unix PTY and a root CA from the
+corresponding Debian archive. In each CA-absent control, the default TLS
+client failed to initialize, even for loopback HTTP. The engine still answered
+its health request and released the exact process and state lock after the SDK
+deadline. The upstream minimum, other Linux architectures, remaining
+minimum-system checks and final same-source suites retain separate evidence
+requirements.
 
 The additional platform workflow uses a 32-bit Rust host toolchain and matching
 32-bit core for Linux x86 on an x64 Linux host and Windows x86 through WOW64.
