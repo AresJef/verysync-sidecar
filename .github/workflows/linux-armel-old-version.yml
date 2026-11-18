@@ -79,7 +79,7 @@ jobs:
           console="$work/guest-console.txt"
           status=0
           timeout --kill-after=8s 90s qemu-system-arm -machine versatilepb,accel=tcg -cpu arm926 -m 256 -smp 1 \
-            -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
+            -nodefaults -display none -audio none -serial stdio -monitor none -nic none -no-reboot \
             -kernel "$root/zImage" -initrd "$root/initramfs.cpio.gz" \
             -append 'console=ttyAMA0 rdinit=/init panic=1' > "$raw" 2>&1 || status=$?
           tr -d '\r' < "$raw" > "$console"
