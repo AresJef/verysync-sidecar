@@ -399,7 +399,40 @@ async fn remote_archive_case(
         .version_time
         .clone();
     eprintln!("private remote archive stage: real bytes archived and listed");
-    let exit = a.shutdown(Duration::from_secs(10)).await?;
+    let exit = match a.shutdown(Duration::from_secs(10)).await {
+        Ok(exit) => exit,
+        Err(error) => {
+            let started = std::time::Instant::now();
+            let source_id = a.client().instance().device_id.clone();
+            let reported_connection =
+                tokio::time::timeout(Duration::from_secs(2), b.client().connections());
+            let actual_exit = tokio::time::timeout(Duration::from_secs(20), a.wait_for_exit());
+            let (connection, observed) = tokio::join!(reported_connection, actual_exit);
+            let found_peer = connection
+                .ok()
+                .and_then(|result| result.ok())
+                .and_then(|snapshot| {
+                    snapshot
+                        .connections
+                        .get(&source_id)
+                        .map(|peer| peer.connected)
+                });
+            let late_exit = observed.ok().and_then(|result| result.ok());
+            eprintln!(
+                "private remote archive source shutdown diagnostics: {}",
+                serde_json::json!({
+                    "original_limit_seconds":10,
+                    "original_graceful_timeout":matches!(&error,verysync_sidecar::Error::Timeout { operation: "gracefully stop owned program" }),
+                    "passive_observation_elapsed_ms":started.elapsed().as_millis(),
+                    "receiver_reported_source_connected_during_observation":found_peer,
+                    "actual_normal_owned_exit_after_original_failure":late_exit.as_ref().map(|exit| !exit.forced && exit.code==Some(0) && exit.tree_stopped && exit.state_released),
+                    "actual_source_new_bytes_retained":std::fs::read(source.join(name)).is_ok_and(|bytes| bytes == new),
+                    "actual_receiver_new_bytes_retained":std::fs::read(receive.join(name)).is_ok_and(|bytes| bytes == new),
+                })
+            );
+            return Err(error.into());
+        }
+    };
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     past_archive_generation(&b, &stamp).await?;
     let report = b
