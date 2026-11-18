@@ -117,8 +117,8 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertIn('async fn ' + row['filter'] + '(', source)
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_receive_permissions_are_one_isolated_linux_profile(self):
-        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+    def test_receive_permissions_are_one_isolated_linux_profile(self):
+        selection = {'draft_labels': ['native-receiver-permissions']}
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 1)
         row = rows[0]
@@ -128,6 +128,35 @@ class DiagnosticSelection(unittest.TestCase):
         source = (ROOT / 'tests/common/file_permission_cases.rs').read_text()
         self.assertIn('async fn ' + row['filter'] + '(', source)
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
+
+    def test_current_copy_range_observer_is_one_linux_profile(self):
+        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+        rows = HELPER.select(self.rows, selection, draft=True)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row['package'], 'linux-amd64-standard')
+        self.assertEqual(row['target'], 'configuration_engine')
+        self.assertEqual(row['filter'], 'native_copy_range_methods_reuse_old_blocks_and_preserve_bytes')
+        source = (ROOT / 'tests/common/copy_range_cases.rs').read_text()
+        self.assertIn('async fn ' + row['filter'] + '(', source)
+        self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
+
+    def test_copy_range_attribution_requires_the_owned_thread_and_exact_file(self):
+        spec = importlib.util.spec_from_file_location('copy_range_fixture', ROOT / 'scripts/run-native-copy-range-test.py')
+        fixture = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixture)
+        source = Path('/tmp/isolation/receiver-copy-file-range/copy-range-fixture.bin')
+        target = source.with_name('.syncthing.copy-range-fixture.bin.tmp')
+        effect = f'copy_file_range(5<{source}>, [0], 6<{target}>, [0], 131072, 0) = 131072'
+        unrelated = effect.replace('receiver-copy-file-range', 'unrelated-receiver')
+        trace = {
+            101: ['clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 102',
+                  'clone(child_stack=NULL, flags=SIGCHLD) = 103'],
+            102: [effect, unrelated],
+            103: [effect],
+            104: [effect],
+        }
+        self.assertEqual(fixture.copies(lambda tid: trace.get(tid, []), 101, source, target.__eq__), [131072])
 
     def test_metadata_only_owned_draft_keeps_native_plan_for_ready_manual_and_forks(self):
         workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
@@ -211,6 +240,7 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-pending-announcement-20261118-01a1ca9b",
                        "test/native-parent-group-control-20261118-01a1ca9b",
                        "test/native-receiver-permissions-20261118-01a1ca9b",
+                       "test/native-copy-range-syscalls-20261118-01a1ca9b",
                        "ci/windows-packet-observer-feasibility-20261118-01a1ca9b",
                        "ci/windows-loopback-header-feasibility-20261118-01a1ca9b",
                        "test/controlled-acceptance-node-20261118-01a1ca9b",
@@ -403,7 +433,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 255)
+        self.assertEqual(len(self.rows), 256)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -537,7 +567,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] in selection["draft_labels"] and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 255)
+        self.assertEqual(len(self.rows), 256)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

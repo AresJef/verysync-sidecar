@@ -2282,5 +2282,14 @@
     "filter": "native_receiver_permission_selection_controls_actual_file_modes",
     "label": "native-receiver-permissions",
     "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_copy_range_methods_reuse_old_blocks_and_preserve_bytes",
+    "label": "native-copy-range-syscalls",
+    "trace": "0"
   }
 ]
