@@ -15,7 +15,10 @@ disabled. No existing instance is discovered or contacted.
 Each phase indexes a new 96 MiB synthetic file containing 768 distinct 128 KiB
 blocks. Blocks also differ between phases, preventing an earlier transfer from
 satisfying the next workload by local reuse. All three receivers must be actively
-syncing while a native LAN send limiter holds back response completion.
+syncing. A 512 KiB/s bootstrap limit lets new metadata propagate; the caller
+independently confirms the new file size, block count and local/global counts on
+all three receivers. Only then does it select the 1 KiB/s LAN send limit used to
+hold back response completion during the snapshots.
 
 Two calls to `Client::collect_core_support_bundle()` per phase obtain the
 official core's goroutine snapshots. Collecting this bundle has native profiling
@@ -32,8 +35,13 @@ blocked waiting for admission. With the homogeneous 128 KiB requests, the
 512, in both snapshots. Received request headers, allocation stack origins,
 retained buffer-pool objects and total process RSS are not admission counters.
 
-After observation, the caller explicitly releases the send limit. Every file
-must complete with exact source and receiver bytes. Identities, keys,
+After observation, the caller explicitly saves the unlimited send setting,
+normally restarts the same owned sender and authenticates a fresh connection
+epoch to all three peers. The persisted identity and selected cap must remain
+unchanged, with new owned PIDs and no forced stop. Every file must complete with
+exact source and receiver bytes within the original 30-second phase deadline.
+This fixture does not claim that changing a rate setting cancels already waiting
+native writes on an existing connection. Identities, keys,
 certificates, unrelated configuration and a caller sentinel must remain intact.
 All four owned processes must exit normally and release their process trees and
 state. Private support archives are inspected in place and deleted; CI logs
@@ -72,3 +80,16 @@ the four failed profiles. It preserves the original 30-second phase deadline,
 payload geometry, admission predicates and required normal exits. All 236
 ready/manual/fork catalog commands and their original runners remain present;
 the temporary draft labels only scope this information-producing diagnosis.
+
+The bounded stage diagnosis at PR #224 (source
+`91e34452e9a53014807352598e23e2429adf1d15`, run 44208612148) showed the second
+phase waiting for all receivers to become active: one or two still had only the
+old file's index. Windows ARM64 completed both phases; both macOS profiles and
+Windows AMD64 retained that exact preparation failure. The next local producer
+confirmed that preparing all three new indexes first permits both 256/512
+admission observations; its separate completion failure after changing to
+unlimited is also retained. The explicit normal-restart epoch makes completion
+independent of outstanding rate-limited writes. The six-profile regression of
+this revised fixture remains required; the earlier transport and preparation
+failures are preserved, and no deadline, payload or admission predicate is
+relaxed.
