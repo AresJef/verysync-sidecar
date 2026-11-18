@@ -14,6 +14,15 @@ D = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(D)
 
 
+def evaluate_workflow(expression, github, label_names=()):
+    expression = expression.removeprefix('${{').removesuffix('}}').strip()
+    expression = expression.replace('github.event.pull_request.labels.*.name', 'label_names')
+    expression = re.sub(r'!(?!=)', 'not ', expression.replace('&&', ' and ').replace('||', ' or '))
+    context = {'github': github, 'false': False, 'true': True, 'label_names': label_names,
+               'contains': lambda values, value: value in values}
+    return eval(expression, {'__builtins__': {}}, context)
+
+
 class NativeObserverDiagnosisContracts(unittest.TestCase):
     def test_controlled_intel_preparation_is_owned_guarded_and_keeps_full_v27_work(self):
         root = Path(__file__).resolve().parents[2]
@@ -55,19 +64,16 @@ class NativeObserverDiagnosisContracts(unittest.TestCase):
                     pull_request=SimpleNamespace(draft=draft,
                         head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
             owned = event == 'pull_request' and draft and repo == github.repository and head == branch
-            def evaluate(condition):
-                expression = re.sub(r'!(?!=)', 'not ', condition.replace('&&', ' and ').replace('||', ' or '))
-                return bool(eval(expression, {'__builtins__': {}}, {'github': github, 'false': False, 'true': True}))
             for condition in guarded:
-                actual = evaluate(condition)
+                actual = evaluate_workflow(condition, github)
                 if owned:
                     self.assertFalse(actual)
                 else:
                     github.head_ref = 'unrelated'
-                    self.assertEqual(actual, evaluate(condition))
+                    self.assertEqual(actual, evaluate_workflow(condition, github))
                     github.head_ref = head
             for condition, _ in steps:
-                self.assertEqual(evaluate(condition), owned)
+                self.assertEqual(evaluate_workflow(condition, github), owned)
 
     def test_intel_wait_draft_scopes_other_jobs_and_preserves_ready_manual_and_forks(self):
         root = Path(__file__).resolve().parents[2]
@@ -88,15 +94,12 @@ class NativeObserverDiagnosisContracts(unittest.TestCase):
                     action='synchronize', pull_request=SimpleNamespace(draft=draft,
                         head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
             for condition in conditions:
-                expression = re.sub(r'!(?!=)', 'not ', condition.replace('&&', ' and ').replace('||', ' or '))
-                def evaluate():
-                    return bool(eval(expression, {'__builtins__': {}}, {'github': github, 'false': False, 'true': True}))
-                actual = evaluate()
+                actual = evaluate_workflow(condition, github)
                 if event == 'pull_request' and draft and repo == github.repository:
                     self.assertFalse(actual)
                 else:
                     github.head_ref = 'unrelated'
-                    self.assertEqual(actual, evaluate())
+                    self.assertEqual(actual, evaluate_workflow(condition, github))
                     github.head_ref = branch
 
     def test_arm_owned_draft_selects_matching_runner_and_core_without_broadening_scope(self):
@@ -116,31 +119,24 @@ class NativeObserverDiagnosisContracts(unittest.TestCase):
             github = SimpleNamespace(event_name=event, head_ref=head,
                 repository='AresJef/verysync-sidecar', event=SimpleNamespace(pull_request=SimpleNamespace(
                     draft=draft, head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
-            def evaluate(expression):
-                expression = expression.removeprefix('${{').removesuffix('}}')
-                expression = expression.replace('&&', ' and ').replace('||', ' or ')
-                expression = re.sub(r'!(?!=)', 'not ', expression)
-                return eval(expression.strip(), {'__builtins__': {}},
-                            {'github': github, 'false': False, 'true': True})
-            self.assertEqual((evaluate(runner), evaluate(package)), expected)
+            self.assertEqual((evaluate_workflow(runner, github), evaluate_workflow(package, github)), expected)
             engine = (root / '.github/workflows/engine-tests.yml').read_text()
             conditions = [line[len('    if: '):] for line in engine.splitlines()
                           if line.startswith('    if: ') and branch in line]
             self.assertEqual(len(conditions), 10)
             for expression in conditions:
-                actual = evaluate(expression)
+                actual = evaluate_workflow(expression, github)
                 if expected[0] == 'macos-15':
                     self.assertFalse(actual)
                 else:
                     github.head_ref = 'unrelated'
-                    self.assertEqual(actual, evaluate(expression))
+                    self.assertEqual(actual, evaluate_workflow(expression, github))
                     github.head_ref = head
 
     def test_diagnostic_draft_never_launches_a_second_frozen_acquisition(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/resource-collection.yml').read_text()
         expression = next(x[len('    if: '):] for x in workflow.splitlines() if x.startswith('    if: '))
-        expression = re.sub(r'!(?!=)', 'not ', expression.replace('&&', ' and ').replace('||', ' or '))
         branch = 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b'
         for event, draft, head, repo in [
             ('pull_request', True, branch, 'AresJef/verysync-sidecar'),
@@ -155,8 +151,8 @@ class NativeObserverDiagnosisContracts(unittest.TestCase):
                         pull_request=SimpleNamespace(draft=draft, head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
                 original = event != 'pull_request' or action != 'labeled' or label == 'resource-formal'
                 owned_draft = event == 'pull_request' and draft and head == branch and repo == github.repository
-                self.assertEqual(bool(eval(expression, {'__builtins__': {}}, {'github': github})),
-                                 original and not owned_draft)
+                labels = (label,) if action == 'labeled' else ()
+                self.assertEqual(evaluate_workflow(expression, github, labels), original and not owned_draft)
 
     def test_timer_backend_is_bound_without_changing_other_source_inputs(self):
         original = {'sampler_sha256': 'original', 'rust_sources_sha256': 'unchanged'}
