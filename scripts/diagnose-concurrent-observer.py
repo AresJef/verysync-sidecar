@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-ORDER = (False, True, True, False)
+ORDER = (True,) * 4
 MAX_WITNESS_SECONDS = 180
 TREE = "ef7818b39e4510557a906d62fdd8c2c838cc3627"
 PROTOCOL_SHA = "cae69b1e559c3cf9d93522c98f32dc44f8084a5d0e47a311e864a522491e528d"

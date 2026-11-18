@@ -17,8 +17,8 @@ concurrency:
 jobs:
   diagnose:
     if: github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'ci/v29-intel-concurrent-20261118-01a1ca9b'
-    name: Compare simultaneous timers under frozen large-stream pilots
-    runs-on: macos-15-intel
+    name: Observe simultaneous timer intervals throughout four small-file pilots
+    runs-on: macos-26-intel
     timeout-minutes: 24
     defaults:
       run:
@@ -59,11 +59,11 @@ jobs:
         run: >-
           python -B scripts/prepare-test-engine.py prepare --package macos-amd64-standard
           --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
-      - name: Compare four pilots with the independent timer off, on, on and off
+      - name: Capture four complete pilots with the independent timer enabled
         run: >-
           python -B "$GITHUB_WORKSPACE/diagnostic/scripts/diagnose-concurrent-observer.py"
           --source "$GITHUB_WORKSPACE/frozen" --cargo "$(command -v cargo)"
-          --toolchain "$TEST_TOOLCHAIN" --scenario stream-large
+          --toolchain "$TEST_TOOLCHAIN" --scenario many-small
           --evidence-dir "$RUNNER_TEMP/v29-intel-concurrent"
       - name: Verify exact private engine cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
