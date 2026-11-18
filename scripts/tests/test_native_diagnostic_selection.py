@@ -47,7 +47,7 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertIn("matrix.label != 'native-official-tracker-registration'", workflow)
 
     def test_current_draft_covers_missing_verdicts_and_changed_signed_dial_api(self):
-        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+        selection = {'draft_labels': ['native-dial-missing-original-gates', 'native-dial-concurrency-policy', 'native-temp-advertisement-missing-original-gate']}
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 7)
         dial = 'native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer'
@@ -59,6 +59,27 @@ class DiagnosticSelection(unittest.TestCase):
             ('macos-arm64-standard', temp)})
         self.assertTrue(all(r['target'] == 'configuration_engine' and r['trace'] == '0' for r in rows))
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
+
+    def test_current_core_preferences_run_six_original_cases_per_native_profile(self):
+        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+        rows = HELPER.select(self.rows, selection, draft=True)
+        self.assertEqual(len(rows), 6)
+        self.assertEqual({r['package'] for r in rows}, set(HELPER.PROFILES) - {'windows-386-standard'})
+        self.assertTrue(all(r['label'] == 'native-core-preference-current-contract' and r['target'] == 'configuration_engine' for r in rows))
+        self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
+        workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
+        block = workflow.split('      - name: Verify six original core preference cases on the current native source\n', 1)[1].split('      - name:', 1)[0]
+        cases = ['native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart', 'native_crash_preferences_preserve_fixed_usage_fields_and_survive_restart', 'native_system_preferences_write_real_event_audit_and_preserve_target_selections', 'native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart', 'native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data', 'native_narrow_configuration_reads_preserve_identity_folders_and_state']
+        self.assertEqual(re.findall(r'^            (native_[a-z0-9_]+)', block, re.M), cases)
+        self.assertIn('set -euo pipefail', block)
+        self.assertIn('|| vs_status=$?', block)
+        self.assertIn('exit \"$vs_failed\"', block)
+        self.assertIn('native core preference command receipt:', block)
+        self.assertIn('--test-target configuration_engine --test-filter "$vs_case"', block)
+        self.assertIn('vs-current-preferences/$vs_case', block)
+        self.assertIn("matrix.label != 'native-core-preference-current-contract'", workflow)
+        source = (ROOT / 'tests/configuration_engine.rs').read_text()
+        self.assertTrue(all(re.search(r'#\[tokio::test\]\s+async fn ' + case + r'\(', source) for case in cases))
 
     def test_ready_keeps_all_six_admission_commands_after_cleanup_change(self):
         rows = HELPER.select(self.rows, {"draft_labels": ["native-incoming-admission-cap", "native-incoming-admission-linux-cleanup"]}, draft=True)
@@ -91,7 +112,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-admission-readonly-exit-20261118-01a1ca9b",
                        "test/native-admission-reconciled-caller-20261118-01a1ca9b",
                        "test/native-official-tracker-20261118-01a1ca9b",
-                       "test/native-missing-policy-evidence-20261118-01a1ca9b"]:
+                       "test/native-missing-policy-evidence-20261118-01a1ca9b",
+                       "test/native-core-preferences-current-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -164,7 +186,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-admission-readonly-exit-20261118-01a1ca9b",
                        "test/native-admission-reconciled-caller-20261118-01a1ca9b",
                        "test/native-official-tracker-20261118-01a1ca9b",
-                       "test/native-missing-policy-evidence-20261118-01a1ca9b"]:
+                       "test/native-missing-policy-evidence-20261118-01a1ca9b",
+                       "test/native-core-preferences-current-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -266,7 +289,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 242)
+        self.assertEqual(len(self.rows), 248)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -400,7 +423,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] in selection["draft_labels"] and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 242)
+        self.assertEqual(len(self.rows), 248)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},

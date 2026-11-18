@@ -1,7 +1,5 @@
 {
   "draft_labels": [
-    "native-dial-missing-original-gates",
-    "native-dial-concurrency-policy",
-    "native-temp-advertisement-missing-original-gate"
+    "native-core-preference-current-contract"
   ]
 }
