@@ -52,9 +52,11 @@ class PacketHeaders(unittest.TestCase):
         self.assertTrue(PARSER.no_filters('Packet Filters:\nNone\n'))
         self.assertFalse(PARSER.no_filters('Packet Filters:\n1 existing TCP\n'))
         self.assertFalse(PARSER.no_filters('unknown'))
-        self.assertEqual(PARSER.owned_filter_id('Packet Filters:\n1 vs1234 TCP\n', 'vs1234'), '1')
+        self.assertEqual(PARSER.owned_filter_id('Packet Filters:\n1 vs1234 TCP 127.0.0.1 32123\n 32124\n', 'vs1234'), '1')
         with self.assertRaises(ValueError):
-            PARSER.owned_filter_id('1 other TCP\n', 'vs1234')
+            PARSER.owned_filter_id('1 other TCP 127.0.0.1 32123\n', 'vs1234')
+        with self.assertRaises(ValueError):
+            PARSER.owned_filter_id('1 vs1234 TCP 127.0.0.1 32123\n2 unrelated TCP 10.0.0.1 80\n', 'vs1234')
 
     def test_unknown_link_or_oversized_snapshot_cannot_produce_headers(self):
         unknown = bytearray(capture())
@@ -93,7 +95,7 @@ class PacketHeaders(unittest.TestCase):
             if args == ['status']:
                 output = 'unknown active capture' if state['starting'] else 'Packet Monitor is not running.'
             elif args == ['filter', 'list']:
-                output = '1 vsabcd1234 TCP' if command.call_count > 3 else 'Packet Filters:\nNone'
+                output = '1 vsabcd1234 TCP 127.0.0.1 32123' if command.call_count > 3 else 'Packet Filters:\nNone'
             return SimpleNamespace(returncode=0, stdout=output)
         with patch.object(PARSER.socket, 'socket', side_effect=[server, client]), \
                 patch.object(PARSER.secrets, 'token_hex', return_value='abcd1234'), \

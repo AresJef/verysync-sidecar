@@ -25,10 +25,22 @@ def no_filters(text):
 
 
 def owned_filter_id(text, name):
-    values = re.findall(r'^\s*(\d+)\s+' + re.escape(name) + r'(?:\s|$)', text, re.M)
-    if len(values) != 1:
-        raise ValueError('owned named filter ID cannot be confirmed')
-    return values[0]
+    rows = []
+    for line in text.splitlines():
+        value = line.strip()
+        if not value or value == 'Packet Filters:' or re.fullmatch(r'[- ]+', value):
+            continue
+        if re.match(r'#\s+Name\s+', value):
+            continue
+        if re.fullmatch(r'\d{1,5}', value):
+            continue
+        match = re.fullmatch(r'(\d+)\s+(\S+)\s+TCP\s+.+', value)
+        if not match:
+            raise ValueError('unverified filter table layout')
+        rows.append(match.groups())
+    if len(rows) != 1 or rows[0][1] != name:
+        raise ValueError('entire filter table is not exclusively owned')
+    return rows[0][0]
 
 
 def summarize(data, source_port, destination_port, version):
@@ -138,8 +150,7 @@ def run_phase(tool, root, version, records):
     if not no_filters(filters):
         return {'version': version, 'status': 'INCONCLUSIVE_FILTER_FORMAT_OR_EXISTING_FILTERS',
                 'preflight_filter_output': filters[:12000], 'capture_started': False, 'records': records}
-    removal_help = command('filter', 'remove', 'help')
-    name_removal = bool(re.search(r'filter[-_ ]name|<name>', removal_help, re.I))
+    command('filter', 'remove', 'help')
     family, address = (socket.AF_INET, '127.0.0.1') if version == 4 else (socket.AF_INET6, '::1')
     name = 'vs' + secrets.token_hex(4)
     identifier, started, start_requested, filter_added = None, False, False, False
@@ -201,9 +212,13 @@ def run_phase(tool, root, version, records):
                 if filter_added:
                     if not safe_to_remove_filter:
                         raise RuntimeError('unconfirmed capture; retaining the owned filter to avoid broadening capture')
-                    if identifier is None and not name_removal:
+                    if identifier is None:
                         raise RuntimeError('owned filter identifier unknown; refusing a blanket removal')
-                    command('filter', 'remove', identifier if identifier is not None else name)
+                    # The native CLI ignores a supplied ID and removes the whole
+                    # table. Reconfirm that the entire table is exactly ours.
+                    if owned_filter_id(command('filter', 'list'), name) != identifier:
+                        raise RuntimeError('owned filter table identity changed')
+                    command('filter', 'remove')
                     if not no_filters(command('filter', 'list')):
                         raise RuntimeError('owned filter cleanup not confirmed')
         command('etl2pcap', str(etl), '--out', str(pcap))

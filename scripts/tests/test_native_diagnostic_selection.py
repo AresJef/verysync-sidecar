@@ -108,6 +108,24 @@ class DiagnosticSelection(unittest.TestCase):
         github.event.pull_request.head.repo.full_name = 'external/fork'
         self.assertTrue(check())
 
+    def test_controlled_node_draft_excludes_old_native_plan_but_keeps_ready_and_forks(self):
+        workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
+        block = workflow.split('  native-diagnostic-plan:\n', 1)[1].split('    name:', 1)[0]
+        expression = block.split('    if: ', 1)[1].strip().replace('&&', ' and ').replace('||', ' or ')
+        expression = re.sub(r'!(?!=)', 'not ', expression)
+        github = SimpleNamespace(event_name='pull_request', head_ref='test/controlled-acceptance-node-20261118-01a1ca9b',
+            repository='AresJef/verysync-sidecar', event=SimpleNamespace(pull_request=SimpleNamespace(
+                draft=True, head=SimpleNamespace(repo=SimpleNamespace(full_name='AresJef/verysync-sidecar')))))
+        check = lambda: eval(expression, {'__builtins__': {}}, {'github': github, 'true': True, 'false': False})
+        self.assertFalse(check())
+        github.event.pull_request.draft = False
+        self.assertTrue(check())
+        github.event.pull_request.draft = True
+        github.event.pull_request.head.repo.full_name = 'external/fork'
+        self.assertTrue(check())
+        github.event_name = 'workflow_dispatch'
+        self.assertTrue(check())
+
     def test_ready_keeps_all_six_admission_commands_after_cleanup_change(self):
         rows = HELPER.select(self.rows, {"draft_labels": ["native-incoming-admission-cap", "native-incoming-admission-linux-cleanup"]}, draft=True)
         self.assertEqual(len(rows), 6)
@@ -142,7 +160,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-missing-policy-evidence-20261118-01a1ca9b",
                        "test/native-core-preferences-current-20261118-01a1ca9b",
                        "ci/windows-packet-observer-feasibility-20261118-01a1ca9b",
-                       "ci/windows-loopback-header-feasibility-20261118-01a1ca9b"]:
+                       "ci/windows-loopback-header-feasibility-20261118-01a1ca9b",
+                       "test/controlled-acceptance-node-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
