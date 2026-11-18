@@ -177,7 +177,16 @@ def main():
     parser.add_argument("--parent", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--toolchain", required=True)
+    parser.add_argument("--cargo", type=Path, help="absolute Cargo executable or target-specific launcher")
     args = parser.parse_args()
+    cargo = args.cargo
+    if cargo is None:
+        default_cargo = shutil.which("cargo")
+        if default_cargo is None:
+            parser.error("Cargo is not available")
+        cargo = Path(default_cargo).absolute()
+    if not cargo.is_absolute() or not cargo.is_file():
+        parser.error("an existing absolute Cargo launcher is required")
     volume = OwnedVolume(args.parent, args.evidence_dir)
     report = {"actual_native_suite_exit": None, "cleanup_verified": False}
     try:
@@ -186,7 +195,7 @@ def main():
         env["VERYSYNC_TEST_BOUNDED_FS"] = str(volume.mount)
         env["VERYSYNC_TEST_BOUNDED_FS_NONCE"] = volume.nonce
         command = [sys.executable, str(Path(__file__).with_name("run-isolated-engine-tests.py")),
-                   "--cargo", str(Path(shutil.which("cargo")).absolute()),
+                   "--cargo", str(cargo),
                    "--toolchain", args.toolchain, "--test-target", "disk_full_engine",
                    "--evidence-dir", str(args.evidence_dir / "native")]
         result = subprocess.run(command, env=env, check=False)
