@@ -36,6 +36,41 @@ def noisy(root, cycles=(0,)):
 
 
 class ResourcePreparationContracts(unittest.TestCase):
+    def test_stale_source_stops_before_any_native_preparation_attempt(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            protocol, _ = dataset(root / "source", readiness=POLICY)
+            protocol["preflight_sha256"] = REPORT.digest(SPEC.origin)
+            protocol["reporter_sha256"] = REPORT.digest(REPORT.__file__)
+            save(root / "protocol.json", protocol)
+            argv = [str(SPEC.origin), "--protocol", str(root / "protocol.json"),
+                    "--cargo", "/synthetic/not-executed", "--toolchain", "1.85.0",
+                    "--evidence-dir", str(root / "output")]
+            with (patch.object(PREFLIGHT.sys, "argv", argv),
+                  patch.object(PREFLIGHT, "check_frozen_source", create=True,
+                               side_effect=ValueError("frozen preparation input differs: rust_sources_sha256")),
+                  patch.object(PREFLIGHT.subprocess, "run", side_effect=AssertionError("native attempt started")) as run):
+                with self.assertRaisesRegex(ValueError, "rust_sources_sha256"):
+                    PREFLIGHT.main()
+            run.assert_not_called()
+            saved = REPORT.read(root / "output/pretrial-result.json")
+            self.assertEqual(saved["status"], "ERROR")
+            self.assertEqual(saved["attempts"], [])
+            self.assertFalse(saved["formal_sample"])
+
+    def test_source_check_names_changed_inputs_and_requires_the_actual_compiler(self):
+        protocol = {"rust_release": "1.85.0", "source_inputs": {"rust_sources_sha256": "pinned"}}
+        source = {"rust_sources_sha256": "pinned", "rustc_version": "rustc 1.85.0 (synthetic)"}
+        profile = SimpleNamespace(source_identity=lambda *_: source)
+        self.assertEqual(PREFLIGHT.check_frozen_source(profile, protocol, Path("cargo"), "1.85.0"), source)
+        source["rust_sources_sha256"] = "changed"
+        with self.assertRaisesRegex(ValueError, "rust_sources_sha256"):
+            PREFLIGHT.check_frozen_source(profile, protocol, Path("cargo"), "1.85.0")
+        source["rust_sources_sha256"] = "pinned"
+        source["rustc_version"] = "rustc 1.99.1 (synthetic)"
+        with self.assertRaisesRegex(ValueError, "compiler differs"):
+            PREFLIGHT.check_frozen_source(profile, protocol, Path("cargo"), "1.85.0")
+
     def test_one_complete_valid_pretrial_order_allows_only_the_original_complete_formal_data(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name); protocol, fingerprint = dataset(root, readiness=POLICY)
@@ -89,7 +124,9 @@ class ResourcePreparationContracts(unittest.TestCase):
                 return SimpleNamespace(returncode=0 if REPORT.read(target / "quality-result.json")["status"] == "VALID" else 2)
             argv = [str(SPEC.origin), "--protocol", str(root / "protocol.json"), "--cargo", "/synthetic/not-executed",
                     "--toolchain", "1.85.0", "--evidence-dir", str(root / "output")]
-            with patch.object(PREFLIGHT.sys, "argv", argv), patch.object(PREFLIGHT.subprocess, "run", side_effect=execute) as run:
+            with (patch.object(PREFLIGHT.sys, "argv", argv),
+                  patch.object(PREFLIGHT, "check_frozen_source", return_value={}),
+                  patch.object(PREFLIGHT.subprocess, "run", side_effect=execute) as run):
                 self.assertEqual(PREFLIGHT.main(), 0)
             saved = REPORT.read(root / "output/pretrial-result.json")
             self.assertEqual(run.call_count, 8)
@@ -115,7 +152,9 @@ class ResourcePreparationContracts(unittest.TestCase):
                 return SimpleNamespace(returncode=2)
             argv = [str(SPEC.origin), "--protocol", str(root / "protocol.json"), "--cargo", "/synthetic/not-executed",
                     "--toolchain", "1.85.0", "--evidence-dir", str(root / "output")]
-            with patch.object(PREFLIGHT.sys, "argv", argv), patch.object(PREFLIGHT.subprocess, "run", side_effect=execute) as run:
+            with (patch.object(PREFLIGHT.sys, "argv", argv),
+                  patch.object(PREFLIGHT, "check_frozen_source", return_value={}),
+                  patch.object(PREFLIGHT.subprocess, "run", side_effect=execute) as run):
                 with self.assertRaises(ValueError):
                     PREFLIGHT.main()
             saved = REPORT.read(root / "output/pretrial-result.json")

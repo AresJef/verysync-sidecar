@@ -1,12 +1,12 @@
 {
-  "protocol_id": "VS045-native-resources-v27",
-  "version": 27,
+  "protocol_id": "VS045-native-resources-v28",
+  "version": 28,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "c37e63517b8f2a241a58fcbb64e294ba31e6890045084fddd541715c53fe2641",
+    "rust_sources_sha256": "e5adb80fe2917bd6a4960bd1cf23044bb6559410ab7f7b16c6da1e772c6f76fb",
     "cargo_lock_sha256": "b8ba854b681e9ece06db946aa8bdbe6d7330c5d3fedaa36dac99d0d851ebd670",
     "sampler_sha256": "eeb177d8bcf94b9647ff16603f7eaa19d086cd1bd9226f7019220cc5cdf45364",
     "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a",
@@ -130,12 +130,12 @@
   ],
   "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
   "revision": {
-    "previous_protocol_sha256": "2e73a3e2b412e9c9087a419b06c2f04483b8f28480c4067eb79f31f741526ed2",
-    "retained": "All v26 and earlier raw observations, readiness results, quality rejections, attempts and deadlines keep their original source identities. No earlier group is a v27 member; the approved156h project budget and historical costs are not reset. No formal v26 acquisition was started.",
-    "changes": "Bind literal external compile-time include_str/include_bytes inputs, including the runtime release catalog and conservatively the rustdoc documents; reject unavailable, nonliteral or outside-tree inputs. The prior runtime catalog is independently unchanged. A local MacARM current/old-four-doc/current release no-run comparison produced identical binaries, but this is not an all-ABI equivalence claim. New compilation-input and sampler hashes require fresh actual preparation and full original collection.",
+    "previous_protocol_sha256": "965702efb9291a5e13971e552e76dfa912dbc05cc73d642bc8150f6d06984913",
+    "retained": "The v27 protocol, preparation observations and rejected attempts keep their original source identities. Preparation creates zero formal samples. Historical project time and all formal deadlines and limits remain in force.",
+    "changes": "Bind the integrated encryption and introduction candidate and its compiled inputs. Check the same frozen source inputs and actual Rust compiler before starting a native preparation attempt. CI also checks before engine preparation and workload compilation. Every raw attempt still has the original source and quality checks.",
     "unchanged": "Nativev2.33.2, Rust1.85, all runtime workloads/measurement/timing/buffering semantics, dependency lock, wrapper, QOS33/criticalkqueue/activity, standardnativeprofiles,10ms/50ms5%/25snap500ms,16MiB/8MiB gates,4formal+2independent complete fresh orders,900s/3attempts/180span/120estimate30save and1completeVALIDorder of2preparation. No quality or stability exception."
   },
-  "preflight_sha256": "d0df504754e28fa52d54831f0d1a8fb2b62ea22679dc60c1262460ce82aacc47",
+  "preflight_sha256": "3af24487934351b14b94a9039eb280218766bf414352ac792f36a73f8758b953",
   "observer_policy": {
     "darwin": "Request QOS_CLASS_USER_INTERACTIVE0x21 only on the short-lived observer thread after the real controller and engine are ready; retain exact requested/observed class and policy name. No worker or global priority changes.",
     "other_systems": "unchanged",

@@ -10,14 +10,30 @@ import sys
 import time
 
 
+def check_frozen_source(metrics, protocol, cargo, toolchain):
+    source = metrics.source_identity(cargo, toolchain)
+    changed = [field for field, expected in protocol["source_inputs"].items()
+               if source.get(field) != expected]
+    if changed:
+        raise ValueError("frozen preparation input differs: " + ", ".join(changed))
+    if not source["rustc_version"].startswith(f"rustc {protocol['rust_release']} "):
+        raise ValueError("actual compiler differs from frozen release")
+    return source
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--protocol", type=Path, required=True)
     p.add_argument("--cargo", type=Path, required=True)
     p.add_argument("--toolchain", required=True)
-    p.add_argument("--evidence-dir", type=Path, required=True)
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--evidence-dir", type=Path)
+    mode.add_argument("--check-source", action="store_true",
+                      help="check the frozen source and compiler before running preparation")
     args = p.parse_args()
-    protocol = json.loads(args.protocol.read_text())
+    protocol_bytes = args.protocol.read_bytes()
+    protocol = json.loads(protocol_bytes)
+    protocol_sha256 = hashlib.sha256(protocol_bytes).hexdigest()
     if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != protocol["preflight_sha256"]:
         raise ValueError("preflight source differs from frozen preparation")
     spec = importlib.util.spec_from_file_location("preflight_validator", Path(__file__).with_name("report-native-resources.py"))
@@ -26,10 +42,16 @@ def main():
         raise ValueError("preflight validator differs from frozen preparation")
     validator.preparation_policy(protocol)
     metrics = validator.module("preflight_metrics", "measure-native-resources.py")
+    if args.check_source:
+        source = check_frozen_source(metrics, protocol, args.cargo, args.toolchain)
+        print(json.dumps({"status": "SOURCE_READY", "protocol_sha256": protocol_sha256,
+                          "source": source}))
+        return 0
     args.evidence_dir.mkdir(parents=True, exist_ok=False)
     result = {"stage": "pretrial", "formal_sample": False, "start_unix": time.time(),
-              "protocol_sha256": hashlib.sha256(args.protocol.read_bytes()).hexdigest(), "attempts": []}
+              "protocol_sha256": protocol_sha256, "attempts": []}
     try:
+        check_frozen_source(metrics, protocol, args.cargo, args.toolchain)
         for cycle, order in enumerate(protocol["formal_orders"][:2]):
             for slot, scenario in enumerate(order):
                 target = args.evidence_dir / f"cycle-{cycle}-slot-{slot}-{scenario}"
