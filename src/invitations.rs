@@ -151,6 +151,16 @@ pub struct FolderPeerUpdate {
     pub association_present: bool,
 }
 
+/// Credential-free readback after changing one folder association's encryption password.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FolderPeerEncryptionUpdate {
+    /// Whether the actual native password is nonempty, or absent if omitted.
+    pub password_is_set: Option<bool>,
+    /// Whether the native field contains exactly the requested string.
+    /// Clearing matches an explicit empty string in the native readback.
+    pub requested_password_matches: bool,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct FolderPeer {
     #[serde(rename = "deviceID")]

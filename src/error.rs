@@ -313,6 +313,8 @@ pub enum Error {
     LocalDeviceProtected,
     /// The exact remote offer is absent; no modifying request was sent.
     PendingOfferNotFound,
+    /// The requested remote peer has no association with this folder.
+    FolderPeerNotAssociated,
     /// This peer has no persistent ignored-folder entry for the requested ID.
     FolderNotIgnored,
     /// The requested identity has no persistent ignore record.
@@ -478,6 +480,7 @@ impl fmt::Display for Error {
             Self::DeviceAlreadyExists {..}=>formatter.write_str("device ID is already configured; creation did not start"),
             Self::LocalDeviceProtected=>formatter.write_str("remote-device mutation cannot target the local identity"),
             Self::PendingOfferNotFound=>formatter.write_str("pending offer is not present"),
+            Self::FolderPeerNotAssociated=>formatter.write_str("peer is not associated with this folder"),
             Self::FolderNotIgnored=>formatter.write_str("folder is not ignored for this device"),
             Self::DeviceNotIgnored=>formatter.write_str("device is not ignored"),
             Self::ConfiguredDeviceCannotBeIgnored {..}=>formatter.write_str("configured device must be explicitly removed before it is ignored"),

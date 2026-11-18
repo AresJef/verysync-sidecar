@@ -129,8 +129,8 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertIn('async fn ' + row['filter'] + '(', source)
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
-    def test_current_copy_range_observer_is_one_linux_profile(self):
-        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+    def test_copy_range_observer_is_one_linux_profile(self):
+        selection = {"draft_labels": ["native-copy-range-syscalls"]}
         rows = HELPER.select(self.rows, selection, draft=True)
         self.assertEqual(len(rows), 1)
         row = rows[0]
@@ -356,6 +356,37 @@ class DiagnosticSelection(unittest.TestCase):
         for label in self.selection["draft_labels"]:
             self.assertEqual(len([r for r in actual if r.get("label") == label]), 6)
         self.assertTrue(all(r in self.rows for r in actual))
+
+    def test_draft_cases_use_six_native_profiles_with_a_full_release_catalog(self):
+        self.assertEqual(len(self.rows), 256)
+        cases = {
+            "draft_cases": [
+                {"target": "p2p_three_nodes", "filter": "introducer_cases"},
+                {"target": "configuration_engine", "filter": "encrypted_folder_cases"},
+            ]
+        }
+        actual = HELPER.select(self.rows, cases, draft=True)
+        self.assertEqual(len(actual), 12)
+        for case in cases["draft_cases"]:
+            matches = [row for row in actual if all(row[k] == v for k, v in case.items())]
+            self.assertEqual({row["package"] for row in matches},
+                             set(HELPER.PROFILES) - {"windows-386-standard"})
+            self.assertTrue(all(row["trace"] == "0" and "label" not in row for row in matches))
+        self.assertEqual(HELPER.select(self.rows, cases, draft=False), self.rows)
+
+    def test_draft_cases_reject_ambiguous_routes_and_invalid_command_arguments(self):
+        case = {"target": "p2p_three_nodes", "filter": "introducer_cases"}
+        for selection in (
+            {"draft_cases": []},
+            {"draft_cases": [case, case]},
+            {"draft_cases": [case] * 33},
+            {"draft_cases": [case | {"filter": "a; b"}]},
+            {"draft_cases": [case | {"target": None}]},
+            {"draft_cases": [case | {"label": "native-official-tracker-registration"}]},
+            {"draft_cases": [case], "draft_labels": ["thumbnail-cache"]},
+        ):
+            with self.subTest(selection=selection), self.assertRaises(ValueError):
+                HELPER.select(self.rows, selection, draft=True)
 
     def test_server_identity_draft_selects_all_six_native_rust_and_core_profiles(self):
         actual = HELPER.select(self.rows, {"draft_labels": ["native-sftp-server-identity"]}, draft=True)

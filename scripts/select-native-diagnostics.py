@@ -3,6 +3,8 @@
 
 This schedules evidence collection only. A selected or superseded diagnosis is
 never acceptance; the independent complete native gates remain required.
+An owned draft may select known labels or run explicit test filters on the six
+standard native profiles without expanding the release matrix.
 """
 import json
 import os
@@ -35,7 +37,7 @@ def draft_mode(event_name, event, repository):
     return pull["draft"] and repo.get("full_name") == repository
 
 
-def select(catalog, selection, *, draft):
+def validate_catalog(catalog):
     if not isinstance(catalog, list) or not 0 < len(catalog) <= 256:
         raise ValueError("bounded nonempty diagnostic catalog required")
     seen = set()
@@ -58,9 +60,34 @@ def select(catalog, selection, *, draft):
             raise ValueError("duplicate diagnostic row")
         seen.add(key)
         labels.add(row.get("label", row["target"]))
+    return labels
+
+
+def standard_draft_rows(cases):
+    if not isinstance(cases, list) or not 0 < len(cases) <= 32:
+        raise ValueError("bounded nonempty draft test cases required")
+    if any(not isinstance(case, dict) or set(case) != {"target", "filter"} for case in cases):
+        raise ValueError("draft test cases require exactly a target and filter")
+    rows = [
+        {**case, "package": package, "runner": runner, "rust": rust, "trace": "0"}
+        for case in cases
+        for package, (runner, rust) in PROFILES.items()
+        if package != "windows-386-standard"
+    ]
+    validate_catalog(rows)
+    return rows
+
+
+def select(catalog, selection, *, draft):
+    labels = validate_catalog(catalog)
     requested = None
     if selection is not None:
-        if not isinstance(selection, dict) or set(selection) != {"draft_labels"}:
+        if not isinstance(selection, dict):
+            raise ValueError("exact draft diagnostic selection schema required")
+        if set(selection) == {"draft_cases"}:
+            rows = standard_draft_rows(selection["draft_cases"])
+            return rows if draft else [dict(row) for row in catalog]
+        if set(selection) != {"draft_labels"}:
             raise ValueError("exact draft diagnostic selection schema required")
         requested = selection["draft_labels"]
         if (not isinstance(requested, list) or not 0 < len(requested) <= 32

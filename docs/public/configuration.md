@@ -208,12 +208,38 @@ filter fields are retained. Patterns and unknown values are hidden from Debug.
 For a transfer between compatible filesystems, set
 `send_extended_attributes(true)` on the sending folder and
 `sync_extended_attributes(true)` on the receiving folder. The fixed v2.33.2
-macOS ARM64 test transferred an ordinary file with two overlapping filter
-rules. Reversing the exact deny and wildcard permit changed whether the
-overlapping attribute appeared on the recipient. The other attribute and
-file contents were preserved in each transfer. This evidence covers that
-filesystem and peer combination. Ownership and copy strategy have their own
-runtime checks.
+tests transferred a file with overlapping filter rules on macOS and Linux,
+on both AMD64 and ARM64. Reversing the exact deny and wildcard permit changed
+whether the overlapping attribute appeared on the recipient. The other
+attribute and file contents were preserved in each transfer.
+[Native attribute tests](https://github.com/AresJef/verysync-sidecar/actions/runs/44254265094)
+
+On Linux AMD64, a paired transfer verified `copy_ownership_from_parent`
+for new ordinary files under one
+unprivileged user with an assignable supplementary group. With the setting
+disabled, the recipient used the ordinary creation group. With it enabled,
+the recipient used the receiving directory's group. Both runs preserved the
+file contents and both owned instances exited normally. Ownership synchronization
+between different users needs its own runtime evidence.
+[Native group inheritance test](https://github.com/AresJef/verysync-sidecar/actions/runs/44260304471)
+
+An isolated Linux AMD64 comparison with fixed v2.33.2 used a read-write
+share and changed the last 128 KiB of
+an existing 8 MiB file. Both strategies reused prior data and installed the
+exact new bytes. The `CopyFileRange` arm made 63 successful `copy_file_range`
+calls from the old file into the installed staging file, copying 7.875 MiB.
+The `Standard` arm installed both versions with zero matching calls. The trace
+was attributed to the owned receiver process and its threads.
+[Native copy strategy comparison](https://github.com/AresJef/verysync-sidecar/actions/runs/44270991476)
+
+With a read-write share, the fixed v2.33.2 tests on macOS ARM64 and Linux AMD64
+observed two new regular files created with source modes `0700` and `0600`.
+With `ignore_permissions(false)` the destination preserved both modes. With
+`ignore_permissions(true)` both destination modes were `0644` in these fixtures.
+The tests verified every file's bytes and both owned instances shut down normally.
+In the tested macOS read-only receive setup, writing `false` left this setting
+enabled in the native readback.
+[Linux AMD64 permission test](https://github.com/AresJef/verysync-sidecar/actions/runs/44263762586)
 
 ```no_run
 use verysync_sidecar::{
@@ -258,6 +284,20 @@ rejects changing an existing folder to or from that type. Scoped typed edits
 check the existing type and refuse such transitions before PATCH. The library
 does not recreate a folder or migrate data to bypass this restriction. Other
 native type selections and idempotent receive-encrypted edits remain explicit.
+
+On macOS ARM64 with fixed v2.33.2, three isolated instances used matching
+explicit folder IDs, with `ReceiveEncrypted` selected when creating the replica.
+The trusted sender and restorer used `set_folder_peer_encryption_password()`
+to configure the associated peer while paused, then marked that peer untrusted.
+The replica stored one opaque file. After
+the sender exited normally, the fresh restorer recovered the exact original
+128 KiB with the correct password. A wrong password produced the native
+encryption consistency rejection and left the restore directory empty.
+Correcting the setting and restarting the restorer preserved its identity
+and the replica's ciphertext bytes. The typed API also cleared the setting
+while paused and verified the native empty value. In a separate registration
+with a read-write key, the actual folder type stayed `SendReceive` after both
+the creation template selection and a native type edit.
 
 Strategy selection does not prove a particular system call, copy-on-write
 behavior, block transfer order or supported target filesystem. Initial encrypted
