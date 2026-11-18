@@ -54,7 +54,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-admission-timeout-stage-20261118-01a1ca9b",
                        "test/native-admission-prepared-index-20261118-01a1ca9b",
                        "test/native-admission-staged-deadlines-20261118-01a1ca9b",
-                       "test/native-admission-linux-cleanup-20261118-01a1ca9b"]:
+                       "test/native-admission-linux-cleanup-20261118-01a1ca9b",
+                       "test/native-admission-readonly-exit-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -123,7 +124,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-admission-timeout-stage-20261118-01a1ca9b",
                        "test/native-admission-prepared-index-20261118-01a1ca9b",
                        "test/native-admission-staged-deadlines-20261118-01a1ca9b",
-                       "test/native-admission-linux-cleanup-20261118-01a1ca9b"]:
+                       "test/native-admission-linux-cleanup-20261118-01a1ca9b",
+                       "test/native-admission-readonly-exit-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(

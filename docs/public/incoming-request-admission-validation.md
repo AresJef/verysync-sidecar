@@ -140,3 +140,19 @@ four explicit successful actor receipts. The owned draft scopes only the
 original Linux AMD64 failure; all 236 ready/manual/fork commands and their
 original runners remain present. The final integrated candidate still requires
 its complete platform and feature gates.
+
+The focused Linux parallel-stop producer at PR #227 (source
+`b8296c39fda219ccfa0397c5c1e1a499c798382c`, run 44217471580) again completed
+both admission phases and the full data/state checks. Three actors exited
+normally; `receiver-1` reached its original ten-second stop deadline. The
+96.69-second failed result is retained. Parallel requests therefore do not
+establish a fix or a root cause.
+
+The next bounded diagnosis follows the existing public API contract: after a
+stop timeout the owner remains intact, and `wait_for_exit()` observes actual
+exit without sending another request. It waits at most twenty additional
+seconds only for a failed actor, records code/force/tree/state if available,
+and still returns the original test failure. This observation is neither a
+second shutdown attempt nor acceptance of a late exit as meeting the original
+ten-second condition. The Linux-only run determines whether normal exit arrives
+late, remains unobserved or fails containment/state cleanup.
