@@ -14,8 +14,30 @@ SUITES = {
     "local_sync_advanced_engine": 5,
     "local_sync_protocol_engine": 11,
     "local_sync_protocol_advanced_engine": 4,
-    "local_sync_runtime_engine": 10,
+    "local_sync_runtime_engine": 11,
 }
+
+
+def expected_summaries(target):
+    count = SUITES[target]
+    outer = ("ok", str(count), "0", "0", "0", "0")
+    if target == "local_sync_protocol_engine":
+        # The SFTP host-policy case runs the same test binary in a fresh
+        # child environment. Its one exact test filters the other ten.
+        return [("ok", "1", "0", "0", "0", str(count - 1)), outer]
+    return [outer]
+
+
+def read_summaries(output):
+    return re.findall(
+        r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; "
+        r"(\d+) ignored; (\d+) measured; (\d+) filtered out;", output, re.MULTILINE,
+    )
+
+
+def accepts_suite(target, output, exit_code, exact_image_cleanup):
+    return (exit_code == 0 and exact_image_cleanup
+            and read_summaries(output) == expected_summaries(target))
 
 
 def main():
@@ -37,17 +59,12 @@ def main():
         )
         log = directory / (target.replace("_", "-") + ".log")
         output = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
-        summaries = re.findall(
-            r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; "
-            r"(\d+) ignored; (\d+) measured; (\d+) filtered out;", output, re.MULTILINE,
-        )
-        expected = [("ok", str(count), "0", "0", "0", "0")]
         clean = subprocess.run([sys.executable, str(scripts / "prepare-test-engine.py"),
                                 "check-cleanup"], check=False).returncode == 0
-        passed = result.returncode == 0 and summaries == expected and clean
+        passed = accepts_suite(target, output, result.returncode, clean)
         print("native storage backend suite receipt: " + json.dumps({
             "target": target, "expected_cases": count, "wrapper_exit_code": result.returncode,
-            "rust_summaries": summaries, "exact_image_cleanup": clean, "passed": passed,
+            "rust_summaries": read_summaries(output), "exact_image_cleanup": clean, "passed": passed,
         }), flush=True)
         failed |= not passed
         if not clean:

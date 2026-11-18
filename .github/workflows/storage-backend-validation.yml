@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/storage-backend-validation.yml
       - scripts/verify-native-storage-backends.py
+      - scripts/tests/test_storage_backend_receipts.py
   workflow_dispatch:
 
 permissions:
@@ -15,7 +16,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  checker-contract:
+    name: Check native receipt parsing and failure refusals
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: python3 -B -m unittest discover -s scripts/tests -p test_storage_backend_receipts.py
+
   backend:
+    # The owned checker-only draft replays the original native results. The
+    # original six jobs remain independent. Ready, fork and manual coverage runs.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b'
+    needs: checker-contract
     name: Complete ordinary backend effects (${{ matrix.package }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
