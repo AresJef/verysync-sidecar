@@ -36,7 +36,8 @@ jobs:
             -o Acquire::Retries=1 -o Acquire::https::Timeout=25)
           timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
           timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends \
-            qemu-system-misc qemu-system-data
+            qemu-system-s390x qemu-system-data
+          dpkg-query -L qemu-system-s390x | grep -Fx /usr/bin/qemu-system-s390x
           qemu-system-s390x --version
           status=0
           timeout --kill-after=5s 75s qemu-system-s390x -machine s390-ccw-virtio,accel=tcg -cpu max -m 512 -smp 1 \
