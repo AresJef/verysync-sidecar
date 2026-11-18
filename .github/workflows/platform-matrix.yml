@@ -33,7 +33,6 @@ jobs:
       TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
       LEGACY_RUST_TARGET: ${{ matrix.target }}
       LEGACY_PE_MACHINE: ${{ matrix.machine }}
-      CARGO_TARGET_DIR: ${{ runner.temp }}/vs-win7-rust-build
     defaults:
       run:
         shell: pwsh
@@ -43,6 +42,8 @@ jobs:
           persist-credentials: false
       - name: Prepare Rust sources and locked default dependencies
         run: |
+          $targetDirectory = Join-Path $env:RUNNER_TEMP 'vs-win7-rust-build'
+          "CARGO_TARGET_DIR=$targetDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           rustup toolchain install $env:TEST_TOOLCHAIN --profile minimal --component rust-src
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc "+$env:TEST_TOOLCHAIN" -vV
