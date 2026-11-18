@@ -285,8 +285,9 @@ check the existing type and refuse such transitions before PATCH. The library
 does not recreate a folder or migrate data to bypass this restriction. Other
 native type selections and idempotent receive-encrypted edits remain explicit.
 
-On macOS ARM64 with fixed v2.33.2, three isolated instances used matching
-explicit folder IDs, with `ReceiveEncrypted` selected when creating the replica.
+On the six standard macOS, Windows and Linux AMD64/ARM64 profiles, fixed
+v2.33.2 ran the same isolated three-instance case. The replica used
+`ReceiveEncrypted` and all three instances used matching explicit folder IDs.
 The trusted sender and restorer used `set_folder_peer_encryption_password()`
 to configure the associated peer while paused, then marked that peer untrusted.
 The replica stored one opaque file. After
@@ -295,9 +296,12 @@ the sender exited normally, the fresh restorer recovered the exact original
 encryption consistency rejection and left the restore directory empty.
 Correcting the setting and restarting the restorer preserved its identity
 and the replica's ciphertext bytes. The typed API also cleared the setting
-while paused and verified the native empty value. In a separate registration
-with a read-write key, the actual folder type stayed `SendReceive` after both
-the creation template selection and a native type edit.
+while paused and verified the native empty value. The recorded scope is
+available as `Capability::FolderPeerEncryption` from `library_capabilities()`.
+[Native workflow](https://github.com/AresJef/verysync-sidecar/actions/runs/44292513846)
+
+In a separate registration with a read-write key, the actual folder type stayed
+`SendReceive` after both the creation template selection and a native type edit.
 
 Strategy selection does not prove a particular system call, copy-on-write
 behavior, block transfer order or supported target filesystem. Initial encrypted

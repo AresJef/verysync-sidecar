@@ -118,8 +118,9 @@ changes a certificate identity nor proves official-account ownership.
 If selected advanced values have an invalid native type after an acknowledged
 create, update or template write, the result is `MutationOutcomeUnknown`.
 
-With VerySync v2.33.2 on macOS ARM64, three isolated instances sharing one
-group verified native introductions. The receiving instance added the third
+With VerySync v2.33.2 on the six standard macOS, Windows and Linux AMD64/ARM64
+profiles, three isolated instances sharing one group verified native
+introductions. The receiving instance added the third
 device, recorded the trusted peer as its introduction source and added the
 folder association after reconnecting. With `skip_introduction_removals(false)`,
 the introducer's withdrawal removed the association and the introduced device
@@ -142,6 +143,8 @@ introduced device and established a direct connection. With the introducer's
 folder paused, the receiver obtained a new file from that device and verified
 its complete bytes. The original introduction source and folder association
 remained present when the receiver configured the address.
+`Capability::DeviceIntroduction` records this scope in `library_capabilities()`.
+[Native workflow](https://github.com/AresJef/verysync-sidecar/actions/runs/44292513846)
 
 ```no_run
 use verysync_sidecar::{Client, DeviceAdvancedPatch, DeviceId, DevicePatch};

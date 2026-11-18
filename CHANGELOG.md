@@ -2,6 +2,12 @@
 
 ## Unreleased (0.1.0-alpha.2)
 
+- Add typed per-peer encryption password controls and capability entries for
+  folder-peer encryption and native device introduction. On VerySync v2.33.2,
+  six standard native profiles verified wrong-password rejection, exact recovery
+  from an encrypted replica, and peer introduction, withdrawal, retention and
+  direct transfer.
+
 - Add a source-bound native anonymous FTP case with actual named-user refusal,
   independently observed anonymous login, exact data across restart and normal
   cleanup. Keep default password peers and pending platform acceptance explicit.

@@ -36,8 +36,12 @@ pub enum Capability {
     PeerSharing,
     /// Remote device configuration, distinct from live connection or transfer state.
     DeviceConfiguration,
+    /// Trust a configured introducer and observe native device and folder associations.
+    DeviceIntroduction,
     /// Pending folder offers, per-peer ignores and explicit local folder associations.
     FolderInvitations,
+    /// Per-association encryption password selection and credential-free readback.
+    FolderPeerEncryption,
     /// Pending-device records; nonempty native validation remains pending.
     PendingDeviceRecords,
     /// Persistent ignored identities; live rejection remains a separate observation.
@@ -170,14 +174,30 @@ pub struct LibraryCapability {
 
 const NATIVE_SCOPE: &str = "Default TLS-feature build; matched controller/engine macOS, Windows or Linux on amd64/arm64; Unix sockets on macOS/Linux and loopback HTTP on Windows; selected modern hosted runners, not minimum-OS or cross-network acceptance";
 const CORE_EVIDENCE: &str = "https://github.com/AresJef/verysync-sidecar/actions/runs/43212477622";
+const PEER_EVIDENCE: &str = "https://github.com/AresJef/verysync-sidecar/actions/runs/44292513846";
+
 const fn typed(capability: Capability) -> LibraryCapability {
+    typed_native(
+        capability,
+        BASELINE_ENGINE_VERSION,
+        CORE_EVIDENCE,
+        NATIVE_SCOPE,
+    )
+}
+
+const fn typed_native(
+    capability: Capability,
+    engine_version: &'static str,
+    evidence_url: &'static str,
+    scope: &'static str,
+) -> LibraryCapability {
     LibraryCapability {
         capability,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::NativeEvidence {
-            engine_version: BASELINE_ENGINE_VERSION,
-            evidence_url: CORE_EVIDENCE,
-            scope: NATIVE_SCOPE,
+            engine_version,
+            evidence_url,
+            scope,
         },
     }
 }
@@ -232,11 +252,23 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
+    typed_native(
+        Capability::DeviceIntroduction,
+        "v2.33.2",
+        PEER_EVIDENCE,
+        "Isolated loopback on standard macOS, Windows and Linux AMD64/ARM64: native introduction, withdrawal, retained association across a fresh session, direct TCP transfer, and normal fixture shutdown after explicit disconnection in the withdrawal case",
+    ),
     LibraryCapability {
         capability: Capability::FolderInvitations,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
+    typed_native(
+        Capability::FolderPeerEncryption,
+        "v2.33.2",
+        PEER_EVIDENCE,
+        "Isolated loopback on standard macOS, Windows and Linux AMD64/ARM64: set and clear on an existing association, wrong-password rejection, and exact recovery from an encrypted replica after the source exits",
+    ),
     LibraryCapability {
         capability: Capability::PendingDeviceRecords,
         implementation: ImplementationStatus::Typed,
