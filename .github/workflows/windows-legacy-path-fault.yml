@@ -1,0 +1,152 @@
+name: Verify Windows legacy ABI path and fault effects
+
+on:
+  push:
+    branches: [ci/windows-legacy-path-fault-20261119-01a1ca9b]
+    paths: [.github/workflows/windows-legacy-path-fault.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  legacy-path-and-fault:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref_name == 'ci/windows-legacy-path-fault-20261119-01a1ca9b'
+    name: ${{ matrix.package }} (Windows Server 2022 compatibility)
+    runs-on: windows-2022
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: windows-amd64-legacy
+            target: x86_64-win7-windows-msvc
+            pe_machine: 34404
+          - package: windows-386-legacy
+            target: i686-win7-windows-msvc
+            pe_machine: 332
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
+      RUSTC_BOOTSTRAP: '1'
+      LEGACY_TARGET: ${{ matrix.target }}
+      LEGACY_MACHINE: ${{ matrix.pe_machine }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: c661d51e0576603543da273913a5919e62df000b
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Identify the exact source and actual Server 2022 host
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_ARCH" = X64
+          test "$(git rev-parse HEAD)" = c661d51e0576603543da273913a5919e62df000b
+          test "$(git rev-parse 'HEAD^{tree}')" = fe22191751451e950a4fa1932f06d129c817341e
+          test -z "$(git status --porcelain)"
+          git show -s --format='path fault candidate=%H tree=%T'
+          python -c 'import sys; version = sys.getwindowsversion(); assert version.build == 20348; print("modern Windows compatibility host build", version.build)'
+      - name: Prepare the pinned MSVC assembly prerequisite
+        shell: pwsh
+        run: |
+          choco install nasm --version=2.16.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory = Join-Path $env:ProgramFiles 'NASM'
+          & (Join-Path $nasmDirectory 'nasm.exe') -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build the original default-TLS tests against the selected Rust 1.85 standard library
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --component rust-src
+          rustc +"$TEST_TOOLCHAIN" -vV
+          rustc +"$TEST_TOOLCHAIN" --print cfg --target "$LEGACY_TARGET"
+          mkdir .cargo
+          printf '[build]\ntarget = "%s"\n\n[unstable]\nbuild-std = ["std", "panic_abort"]\n' "$LEGACY_TARGET" > .cargo/config.toml
+          cargo +"$TEST_TOOLCHAIN" fetch --locked --target "$LEGACY_TARGET"
+          cargo +"$TEST_TOOLCHAIN" test --locked --features engine-tests,download --test file_transfer_engine --test disk_full_engine --no-run --message-format=json > "$RUNNER_TEMP/vs-win7-path-artifacts.jsonl"
+          python -B - "$RUNNER_TEMP/vs-win7-path-artifacts.jsonl" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import struct
+          import sys
+
+          records = [json.loads(line) for line in Path(sys.argv[1]).read_text(encoding="utf-8-sig").splitlines()]
+          expected = {"file_transfer_engine", "disk_full_engine"}
+          seen = set()
+          for event in records:
+              if event.get("reason") != "compiler-artifact" or not event.get("executable"):
+                  continue
+              target = event["target"]["name"]
+              if target not in expected:
+                  continue
+              binary = Path(event["executable"])
+              assert os.environ["LEGACY_TARGET"] in binary.parts
+              raw = binary.read_bytes()
+              pe, = struct.unpack_from("<I", raw, 60)
+              machine, = struct.unpack_from("<H", raw, pe + 4)
+              assert raw[:2] == b"MZ" and raw[pe:pe + 4] == b"PE\x00\x00"
+              assert machine == int(os.environ["LEGACY_MACHINE"])
+              assert target not in seen
+              seen.add(target)
+              print(json.dumps({"actual_test_target": target, "pe_machine": machine,
+                                "binary_sha256": hashlib.sha256(raw).hexdigest()}))
+          assert seen == expected
+          PY
+      - name: Explicitly prepare the matching fixed official legacy program
+        run: >-
+          python -B scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Run the original full file transfer path and fault suite
+        id: transfer
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_transfer_engine --evidence-dir "${{ runner.temp }}/vs-win7-transfer"
+      - name: Verify exact executable cleanup before the next isolated case
+        id: transfer_cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Run the original real bounded-volume disk-full recovery
+        id: disk_full
+        continue-on-error: true
+        if: always() && !cancelled() && steps.transfer_cleanup.outcome == 'success'
+        run: >-
+          python scripts/run-bounded-disk-full-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --evidence-dir "${{ runner.temp }}/vs-win7-disk-full"
+      - name: Verify final exact executable cleanup
+        id: final_cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require both actual suite results and both cleanup results
+        if: always()
+        env:
+          TRANSFER: ${{ steps.transfer.outcome }}
+          DISK_FULL: ${{ steps.disk_full.outcome }}
+          TRANSFER_CLEANUP: ${{ steps.transfer_cleanup.outcome }}
+          FINAL_CLEANUP: ${{ steps.final_cleanup.outcome }}
+        run: |
+          set -euo pipefail
+          for outcome in "$TRANSFER" "$DISK_FULL" "$TRANSFER_CLEANUP" "$FINAL_CLEANUP"; do
+            test "$outcome" = success
+          done
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          transfer = (root / "vs-win7-transfer/file-transfer-engine.log").read_text(encoding="utf-8")
+          disk = (root / "vs-win7-disk-full/native/disk-full-engine.log").read_text(encoding="utf-8")
+          assert "test result: ok. 6 passed; 0 failed; 0 ignored;" in transfer
+          for marker in ("native path boundary evidence: {", "native process failure recovery evidence: {", "public resource cancellation evidence: {"):
+              assert transfer.count(marker) == 1, marker
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in disk
+          assert disk.count("native disk-full evidence: {") == 1
+          print("Original path, cancellation, process recovery and disk-full cases ran.")
+          PY
