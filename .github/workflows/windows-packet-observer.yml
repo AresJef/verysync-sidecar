@@ -1,0 +1,38 @@
+name: Windows owned packet observer feasibility
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-packet-observer.yml
+      - scripts/probe-windows-packet-tools.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-owned-packet-observer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  metadata:
+    name: Read-only in-box packet tools (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            package: windows-amd64-standard
+          - runner: windows-11-arm
+            package: windows-arm64-standard
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Read actual native tool syntax and inactive/active state without changing it
+        run: python -B scripts/probe-windows-packet-tools.py --github-actions-metadata-only

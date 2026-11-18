@@ -81,6 +81,24 @@ class DiagnosticSelection(unittest.TestCase):
         source = (ROOT / 'tests/configuration_engine.rs').read_text()
         self.assertTrue(all(re.search(r'#\[tokio::test\]\s+async fn ' + case + r'\(', source) for case in cases))
 
+    def test_metadata_only_owned_draft_keeps_native_plan_for_ready_manual_and_forks(self):
+        workflow = (ROOT / '.github/workflows/engine-tests.yml').read_text()
+        block = workflow.split('  native-diagnostic-plan:\n', 1)[1].split('    name:', 1)[0]
+        expression = block.split('    if: ', 1)[1].strip().replace('&&', ' and ').replace('||', ' or ')
+        expression = re.sub(r'!(?!=)', 'not ', expression)
+        github = SimpleNamespace(event_name='pull_request', head_ref='ci/windows-packet-observer-feasibility-20261118-01a1ca9b',
+            repository='AresJef/verysync-sidecar', event=SimpleNamespace(pull_request=SimpleNamespace(
+                draft=True, head=SimpleNamespace(repo=SimpleNamespace(full_name='AresJef/verysync-sidecar')))))
+        check = lambda: eval(expression, {'__builtins__': {}}, {'github': github, 'true': True, 'false': False})
+        self.assertFalse(check())
+        github.event.pull_request.draft = False
+        self.assertTrue(check())
+        github.event.pull_request.draft = True
+        github.event.pull_request.head.repo.full_name = 'external/fork'
+        self.assertTrue(check())
+        github.event_name = 'workflow_dispatch'
+        self.assertTrue(check())
+
     def test_ready_keeps_all_six_admission_commands_after_cleanup_change(self):
         rows = HELPER.select(self.rows, {"draft_labels": ["native-incoming-admission-cap", "native-incoming-admission-linux-cleanup"]}, draft=True)
         self.assertEqual(len(rows), 6)
@@ -113,7 +131,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-admission-reconciled-caller-20261118-01a1ca9b",
                        "test/native-official-tracker-20261118-01a1ca9b",
                        "test/native-missing-policy-evidence-20261118-01a1ca9b",
-                       "test/native-core-preferences-current-20261118-01a1ca9b"]:
+                       "test/native-core-preferences-current-20261118-01a1ca9b",
+                       "ci/windows-packet-observer-feasibility-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
