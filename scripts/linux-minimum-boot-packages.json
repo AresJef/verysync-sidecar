@@ -1,0 +1,34 @@
+{
+  "squeeze": [
+    {
+      "package": "busybox-static",
+      "version": "1:1.17.1-8",
+      "filename": "pool/main/b/busybox/busybox-static_1.17.1-8_amd64.deb",
+      "size": "950876",
+      "sha256": "228aaf4df875f870c8e6e66590e4c8b24f971113c3fbda00b393a9208e046de9"
+    },
+    {
+      "package": "linux-image-2.6.32-5-amd64",
+      "version": "2.6.32-48squeeze6",
+      "filename": "pool/main/l/linux-2.6/linux-image-2.6.32-5-amd64_2.6.32-48squeeze6_amd64.deb",
+      "size": "28957440",
+      "sha256": "a0dcaa6a16767932de48269686f5beea0cf7b6996986c91c42bf79ea9f99985f"
+    }
+  ],
+  "wheezy": [
+    {
+      "package": "busybox-static",
+      "version": "1:1.20.0-7",
+      "filename": "pool/main/b/busybox/busybox-static_1.20.0-7_amd64.deb",
+      "size": "950596",
+      "sha256": "444b40eb42384b413160615c023a2536c6002c853db1159ac1c8c44a7eb584f1"
+    },
+    {
+      "package": "linux-image-3.2.0-4-amd64",
+      "version": "3.2.78-1",
+      "filename": "pool/main/l/linux/linux-image-3.2.0-4-amd64_3.2.78-1_amd64.deb",
+      "size": "23461064",
+      "sha256": "3083a848d7d2dcfe0dfd8f381d9a33cddab15c3407fee5657138b162ca473eea"
+    }
+  ]
+}

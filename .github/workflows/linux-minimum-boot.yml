@@ -1,0 +1,61 @@
+name: Old Linux guest boot
+
+on:
+  push:
+    branches: [ci/linux-minimum-boot-20261119-01a1ca9b]
+    paths:
+      - .github/workflows/linux-minimum-boot.yml
+      - scripts/prepare-linux-minimum-boot.py
+      - scripts/linux-minimum-boot-packages.json
+
+permissions:
+  contents: read
+
+jobs:
+  boot:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-minimum-boot-20261119-01a1ca9b'
+    name: Boot the fixed Debian ${{ matrix.distribution }} kernel without external networking
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distribution: squeeze
+            release: 2.6.32-5-amd64
+          - distribution: wheezy
+            release: 3.2.0-4-amd64
+    env:
+      DISTRIBUTION: ${{ matrix.distribution }}
+      EXPECTED_RELEASE: ${{ matrix.release }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Prepare the runner emulator and verify the exact archive bytes
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 seabios
+          qemu-system-x86_64 --version
+          python3 -B scripts/prepare-linux-minimum-boot.py "$DISTRIBUTION" --destination "$RUNNER_TEMP/vs-minimum-boot"
+      - name: Require the expected kernel and private loopback result
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/vs-minimum-boot"
+          guest="$root/$DISTRIBUTION"
+          timeout 70s qemu-system-x86_64 -machine pc,accel=tcg -cpu qemu64 -m 384 -smp 1 \
+            -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
+            -kernel "$guest/bzImage" -initrd "$guest/initramfs.cpio.gz" \
+            -append 'console=ttyS0 rdinit=/init panic=1' 2>&1 | tee "$root/guest-console.log"
+          tr -d '\r' < "$root/guest-console.log" | grep -Fx "VS_MINIMUM_BOOT_OK kernel=$EXPECTED_RELEASE loopback=127.0.0.1"
+          if grep -E 'VS_MINIMUM_BOOT_FAILURE|Kernel panic' "$root/guest-console.log"; then exit 1; fi
+      - name: Retain the guest transcript and exact input receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: minimum-boot-${{ matrix.distribution }}
+          path: |
+            ${{ runner.temp }}/vs-minimum-boot/guest-console.log
+            ${{ runner.temp }}/vs-minimum-boot/prepared-boot-fixture.json
+          if-no-files-found: warn
