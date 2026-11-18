@@ -19,9 +19,9 @@ KERNELS = {
 }
 ELF_FORMAT = {"amd64": (2, 62), "i386": (1, 3), "arm64": (2, 183)}
 RUNTIME = {
-    "amd64": ("linux-amd64-standard", "lib64", "ld-linux-x86-64.so.2"),
-    "i386": ("linux-386-standard", "lib", "ld-linux.so.2"),
-    "arm64": ("linux-arm64-standard", "lib", "ld-linux-aarch64.so.1"),
+    "amd64": ("linux-amd64-standard", "lib64", "lib64/ld-linux-x86-64.so.2"),
+    "i386": ("linux-386-standard", "lib", "lib/ld-linux.so.2"),
+    "arm64": ("linux-arm64-standard", "lib64", "lib/ld-linux-aarch64.so.1"),
 }
 dig = lambda payload: hashlib.sha256(payload).hexdigest()
 
@@ -94,6 +94,9 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
              for name,mode in (("dev/pts",0o755),("etc",0o755),("etc/ssl",0o755),("etc/ssl/certs",0o755),
                                (runtime_lib,0o755),("tmp",0o1777),
                                ("vs-data",0o755),("version-state",0o700))]
+    loader_dir, loader_name = interpreter.split("/")
+    if loader_dir != runtime_lib:
+        files.append((loader_dir, stat.S_IFDIR | 0o755, b"", 0, 0))
     files += [(name, stat.S_IFCHR | 0o666, b"", 1, minor)
               for name, minor in (("dev/random",8),("dev/urandom",9),("dev/zero",5))]
     files += [
@@ -113,6 +116,8 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
         assert 0 < source.stat().st_size < 100_000_000
         if source.name in {"vs-sdk-probe", "vs-entropy-control"}:
             destination = "bin/" + source.name
+        elif source.name == loader_name:
+            destination = interpreter
         else:
             assert re.fullmatch(r"(lib|ld-)[A-Za-z0-9_.+-]+",source.name)
             destination = runtime_lib + "/" + source.name
@@ -120,7 +125,7 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
         check_elf(data, architecture)
         files.append((destination, stat.S_IFREG | 0o755,data,0,0))
         hashes[destination] = dig(data)
-    assert {f"{runtime_lib}/libc.so.6", f"{runtime_lib}/{interpreter}",
+    assert {f"{runtime_lib}/libc.so.6", interpreter,
             "bin/vs-sdk-probe","bin/vs-entropy-control"} <= hashes.keys()
     return files, hashes
 
