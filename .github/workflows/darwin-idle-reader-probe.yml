@@ -1,4 +1,4 @@
-name: Darwin idle reader diagnosis
+name: Darwin resource reader diagnosis
 
 on:
   pull_request:
@@ -12,9 +12,9 @@ permissions:
   contents: read
 
 jobs:
-  idle:
+  active:
     if: github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == 'AresJef/verysync-sidecar' && github.head_ref == 'ci/darwin-idle-reader-20261118-01a1ca9b'
-    name: Owned Intel idle reader paired diagnosis
+    name: Owned Intel streaming reader diagnosis
     runs-on: macos-15-intel
     timeout-minutes: 20
     defaults:
@@ -43,11 +43,11 @@ jobs:
           --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
       - name: Build the unchanged actual release workload
         run: cargo +1.85.0 test --release --no-run --features engine-tests,download --test resource_usage_engine --locked
-      - name: Run four fresh idle pilots in paired order
+      - name: Run paired streaming pilots and a separate counter comparison
         run: >-
           python -B scripts/diagnose-darwin-idle-read.py --toolchain 1.85.0
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "$RUNNER_TEMP/vs-idle-reader"
+          --scenario stream-large --evidence-dir "$RUNNER_TEMP/vs-active-reader"
       - name: Require exact owned-core cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
@@ -55,16 +55,17 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: intel-idle-reader-diagnosis
+          name: intel-active-reader-diagnosis
           retention-days: 14
           if-no-files-found: warn
           path: |
-            ${{ runner.temp }}/vs-idle-reader/idle-reader-comparison.json
-            ${{ runner.temp }}/vs-idle-reader/**/reader-identity.json
-            ${{ runner.temp }}/vs-idle-reader/**/preparation-result.json
-            ${{ runner.temp }}/vs-idle-reader/**/quality-result.json
-            ${{ runner.temp }}/vs-idle-reader/**/samples.jsonl
-            ${{ runner.temp }}/vs-idle-reader/**/events.jsonl
-            ${{ runner.temp }}/vs-idle-reader/**/safe-error.json
-            ${{ runner.temp }}/vs-idle-reader/**/console.log
-            ${{ runner.temp }}/vs-idle-reader/*.console.log
+            ${{ runner.temp }}/vs-active-reader/active-reader-comparison.json
+            ${{ runner.temp }}/vs-active-reader/**/counter-brackets.json
+            ${{ runner.temp }}/vs-active-reader/**/reader-identity.json
+            ${{ runner.temp }}/vs-active-reader/**/preparation-result.json
+            ${{ runner.temp }}/vs-active-reader/**/quality-result.json
+            ${{ runner.temp }}/vs-active-reader/**/samples.jsonl
+            ${{ runner.temp }}/vs-active-reader/**/events.jsonl
+            ${{ runner.temp }}/vs-active-reader/**/safe-error.json
+            ${{ runner.temp }}/vs-active-reader/**/console.log
+            ${{ runner.temp }}/vs-active-reader/*.console.log

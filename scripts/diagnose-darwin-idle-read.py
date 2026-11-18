@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare native metric readers during four isolated macOS idle pilots."""
+"""Compare native metric readers during isolated macOS resource pilots."""
 import argparse
 import ctypes
 import hashlib
@@ -13,6 +13,7 @@ import tempfile
 import time
 
 ORDER = ("psutil", "combined", "combined", "psutil")
+COUNTER_ROWS = tuple(range(10, 190, 15))
 ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL = ROOT / "tests/fixtures/resource-protocol.json"
 C_SOURCE = Path(__file__).with_name("darwin-owned-sample.c")
@@ -26,6 +27,19 @@ class Sample(ctypes.Structure):
         ("user_ns", ctypes.c_uint64),
         ("system_ns", ctypes.c_uint64),
     ]
+
+    def counters(self):
+        return {"rss_bytes": self.rss_bytes, "cpu_user_s": self.user_ns / 1_000_000_000,
+                "cpu_system_s": self.system_ns / 1_000_000_000}
+
+
+def require_counter_agreement(before, sample, after):
+    if not min(before["rss_bytes"], after["rss_bytes"]) <= sample["rss_bytes"] <= max(before["rss_bytes"], after["rss_bytes"]):
+        raise RuntimeError("native RSS differs from reference bounds")
+    for key in ("cpu_user_s", "cpu_system_s"):
+        first, actual, last = (round(read[key] * 1_000_000_000) for read in (before, sample, after))
+        if not first - 1_000 <= actual <= last + 1_000:
+            raise RuntimeError("native CPU counter differs from reference bounds")
 
 
 def read_json(path):
@@ -70,11 +84,7 @@ class OwnedReader:
         creation = before["creation_time"]
         if abs(birth - round(creation * 1_000_000)) > 1 or creation != after["creation_time"]:
             raise RuntimeError("native birth identity differs from the reference")
-        if not min(before["rss_bytes"], after["rss_bytes"]) <= sample.rss_bytes <= max(before["rss_bytes"], after["rss_bytes"]):
-            raise RuntimeError("native RSS differs from reference bounds")
-        for actual, key in ((sample.user_ns, "cpu_user_s"), (sample.system_ns, "cpu_system_s")):
-            if not round(before[key] * 1_000_000_000) - 1_000 <= actual <= round(after[key] * 1_000_000_000) + 1_000:
-                raise RuntimeError("native CPU counter differs from reference bounds")
+        require_counter_agreement(before, sample.counters(), after)
         if self.read(process.pid, parent + 1, birth, pointer) != 1:
             raise RuntimeError("native reader accepted the wrong parent")
         if self.read(process.pid, parent, birth + 1, pointer) != 2:
@@ -86,8 +96,7 @@ class OwnedReader:
         parent, birth, creation, sample, pointer = binding
         if self.read(process.pid, parent, birth, pointer) != 0:
             raise RuntimeError("native identity ended, changed or could not be read")
-        return {"pid": process.pid, "creation_time": creation, "rss_bytes": sample.rss_bytes,
-                "cpu_user_s": sample.user_ns / 1_000_000_000, "cpu_system_s": sample.system_ns / 1_000_000_000,
+        return {"pid": process.pid, "creation_time": creation, **sample.counters(),
                 "read_start_ns": start, "read_end_ns": time.perf_counter_ns()}
 
 
@@ -96,13 +105,15 @@ def worker(args, protocol):
     reader = OwnedReader(args.library)
     reference, owned, fingerprint = sampler.snapshot, sampler.owned_processes, sampler.source_identity
     canonical, library = SAMPLER.read_bytes(), args.library.read_bytes()
-    experiment_inputs = [canonical, Path(__file__).read_bytes(), C_SOURCE.read_bytes(), library, args.reader.encode()]
+    experiment_inputs = [canonical, Path(__file__).read_bytes(), C_SOURCE.read_bytes(), library,
+                         args.scenario.encode(), args.reader.encode()]
     binding_digest = digest(b"\0".join(experiment_inputs))
     bindings = {}
+    targets, brackets = [], []
     owner = sampler.dependency().Process()
 
     def admit(ready):
-        targets = owned(ready)
+        targets.extend(owned(ready))
         for target in targets:
             lineage = target.parents()
             if not lineage or owner not in lineage:
@@ -120,17 +131,42 @@ def worker(args, protocol):
                 "diagnostic_only": True, "eligible_for_frozen_preparation_or_formal": False,
                 "metric_reader": args.reader, "native_reader_sha256": digest(library)}
 
+    if args.reader == "counter-check":
+        class CounterSamples(sampler.BufferedSamples):
+            def __init__(self, path):
+                super().__init__(path)
+                self.measured = 0
+
+            def append(self, row):
+                super().append(row)
+                if row["phase"] != "measure":
+                    return
+                ordinal = self.measured
+                self.measured += 1
+                if ordinal not in COUNTER_ROWS:
+                    return
+                for target in targets:
+                    before = reference(target)
+                    combined = reader.snapshot(target, bindings[target.pid])
+                    after = reference(target)
+                    brackets.append({"row": ordinal, "before": before, "combined": combined, "after": after})
+                    require_counter_agreement(before, combined, after)
+
+        sampler.BufferedSamples = CounterSamples
+
     sampler.owned_processes = admit
     saved_argv = sys.argv
     sampler.source_identity = identity
     try:
-        sys.argv = [str(SAMPLER), "--stage", "pilot", "--scenario", "idle",
-                    "--repeats", str(protocol["scenarios"]["idle"]["repeats"]), "--interval-ms",
+        sys.argv = [str(SAMPLER), "--stage", "pilot", "--scenario", args.scenario,
+                    "--repeats", str(protocol["scenarios"][args.scenario]["repeats"]), "--interval-ms",
                     str(protocol["interval_ms"]), "--toolchain", args.toolchain,
                     "--cargo", str(args.cargo), "--evidence-dir", str(args.evidence_dir)]
         code = sampler.main()
     finally:
         sys.argv = saved_argv
+        if args.reader == "counter-check" and args.evidence_dir.is_dir():
+            write_json(args.evidence_dir / "counter-brackets.json", brackets)
     if code in {0, 2}:
         assert len(bindings) == 2, "both held native processes must bind before measuring"
         for pid, (parent, birth, _, sample, pointer) in bindings.items():
@@ -164,44 +200,77 @@ def verify_case(folder, mode, protocol, sampler, code):
             "samples_sha256": digest((folder / "samples.jsonl").read_bytes())}
 
 
+def verify_counter_brackets(folder):
+    raw = read_json(folder / "preparation-result.json")
+    records = read_json(folder / "counter-brackets.json")
+    measured = [row for line in (folder / "samples.jsonl").read_bytes().splitlines()
+                if (row := json.loads(line))["phase"] == "measure"]
+    expected = [(row, (p["pid"], p["creation_time"])) for row in COUNTER_ROWS for p in raw["identities"]]
+    if len(records) != len(expected):
+        raise RuntimeError("active counter comparison missed a registered sample")
+    earliest_completion_ns = raw["events"][1]["observed_ns"] + raw["events"][2]["elapsed_ns"]
+    counters = {}
+    for record, (row_number, identity) in zip(records, expected, strict=True):
+        before, combined, after = (record[key] for key in ("before", "combined", "after"))
+        if record["row"] != row_number or any((p["pid"], p["creation_time"]) != identity for p in (before, combined, after)):
+            raise RuntimeError("active counter comparison changed owned process identity")
+        if not (measured[row_number]["end_ns"] <= before["read_start_ns"] <= before["read_end_ns"]
+                <= combined["read_start_ns"] <= combined["read_end_ns"] <= after["read_start_ns"]
+                <= after["read_end_ns"] < earliest_completion_ns):
+            raise RuntimeError("active counter comparison differs from its measurement interval")
+        require_counter_agreement(before, combined, after)
+        counters.setdefault(identity, []).append(combined["cpu_user_s"] + combined["cpu_system_s"])
+    growth = [points[-1] - points[0] for points in counters.values()]
+    if not all(value > 0 for value in growth):
+        raise RuntimeError("both owned processes must exhibit active CPU growth")
+    return {"observations": len(records), "cpu_growth_s": growth,
+            "sha256": digest((folder / "counter-brackets.json").read_bytes())}
+
+
 def compare(args, protocol):
     sampler = load_sampler()
     args.evidence_dir.mkdir(mode=0o700)
     started = time.monotonic()
-    result = {"formal_sample": False, "scenario": "idle", "order": ORDER,
+    order = ORDER + ("counter-check",) if args.scenario != "idle" else ORDER
+    result = {"formal_sample": False, "scenario": args.scenario, "order": order,
               "architecture": platform.machine(), "status": "ERROR", "cases": []}
     try:
         with tempfile.TemporaryDirectory(prefix="vss-owned-idle-reader-") as temporary:
             library = Path(temporary) / "owned.dylib"
             subprocess.run(["xcrun", "clang", "-O2", "-Wall", "-Wextra", "-Werror", "-dynamiclib",
                             str(C_SOURCE), "-o", str(library)], check=True, timeout=30)
-            for slot, mode in enumerate(ORDER):
+            for slot, mode in enumerate(order):
                 if time.monotonic() - started + 150 > 600:
                     result["status"] = "INSUFFICIENT_DIAGNOSTIC_TIME"
                     return 2
                 folder = args.evidence_dir / f"case-{slot}-{mode}"
                 command = [sys.executable, "-B", str(Path(__file__).resolve()),
                            "--cargo", str(args.cargo), "--toolchain", args.toolchain,
-                           "--evidence-dir", str(folder), "--reader", mode, "--library", str(library)]
+                           "--evidence-dir", str(folder), "--scenario", args.scenario,
+                           "--reader", mode, "--library", str(library)]
                 with (args.evidence_dir / f"case-{slot}.console.log").open("wb") as output:
                     code = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=False).returncode
                 if code not in {0, 2}:
                     result["failed_case"] = {"directory": folder.name, "exit_code": code}
                     return code
-                result["cases"].append(verify_case(folder, mode, protocol, sampler, code))
+                case = verify_case(folder, mode, protocol, sampler, code)
+                if mode == "counter-check":
+                    case["counter_comparison"] = verify_counter_brackets(folder)
+                result["cases"].append(case)
         cases = result["cases"]
         catalog = read_json(ROOT / "tests/fixtures/verysync-v2.33.2-standard-binaries.json")
         package = {"arm64": "macos-arm64-standard", "x86_64": "macos-amd64-standard"}[platform.machine()]
         expected = next(item["binary_sha256"] for item in catalog["packages"] if item["id"] == package)
         if ({c["engine_sha256"] for c in cases} != {expected}
                 or len({c["controller_sha256"] for c in cases}) != 1
-                or len({tuple(i) for c in cases for i in c["identities"]}) != 8):
-            raise RuntimeError("diagnostic pilots did not use fixed binaries and eight fresh process identities")
+                or len({tuple(i) for c in cases for i in c["identities"]}) != 2 * len(order)):
+            raise RuntimeError("diagnostic pilots did not use fixed binaries and fresh process identities")
         result["status"] = "DIAGNOSIS_COMPLETE_ONLY"
         return 0
     finally:
         result["elapsed_s"] = time.monotonic() - started
-        write_json(args.evidence_dir / "idle-reader-comparison.json", result)
+        name = "idle-reader-comparison.json" if args.scenario == "idle" else "active-reader-comparison.json"
+        write_json(args.evidence_dir / name, result)
         print(json.dumps(result))
 
 
@@ -210,7 +279,8 @@ def main():
     parser.add_argument("--cargo", type=Path, required=True)
     parser.add_argument("--toolchain", default="1.85.0")
     parser.add_argument("--evidence-dir", type=Path, required=True)
-    parser.add_argument("--reader", choices=sorted(set(ORDER)))
+    parser.add_argument("--scenario", choices=("idle", "stream-large"), default="idle")
+    parser.add_argument("--reader", choices=("psutil", "combined", "counter-check"))
     parser.add_argument("--library", type=Path)
     args = parser.parse_args()
     if sys.platform != "darwin" or not args.evidence_dir.is_absolute() or args.evidence_dir.exists():
@@ -219,6 +289,8 @@ def main():
         raise ValueError("an explicit absolute Cargo executable is required")
     if bool(args.reader) != bool(args.library) or (args.library and not args.library.is_file()):
         raise ValueError("worker reader requires its compiled native library")
+    if args.reader == "counter-check" and args.scenario == "idle":
+        raise ValueError("counter comparison requires a streaming workload")
     protocol = read_json(PROTOCOL)
     return worker(args, protocol) if args.reader else compare(args, protocol)
 
