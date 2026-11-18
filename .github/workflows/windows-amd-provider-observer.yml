@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 3
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
@@ -34,11 +34,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$RUNNER_ARCH" = X64
-          test "$(git rev-parse HEAD^)" = 83942f58532cbad796a1d89aaee1fe9e2b04df85
-          test "$(git rev-parse 'HEAD^^{tree}')" = 054c09ee2d25e7b8bc8f90fdc758c30fe4c5fd04
-          test -z "$(git diff HEAD^ HEAD -- src Cargo.toml Cargo.lock releases)"
+          base=83942f58532cbad796a1d89aaee1fe9e2b04df85
+          git merge-base --is-ancestor "$base" HEAD
+          test "$(git rev-parse "$base^{tree}")" = 054c09ee2d25e7b8bc8f90fdc758c30fe4c5fd04
+          test -z "$(git diff "$base" HEAD -- src Cargo.toml Cargo.lock releases)"
           git log -1 --format='%H %T %P'
           rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
       - name: Prepare both pinned programs privately
         run: |
           python scripts/prepare-test-engine.py prepare --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
