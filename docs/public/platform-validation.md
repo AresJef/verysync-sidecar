@@ -20,6 +20,15 @@ still require their own same-source acceptance. The inventory retains native,
 compatibility and emulation classes rather than combining them into a native
 hardware or minimum-system support claim.
 
+Candidate `6c650422` passed the selected runtime suites for 13 additional
+targets with the matching fixed v2.33.2 archives. The suites exercised
+management and file effects, startup, cancellation, state reuse and owned host
+exit. The two x86 compatibility jobs also exercised peer lifecycle and
+key-based sharing. The same candidate linked the `connect_existing` and
+`manage_owned` examples for both Win7 targets on Windows Server 2022. Actual
+legacy Windows execution, minimum-system testing and the complete feature
+matrix remain pending. [Candidate additional-platform results](https://github.com/AresJef/verysync-sidecar/actions/runs/44337786187)
+
 The additional platform workflow uses a 32-bit Rust host toolchain and matching
 32-bit core for Linux x86 on an x64 Linux host and Windows x86 through WOW64.
 Its first execution slice checks real management/file effects, managed startup
