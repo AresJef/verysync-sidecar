@@ -69,11 +69,12 @@ def prepare_runtime(runtime, engine_receipt):
     assert native_core[:6] == b"\x7fELF\x02\x01" and struct.unpack_from("<H", native_core, 18)[0] == 62
 
     files = [(name, stat.S_IFDIR | mode, b"", 0, 0)
-             for name,mode in (("etc",0o755),("lib64",0o755),("tmp",0o1777),
+             for name,mode in (("dev/pts",0o755),("etc",0o755),("lib64",0o755),("tmp",0o1777),
                                ("vs-data",0o755),("version-state",0o700))]
     files += [(name, stat.S_IFCHR | 0o666, b"", 1, minor)
               for name, minor in (("dev/random",8),("dev/urandom",9),("dev/zero",5))]
     files += [
+        ("dev/ptmx", stat.S_IFCHR | 0o666,b"",5,2),
         ("etc/passwd", stat.S_IFREG | 0o644,
          b"root:x:0:0:root:/:/bin/busybox\nvs-guest:x:1000:1000:guest:/vs-data:/bin/busybox\n",0,0),
         ("etc/group", stat.S_IFREG | 0o644,b"root:x:0:\nvs-guest:x:1000:\n",0,0),
@@ -104,7 +105,10 @@ def prepare_runtime(runtime, engine_receipt):
 def boot_init(expected, program_sha=None):
     runtime = ""
     if program_sha is not None:
-        runtime = f'''/bin/busybox chown 1000:1000 /vs-data || fail guest_permissions
+        runtime = f'''/bin/busybox mount -t devpts -o gid=5,mode=0620 devpts /dev/pts || fail devpts_mount
+[ -c /dev/ptmx ] || fail private_pty
+echo "VS_MINIMUM_PTY_READY devpts=true ptmx=true"
+/bin/busybox chown 1000:1000 /vs-data || fail guest_permissions
 /bin/busybox chmod 0700 /vs-data || fail guest_permissions
 actual_program_sha=$(/bin/busybox sha256sum /bin/verysync) || fail program_sha
 case "$actual_program_sha" in "{program_sha} "*) ;; *) fail program_sha ;; esac
@@ -187,6 +191,8 @@ kernel,config = members[kernel_name],members[config_name]
 assert kernel[0x202:0x206] == b"HdrS"
 check = {"CONFIG_X86_64","CONFIG_BLK_DEV_INITRD","CONFIG_BINFMT_ELF","CONFIG_PROC_FS",
          "CONFIG_SYSFS","CONFIG_INET","CONFIG_SERIAL_8250_CONSOLE"}
+if args.runtime_dir is not None:
+    check.add("CONFIG_UNIX98_PTYS")
 config_set = {x for x in config.decode().splitlines() if not x.startswith("#")}
 assert all(key+"=y" in config_set for key in check), (distribution,check-set(x.split("=")[0] for x in config_set))
 busybox = verified_members(by_name[distribution,"busybox-static"], {"bin/busybox":2500000})["bin/busybox"]

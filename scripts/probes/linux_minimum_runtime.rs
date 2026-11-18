@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 use verysync_sidecar::{
-    CreateFolderOptions, FolderId, LocalProgram, ManagedInstance, ManagedOptions,
-    ManagementEndpoint, ResourceTransferOptions, TargetPath,
+    CreateFolderOptions, Error as SidecarError, FolderId, LocalProgram, ManagedInstance,
+    ManagedOptions, ManagementEndpoint, ResourceTransferOptions, TargetPath,
 };
 
 type ProbeResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -110,11 +110,19 @@ async fn verify_guest(hash: [u8; 32]) -> ProbeResult<()> {
             let configured = state.join(".verysync-sidecar-configured").is_file();
             let core_log_created = state.join(".verysync-sidecar-core.log").is_file();
             let exact_programs = owned_images(&program).map(|pids| pids.len()).ok();
+            let native_io = match &error {
+                SidecarError::LocalIo { operation, source } => Some(json!({
+                    "operation": operation,
+                    "kind": format!("{:?}", source.kind()),
+                    "os_code": source.raw_os_error()
+                })),
+                _ => None,
+            };
             println!(
                 "VS_MINIMUM_SDK_START_FAILURE {}",
                 json!({"settings_created":settings,"key_generated":key_generated,
                     "configuration_completed":configured,"core_log_created":core_log_created,
-                    "exact_programs_running":exact_programs})
+                    "exact_programs_running":exact_programs,"native_io":native_io})
             );
             return Err(error.into());
         }

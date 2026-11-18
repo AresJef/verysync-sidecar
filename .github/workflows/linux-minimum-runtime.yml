@@ -87,6 +87,7 @@ jobs:
                 || ! grep -Fxq "VS_MINIMUM_BOOT_OK kernel=$release loopback=127.0.0.1" "$console" \
                 || ! grep -Fxq 'VS_MINIMUM_CORE_VERSION_OK v2.33.2' "$console" \
                 || ! grep -Fxq 'VS_MINIMUM_GLIBC_VERSION glibc=2.17' "$console" \
+                || ! grep -Fxq 'VS_MINIMUM_PTY_READY devpts=true ptmx=true' "$console" \
                 || ! grep -Fxq "VS_MINIMUM_ENTROPY_MODE $entropy" "$console" \
                 || ! grep -Eq '^VS_MINIMUM_ENTROPY phase=before_sdk bits=[0-9]+ readable=[01]$' "$console" \
                 || ! grep -Eq '^VS_MINIMUM_ENTROPY phase=after_sdk bits=[0-9]+ readable=[01]$' "$console" \
