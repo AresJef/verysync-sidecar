@@ -55,7 +55,7 @@ fn verify_guest_user() -> ProbeResult<()> {
         "guest process retained supplementary groups",
     )?;
     let maps = fs::read_to_string("/proc/self/maps")?;
-    let library = if cfg!(target_arch = "x86") {
+    let library = if cfg!(any(target_arch = "x86", target_arch = "arm")) {
         " /lib/libc.so.6"
     } else {
         " /lib64/libc.so.6"

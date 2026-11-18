@@ -8,6 +8,8 @@ on:
       - scripts/linux-minimum-boot-armel-packages.json
       - scripts/prepare-linux-minimum-boot.py
       - scripts/probes/build-linux-armel-stretch-runtime.sh
+      - scripts/probes/linux_minimum_runtime.rs
+      - scripts/probes/linux_guest_entropy.c
 
 permissions:
   contents: read
