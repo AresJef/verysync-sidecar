@@ -7,6 +7,7 @@ case "$target" in
   x86_64-unknown-linux-gnu) expected_loader=/lib64/ld-linux-x86-64.so.2 ;;
   i686-unknown-linux-gnu) expected_loader=/lib/ld-linux.so.2 ;;
   aarch64-unknown-linux-gnu) expected_loader=/lib/ld-linux-aarch64.so.1 ;;
+  s390x-unknown-linux-gnu) expected_loader=/lib/ld64.so.1 ;;
   *) exit 2 ;;
 esac
 export PATH="/toolchain/bin:$PATH"
