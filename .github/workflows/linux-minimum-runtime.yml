@@ -136,7 +136,7 @@ jobs:
               ;;
             s390x)
               suites=(wheezy)
-              vm_package=(qemu-system-misc qemu-system-data)
+              vm_package=(qemu-system-s390x qemu-system-data)
               machine=s390-ccw-virtio
               serial=ttyS1
               kernel=image
@@ -146,8 +146,21 @@ jobs:
               ;;
             *) exit 2 ;;
           esac
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends "${vm_package[@]}"
+          if [ "$GUEST_ARCH" = s390x ]; then
+            sources="$work/ubuntu-official-sources.list"
+            printf '%s\n' \
+              'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main' \
+              'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main' \
+              'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-security main' > "$sources"
+            apt_options=(-o "Dir::Etc::sourcelist=$sources" -o Dir::Etc::sourceparts=/dev/null
+              -o Acquire::Retries=1 -o Acquire::https::Timeout=25)
+            timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
+            timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends "${vm_package[@]}"
+            dpkg-query -L qemu-system-s390x | grep -Fx /usr/bin/qemu-system-s390x
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "${vm_package[@]}"
+          fi
           "$qemu" --version
           python3 -B verified-product/scripts/prepare-test-engine.py prepare \
             --package "$package" --parent "$work/official-core" > "$work/native-program-receipt.json"
