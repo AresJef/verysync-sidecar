@@ -1,0 +1,25 @@
+{
+  "wheezy": [
+    {
+      "package": "busybox-static",
+      "version": "1:1.20.0-7",
+      "filename": "pool/main/b/busybox/busybox-static_1.20.0-7_armel.deb",
+      "size": "865964",
+      "sha256": "efcddd59034ceae843ff2bb59cf7e092a83c1783b91b3a3bd7bd5348306376eb"
+    },
+    {
+      "package": "ca-certificates",
+      "version": "20130119+deb7u1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20130119+deb7u1_all.deb",
+      "size": "209900",
+      "sha256": "3494ecfd607e4233d8d1a656eceb6bd109d756bc0afe9d3b29dfc0acc4fe19cf"
+    },
+    {
+      "package": "linux-image-3.2.0-4-versatile",
+      "version": "3.2.78-1",
+      "filename": "pool/main/l/linux/linux-image-3.2.0-4-versatile_3.2.78-1_armel.deb",
+      "size": "13802776",
+      "sha256": "2bb4a22a57ffc0470164978e4e253a6975fe2af3c2ac64d3f509a38f8f244f03"
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+name: Run the fixed ARMEL core on Debian Wheezy
+
+on:
+  push:
+    branches: [ci/linux-armel-wheezy-version-20261119-01a1ca9b]
+    paths: [.github/workflows/linux-armel-old-version.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  armel-version:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-armel-wheezy-version-20261119-01a1ca9b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      PRODUCT_SOURCE: c661d51e0576603543da273913a5919e62df000b
+      PRODUCT_TREE: fe22191751451e950a4fa1932f06d129c817341e
+      ARCHIVE_SHA: 005ace647231cc8714b8d944dc8bc4376f4d86dd1198eae61e25ef99112a31a6
+      PROGRAM_SHA: bcdfb410216b1b48f79e61124a6a8cafdd085b54f54548c4848561afee36fb43
+      KERNEL_SHA: d40c9af14496bfd3349d922c03baf4b4df84937fe2f6f5f8abd4ca1aadabde5d
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.PRODUCT_SOURCE }}
+          path: verified-product
+          persist-credentials: false
+      - name: Bind the official program, kernel and static userspace
+        run: |
+          set -euo pipefail
+          test "$(git -C verified-product rev-parse HEAD)" = "$PRODUCT_SOURCE"
+          test "$(git -C verified-product rev-parse 'HEAD^{tree}')" = "$PRODUCT_TREE"
+          test -z "$(git -C verified-product status --porcelain)"
+          printf 'product source=%s tree=%s\n' "$PRODUCT_SOURCE" "$PRODUCT_TREE"
+          work="$RUNNER_TEMP/vs-armel-version"
+          mkdir -pm 0700 "$work/official-core"
+          python3 -B verified-product/scripts/prepare-test-engine.py prepare \
+            --package linux-arm-standard --parent "$work/official-core" > "$work/program-receipt.json"
+          python3 -B scripts/prepare-linux-minimum-boot.py wheezy --architecture armel \
+            --destination "$work/guest" --armel-version-control --engine-receipt "$work/program-receipt.json"
+          python3 - "$work" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          program = json.loads((root / "program-receipt.json").read_text())
+          assert program["package"] == "linux-arm-standard" and program["version"] == "v2.33.2"
+          assert program["archive_sha256"] == os.environ["ARCHIVE_SHA"]
+          assert program["binary_sha256"] == os.environ["PROGRAM_SHA"]
+          guest = json.loads((root / "guest/prepared-boot-fixture.json").read_text())
+          assert guest["kernel_sha256"] == os.environ["KERNEL_SHA"]
+          assert guest["qemu_network_adapters"] == 0
+          assert guest["runtime_payload_sha256"] == {"bin/verysync": program["binary_sha256"]}
+          print("Matched fixed archive, program, kernel and no external network configuration.")
+          PY
+      - name: Start and close the offline ARMEL guest
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-armel-version"
+          sources="$work/ubuntu-official-sources.list"
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-security main universe' > "$sources"
+          apt_options=(-o "Dir::Etc::sourcelist=$sources" -o Dir::Etc::sourceparts=/dev/null
+            -o Acquire::Retries=1 -o Acquire::https::Timeout=25)
+          timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
+          timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends qemu-system-arm qemu-system-data
+          dpkg-query -L qemu-system-arm | grep -Fx /usr/bin/qemu-system-arm
+          qemu-system-arm --version
+
+          root="$work/guest/wheezy"
+          raw="$work/guest-console.log"
+          console="$work/guest-console.txt"
+          status=0
+          timeout --kill-after=8s 90s qemu-system-arm -machine versatilepb,accel=tcg -cpu arm926 -m 256 -smp 1 \
+            -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
+            -kernel "$root/zImage" -initrd "$root/initramfs.cpio.gz" \
+            -append 'console=ttyAMA0 rdinit=/init panic=1' > "$raw" 2>&1 || status=$?
+          tr -d '\r' < "$raw" > "$console"
+          cat "$console"
+          printf 'Guest emulator_exit=%s\n' "$status"
+          test "$status" -eq 0
+          grep -aFxq 'VS_MINIMUM_BOOT_OK kernel=3.2.0-4-versatile loopback=127.0.0.1' "$console"
+          grep -aEq '^VS_ARMEL_GUEST_ABI armv5te(j)?l$' "$console"
+          grep -aFxq "VS_ARMEL_FIXED_SHA $PROGRAM_SHA" "$console"
+          grep -aFxq 'VS_ARMEL_VERSION_EXIT status=0' "$console"
+          grep -aEq '(^|[[:space:]])v2\.33\.2([[:space:]]|$)' "$console"
+          grep -aFxq VS_ARMEL_VERSION_CONTROL_DONE "$console"
+          grep -aFq 'Restarting system' "$console"
+          if grep -aqE 'Kernel panic|VS_MINIMUM_BOOT_FAILURE' "$console"; then exit 1; fi
+      - name: Preserve the guest console and input checksums
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: armel-wheezy-fixed-version
+          path: |
+            ${{ runner.temp }}/vs-armel-version/guest-console.log
+            ${{ runner.temp }}/vs-armel-version/guest/prepared-boot-fixture.json
+          if-no-files-found: warn

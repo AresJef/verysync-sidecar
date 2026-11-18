@@ -15,16 +15,18 @@ import tarfile
 KERNELS = {
     "amd64": {"squeeze": "2.6.32-5-amd64", "wheezy": "3.2.0-4-amd64"},
     "i386": {"squeeze": "2.6.32-5-686", "wheezy": "3.2.0-4-686-pae"},
+    "armel": {"wheezy": "3.2.0-4-versatile"},
     "arm64": {"jessie": "3.16.0-6-arm64"},
     "s390x": {"wheezy": "3.2.0-4-s390x", "stretch": "4.9.0-13-s390x"},
 }
 ELF_FORMAT = {
-    "amd64": (2, 62, "<"), "i386": (1, 3, "<"), "arm64": (2, 183, "<"),
+    "amd64": (2, 62, "<"), "i386": (1, 3, "<"), "armel": (1, 40, "<"), "arm64": (2, 183, "<"),
     "s390x": (2, 22, ">"),
 }
 RUNTIME = {
     "amd64": ("linux-amd64-standard", "lib64", "lib64/ld-linux-x86-64.so.2"),
     "i386": ("linux-386-standard", "lib", "lib/ld-linux.so.2"),
+    "armel": ("linux-arm-standard", "lib", "lib/ld-linux.so.3"),
     "arm64": ("linux-arm64-standard", "lib64", "lib/ld-linux-aarch64.so.1"),
     "s390x": ("linux-s390x-standard", "lib64", "lib/ld64.so.1"),
 }
@@ -141,8 +143,10 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
     return files, hashes
 
 
-def boot_init(expected, program_sha=None, ca_sha=None, runtime_lib="lib64", vx_control=False):
+def boot_init(expected, program_sha=None, ca_sha=None, runtime_lib="lib64",
+              vx_control=False, armel_control=False):
     runtime = ""
+    shutdown = "reboot" if armel_control else "poweroff"
     if vx_control:
         runtime = f'''auxv=$(/bin/busybox od -A n -v -t u8 /proc/self/auxv) || fail auxv_read
 set -- $auxv
@@ -161,6 +165,21 @@ version=$(/bin/verysync version --home /version-state 2>&1) || status=$?
 echo "VS_S390X_VERSION_EXIT status=$status"
 echo "$version"
 echo "VS_S390X_VERSION_CONTROL_DONE"
+'''
+    elif armel_control:
+        runtime = f'''machine=$(/bin/busybox uname -m) || fail machine_identity
+case "$machine" in armv5tel|armv5tejl) ;; *) fail machine_identity ;; esac
+echo "VS_ARMEL_GUEST_ABI $machine"
+adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
+echo "VS_ARMEL_GUEST_ADAPTERS $adapters"
+actual_program_sha=$(/bin/busybox sha256sum /bin/verysync) || fail program_sha
+case "$actual_program_sha" in "{program_sha} "*) ;; *) fail program_sha ;; esac
+echo "VS_ARMEL_FIXED_SHA {program_sha}"
+status=0
+version=$(/bin/verysync version --home /version-state 2>&1) || status=$?
+echo "VS_ARMEL_VERSION_EXIT status=$status"
+echo "$version"
+echo "VS_ARMEL_VERSION_CONTROL_DONE"
 '''
     elif program_sha is not None:
         runtime = f'''/bin/busybox mount -t devpts -o gid=5,mode=0620 devpts /dev/pts || fail devpts_mount
@@ -211,7 +230,7 @@ sdk_status=0
 export PATH=/bin
 fail() {{
     echo "VS_MINIMUM_BOOT_FAILURE $1"
-    /bin/busybox poweroff -f
+    /bin/busybox {shutdown} -f
     exit 1
 }}
 /bin/busybox mount -t proc proc /proc || fail proc
@@ -223,7 +242,7 @@ ifconfig_result=$(/bin/busybox ifconfig lo) || fail loopback_readback
 case "$ifconfig_result" in *127.0.0.1*) ;; *) fail loopback_address ;; esac
 echo "VS_MINIMUM_BOOT_OK kernel=$actual loopback=127.0.0.1"
 {runtime}/bin/busybox sync
-/bin/busybox poweroff -f
+/bin/busybox {shutdown} -f
 exit 0
 """.encode()
 
@@ -236,12 +255,18 @@ parser.add_argument("--local-package-dir", type=Path,
 parser.add_argument("--runtime-dir", type=Path)
 parser.add_argument("--engine-receipt", type=Path)
 parser.add_argument("--s390x-version-control", action="store_true")
+parser.add_argument("--armel-version-control", action="store_true")
 args = parser.parse_args()
 if args.distribution not in KERNELS[args.architecture]:
     parser.error("unsupported distribution and architecture combination")
-if args.s390x_version_control:
+if args.armel_version_control:
+    if args.architecture != "armel" or args.engine_receipt is None or args.runtime_dir is not None:
+        parser.error("ARMEL version control needs only the fixed ARMEL engine receipt")
+elif args.s390x_version_control:
     if args.architecture != "s390x" or args.engine_receipt is None or args.runtime_dir is not None:
         parser.error("s390x version control needs only the fixed s390x engine receipt")
+elif args.architecture == "armel" and args.runtime_dir is not None:
+    parser.error("ARMEL SDK runtime has no prepared libc fixture")
 elif (args.runtime_dir is None) != (args.engine_receipt is None):
     parser.error("provide both the fixed native engine receipt and runtime directory")
 os.umask(0o077)
@@ -279,10 +304,14 @@ kernel,config = members[kernel_name],members[config_name]
 required_platform = {
     "amd64": {"CONFIG_X86_64", "CONFIG_SERIAL_8250_CONSOLE"},
     "i386": {"CONFIG_X86_32", "CONFIG_SERIAL_8250_CONSOLE"},
+    "armel": {"CONFIG_AEABI", "CONFIG_CPU_ARM926T", "CONFIG_ARCH_VERSATILE", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
     "arm64": {"CONFIG_ARM64", "CONFIG_ARCH_VEXPRESS", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
     "s390x": {"CONFIG_S390", "CONFIG_64BIT", "CONFIG_SCLP_VT220_CONSOLE"},
 }
-if args.architecture == "arm64":
+if args.architecture == "armel":
+    kernel_filename = "zImage"
+    assert kernel[0x24:0x28] == bytes.fromhex("18286f01")
+elif args.architecture == "arm64":
     kernel_filename = "Image"
     assert kernel[0x38:0x3c] == b"ARM\x64"
 elif args.architecture == "s390x":
@@ -305,7 +334,7 @@ files=[(name,stat.S_IFDIR|0o755,b"",0,0) for name in ("bin","dev","proc","sys")]
 files += [("dev/console",stat.S_IFCHR|0o600,b"",5,1),("dev/null",stat.S_IFCHR|0o666,b"",1,3),
           ("bin/busybox",stat.S_IFREG|0o755,busybox,0,0)]
 runtime_hashes = {}
-if args.s390x_version_control:
+if args.s390x_version_control or args.armel_version_control:
     native_core, program_sha = checked_native_program(args.engine_receipt, args.architecture)
     files.extend([
         ("bin/verysync", stat.S_IFREG | 0o755, native_core, 0, 0),
@@ -325,7 +354,8 @@ if args.runtime_dir is not None:
     )
     files.extend(runtime_files)
 files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
-            runtime_hashes.get("candidate_debian_platform_ca"), runtime_lib, args.s390x_version_control),0,0))
+            runtime_hashes.get("candidate_debian_platform_ca"), runtime_lib,
+            args.s390x_version_control, args.armel_version_control),0,0))
 ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)
