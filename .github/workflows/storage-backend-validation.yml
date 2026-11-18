@@ -2,6 +2,7 @@ name: Native storage backend acceptance
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/storage-backend-validation.yml
       - scripts/verify-native-storage-backends.py
