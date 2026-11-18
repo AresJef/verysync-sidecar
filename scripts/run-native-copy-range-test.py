@@ -15,13 +15,13 @@ TRANSFER = "native copy range transfer effects: "
 PAYLOAD = "copy-range-fixture.bin"
 COPY = re.compile(r"^copy_file_range\(\d+<([^>]+)>.*?, \d+<([^>]+)>.*\)\s+= (-?\d+)")
 THREAD = re.compile(r"^clone3?\(.*CLONE_THREAD.*\)\s+= (\d+)$")
+RENAME = re.compile(r"^rename(?:at2?)?\(.*\)\s+= 0$")
 
 
-def copies(trace, root_pid, source, target):
-    """Return copy results originating from the exact owned PID and its threads."""
+def owned_calls(trace, root_pid):
+    """Yield traced calls originating from the exact owned PID and its threads."""
     pending = [root_pid]
     visited = set()
-    calls = []
     while pending:
         tid = pending.pop()
         if tid in visited:
@@ -31,10 +31,15 @@ def copies(trace, root_pid, source, target):
             thread = THREAD.match(line)
             if thread:
                 pending.append(int(thread[1]))
-            copy = COPY.match(line)
-            if copy and Path(copy[1]) == source and target(Path(copy[2])):
-                calls.append(int(copy[3]))
-    return calls
+            yield line
+
+
+def copies(trace, root_pid, source, target):
+    return [
+        int(call[3])
+        for line in owned_calls(trace, root_pid)
+        if (call := COPY.match(line)) and Path(call[1]) == source and target(Path(call[2]))
+    ]
 
 
 def trace_lines(prefix):
@@ -46,7 +51,8 @@ def trace_lines(prefix):
 
 def run_traced(strace, prefix, command, env):
     subprocess.run(
-        [strace, "-ff", "-qq", "-yy", "-s", "0", "-e", "trace=clone,clone3,copy_file_range",
+        [strace, "-ff", "-qq", "-yy", "-s", "0", "-e",
+         "trace=clone,clone3,copy_file_range,rename,renameat,renameat2",
          "-o", str(prefix), *command], env=env, check=True,
     )
 
@@ -54,24 +60,25 @@ def run_traced(strace, prefix, command, env):
 def preflight(strace, root, env):
     source = root / "oracle-source"
     dest = root / "oracle-destination"
+    process_id = root / "oracle-pid"
     script = """
-import os, pathlib, sys
-source, dest = map(pathlib.Path, sys.argv[1:])
+import os, pathlib, sys, threading
+source, dest, process_id = map(pathlib.Path, sys.argv[1:])
 data = b'independent range oracle' * 512
 source.write_bytes(data)
+process_id.write_text(str(os.getpid()))
 print('copy oracle bytes:', len(data), flush=True)
-with source.open('rb') as old, dest.open('wb') as new:
-    assert os.copy_file_range(old.fileno(), new.fileno(), len(data)) == len(data)
+def copy():
+    with source.open('rb') as old, dest.open('wb') as new:
+        assert os.copy_file_range(old.fileno(), new.fileno(), len(data)) == len(data)
+worker = threading.Thread(target=copy)
+worker.start()
+worker.join()
 assert dest.read_bytes() == data
 """
     prefix = root / "oracle"
-    run_traced(strace, prefix, [sys.executable, "-c", script, str(source), str(dest)], env)
-    observed = [
-        int(match[3])
-        for capture in root.glob("oracle.*")
-        for line in capture.read_text(encoding="utf-8").splitlines()
-        if (match := COPY.match(line)) and match[1] == str(source) and match[2] == str(dest)
-    ]
+    run_traced(strace, prefix, [sys.executable, "-c", script, str(source), str(dest), str(process_id)], env)
+    observed = copies(trace_lines(prefix), int(process_id.read_text()), source, dest.__eq__)
     if observed != [source.stat().st_size]:
         raise RuntimeError("the unprivileged copy and decoded descriptor oracle did not agree")
 
@@ -106,17 +113,40 @@ def main():
     fixture = Path(data["fixture_root"])
     if data["receiver_pid"] <= 1 or fixture.parent != scratch:
         raise RuntimeError("the Rust fixture identity must belong to the explicit trace root")
+    trace = trace_lines(root / "receiver")
+    receiver_calls = list(owned_calls(trace, data["receiver_pid"]))
+    all_fixture_range_calls = 0
+    for file in root.glob("receiver.*"):
+        if file.suffix[1:].isdigit():
+            all_fixture_range_calls += sum(
+                "copy_file_range(" in line and str(fixture) in line
+                for line in file.read_text(encoding="utf-8").splitlines()
+            )
     rows = []
     for arm in ("standard", "copy-file-range"):
         folder = fixture / f"receiver-{arm}"
+        installed = folder / PAYLOAD
         results = copies(
-            trace_lines(root / "receiver"), data["receiver_pid"], folder / PAYLOAD,
+            trace, data["receiver_pid"], installed,
             lambda dest: dest.parent == folder and dest.name != PAYLOAD and PAYLOAD in dest.name,
         )
+        installs = 0
+        for line in receiver_calls:
+            if RENAME.match(line):
+                paths = re.findall(r'"([^"]+)"', line)
+                if len(paths) == 2 and Path(paths[1]) == installed and PAYLOAD in Path(paths[0]).name:
+                    installs += 1
         rows.append({"strategy": arm, "attempts": len(results),
                      "copied_bytes": sum(value for value in results if value > 0),
-                     "errors": sum(value < 0 for value in results)})
+                     "errors": sum(value < 0 for value in results), "receiver_installs": installs})
+    print("native copy range observation scope: " + json.dumps({
+        "calls_attributed_to_receiver_and_threads": len(receiver_calls),
+        "all_fixture_copy_file_range_calls": all_fixture_range_calls,
+        "threaded_copy_oracle_passed": True,
+    }), flush=True)
     print("native copy range syscall effects: " + json.dumps(rows), flush=True)
+    if any(row["receiver_installs"] < 2 for row in rows):
+        raise RuntimeError("did not attribute both actual file installs to owned receiver threads")
     if rows[0]["attempts"] != 0 or rows[1]["copied_bytes"] < data["file_bytes"] // 2 or rows[1]["errors"]:
         raise RuntimeError("the exact old-file to new-temp syscalls did not distinguish the two strategies")
 
