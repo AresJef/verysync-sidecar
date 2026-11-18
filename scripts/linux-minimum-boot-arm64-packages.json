@@ -1,0 +1,25 @@
+{
+  "jessie": [
+    {
+      "package": "ca-certificates",
+      "version": "20141019+deb8u3",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20141019+deb8u3_all.deb",
+      "size": "206870",
+      "sha256": "bd799f47f5ae3260b6402b1fe19fe2c37f2f4125afcd19327bf69a9cf436aeff"
+    },
+    {
+      "package": "busybox-static",
+      "version": "1:1.22.0-9+deb8u1",
+      "filename": "pool/main/b/busybox/busybox-static_1.22.0-9+deb8u1_arm64.deb",
+      "size": "738204",
+      "sha256": "5bf3d26e9bef4f4b0bbc34fb1c653153b19047052703670beced5c111d47b615"
+    },
+    {
+      "package": "linux-image-3.16.0-6-arm64",
+      "version": "3.16.56-1+deb8u1",
+      "filename": "pool/main/l/linux/linux-image-3.16.0-6-arm64_3.16.56-1+deb8u1_arm64.deb",
+      "size": "15862648",
+      "sha256": "3700cbd91e48468843a2d5041b32a8ad0f56b15864fcb0bab5398016c639a981"
+    }
+  ]
+}

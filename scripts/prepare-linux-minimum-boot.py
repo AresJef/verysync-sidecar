@@ -15,6 +15,13 @@ import tarfile
 KERNELS = {
     "amd64": {"squeeze": "2.6.32-5-amd64", "wheezy": "3.2.0-4-amd64"},
     "i386": {"squeeze": "2.6.32-5-686", "wheezy": "3.2.0-4-686-pae"},
+    "arm64": {"jessie": "3.16.0-6-arm64"},
+}
+ELF_FORMAT = {"amd64": (2, 62), "i386": (1, 3), "arm64": (2, 183)}
+RUNTIME = {
+    "amd64": ("linux-amd64-standard", "lib64", "ld-linux-x86-64.so.2"),
+    "i386": ("linux-386-standard", "lib", "ld-linux.so.2"),
+    "arm64": ("linux-arm64-standard", "lib", "ld-linux-aarch64.so.1"),
 }
 dig = lambda payload: hashlib.sha256(payload).hexdigest()
 
@@ -41,14 +48,14 @@ def verified_members(package, required):
     return payloads
 
 def check_elf(data, architecture):
-    elf_class, machine = (2, 62) if architecture == "amd64" else (1, 3)
+    elf_class, machine = ELF_FORMAT[architecture]
     assert data[:6] == b"\x7fELF" + bytes((elf_class, 1))
     assert struct.unpack_from("<H", data, 18)[0] == machine
 
 
 def check_static_busybox(busybox, architecture):
     check_elf(busybox, architecture)
-    if architecture == "amd64":
+    if ELF_FORMAT[architecture][0] == 2:
         table = struct.unpack_from("<Q", busybox, 32)[0]
         size, count = struct.unpack_from("<HH", busybox, 54)
         assert size == 56
@@ -72,10 +79,9 @@ def write_newc(files):
         cpio.extend(b"\0"*((-len(cpio))%4))
     return bytes(cpio)
 
-def prepare_runtime(runtime, engine_receipt, platform_ca, architecture, runtime_lib):
+def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
     engine = json.loads(engine_receipt.read_text())
-    package = "linux-amd64-standard" if architecture == "amd64" else "linux-386-standard"
-    interpreter = "ld-linux-x86-64.so.2" if architecture == "amd64" else "ld-linux.so.2"
+    package, runtime_lib, interpreter = RUNTIME[architecture]
     assert (engine["package"], engine["version"]) == (package, "v2.33.2")
     binary = Path(engine["binary"])
     assert binary.is_file() and 1_000_000 < binary.stat().st_size < 150_000_000
@@ -187,7 +193,7 @@ exit 0
 """.encode()
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("distribution", choices=KERNELS["amd64"])
+parser.add_argument("distribution", choices=sorted({suite for kernels in KERNELS.values() for suite in kernels}))
 parser.add_argument("--architecture", choices=KERNELS, default="amd64")
 parser.add_argument("--destination", required=True, type=Path)
 parser.add_argument("--local-package-dir", type=Path,
@@ -195,12 +201,14 @@ parser.add_argument("--local-package-dir", type=Path,
 parser.add_argument("--runtime-dir", type=Path)
 parser.add_argument("--engine-receipt", type=Path)
 args = parser.parse_args()
+if args.distribution not in KERNELS[args.architecture]:
+    parser.error("unsupported distribution and architecture combination")
 if (args.runtime_dir is None) != (args.engine_receipt is None):
     parser.error("provide both the fixed native engine receipt and runtime directory")
 os.umask(0o077)
 WORK = args.destination.resolve()
 WORK.mkdir(mode=0o700)
-manifest_suffix = "" if args.architecture == "amd64" else "-i386"
+manifest_suffix = "" if args.architecture == "amd64" else f"-{args.architecture}"
 manifest = Path(__file__).with_name(f"linux-minimum-boot{manifest_suffix}-packages.json")
 records = json.loads(manifest.read_text())[args.distribution]
 by_name = {}
@@ -219,15 +227,24 @@ for package in records:
     by_name[args.distribution,package["package"]] = dict(package,local_path=str(destination))
 distribution = args.distribution
 release = KERNELS[args.architecture][distribution]
-runtime_lib = "lib64" if args.architecture == "amd64" else "lib"
+_, runtime_lib, _ = RUNTIME[args.architecture]
 kernel_name, config_name = "boot/vmlinuz-"+release, "boot/config-"+release
 kernel_deb = by_name[distribution,"linux-image-"+release]
 members = verified_members(kernel_deb, {kernel_name:12*1024*1024,config_name:1024*1024})
 kernel,config = members[kernel_name],members[config_name]
-assert kernel[0x202:0x206] == b"HdrS"
-arch_config = "CONFIG_X86_64" if args.architecture == "amd64" else "CONFIG_X86_32"
-check = {arch_config,"CONFIG_BLK_DEV_INITRD","CONFIG_BINFMT_ELF","CONFIG_PROC_FS",
-         "CONFIG_SYSFS","CONFIG_INET","CONFIG_SERIAL_8250_CONSOLE"}
+required_platform = {
+    "amd64": {"CONFIG_X86_64", "CONFIG_SERIAL_8250_CONSOLE"},
+    "i386": {"CONFIG_X86_32", "CONFIG_SERIAL_8250_CONSOLE"},
+    "arm64": {"CONFIG_ARM64", "CONFIG_ARCH_VEXPRESS", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
+}
+if args.architecture == "arm64":
+    kernel_filename = "Image"
+    assert kernel[0x38:0x3c] == b"ARM\x64"
+else:
+    kernel_filename = "bzImage"
+    assert kernel[0x202:0x206] == b"HdrS"
+check = {"CONFIG_BLK_DEV_INITRD", "CONFIG_BINFMT_ELF", "CONFIG_PROC_FS", "CONFIG_SYSFS", "CONFIG_INET"}
+check.update(required_platform[args.architecture])
 if args.architecture == "i386" and distribution == "wheezy":
     check.add("CONFIG_X86_PAE")
 if args.runtime_dir is not None:
@@ -246,7 +263,7 @@ if args.runtime_dir is not None:
     assert platform_ca.strip().startswith(b"-----BEGIN CERTIFICATE-----")
     assert platform_ca.strip().endswith(b"-----END CERTIFICATE-----")
     runtime_files, runtime_hashes = prepare_runtime(
-        args.runtime_dir, args.engine_receipt, platform_ca, args.architecture, runtime_lib,
+        args.runtime_dir, args.engine_receipt, platform_ca, args.architecture,
     )
     files.extend(runtime_files)
 files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
@@ -254,11 +271,11 @@ files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bi
 ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)
-(root/"bzImage").write_bytes(kernel)
+(root / kernel_filename).write_bytes(kernel)
 (root/"initramfs.cpio.gz").write_bytes(ramdisk)
 (root/"kernel-config").write_bytes(config)
 receipt = {"distribution":distribution,"architecture":args.architecture,"expected_uname_release":release,
-            "bzimage_sha256":dig(kernel),"initramfs_sha256":dig(ramdisk),
+            "kernel_filename":kernel_filename,"kernel_sha256":dig(kernel),"initramfs_sha256":dig(ramdisk),
             "kernel_config_sha256":dig(config),"busybox_sha256":dig(busybox),
             "required_kernel_options":sorted(check),"exact_guest_initramfs":str(root/"initramfs.cpio.gz"),
             "expected_serial_marker":"VS_MINIMUM_BOOT_OK kernel="+release+" loopback=127.0.0.1",
