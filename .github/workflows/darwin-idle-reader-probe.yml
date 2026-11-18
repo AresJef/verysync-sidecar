@@ -1,0 +1,71 @@
+name: Darwin resource reader diagnosis
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - scripts/diagnose-darwin-idle-read.py
+      - scripts/darwin-owned-sample.c
+      - .github/workflows/darwin-idle-reader-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  active:
+    if: github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == 'AresJef/verysync-sidecar' && github.head_ref == 'ci/darwin-idle-reader-20261118-01a1ca9b'
+    name: Owned Intel streaming reader diagnosis
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Prepare fixed diagnostic dependencies and native MSRV
+        run: |
+          python -m pip install -r scripts/resource-test-requirements.txt
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 fetch --locked
+      - name: Verify the frozen source before preparing the private core
+        run: >-
+          python scripts/preflight-native-resources.py --check-source
+          --protocol tests/fixtures/resource-protocol.json --toolchain 1.85.0
+          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
+      - name: Explicitly prepare the owned fixed Intel core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package macos-amd64-standard
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Build the unchanged actual release workload
+        run: cargo +1.85.0 test --release --no-run --features engine-tests,download --test resource_usage_engine --locked
+      - name: Run paired streaming pilots and a separate counter comparison
+        run: >-
+          python -B scripts/diagnose-darwin-idle-read.py --toolchain 1.85.0
+          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
+          --scenario stream-large --evidence-dir "$RUNNER_TEMP/vs-active-reader"
+      - name: Require exact owned-core cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Preserve diagnostic-only raw records
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: intel-active-reader-diagnosis
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/vs-active-reader/active-reader-comparison.json
+            ${{ runner.temp }}/vs-active-reader/**/counter-brackets.json
+            ${{ runner.temp }}/vs-active-reader/**/reader-identity.json
+            ${{ runner.temp }}/vs-active-reader/**/preparation-result.json
+            ${{ runner.temp }}/vs-active-reader/**/quality-result.json
+            ${{ runner.temp }}/vs-active-reader/**/samples.jsonl
+            ${{ runner.temp }}/vs-active-reader/**/events.jsonl
+            ${{ runner.temp }}/vs-active-reader/**/safe-error.json
+            ${{ runner.temp }}/vs-active-reader/**/console.log
+            ${{ runner.temp }}/vs-active-reader/*.console.log
