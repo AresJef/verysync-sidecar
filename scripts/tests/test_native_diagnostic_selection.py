@@ -98,6 +98,15 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(check())
         github.event_name = 'workflow_dispatch'
         self.assertTrue(check())
+        github.event_name = 'pull_request'
+        github.event.pull_request.head.repo.full_name = github.repository
+        github.head_ref = 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b'
+        self.assertFalse(check())
+        github.event.pull_request.draft = False
+        self.assertTrue(check())
+        github.event.pull_request.draft = True
+        github.event.pull_request.head.repo.full_name = 'external/fork'
+        self.assertTrue(check())
 
     def test_ready_keeps_all_six_admission_commands_after_cleanup_change(self):
         rows = HELPER.select(self.rows, {"draft_labels": ["native-incoming-admission-cap", "native-incoming-admission-linux-cleanup"]}, draft=True)
@@ -132,7 +141,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-official-tracker-20261118-01a1ca9b",
                        "test/native-missing-policy-evidence-20261118-01a1ca9b",
                        "test/native-core-preferences-current-20261118-01a1ca9b",
-                       "ci/windows-packet-observer-feasibility-20261118-01a1ca9b"]:
+                       "ci/windows-packet-observer-feasibility-20261118-01a1ca9b",
+                       "ci/windows-loopback-header-feasibility-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
