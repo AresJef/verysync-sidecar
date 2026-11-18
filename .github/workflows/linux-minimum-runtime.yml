@@ -79,7 +79,7 @@ jobs:
               timeout 170s qemu-system-x86_64 -machine pc,accel=tcg -cpu qemu64 -m 512 -smp 1 \
                 -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
                 -kernel "$root/$suite/bzImage" -initrd "$root/$suite/initramfs.cpio.gz" \
-                -append "console=ttyS0 rdinit=/init vs_minimum_entropy=seeded vs_minimum_certs=$trust panic=1" +                > "$log" 2>&1 || status=$?
+                -append "console=ttyS0 rdinit=/init vs_minimum_entropy=seeded vs_minimum_certs=$trust panic=1" > "$log" 2>&1 || status=$?
               tr -d '\r' < "$log" > "$console"
               cat "$console"
               echo "Guest $suite trust=$trust emulator_exit=$status"
