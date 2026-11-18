@@ -1,0 +1,91 @@
+name: Native storage backend acceptance
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/storage-backend-validation.yml
+      - scripts/verify-native-storage-backends.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-storage-backends-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Complete ordinary backend effects (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: linux-amd64-standard
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-gnu
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Prepare the x64 protocol peer interpreter on Windows ARM
+        if: matrix.package == 'windows-arm64-standard'
+        id: storage_tools_python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+          architecture: x64
+          update-environment: false
+      - name: Install native Rust and fetch locked dependencies
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed private core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Prepare private protocol peers and fixed test trust
+        env:
+          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
+        run: >-
+          python scripts/prepare-storage-test-environment.py
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Prepare pinned TLS fixture without system trust changes
+        run: >-
+          python scripts/prepare-ldap-tls-fixture.py prepare
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Require real local FTP SFTP SMB WebDAV outcomes without skips
+        run: >-
+          python scripts/verify-native-storage-backends.py
+          --toolchain "$TEST_TOOLCHAIN" --evidence-dir "$RUNNER_TEMP/vs-storage-backends"
+      - name: Require exact owned-core cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Remove private TLS fixture material
+        if: always() && env.VERYSYNC_TEST_LDAP_TLS_MANIFEST != ''
+        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "$RUNNER_TEMP"

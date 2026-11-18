@@ -162,7 +162,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "ci/windows-packet-observer-feasibility-20261118-01a1ca9b",
                        "ci/windows-loopback-header-feasibility-20261118-01a1ca9b",
                        "test/controlled-acceptance-node-20261118-01a1ca9b",
-                       "ci/api-compatibility-tooling-20261118-01a1ca9b"]:
+                       "ci/api-compatibility-tooling-20261118-01a1ca9b",
+                       "test/native-storage-backend-acceptance-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
