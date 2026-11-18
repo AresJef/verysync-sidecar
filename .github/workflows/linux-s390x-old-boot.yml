@@ -26,12 +26,20 @@ jobs:
       - name: Verify the exact guest kernel, loopback and clean emulator exit
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-misc qemu-system-data
-          qemu-system-s390x --version
           work="$RUNNER_TEMP/vs-s390x-boot"
+          sources="$work/ubuntu-official-sources.list"
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-security main' > "$sources"
+          apt_options=(-o "Dir::Etc::sourcelist=$sources" -o Dir::Etc::sourceparts=/dev/null
+            -o Acquire::Retries=1 -o Acquire::https::Timeout=25)
+          timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
+          timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends \
+            qemu-system-misc qemu-system-data
+          qemu-system-s390x --version
           status=0
-          timeout 75s qemu-system-s390x -machine s390-ccw-virtio,accel=tcg -cpu max -m 512 -smp 1 \
+          timeout --kill-after=5s 75s qemu-system-s390x -machine s390-ccw-virtio,accel=tcg -cpu max -m 512 -smp 1 \
             -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
             -kernel "$work/wheezy/image" -initrd "$work/wheezy/initramfs.cpio.gz" \
             -append 'console=ttyS1 rdinit=/init panic=1' > "$work/s390x-console.log" 2>&1 || status=$?
