@@ -165,7 +165,8 @@ class DiagnosticSelection(unittest.TestCase):
                        "ci/api-compatibility-tooling-20261118-01a1ca9b",
                        "test/native-storage-backend-acceptance-20261118-01a1ca9b",
                        "fix/storage-backend-receipt-checker-20261118-01a1ca9b",
-                       "ci/darwin-owned-process-read-20261118-01a1ca9b"]:
+                       "ci/darwin-owned-process-read-20261118-01a1ca9b",
+                       "ci/win7-default-abi-20261118-01a1ca9b"]:
             github = SimpleNamespace(event_name="pull_request", head_ref=branch,
                 repository="AresJef/verysync-sidecar", event=SimpleNamespace(
                     pull_request=SimpleNamespace(draft=True, head=SimpleNamespace(
@@ -211,6 +212,15 @@ class DiagnosticSelection(unittest.TestCase):
                 self.assertIn("update-environment: false", block)
             else:
                 self.assertIn("python scripts/prepare-storage-test-environment.py", block)
+
+    def test_legacy_windows_build_sets_target_directory_after_runner_assignment(self):
+        workflow = (ROOT / ".github/workflows/platform-matrix.yml").read_text()
+        job = workflow.split("  windows-legacy-build:\n", 1)[1].split("  x86-compatibility:\n", 1)[0]
+        header, steps = job.split("    steps:\n", 1)
+        self.assertNotIn("runner.temp", header)
+        self.assertNotIn("CARGO_TARGET_DIR", header)
+        self.assertIn('Join-Path $env:RUNNER_TEMP', steps)
+        self.assertIn('"CARGO_TARGET_DIR=$targetDirectory" | Out-File -FilePath $env:GITHUB_ENV', steps)
 
     def test_owned_storage_drafts_run_the_selected_native_matrix(self):
         workflow = (ROOT / ".github/workflows/engine-tests.yml").read_text()
