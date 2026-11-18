@@ -1,6 +1,13 @@
 {
   "squeeze": [
     {
+      "package": "ca-certificates",
+      "version": "20090814+nmu3squeeze1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20090814+nmu3squeeze1_all.deb",
+      "size": "145802",
+      "sha256": "68cfa6f7a2ff0c87e581c320582a9daff892fe9090c56b2913ce7e2630fdad2d"
+    },
+    {
       "package": "busybox-static",
       "version": "1:1.17.1-8",
       "filename": "pool/main/b/busybox/busybox-static_1.17.1-8_amd64.deb",
@@ -16,6 +23,13 @@
     }
   ],
   "wheezy": [
+    {
+      "package": "ca-certificates",
+      "version": "20130119+deb7u1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20130119+deb7u1_all.deb",
+      "size": "209900",
+      "sha256": "3494ecfd607e4233d8d1a656eceb6bd109d756bc0afe9d3b29dfc0acc4fe19cf"
+    },
     {
       "package": "busybox-static",
       "version": "1:1.20.0-7",

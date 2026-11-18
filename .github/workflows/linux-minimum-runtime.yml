@@ -54,7 +54,7 @@ jobs:
             --mount "type=bind,src=$sysroot,dst=/toolchain,readonly" \
             --mount "type=bind,src=$work/build,dst=/evidence" \
             "$PYPA_BUILD_IMAGE" /bin/bash /support/build-linux-minimum-runtime.sh
-      - name: Compare boot entropy and verify native Rust effects on both kernels
+      - name: Compare platform trust and verify native Rust effects on both kernels
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/vs-minimum-runtime"
@@ -72,43 +72,44 @@ jobs:
               overall=1
               continue
             fi
-            for entropy in natural seeded; do
-              log="$root/guest-console-$entropy.log"
-              console="$root/guest-console-$entropy.txt"
+            for trust in absent debian; do
+              log="$root/guest-console-$trust.log"
+              console="$root/guest-console-$trust.txt"
               status=0
               timeout 170s qemu-system-x86_64 -machine pc,accel=tcg -cpu qemu64 -m 512 -smp 1 \
                 -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
                 -kernel "$root/$suite/bzImage" -initrd "$root/$suite/initramfs.cpio.gz" \
-                -append "console=ttyS0 rdinit=/init vs_minimum_entropy=$entropy panic=1" > "$log" 2>&1 || status=$?
+                -append "console=ttyS0 rdinit=/init vs_minimum_entropy=seeded vs_minimum_certs=$trust panic=1" +                > "$log" 2>&1 || status=$?
               tr -d '\r' < "$log" > "$console"
               cat "$console"
-              echo "Guest $suite entropy=$entropy emulator_exit=$status"
+              echo "Guest $suite trust=$trust emulator_exit=$status"
               if [ "$status" -ne 0 ] \
                 || ! grep -Fxq "VS_MINIMUM_BOOT_OK kernel=$release loopback=127.0.0.1" "$console" \
                 || ! grep -Fxq 'VS_MINIMUM_CORE_VERSION_OK v2.33.2' "$console" \
                 || ! grep -Fxq 'VS_MINIMUM_GLIBC_VERSION glibc=2.17' "$console" \
                 || ! grep -Fxq 'VS_MINIMUM_PTY_READY devpts=true ptmx=true' "$console" \
-                || ! grep -Fxq "VS_MINIMUM_ENTROPY_MODE $entropy" "$console" \
-                || ! grep -Eq '^VS_MINIMUM_ENTROPY phase=before_sdk bits=[0-9]+ readable=[01]$' "$console" \
+                || ! grep -Fxq 'VS_MINIMUM_ENTROPY_MODE seeded' "$console" \
+                || ! grep -Fxq 'VS_MINIMUM_ENTROPY_CREDIT_OK bits=512' "$console" \
+                || ! grep -Eq '^VS_MINIMUM_ENTROPY phase=before_sdk bits=[0-9]+ readable=1$' "$console" \
                 || ! grep -Eq '^VS_MINIMUM_ENTROPY phase=after_sdk bits=[0-9]+ readable=[01]$' "$console" \
+                || ! grep -Fxq "VS_MINIMUM_CA_MODE $trust" "$console" \
                 || ! grep -Fxq 'VS_MINIMUM_SDK_RUNTIME uid=1000 loaded_fixture_libc=true' "$console" \
                 || grep -q 'Kernel panic - not syncing' "$console"; then
                 overall=1
                 continue
               fi
-              if [ "$entropy" = seeded ] &&
-                 { ! grep -Fxq 'VS_MINIMUM_ENTROPY_CREDIT_OK bits=512' "$console" ||
-                   ! grep -Eq '^VS_MINIMUM_ENTROPY phase=before_sdk bits=[0-9]+ readable=1$' "$console"; }; then
-                overall=1
-                continue
-              fi
-              if grep -Eq '^VS_MINIMUM_SDK_OK \{' "$console" &&
+              if [ "$trust" = debian ] &&
+                 grep -Fxq 'VS_MINIMUM_CA_BUILDER debian_ca=true builder_ok=true missing_platform_roots=false' "$console" &&
+                 grep -Eq '^VS_MINIMUM_SDK_OK \{' "$console" &&
                  ! grep -q '^VS_MINIMUM_BOOT_FAILURE ' "$console"; then
-                echo "Guest $suite entropy=$entropy sdk_result=passed"
-              elif [ "$entropy" = natural ] &&
+                echo "Guest $suite trust=$trust sdk_result=passed"
+              elif [ "$trust" = absent ] &&
+                   grep -Fxq 'VS_MINIMUM_CA_BUILDER debian_ca=false builder_ok=false missing_platform_roots=true' "$console" &&
+                   grep -Eq '^VS_MINIMUM_SDK_START_OBSERVATION .*"native_health_http_status":200[,}]' "$console" &&
+                   grep -Fxq 'VS_MINIMUM_SDK_FAILURE_CLEANUP exact_exit_and_lease_release=true' "$console" &&
                    grep -Fxq 'VS_MINIMUM_BOOT_FAILURE sdk_runtime' "$console" &&
                    grep -Fxq 'Error: Error(management deadline exceeded while attempting to start managed instance)' "$console"; then
-                echo "Guest $suite entropy=$entropy sdk_result=startup_deadline"
+                echo "Guest $suite trust=$trust sdk_result=missing_platform_ca_control"
               else
                 overall=1
               fi

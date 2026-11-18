@@ -58,7 +58,7 @@ def write_newc(files):
         cpio.extend(b"\0"*((-len(cpio))%4))
     return bytes(cpio)
 
-def prepare_runtime(runtime, engine_receipt):
+def prepare_runtime(runtime, engine_receipt, platform_ca):
     engine = json.loads(engine_receipt.read_text())
     assert (engine["package"],engine["version"]) == ("linux-amd64-standard","v2.33.2")
     binary = Path(engine["binary"])
@@ -69,7 +69,8 @@ def prepare_runtime(runtime, engine_receipt):
     assert native_core[:6] == b"\x7fELF\x02\x01" and struct.unpack_from("<H", native_core, 18)[0] == 62
 
     files = [(name, stat.S_IFDIR | mode, b"", 0, 0)
-             for name,mode in (("dev/pts",0o755),("etc",0o755),("lib64",0o755),("tmp",0o1777),
+             for name,mode in (("dev/pts",0o755),("etc",0o755),("etc/ssl",0o755),("etc/ssl/certs",0o755),
+                               ("lib64",0o755),("tmp",0o1777),
                                ("vs-data",0o755),("version-state",0o700))]
     files += [(name, stat.S_IFCHR | 0o666, b"", 1, minor)
               for name, minor in (("dev/random",8),("dev/urandom",9),("dev/zero",5))]
@@ -81,9 +82,10 @@ def prepare_runtime(runtime, engine_receipt):
         ("etc/hosts", stat.S_IFREG | 0o644,b"127.0.0.1 localhost\n",0,0),
         ("bin/verysync", stat.S_IFREG | 0o755,native_core,0,0),
         (".vs-entropy-seed", stat.S_IFREG | 0o400,os.urandom(64),0,0),
+        (".vs-debian-platform-ca", stat.S_IFREG | 0o444,platform_ca,0,0),
     ]
 
-    hashes = {"bin/verysync":digest}
+    hashes = {"bin/verysync":digest, "candidate_debian_platform_ca":dig(platform_ca)}
     for source in sorted(runtime.iterdir()):
         assert source.is_file() and not source.is_symlink()
         assert 0 < source.stat().st_size < 100_000_000
@@ -102,7 +104,7 @@ def prepare_runtime(runtime, engine_receipt):
     return files, hashes
 
 
-def boot_init(expected, program_sha=None):
+def boot_init(expected, program_sha=None, ca_sha=None):
     runtime = ""
     if program_sha is not None:
         runtime = f'''/bin/busybox mount -t devpts -o gid=5,mode=0620 devpts /dev/pts || fail devpts_mount
@@ -130,6 +132,20 @@ if [ "$entropy_mode" = seeded ]; then
 fi
 /bin/busybox rm /.vs-entropy-seed || fail entropy_seed_removal
 /bin/vs-entropy-control before_sdk || fail entropy_measurement
+unset SSL_CERT_FILE SSL_CERT_DIR
+case " $(/bin/busybox cat /proc/cmdline) " in
+    *" vs_minimum_certs=absent "*)
+        /bin/busybox rm /.vs-debian-platform-ca || fail ca_removal
+        echo "VS_MINIMUM_CA_MODE absent"
+        ;;
+    *" vs_minimum_certs=debian "*)
+        ca=$(/bin/busybox sha256sum /.vs-debian-platform-ca) || fail ca_sha
+        case "$ca" in "{ca_sha} "*) ;; *) fail ca_sha ;; esac
+        /bin/busybox mv /.vs-debian-platform-ca /etc/ssl/certs/ca-certificates.crt || fail ca_location
+        echo "VS_MINIMUM_CA_MODE debian"
+        ;;
+    *) fail ca_mode ;;
+esac
 sdk_status=0
 /bin/vs-sdk-probe {program_sha} || sdk_status=$?
 /bin/vs-entropy-control after_sdk || fail entropy_measurement
@@ -172,6 +188,8 @@ manifest = Path(__file__).with_name("linux-minimum-boot-packages.json")
 records = json.loads(manifest.read_text())[args.distribution]
 by_name = {}
 for package in records:
+    if package["package"] == "ca-certificates" and args.runtime_dir is None:
+        continue
     filename = args.distribution+"-"+package["package"]+".deb"
     destination = WORK / filename
     if args.local_package_dir:
@@ -202,9 +220,14 @@ files += [("dev/console",stat.S_IFCHR|0o600,b"",5,1),("dev/null",stat.S_IFCHR|0o
           ("bin/busybox",stat.S_IFREG|0o755,busybox,0,0)]
 runtime_hashes = {}
 if args.runtime_dir is not None:
-    runtime_files, runtime_hashes = prepare_runtime(args.runtime_dir,args.engine_receipt)
+    ca_member = "usr/share/ca-certificates/mozilla/DigiCert_Global_Root_CA.crt"
+    platform_ca = verified_members(by_name[distribution,"ca-certificates"], {ca_member:16384})[ca_member]
+    assert platform_ca.strip().startswith(b"-----BEGIN CERTIFICATE-----")
+    assert platform_ca.strip().endswith(b"-----END CERTIFICATE-----")
+    runtime_files, runtime_hashes = prepare_runtime(args.runtime_dir,args.engine_receipt,platform_ca)
     files.extend(runtime_files)
-files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync")),0,0))
+files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
+            runtime_hashes.get("candidate_debian_platform_ca")),0,0))
 ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)
