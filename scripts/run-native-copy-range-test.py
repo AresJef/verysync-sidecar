@@ -16,6 +16,7 @@ PAYLOAD = "copy-range-fixture.bin"
 COPY = re.compile(r"^copy_file_range\(\d+<([^>]+)>.*?, \d+<([^>]+)>.*\)\s+= (-?\d+)")
 THREAD = re.compile(r"^clone3?\(.*CLONE_THREAD.*\)\s+= (\d+)$")
 RENAME = re.compile(r"^rename(?:at2?)?\(.*\)\s+= 0$")
+STAGING_FILE = re.compile(r"[0-9a-fA-F]{32}\.tmp")
 
 
 def owned_calls(trace, root_pid):
@@ -141,19 +142,18 @@ def main():
     for arm in ("standard", "copy-file-range"):
         folder = fixture / f"receiver-{arm}"
         installed = folder / PAYLOAD
-        results = copies(
-            trace, data["receiver_pid"], installed,
-            lambda dest: dest.parent == folder and dest.name != PAYLOAD and PAYLOAD in dest.name,
-        )
-        installs = 0
+        stages = []
         for _, line in receiver_calls:
             if RENAME.match(line):
                 paths = re.findall(r'"([^"]+)"', line)
-                if len(paths) == 2 and Path(paths[1]) == installed and PAYLOAD in Path(paths[0]).name:
-                    installs += 1
+                if len(paths) == 2 and Path(paths[1]) == installed:
+                    source = Path(paths[0])
+                    if source.parent == folder / ".verysync" and STAGING_FILE.fullmatch(source.name):
+                        stages.append(source)
+        results = copies(trace, data["receiver_pid"], installed, set(stages).__contains__)
         rows.append({"strategy": arm, "attempts": len(results),
                      "copied_bytes": sum(value for value in results if value > 0),
-                     "errors": sum(value < 0 for value in results), "receiver_installs": installs})
+                     "errors": sum(value < 0 for value in results), "receiver_installs": len(stages)})
     print("native copy range observation scope: " + json.dumps({
         "calls_attributed_to_receiver_and_threads": len(receiver_calls),
         "all_fixture_copy_file_range_calls": all_fixture_range_calls,
