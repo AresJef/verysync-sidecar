@@ -180,6 +180,73 @@ async fn probe_pending_device_after_unknown_native_announcement() -> TestResult 
     Ok(())
 }
 
+/// After a failed dynamic discovery result, compare the exact endpoint with
+/// transport reachability and an explicit address. The caller still returns
+/// the original failure. This is enabled only on the dedicated CI branch.
+async fn compare_owned_advertised_endpoint(
+    sender: &ManagedInstance,
+    receiver: &ManagedInstance,
+    sender_id: &DeviceId,
+    receiver_id: &DeviceId,
+) -> TestResult {
+    let parse = |value: &str| value.strip_prefix("tcp://")?.parse::<SocketAddr>().ok();
+    let owned: Vec<_> = receiver
+        .client()
+        .listener_status()
+        .await?
+        .into_values()
+        .filter(|listener| listener.error.is_none())
+        .flat_map(|listener| listener.lan_addresses)
+        .filter_map(|candidate| parse(&candidate))
+        .collect();
+    let cache = sender.client().discovery_cache().await?;
+    let Some(address) = cache
+        .get(receiver_id.as_str())
+        .into_iter()
+        .flat_map(|entry| &entry.addresses)
+        .filter_map(|candidate| parse(candidate))
+        .find(|candidate| {
+            owned.contains(candidate)
+                && matches!(candidate, SocketAddr::V4(addr) if addr.ip().is_private() || addr.ip().is_loopback())
+                && !matches!(candidate.port(), 0 | 18886 | 21027)
+        })
+    else {
+        eprintln!("VS_ANNOUNCE_CONTROL no matching owned advertised endpoint");
+        return Ok(());
+    };
+    // A bare TCP connect has no application payload. It addresses only the
+    // listener reported by the known private receiver, with a finite deadline.
+    let reachable = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::TcpStream::connect(address),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok());
+    eprintln!("VS_ANNOUNCE_CONTROL owned_tcp_reachable={reachable}");
+    if !reachable {
+        return Ok(());
+    }
+    let explicit = format!("tcp://{address}");
+    sender
+        .client()
+        .update_device(
+            receiver_id,
+            &DevicePatch::default().addresses(vec![explicit.clone()]),
+        )
+        .await?;
+    let exact_readback = sender.client().device(receiver_id).await?.addresses == [explicit];
+    let authenticated_pair = tokio::time::timeout(Duration::from_secs(12), async {
+        connection(sender.client(), receiver_id, true).await?;
+        connection(receiver.client(), sender_id, true).await
+    })
+    .await
+    .is_ok_and(|result| result.is_ok());
+    eprintln!(
+        "VS_ANNOUNCE_CONTROL explicit_address_readback={exact_readback} authenticated_pair={authenticated_pair}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restart() -> TestResult {
     // Local broadcast/multicast and wildcard P2P listeners are confined to an
@@ -312,6 +379,13 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
             if let Err(error) = diagnostics {
                 eprintln!("owned local announcement secondary diagnostic unavailable: {error:?}");
             }
+        }
+    }
+    if !matches!(&found, Ok(Ok(_)))
+        && std::env::var("VS_OWNED_ANNOUNCE_ENDPOINT_CONTROL").as_deref() == Ok("enabled")
+    {
+        if let Err(error) = compare_owned_advertised_endpoint(&a, &b, &a_id, &b_id).await {
+            eprintln!("VS_ANNOUNCE_CONTROL unavailable: {error:?}");
         }
     }
     let snapshot = found??;
