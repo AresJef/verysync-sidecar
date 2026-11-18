@@ -61,3 +61,14 @@ The separate signed-domain case remains necessary for negative, zero and
 positive setting preservation. This saturation case uses positive settings
 at or above the native implementation's lower bound; it does not infer a portable
 zero or negative admission policy from a readback or a small successful copy.
+
+The first complete final-source CI attempt (PR #223, native run 44206659171,
+source `8b502998548003ebb6d3dfcea0dca227f848cbac`) passed on Linux AMD64 and
+ARM64. macOS ARM64 and both Windows profiles completed the 32 MiB phase but
+expired in the 64 MiB phase before producing a snapshot; macOS AMD64 instead
+failed while reading management status. Those original failures remain open.
+The bounded follow-up records the exact stage and native receiver state on only
+the four failed profiles. It preserves the original 30-second phase deadline,
+payload geometry, admission predicates and required normal exits. All 236
+ready/manual/fork catalog commands and their original runners remain present;
+the temporary draft labels only scope this information-producing diagnosis.
