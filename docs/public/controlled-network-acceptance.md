@@ -58,3 +58,12 @@ The bounded local verifier is `scripts/verify-acceptance-node.py`. It requires a
 explicit compiled example, fixed core and digest; it checks stdin stop, EOF and
 TTL independently, authenticated status/configuration, retained synthetic bytes,
 identity/private-key preservation and actual owned-process exit. It logs no keys.
+
+The initial focused validation passed on all six standard native profiles
+(macOS, Linux and Windows; AMD64 and ARM64), using the same PR merge
+`ceecf3e9c7eecdd579afcf45cc2ca014933dfd9c`. Run
+[44236239790](https://github.com/AresJef/verysync-sidecar/actions/runs/44236239790)
+contains 18 actual normal lifecycle paths and 18 negative boundaries with exact
+prepared-image cleanup. Both Quality jobs passed in run
+[44236239605](https://github.com/AresJef/verysync-sidecar/actions/runs/44236239605).
+These results validate the finite node tool, not the eventual external networks.

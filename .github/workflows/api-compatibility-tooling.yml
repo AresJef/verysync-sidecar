@@ -1,0 +1,36 @@
+name: API compatibility checker self-test
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/api-compatibility-tooling.yml
+      - scripts/check-api-compatibility-tool.py
+      - scripts/prepare-api-compatibility-tool.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-checker-selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tool:
+    name: Require real API-removal detection and feature coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install the fixed checker compiler, separate from SDK MSRV
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Explicitly prepare the fixed official checker with verified SHA-256
+        run: >-
+          python3 scripts/prepare-api-compatibility-tool.py
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Require unchanged pass and controlled public and feature API removal failures
+        run: >-
+          python3 scripts/check-api-compatibility-tool.py --checker "$VERYSYNC_SEMVER_CHECKER"
+          --cargo "$(command -v cargo)" --evidence "$RUNNER_TEMP/api-compatibility-tool-selftest"
