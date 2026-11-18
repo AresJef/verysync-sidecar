@@ -2255,5 +2255,14 @@
     "filter": "native_extended_attribute_filter_uses_first_rule_and_preserves_files",
     "label": "native-extended-attribute-filter",
     "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "network",
+    "filter": "probe_pending_device_after_unknown_native_announcement",
+    "label": "native-pending-announcement-source",
+    "trace": "0"
   }
 ]

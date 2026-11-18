@@ -75,6 +75,112 @@ async fn no_peer_for(client: &Client, peer: &DeviceId, seconds: u64) -> TestResu
 }
 
 #[tokio::test]
+async fn probe_pending_device_after_unknown_native_announcement() -> TestResult {
+    assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+    assert_eq!(
+        std::env::var("VERYSYNC_TEST_LOCAL_ANNOUNCEMENT").as_deref(),
+        Ok("github-actions-isolated-vm")
+    );
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let port = socket.local_addr()?.port();
+    assert!(!matches!(port, 0 | 18886 | 21027));
+    drop(socket);
+    let multicast = format!("[ff12::5653:{port:x}]:{port}");
+    let root = tempfile::Builder::new()
+        .prefix("vss-unknown-announce-")
+        .tempdir()?
+        .keep();
+    let sentinel = root.join("caller-sentinel");
+    std::fs::write(&sentinel, b"retained private probe")?;
+    let mut receiving = ManagedInstance::start(options(&root.join("receiving"))?).await?;
+    let mut announcing = ManagedInstance::start(options(&root.join("announcing"))?).await?;
+    let receiving_id = receiving.client().instance().device_id.clone();
+    let announcing_id = announcing.client().instance().device_id.clone();
+    assert!(!receiving
+        .client()
+        .pending_devices()
+        .await?
+        .contains_key(&announcing_id));
+    for core in [&mut receiving, &mut announcing] {
+        setup(core.client(), port, &multicast, true).await?;
+        core.restart(Duration::from_secs(30)).await?;
+        let applied = core.client().network_configuration().await?;
+        assert!(applied.local_announce_enabled && !applied.global_announce_enabled);
+    }
+    let expected_ports = tcp_ports(announcing.client()).await?;
+    let until = tokio::time::Instant::now() + Duration::from_secs(45);
+    let mut saw_owned_announcement = false;
+    let mut saw_pending_record = false;
+    let mut observations = 0_u32;
+    while tokio::time::Instant::now() < until {
+        let cache = receiving.client().discovery_cache().await?;
+        saw_owned_announcement |= cache
+            .get(announcing_id.as_str())
+            .into_iter()
+            .flat_map(|record| &record.addresses)
+            .filter_map(|address| address.strip_prefix("tcp://"))
+            .filter_map(|address| address.parse::<SocketAddr>().ok())
+            .any(|address| expected_ports.contains(&address.port()));
+        let pending = receiving.client().pending_devices().await?;
+        observations += 1;
+        if pending.contains_key(&announcing_id) {
+            saw_pending_record = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    assert!(observations > 0);
+    assert_eq!(
+        receiving.client().system_status().await?.device_id,
+        receiving_id
+    );
+    assert_eq!(
+        announcing.client().system_status().await?.device_id,
+        announcing_id
+    );
+    assert!(matches!(
+        receiving.client().device(&announcing_id).await,
+        Err(Error::DeviceNotFound { .. })
+    ));
+    let announcing_exit = announcing.shutdown(Duration::from_secs(10)).await?;
+    assert!(
+        announcing_exit.tree_stopped
+            && announcing_exit.state_released
+            && !announcing_exit.forced
+            && announcing_exit.code == Some(0)
+    );
+    let mut dismissed_owned_record = false;
+    if saw_pending_record {
+        receiving
+            .client()
+            .dismiss_pending_device(&announcing_id)
+            .await?;
+        assert!(!receiving
+            .client()
+            .pending_devices()
+            .await?
+            .contains_key(&announcing_id));
+        dismissed_owned_record = true;
+    }
+    let exit = receiving.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    assert_eq!(std::fs::read(sentinel)?, b"retained private probe");
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "owned unknown announcement probe: {}",
+        json!({
+            "owned_identity_in_discovery_cache": saw_owned_announcement,
+            "nonempty_owned_pending_record_observed": saw_pending_record,
+            "originally_unconfigured_peer": true,
+            "exact_dismissal_verified": dismissed_owned_record,
+            "actual_observations": observations,
+            "both_normal_owned_exits": true
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restart() -> TestResult {
     // Local broadcast/multicast and wildcard P2P listeners are confined to an
     // explicit ephemeral CI VM; never enable them on the user's current Mac.

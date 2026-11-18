@@ -81,8 +81,8 @@ class DiagnosticSelection(unittest.TestCase):
         source = (ROOT / 'tests/configuration_engine.rs').read_text()
         self.assertTrue(all(re.search(r'#\[tokio::test\]\s+async fn ' + case + r'\(', source) for case in cases))
 
-    def test_current_attribute_filter_draft_uses_four_unix_profiles(self):
-        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+    def test_attribute_filter_draft_uses_four_unix_profiles(self):
+        selection = {'draft_labels': ['native-extended-attribute-filter']}
         rows = HELPER.select(self.rows, selection, draft=True)
         expected = {'macos-amd64-standard', 'macos-arm64-standard', 'linux-amd64-standard', 'linux-arm64-standard'}
         self.assertEqual(len(rows), len(expected))
@@ -91,6 +91,18 @@ class DiagnosticSelection(unittest.TestCase):
         self.assertTrue(all(row['target'] == 'configuration_engine' and row['filter'] == case for row in rows))
         source = (ROOT / 'tests/common/extended_attribute_cases.rs').read_text()
         self.assertIn('async fn ' + case + '(', source)
+        self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
+
+    def test_current_unknown_announcement_probe_is_one_isolated_linux_profile(self):
+        selection = json.loads((ROOT / '.github/native-diagnostic-selection.json').read_text())
+        rows = HELPER.select(self.rows, selection, draft=True)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row['package'], 'linux-amd64-standard')
+        self.assertEqual(row['target'], 'network')
+        self.assertEqual(row['filter'], 'probe_pending_device_after_unknown_native_announcement')
+        source = (ROOT / 'tests/common/local_announcement_cases.rs').read_text()
+        self.assertIn('async fn ' + row['filter'] + '(', source)
         self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
 
     def test_metadata_only_owned_draft_keeps_native_plan_for_ready_manual_and_forks(self):
@@ -172,6 +184,7 @@ class DiagnosticSelection(unittest.TestCase):
                        "test/native-missing-policy-evidence-20261118-01a1ca9b",
                        "test/native-core-preferences-current-20261118-01a1ca9b",
                        "test/native-xattr-filter-20261118-01a1ca9b",
+                       "test/native-pending-announcement-20261118-01a1ca9b",
                        "ci/windows-packet-observer-feasibility-20261118-01a1ca9b",
                        "ci/windows-loopback-header-feasibility-20261118-01a1ca9b",
                        "test/controlled-acceptance-node-20261118-01a1ca9b",
@@ -364,7 +377,7 @@ class DiagnosticSelection(unittest.TestCase):
 
     def test_ready_and_dispatch_preserve_every_original_row(self):
         self.assertEqual(HELPER.select(self.rows, self.selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 252)
+        self.assertEqual(len(self.rows), 253)
         self.assertEqual(HELPER.select(self.rows, None, draft=True), self.rows)
 
     def test_ready_catalog_retains_priority_and_windows_sharing_effects(self):
@@ -498,7 +511,7 @@ class DiagnosticSelection(unittest.TestCase):
             self.assertTrue(all(r["label"] in selection["draft_labels"] and r["target"] == target and
                                 r["filter"] == name and r["trace"] == "0" for r in rows))
             self.assertEqual(HELPER.select(self.rows, selection, draft=False), self.rows)
-        self.assertEqual(len(self.rows), 252)
+        self.assertEqual(len(self.rows), 253)
 
     def test_unknown_empty_duplicate_and_malformed_selection_refused(self):
         for value in [{"draft_labels": []}, {"draft_labels": ["unknown"]},
