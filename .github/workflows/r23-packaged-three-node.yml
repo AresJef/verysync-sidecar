@@ -1,0 +1,48 @@
+name: Verify three native nodes from the exact candidate crate
+on:
+  push:
+    branches: [verify/r23/packaged-three-node]
+permissions:
+  contents: read
+jobs:
+  three-node:
+    name: Packaged candidate on three isolated native peers
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          path: candidate
+          ref: 4f0cb7254e78364d8b675ed43ee5a36854d919b4
+      - name: Build and verify the exact candidate archive
+        working-directory: candidate
+        run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/packaged-three-target"
+          printf 'CARGO_TARGET_DIR=%s\n' "$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 fetch --locked
+          cargo +1.85.0 package --offline --locked
+          RUSTUP_TOOLCHAIN=1.85.0 python3 -B scripts/publish-github-release.py \
+            --metadata ../.github/diagnostics/routed-candidate-package.json \
+            --check-package "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate"
+      - name: Prepare the fixed private engine executable
+        working-directory: candidate
+        run: >-
+          python3 scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require real packaged handoff, introducer behavior and native check results
+        run: |
+          mkdir "$RUNNER_TEMP/packaged-three"
+          tar -xzf "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate" -C "$RUNNER_TEMP/packaged-three"
+          cd "$RUNNER_TEMP/packaged-three/verysync-sidecar-0.1.0-alpha.2"
+          python3 scripts/run-isolated-engine-tests.py --toolchain 1.85.0 --cargo "$(command -v cargo)" \
+            --test-target p2p_three_nodes --evidence-dir "$RUNNER_TEMP/owned-three-native"
+      - name: Require exact owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        working-directory: candidate
+        run: python3 scripts/prepare-test-engine.py check-cleanup
