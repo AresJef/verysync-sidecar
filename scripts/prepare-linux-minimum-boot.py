@@ -194,7 +194,7 @@ echo "VS_ARMEL_VERSION_EXIT status=$status"
 echo "$version"
 echo "VS_ARMEL_VERSION_CONTROL_DONE"
 '''
-    elif malta_control and program_sha is not None:
+    elif malta_control and program_sha is not None and ca_sha is None:
         runtime = f'''machine=$(/bin/busybox uname -m) || fail machine_identity
 case "$machine" in mips|mipsel) ;; *) fail machine_identity ;; esac
 adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
@@ -214,8 +214,8 @@ echo "$version"
 echo "VS_MALTA_VERSION_CONTROL_DONE"
 '''
     elif program_sha is not None:
-        arm_with_archived_libc = armel_stretch or legacy_armv7
-        libc_number = "2.24" if arm_with_archived_libc else "2.17"
+        archived_libc = armel_stretch or legacy_armv7 or malta_control
+        libc_number = "2.24" if archived_libc else "2.17"
         entropy_setup = '''case " $(/bin/busybox cat /proc/cmdline) " in
     *" vs_minimum_entropy=natural "*) entropy_mode=natural ;;
     *" vs_minimum_entropy=seeded "*) entropy_mode=seeded ;;
@@ -228,7 +228,14 @@ if [ "$entropy_mode" = seeded ]; then
 fi
 /bin/busybox rm /.vs-entropy-seed || fail entropy_seed_removal
 '''
-        if arm_with_archived_libc:
+        if malta_control:
+            runtime = '''machine=$(/bin/busybox uname -m) || fail machine_identity
+case "$machine" in mips|mipsel) ;; *) fail machine_identity ;; esac
+adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
+[ "$adapters" = lo ] || fail external_guest_adapter
+echo "VS_MALTA_GUEST_CONTROL $machine lo"
+'''
+        elif archived_libc:
             marker = "VS_ARMEL_STRETCH_GUEST" if armel_stretch else "VS_ARM_VEXPRESS_CONTROL"
             runtime = f'''machine=$(/bin/busybox uname -m) || fail machine_identity
 [ "$machine" = armv7l ] || fail machine_identity
@@ -244,7 +251,7 @@ echo "VS_MINIMUM_PTY_READY devpts=true ptmx=true"
 actual_program_sha=$(/bin/busybox sha256sum /bin/verysync) || fail program_sha
 case "$actual_program_sha" in "{program_sha} "*) ;; *) fail program_sha ;; esac
 '''
-        if arm_with_archived_libc:
+        if archived_libc:
             runtime += entropy_setup
         runtime += f'''
 version=$(/bin/verysync version --home /version-state) || fail fixed_program_version
@@ -254,7 +261,7 @@ libc_version=$(/{runtime_lib}/libc.so.6) || fail fixture_libc
 case "$libc_version" in *"version {libc_number}"*) ;; *) fail fixture_libc ;; esac
 echo "VS_MINIMUM_GLIBC_VERSION glibc={libc_number}"
 '''
-        if not arm_with_archived_libc:
+        if not archived_libc:
             runtime += entropy_setup
         runtime += f'''
 /bin/vs-entropy-control before_sdk || fail entropy_measurement
@@ -331,8 +338,8 @@ malta_version = args.malta_entropy_helper is not None
 if malta_version:
     if not malta or args.distribution != "stretch" or args.engine_receipt is None or args.runtime_dir is not None:
         parser.error("the Malta version control needs the exact Stretch program and static entropy helper")
-elif malta and (args.runtime_dir is not None or args.engine_receipt is not None):
-    parser.error("provide the exact Malta entropy helper and engine receipt or run only the boot control")
+elif malta and args.runtime_dir is not None and args.distribution != "stretch":
+    parser.error("the Malta SDK fixture requires the archived Stretch sysroot")
 if args.arm_vexpress_runtime is not None:
     if args.architecture != "arm-vexpress" or args.runtime_dir is None or args.engine_receipt is None:
         parser.error("vexpress runtime requires an exact profile, its runtime directory and its engine receipt")
@@ -495,5 +502,7 @@ if armel_stretch or vexpress_stretch:
     receipt.update({"dtb_filename": dtb_filename, "dtb_sha256": dig(dtb), "guest_libc": "glibc 2.24"})
 if args.arm_vexpress_runtime is not None:
     receipt.update({"guest_libc": "glibc 2.24", "vexpress_profile": args.arm_vexpress_runtime})
+if malta and args.runtime_dir is not None:
+    receipt["guest_libc"] = "glibc 2.24"
 (WORK/"prepared-boot-fixture.json").write_text(json.dumps(receipt,indent=2)+"\n")
 print(json.dumps(receipt))

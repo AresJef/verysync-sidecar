@@ -29,6 +29,50 @@
       "filename": "pool/main/l/linux/linux-image-4.9.0-13-4kc-malta_4.9.228-1_mipsel.deb",
       "size": "32810176",
       "sha256": "9a5dff9c498bf5736ca9f97cbb005b4b60bd139aa0f30f5bab9feca783907d9b"
+    },
+    {
+      "package": "ca-certificates",
+      "version": "20200601~deb9u1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20200601~deb9u1_all.deb",
+      "size": "159692",
+      "sha256": "d6fc9275de84bdf598b3703a50935dc69d2e80105317a44f6cba465c073f88f9"
+    }
+  ],
+  "stretch-sysroot": [
+    {
+      "package": "libatomic1",
+      "version": "6.3.0-18+deb9u1",
+      "filename": "pool/main/g/gcc-6/libatomic1_6.3.0-18+deb9u1_mipsel.deb",
+      "size": "6724",
+      "sha256": "05156c9b2a9e9ecbddd14e2a9baf5a51da70ab803512b1c75c28b7f07a9298ad"
+    },
+    {
+      "package": "libgcc1",
+      "version": "1:6.3.0-18+deb9u1",
+      "filename": "pool/main/g/gcc-6/libgcc1_6.3.0-18+deb9u1_mipsel.deb",
+      "size": "47162",
+      "sha256": "fd51cf4100ac36da484555f34dc04f0fdd1ed64569feec5cb59e4918dd38df58"
+    },
+    {
+      "package": "libc6",
+      "version": "2.24-11+deb9u4",
+      "filename": "pool/main/g/glibc/libc6_2.24-11+deb9u4_mipsel.deb",
+      "size": "2392854",
+      "sha256": "5515fb37ad178bb61b5ce53e0d36860d865779174352403ee7ed20976777f129"
+    },
+    {
+      "package": "libc6-dev",
+      "version": "2.24-11+deb9u4",
+      "filename": "pool/main/g/glibc/libc6-dev_2.24-11+deb9u4_mipsel.deb",
+      "size": "2162508",
+      "sha256": "1ffd1386f470657d3c5aa12179a009f6aea23a0b42f5146b04a2280b7e4bb032"
+    },
+    {
+      "package": "linux-libc-dev",
+      "version": "4.9.228-1",
+      "filename": "pool/main/l/linux/linux-libc-dev_4.9.228-1_mipsel.deb",
+      "size": "1497020",
+      "sha256": "d5ec5e5421148989afa0ec90f9d72ccefe11e7d4fb1e8be1ab3f18434ffa5b47"
     }
   ]
 }

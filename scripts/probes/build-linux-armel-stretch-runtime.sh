@@ -27,6 +27,13 @@ case "$arch_profile" in
     float=hard
     loader=ld-linux-armhf.so.3
     ;;
+  mips|mipsel)
+    target="$arch_profile-unknown-linux-gnu"
+    abi="$arch_profile-linux-gnu"
+    cpu=mips32r2
+    float=
+    loader=ld.so.1
+    ;;
   *) exit 2 ;;
 esac
 sysroot="$work/armel-sysroot"
@@ -61,8 +68,13 @@ cat > "$linker" <<'LINKER'
 set -euo pipefail
 root="$VS_ARMEL_SYSROOT"
 abi="$VS_ARM_GNU_ABI"
-cpu=(-march="$VS_ARM_CPU" -mfloat-abi="$VS_ARM_FLOAT")
-if [[ "$VS_ARM_FLOAT" = hard ]]; then cpu+=(-mfpu=vfpv3-d16); fi
+cpu=(-march="$VS_ARM_CPU")
+if [[ -n "$VS_ARM_FLOAT" ]]; then
+  cpu+=(-mfloat-abi="$VS_ARM_FLOAT")
+  if [[ "$VS_ARM_FLOAT" = hard ]]; then cpu+=(-mfpu=vfpv3-d16); fi
+else
+  cpu+=(-mabi=32)
+fi
 exec "/usr/bin/$abi-gcc" --sysroot="$root" "${cpu[@]}" \
   -B"$root/usr/lib/$abi/" -L"$root/usr/lib/$abi" -L"$root/lib/$abi" \
   -isystem "$root/usr/include/$abi" -isystem "$root/usr/include" \
@@ -78,14 +90,26 @@ export "AR_${target_alias}=/usr/bin/$abi-ar"
 export CARGO_TARGET_DIR="$work/target"
 cargo +1.85.0 --version
 rustc +1.85.0 --version
-rustup target list --installed --toolchain 1.85.0 | grep -Fx "$target"
+cargo_build=(cargo +1.85.0)
+sysroot_label=ARM
+abi_label=ARMEL
+if [[ "$arch_profile" == mips || "$arch_profile" == mipsel ]]; then
+  sysroot_label=MIPS
+  abi_label=MIPS
+  source_lock="$(rustc +1.85.0 --print sysroot)/lib/rustlib/src/rust/library/Cargo.lock"
+  printf '%s  %s\n' aa34aebc09586809bf72b16b62114d811baba843bb8296c10f07c90e4e5b8e31 "$source_lock" | sha256sum --check --strict
+  export RUSTC_BOOTSTRAP=1 VERYSYNC_TEST_CUSTOM_STD=rust185-mips-bootstrap CARGO_BUILD_TARGET="$target"
+  cargo_build=(python3 "$work/product/scripts/cargo-mips-std.py" +1.85.0)
+else
+  rustup target list --installed --toolchain 1.85.0 | grep -Fx "$target"
+fi
 "$abi-gcc" --version | sed -n '1p'
-printf 'Link target %s with archived ARM sysroot %s\n' "$target" "$sysroot"
+printf 'Link target %s with archived %s sysroot %s\n' "$target" "$sysroot_label" "$sysroot"
 cp -R "$source_tree" "$work/product"
 cp "$support/linux_minimum_runtime.rs" "$work/product/examples/linux_minimum_runtime.rs"
 (
   cd "$work/product"
-  cargo +1.85.0 build --locked --release --target "$target" --example linux_minimum_runtime
+  "${cargo_build[@]}" build --locked --release --target "$target" --example linux_minimum_runtime
 )
 install -m 755 "$CARGO_TARGET_DIR/$target/release/examples/linux_minimum_runtime" "$fixture/vs-sdk-probe"
 "$linker" -std=gnu11 -Wall -Wextra -Werror -O2 "$support/linux_guest_entropy.c" -o "$fixture/vs-entropy-control"
@@ -117,5 +141,5 @@ done
 "$abi-readelf" --version-info "$fixture/vs-sdk-probe" "$fixture/vs-entropy-control" > "$work/symbol-versions.txt"
 highest=$(grep -Eo 'GLIBC_[0-9]+(\.[0-9]+)+' "$work/symbol-versions.txt" | sort -Vu | tail -n 1)
 test "$(printf '%s\n' "$highest" GLIBC_2.24 | sort -V | tail -n 1)" = GLIBC_2.24
-printf 'ARMEL dynamic glibc max symbol ABI %s\n' "$highest"
+printf '%s dynamic glibc max symbol ABI %s\n' "$abi_label" "$highest"
 sha256sum "$fixture"/* | tee "$work/guest-runtime-sha256.txt"
