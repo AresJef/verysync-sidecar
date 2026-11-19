@@ -43,7 +43,7 @@ def catalog(suite):
         assert name not in chosen
         assert fields["Architecture"] in {"all", "ppc64el"}
         assert re.fullmatch(r"[0-9a-f]{64}", fields["SHA256"])
-        assert re.fullmatch(r"pool/main/[A-Za-z0-9+./~-]+\.deb", fields["Filename"])
+        assert re.fullmatch(r"pool/main/[A-Za-z0-9_+./~-]+\.deb", fields["Filename"])
         assert ".." not in Path(fields["Filename"]).parts
         chosen[name] = {
             "package": name, "version": fields["Version"], "filename": fields["Filename"],
