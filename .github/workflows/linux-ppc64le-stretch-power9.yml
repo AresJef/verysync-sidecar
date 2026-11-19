@@ -1,0 +1,151 @@
+name: Exercise the fixed Rust SDK in an offline Debian Stretch POWER9 guest
+on:
+  push:
+    branches: [ci/linux-ppc64le-stretch-power9-20261119-01a1ca9b]
+    paths:
+      - .github/workflows/linux-ppc64le-stretch-power9.yml
+      - scripts/prepare-linux-minimum-boot.py
+      - scripts/probes/build-linux-armel-stretch-runtime.sh
+      - scripts/probes/ppc64le-stretch-inputs.py
+
+permissions:
+  contents: read
+
+jobs:
+  ppc64le:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-ppc64le-stretch-power9-20261119-01a1ca9b'
+    name: Fixed PPC64LE SDK on Debian 4.9 with and without the archived CA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 19
+    env:
+      PRODUCT: 0cb2613797f3d3e327996e0bf034ec72b9dab0e2
+      PRODUCT_TREE: 30dac6ec75db9d3df745f4c370c95c14d6b52ec5
+      CORE_ARCHIVE: c1115c498d40fcf6c1e0cfadd5176fa5230fce56cb937e61c76a210ffa7565f7
+      CORE_SHA: d285229f125ecba770627f580eabb6257f9ba503a9ef169171d9d8facda32145
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 0cb2613797f3d3e327996e0bf034ec72b9dab0e2
+          path: verified-product
+          persist-credentials: false
+      - name: Authenticate the unchanged Rust product, Debian archives and official engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(git -C verified-product rev-parse HEAD)" = "$PRODUCT"
+          test "$(git -C verified-product rev-parse 'HEAD^{tree}')" = "$PRODUCT_TREE"
+          test -z "$(git -C verified-product status --porcelain)"
+          work="$RUNNER_TEMP/vs-ppc64le-stretch"
+          install -d -m 700 "$work" "$work/runs"
+          python3 -B scripts/probes/ppc64le-stretch-inputs.py "$work"
+          python3 -B verified-product/scripts/prepare-test-engine.py prepare \
+            --package linux-ppc64le-standard --parent "$work/official-core" > "$work/official-core-receipt.json"
+          python3 - "$work" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          receipt = json.loads((Path(sys.argv[1])/"official-core-receipt.json").read_text())
+          assert (receipt["package"],receipt["version"]) == ("linux-ppc64le-standard","v2.33.2")
+          assert (receipt["archive_sha256"],receipt["binary_sha256"]) == (os.environ["CORE_ARCHIVE"],os.environ["CORE_SHA"])
+          print("Matched the fixed PPC64LE archive and executable bytes", receipt["binary_sha256"])
+          PY
+      - name: Prepare the fixed Rust compiler target and full-system POWER9 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --kill-after=10s 135s sudo apt-get -o Acquire::Retries=1 -o Acquire::https::Timeout=18 update
+          timeout --kill-after=10s 190s sudo apt-get -o Acquire::Retries=1 -o Acquire::https::Timeout=18 install \
+            -y --no-install-recommends gcc-powerpc64le-linux-gnu binutils-powerpc64le-linux-gnu qemu-system-ppc qemu-system-data
+          timeout --kill-after=5s 120s rustup toolchain install 1.85.0 --profile minimal --target powerpc64le-unknown-linux-gnu
+          qemu-system-ppc64 --version
+      - name: Boot the authenticated Debian kernel before building the Rust controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-ppc64le-stretch"
+          python3 -B scripts/prepare-linux-minimum-boot.py stretch --architecture ppc64le \
+            --destination "$work/check-boot" --local-package-dir "$work/packages"
+          root="$work/check-boot/stretch"
+          status=0
+          timeout --kill-after=8s 115s qemu-system-ppc64 -machine pseries,accel=tcg -cpu power9 -m 768 -smp 1 \
+            -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
+            -kernel "$root/vmlinux" -initrd "$root/initramfs.cpio.gz" \
+            -append "console=hvc0 rdinit=/init panic=1" > "$work/runs/plain-boot.log" 2>&1 || status=$?
+          tr -d "\r" < "$work/runs/plain-boot.log"
+          test "$status" = 0
+          tr -d "\r" < "$work/runs/plain-boot.log" | grep -aFx 'VS_MINIMUM_BOOT_OK kernel=4.9.0-13-powerpc64le loopback=127.0.0.1'
+      - name: Link the original Rust probe against archived PPC64LE glibc 2.28
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-ppc64le-stretch"
+          bash scripts/probes/build-linux-armel-stretch-runtime.sh "$PWD/verified-product" "$PWD/scripts/probes" "$work" ppc64le
+      - name: Exercise the original data, trust and clean-exit gates in both offline guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-ppc64le-stretch"
+          python3 -B scripts/prepare-linux-minimum-boot.py stretch --architecture ppc64le \
+            --destination "$work/boot" --local-package-dir "$work/packages" \
+            --runtime-dir "$work/guest-runtime" --engine-receipt "$work/official-core-receipt.json"
+          root="$work/boot/stretch"
+          cmp "$root/vmlinux" "$work/check-boot/stretch/vmlinux"
+          overall=0
+          for trust in absent debian; do
+            raw="$work/runs/guest-console-$trust.log"
+            console="$work/runs/guest-console-$trust.txt"
+            status=0
+            timeout --kill-after=8s 155s qemu-system-ppc64 -machine pseries,accel=tcg -cpu power9 -m 768 -smp 1 \
+              -nodefaults -display none -serial stdio -monitor none -nic none -no-reboot \
+              -kernel "$root/vmlinux" -initrd "$root/initramfs.cpio.gz" \
+              -append "console=hvc0 rdinit=/init vs_minimum_entropy=seeded vs_minimum_certs=$trust panic=1" > "$raw" 2>&1 || status=$?
+            tr -d '\r' < "$raw" > "$console"
+            cat "$console"
+            printf 'POWER9 guest %s emulator_exit=%s\n' "$trust" "$status"
+            if [ "$status" -ne 0 ] \
+                || ! grep -aFxq 'VS_MINIMUM_BOOT_OK kernel=4.9.0-13-powerpc64le loopback=127.0.0.1' "$console" \
+                || ! grep -aFxq 'VS_PPC64LE_GUEST_CONTROL ppc64le POWER9 lo' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_PTY_READY devpts=true ptmx=true' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_CORE_VERSION_OK v2.33.2' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_GLIBC_VERSION glibc=2.28' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_ENTROPY_MODE seeded' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_ENTROPY_CREDIT_OK bits=512' "$console" \
+                || ! grep -aEq '^VS_MINIMUM_ENTROPY phase=before_sdk bits=[0-9]+ readable=1$' "$console" \
+                || ! grep -aEq '^VS_MINIMUM_ENTROPY phase=after_sdk bits=[0-9]+ readable=[01]$' "$console" \
+                || ! grep -aFxq "VS_MINIMUM_CA_MODE $trust" "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_SDK_RUNTIME uid=1000 loaded_fixture_libc=true' "$console" \
+                || grep -aq 'Kernel panic' "$console"; then
+              overall=1
+              continue
+            fi
+            if [ "$trust" = debian ]; then
+              grep -aFxq 'VS_MINIMUM_CA_BUILDER debian_ca=true builder_ok=true missing_platform_roots=false' "$console" \
+                && grep -aEq '^VS_MINIMUM_SDK_OK \{' "$console" \
+                && ! grep -aq '^VS_MINIMUM_BOOT_FAILURE ' "$console" || overall=1
+            else
+              grep -aFxq 'VS_MINIMUM_CA_BUILDER debian_ca=false builder_ok=false missing_platform_roots=true' "$console" \
+                && grep -aEq '^VS_MINIMUM_SDK_START_OBSERVATION .*"native_health_http_status":200[,}]' "$console" \
+                && grep -aFxq 'VS_MINIMUM_SDK_FAILURE_CLEANUP exact_exit_and_lease_release=true' "$console" \
+                && grep -aFxq 'VS_MINIMUM_BOOT_FAILURE sdk_runtime' "$console" \
+                && grep -aFxq 'Error: Error(management deadline exceeded while attempting to start managed instance)' "$console" || overall=1
+            fi
+          done
+          exit "$overall"
+      - name: Preserve only guest serial logs and integrity receipts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ppc64le-debian-stretch-sdk-power9
+          path: |
+            ${{ runner.temp }}/vs-ppc64le-stretch/runs/*.log
+            ${{ runner.temp }}/vs-ppc64le-stretch/check-boot/prepared-boot-fixture.json
+            ${{ runner.temp }}/vs-ppc64le-stretch/boot/prepared-boot-fixture.json
+            ${{ runner.temp }}/vs-ppc64le-stretch/guest-runtime-sha256.txt
+            ${{ runner.temp }}/vs-ppc64le-stretch/authenticated-ppc64le-inputs.json
+          if-no-files-found: warn

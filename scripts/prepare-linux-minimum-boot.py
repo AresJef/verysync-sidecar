@@ -21,12 +21,14 @@ KERNELS = {
     "mips": {"wheezy": "3.2.0-4-4kc-malta", "stretch": "4.9.0-13-4kc-malta"},
     "mipsel": {"wheezy": "3.2.0-4-4kc-malta", "stretch": "4.9.0-13-4kc-malta"},
     "s390x": {"wheezy": "3.2.0-4-s390x", "stretch": "4.9.0-13-s390x"},
+    "ppc64le": {"stretch": "4.9.0-13-powerpc64le"},
 }
 ELF_FORMAT = {
     "amd64": (2, 62, "<"), "i386": (1, 3, "<"), "armel": (1, 40, "<"), "arm64": (2, 183, "<"),
     "arm-vexpress": (1, 40, "<"),
     "mips": (1, 8, ">"), "mipsel": (1, 8, "<"),
     "s390x": (2, 22, ">"),
+    "ppc64le": (2, 21, "<"),
 }
 RUNTIME = {
     "amd64": ("linux-amd64-standard", "lib64", "lib64/ld-linux-x86-64.so.2"),
@@ -37,6 +39,7 @@ RUNTIME = {
     "mips": ("linux-mips-standard", "lib", "lib/ld.so.1"),
     "mipsel": ("linux-mipsle-standard", "lib", "lib/ld.so.1"),
     "s390x": ("linux-s390x-standard", "lib64", "lib/ld64.so.1"),
+    "ppc64le": ("linux-ppc64le-standard", "lib64", "lib64/ld64.so.2"),
 }
 VEXPRESS_RUNTIME = {
     "armv6": ("linux-armv6-standard", "lib", "lib/ld-linux.so.3"),
@@ -157,7 +160,7 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture, profile=
 
 def boot_init(expected, program_sha=None, ca_sha=None, runtime_lib="lib64",
               vx_control=False, armel_control=False, armel_stretch=False,
-              legacy_armv7=False, malta_control=False):
+              legacy_armv7=False, malta_control=False, ppc64le_control=False):
     runtime = ""
     shutdown = "reboot" if armel_control or armel_stretch or legacy_armv7 or malta_control else "poweroff"
     if vx_control:
@@ -214,8 +217,8 @@ echo "$version"
 echo "VS_MALTA_VERSION_CONTROL_DONE"
 '''
     elif program_sha is not None:
-        archived_libc = armel_stretch or legacy_armv7 or malta_control
-        libc_number = "2.28" if malta_control else ("2.24" if archived_libc else "2.17")
+        archived_libc = armel_stretch or legacy_armv7 or malta_control or ppc64le_control
+        libc_number = "2.28" if malta_control or ppc64le_control else ("2.24" if archived_libc else "2.17")
         entropy_setup = '''case " $(/bin/busybox cat /proc/cmdline) " in
     *" vs_minimum_entropy=natural "*) entropy_mode=natural ;;
     *" vs_minimum_entropy=seeded "*) entropy_mode=seeded ;;
@@ -234,6 +237,15 @@ case "$machine" in mips|mipsel) ;; *) fail machine_identity ;; esac
 adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
 [ "$adapters" = lo ] || fail external_guest_adapter
 echo "VS_MALTA_GUEST_CONTROL $machine lo"
+'''
+        elif ppc64le_control:
+            runtime = '''machine=$(/bin/busybox uname -m) || fail machine_identity
+[ "$machine" = ppc64le ] || fail machine_identity
+adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
+[ "$adapters" = lo ] || fail external_guest_adapter
+/bin/busybox grep -q POWER9 /proc/cpuinfo || fail cpu_identity
+echo "VS_PPC64LE_GUEST_CONTROL ppc64le POWER9 lo"
+export LD_LIBRARY_PATH=/lib64
 '''
         elif archived_libc:
             marker = "VS_ARMEL_STRETCH_GUEST" if armel_stretch else "VS_ARM_VEXPRESS_CONTROL"
@@ -385,12 +397,13 @@ for package in records:
 distribution = args.distribution
 release = KERNELS[args.architecture][distribution]
 _, runtime_lib, _ = RUNTIME[args.architecture]
-kernel_member = "vmlinux" if malta else "vmlinuz"
+ppc64le = args.architecture == "ppc64le"
+kernel_member = "vmlinux" if malta or ppc64le else "vmlinuz"
 kernel_name, config_name = "boot/"+kernel_member+"-"+release, "boot/config-"+release
 kernel_deb = by_name[distribution,"linux-image-"+release]
 armel_stretch = args.architecture == "armel" and distribution == "stretch"
 vexpress_stretch = args.architecture == "arm-vexpress" and distribution == "stretch"
-required_kernel_members = {kernel_name:12*1024*1024,config_name:1024*1024}
+required_kernel_members = {kernel_name:(32 if ppc64le else 12)*1024*1024,config_name:1024*1024}
 dtb_filename = "vexpress-v2p-ca15-tc1.dtb" if vexpress_stretch else "vexpress-v2p-ca9.dtb"
 if armel_stretch or vexpress_stretch:
     dtb_member = f"usr/lib/linux-image-{release}/{dtb_filename}"
@@ -409,8 +422,9 @@ required_platform = {
     "mips": {"CONFIG_MIPS_MALTA", "CONFIG_CPU_MIPS32_R1", "CONFIG_CPU_BIG_ENDIAN", "CONFIG_SERIAL_8250_CONSOLE"},
     "mipsel": {"CONFIG_MIPS_MALTA", "CONFIG_CPU_MIPS32_R1", "CONFIG_CPU_LITTLE_ENDIAN", "CONFIG_SERIAL_8250_CONSOLE"},
     "s390x": {"CONFIG_S390", "CONFIG_64BIT", "CONFIG_SCLP_VT220_CONSOLE"},
+    "ppc64le": {"CONFIG_PPC64", "CONFIG_PPC_PSERIES", "CONFIG_HVC_CONSOLE"},
 }
-if malta:
+if malta or ppc64le:
     kernel_filename = "vmlinux"
     check_elf(kernel, args.architecture)
 elif args.architecture in {"armel", "arm-vexpress"}:
@@ -482,7 +496,7 @@ if args.runtime_dir is not None:
 files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
             runtime_hashes.get("candidate_debian_platform_ca"), runtime_lib,
             args.s390x_version_control, args.armel_version_control, armel_stretch,
-            args.architecture == "arm-vexpress", malta),0,0))
+            args.architecture == "arm-vexpress", malta, ppc64le),0,0))
 ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)
@@ -502,7 +516,7 @@ if armel_stretch or vexpress_stretch:
     receipt.update({"dtb_filename": dtb_filename, "dtb_sha256": dig(dtb), "guest_libc": "glibc 2.24"})
 if args.arm_vexpress_runtime is not None:
     receipt.update({"guest_libc": "glibc 2.24", "vexpress_profile": args.arm_vexpress_runtime})
-if malta and args.runtime_dir is not None:
+if (malta or ppc64le) and args.runtime_dir is not None:
     receipt["guest_libc"] = "glibc 2.28"
 (WORK/"prepared-boot-fixture.json").write_text(json.dumps(receipt,indent=2)+"\n")
 print(json.dumps(receipt))

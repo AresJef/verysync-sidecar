@@ -38,8 +38,19 @@ case "$arch_profile" in
     archive_suite=buster
     libc_version=2.28
     ;;
+  ppc64le)
+    target=powerpc64le-unknown-linux-gnu
+    abi=powerpc64le-linux-gnu
+    cpu=power9
+    float=
+    loader=ld64.so.2
+    archive_suite=buster
+    libc_version=2.28
+    ;;
   *) exit 2 ;;
 esac
+loader_directory=lib
+if [[ "$arch_profile" == ppc64le ]]; then loader_directory=lib64; fi
 sysroot="$work/armel-sysroot"
 fixture="$work/guest-runtime"
 mkdir -m 700 "$sysroot" "$fixture"
@@ -73,7 +84,9 @@ set -euo pipefail
 root="$VS_ARMEL_SYSROOT"
 abi="$VS_ARM_GNU_ABI"
 cpu=(-march="$VS_ARM_CPU")
-if [[ -n "$VS_ARM_FLOAT" ]]; then
+if [[ "$abi" == powerpc64le-linux-gnu ]]; then
+  cpu=(-mcpu="$VS_ARM_CPU" -mabi=elfv2)
+elif [[ -n "$VS_ARM_FLOAT" ]]; then
   cpu+=(-mfloat-abi="$VS_ARM_FLOAT")
   if [[ "$VS_ARM_FLOAT" = hard ]]; then cpu+=(-mfpu=vfpv3-d16); fi
 else
@@ -107,6 +120,10 @@ if [[ "$arch_profile" == mips || "$arch_profile" == mipsel ]]; then
   cargo_build=(python3 "$work/product/scripts/cargo-mips-std.py" +1.85.0)
 else
   rustup target list --installed --toolchain 1.85.0 | grep -Fx "$target"
+  if [[ "$arch_profile" == ppc64le ]]; then
+    sysroot_label=PPC64LE
+    abi_label=PPC64LE
+  fi
 fi
 "$abi-gcc" --version | sed -n '1p'
 printf 'Link target %s with archived %s sysroot %s\n' "$target" "$sysroot_label" "$sysroot"
@@ -126,7 +143,7 @@ needed_libraries() {
 }
 runtime_dependencies=("$fixture/vs-sdk-probe" "$fixture/vs-entropy-control" "$fixture/libc.so.6")
 for file in "${runtime_dependencies[@]:0:2}"; do
-  "$abi-readelf" -l "$file" | grep -F "[Requesting program interpreter: /lib/$loader]"
+  "$abi-readelf" -l "$file" | grep -F "[Requesting program interpreter: /$loader_directory/$loader]"
 done
 for ((i = 0; i < ${#runtime_dependencies[@]}; i++)); do
   binary="${runtime_dependencies[i]}"
