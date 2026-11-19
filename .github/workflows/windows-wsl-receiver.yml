@@ -1,0 +1,37 @@
+name: Boot an owned Windows test receiver guest
+
+on:
+  push:
+    branches: ['verify/windows-wsl-receiver-20261119-a']
+    paths:
+      - .github/workflows/windows-wsl-receiver.yml
+      - .github/diagnostics/wsl-receiver.ps1
+
+permissions:
+  contents: read
+
+jobs:
+  guest:
+    name: Owned WSL2 receive link (${{ matrix.guest_arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            guest_arch: x86_64
+            sha256: 56e2810205c17a5dff78cdd7b2c2af4ccdef16f18d765d5bb0f527438b136676
+          - runner: windows-11-arm
+            guest_arch: aarch64
+            sha256: 3f1bd6811370264cc363bb991ff15ac67621b239ea6e25ff2eb22af3d0641473
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Verify the official input, boot the exact WSL2 guest, and remove only that guest
+        shell: pwsh
+        run: >-
+          ./.github/diagnostics/wsl-receiver.ps1
+          -GuestArch '${{ matrix.guest_arch }}'
+          -ExpectedDigest '${{ matrix.sha256 }}'
