@@ -1,0 +1,87 @@
+name: Verify ordinary and entitlement boundary effects from the candidate package
+on:
+  push:
+    branches: [verify/r24/packaged-ordinary-scope]
+permissions:
+  contents: read
+jobs:
+  ordinary:
+    name: Packaged ordinary effects and exact refusing cases (${{ matrix.package }})
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust_host: aarch64-unknown-linux-gnu
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust_host: aarch64-apple-darwin
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          path: candidate
+          ref: 0ade4f71d088bebd7dd7cb3544feb3a249521b51
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Build and verify the exact candidate crate
+        working-directory: candidate
+        env:
+          EXPECTED_RUST_HOST: ${{ matrix.rust_host }}
+        run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/ordinary-candidate-target"
+          printf 'CARGO_TARGET_DIR=%s\n' "$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          test "$(rustc +"$TEST_TOOLCHAIN" -vV | sed -n 's/^host: //p')" = "$EXPECTED_RUST_HOST"
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          cargo +"$TEST_TOOLCHAIN" package --offline --locked
+          RUSTUP_TOOLCHAIN="$TEST_TOOLCHAIN" python3 -B scripts/publish-github-release.py \
+            --metadata ../.github/diagnostics/r23-ordinary-package.json \
+            --check-package "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate"
+      - name: Prepare matching pinned native fixture with private state
+        working-directory: candidate
+        run: >-
+          python3 scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require nine actual appropriate native outcomes and exact per-suite cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/ordinary-crate"
+          tar -xzf "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate" -C "$RUNNER_TEMP/ordinary-crate"
+          cd "$RUNNER_TEMP/ordinary-crate/verysync-sidecar-0.1.0-alpha.2"
+          run_case() {
+            local suite="$1" filter="$2" expected="$3" label="$4"
+            local evidence="$RUNNER_TEMP/native-ordinary-$label"
+            local selection=()
+            if [[ -n "$filter" ]]; then selection=(--test-filter "$filter"); fi
+            python3 scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+              --test-target "$suite" "${selection[@]}" --evidence-dir "$evidence"
+            grep -E "^test result: ok. $expected passed; 0 failed; 0 ignored;" \
+              "$evidence/${suite//_/-}.log"
+            python3 scripts/prepare-test-engine.py check-cleanup
+            printf 'ORDINARY_CASE %s count=%s exact_image_cleanup=true\n' "$label" "$expected"
+          }
+          run_case authentication_engine native_local_api_explicit_startup 1 local-api
+          run_case authentication_engine official_account_empty_logout 1 account-boundary
+          run_case authentication_engine native_empty_license_metadata 1 license-boundary
+          run_case authentication_engine native_tunnel_permissions_negative 1 tunnel-boundary
+          run_case sync_observation actual_selective_tree_pages_and_license_rejection 1 selective-tree
+          run_case local_sync_automation_engine '' 2 storage-startup-and-schedule
+          run_case file_history_engine public_free_audit_settings 1 audit-boundary
+          run_case file_history_engine public_version_policy_archives_remote_changes 1 ordinary-history
+      - name: Require final exact owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        working-directory: candidate
+        run: python3 scripts/prepare-test-engine.py check-cleanup
