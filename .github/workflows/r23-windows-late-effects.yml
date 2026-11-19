@@ -1,0 +1,57 @@
+name: Locate two Windows native acceptance failures
+on:
+  push:
+    branches: [verify/r23/windows-late-effects]
+permissions:
+  contents: read
+jobs:
+  windows-diagnosis:
+    name: Native failure stage (${{ matrix.package }})
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            toolchain: 1.85.0-aarch64-pc-windows-msvc
+            target: maintenance_engine
+            filter: actual_
+          - package: windows-amd64-standard
+            runner: windows-2022
+            toolchain: 1.85.0-x86_64-pc-windows-msvc
+            target: engine_control
+            filter: actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: ${{ matrix.toolchain }}
+      TEST_PACKAGE: ${{ matrix.package }}
+      TEST_TARGET: ${{ matrix.target }}
+      TEST_FILTER: ${{ matrix.filter }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Prepare the same native compiler and fixed isolated engine
+        run: |
+          git rev-parse HEAD HEAD^{tree}
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          python scripts/prepare-test-engine.py prepare --package "$TEST_PACKAGE" \
+            --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Observe originally required effects and original deadlines
+        run: |
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target "$TEST_TARGET" --test-filter "$TEST_FILTER" \
+            --evidence-dir "$RUNNER_TEMP/vs-r23-windows-late-effects"
+      - name: Confirm exact owned test-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup

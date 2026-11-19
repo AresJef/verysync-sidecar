@@ -514,6 +514,11 @@ async fn incomplete_native_peer_observation(observe_download: bool) -> TestResul
     println!("native_debug_index_file_actual_peer_availability=true native_index_file_availability=true actual_private_peer_matches=true non_temporary_source_record=true shared_native_signature_version3_preserved_without_verification=true zero_local_record_preserved=true receiver_file_not_complete=true no_wan_or_completion_claim=true caller_fixture_polling_separate_from_single_sdk_reads=true");
 
     if observe_download {
+        let mut progress_reads = 0;
+        let mut sample_reads = 0;
+        let mut native_500s = 0;
+        let mut last_sample = None;
+        let started = std::time::Instant::now();
         let progress = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 match b
@@ -521,22 +526,36 @@ async fn incomplete_native_peer_observation(observe_download: bool) -> TestResul
                     .folder_download_progress(&bf.configuration.id)
                     .await
                 {
-                    Ok(progress)
-                        if progress
-                            .files
-                            .get("sample.bin")
-                            .is_some_and(|p| p.pulled_blocks > 0 && p.pulling_blocks > 0) =>
-                    {
-                        return Ok::<_, Error>(progress)
+                    Ok(progress) => {
+                        progress_reads += 1;
+                        if let Some(sample) = progress.files.get("sample.bin") {
+                            sample_reads += 1;
+                            last_sample = Some((
+                                sample.pulled_blocks,
+                                sample.pulling_blocks,
+                                sample.bytes_done,
+                                sample.bytes_total,
+                            ));
+                            if sample.pulled_blocks > 0 && sample.pulling_blocks > 0 {
+                                return Ok::<_, Error>(progress);
+                            }
+                        }
                     }
-                    Ok(_) => {}
-                    Err(Error::Http { response }) if response.status() == 500 => {}
+                    Err(Error::Http { response }) if response.status() == 500 => {
+                        native_500s += 1;
+                    }
                     Err(error) => return Err(error),
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
-        .await??;
+        .await;
+        eprintln!(
+            "native progress stage: timed_out={}, elapsed_ms={}, reads={progress_reads}, sample_reads={sample_reads}, native_500s={native_500s}, last_sample={last_sample:?}",
+            progress.is_err(),
+            started.elapsed().as_millis()
+        );
+        let progress = progress??;
         let current = &progress.files["sample.bin"];
         assert_eq!(current.total_blocks, 32);
         assert!(current.bytes_done > 0 && current.bytes_done < current.bytes_total);
@@ -553,20 +572,28 @@ async fn incomplete_native_peer_observation(observe_download: bool) -> TestResul
                 .await?
                 .requested_fields_match
         );
-        tokio::time::timeout(Duration::from_secs(20), async {
+        let mut last_file_bytes = None;
+        let started = std::time::Instant::now();
+        let complete = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 match std::fs::read(received.join("sample.bin")) {
                     Ok(bytes) if bytes == sample => {
                         return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
                     }
-                    Ok(_) => {}
+                    Ok(bytes) => last_file_bytes = Some(bytes.len()),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error.into()),
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
-        .await??;
+        .await;
+        eprintln!(
+            "native completed-file stage: timed_out={}, elapsed_ms={}, last_visible_file_bytes={last_file_bytes:?}",
+            complete.is_err(),
+            started.elapsed().as_millis()
+        );
+        complete??;
         assert!(b
             .client()
             .folder_download_progress(&bf.configuration.id)

@@ -987,17 +987,32 @@ async fn actual_native_completion_instructions_keep_private_text_and_owned_profi
             instruction_receipts += 1;
         }
         assert!(!format!("{exit:?}").contains(filename));
+        eprintln!("native completion stage: post-command protection checks {action:?}");
         assert_eq!(std::fs::read(&sentinel)?, bytes);
         for (n, expected) in protected.iter().zip(&before) {
+            eprintln!("native completion stage: verify protected {n}");
             assert_eq!(&std::fs::read(core.state_directory().join(n))?, expected);
         }
+        eprintln!("native completion stage: post-command protections passed {action:?}");
     }
+    eprintln!("native completion stage: request restart");
     core.restart(Duration::from_secs(10)).await?;
     assert_eq!(core.client().instance().device_id, id);
+    eprintln!("native completion stage: restarted with original identity");
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     assert_eq!(std::fs::read(&sentinel)?, bytes);
-    std::fs::remove_dir_all(&root)?;
+    eprintln!("native completion stage: normal exit and protected sample confirmed");
+    let cleanup = std::fs::remove_dir_all(&root);
+    eprintln!(
+        "native completion stage: removal success={}, raw_os_error={:?}",
+        cleanup.is_ok(),
+        cleanup
+            .as_ref()
+            .err()
+            .and_then(std::io::Error::raw_os_error)
+    );
+    cleanup?;
     assert_eq!(instruction_receipts + unsupported_shell_receipts, 2);
     eprintln!("native completion evidence: {{\"instruction_text_receipts\":{instruction_receipts},\"native_unsupported_shell_receipts\":{unsupported_shell_receipts},\"unicode_and_space_program_path_preserved\":true,\"no_sdk_shell_evaluation\":true,\"synthetic_shell_configuration_retained\":true,\"private_state_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"both_normal_owned_tree_exits\":true}}");
     Ok(())
