@@ -93,7 +93,7 @@ jobs:
           root="$work/guest/stretch"
           printf '%s  %s\n' "$KERNEL_SHA256" "$root/vmlinux" | sha256sum --check --strict
           status=0
-          timeout --kill-after=8s 90s "$QEMU_PROGRAM" -machine malta,accel=tcg -cpu 24Kf -m 128 -smp 1 \
+          timeout --kill-after=8s 90s "$QEMU_PROGRAM" -machine malta,accel=tcg -cpu 24Kf -m 256 -smp 1 \
             -nodefaults -display none -audio none -serial stdio -monitor none -nic none -no-reboot \
             -kernel "$root/vmlinux" -initrd "$root/initramfs.cpio.gz" \
             -append 'console=ttyS0 rdinit=/init vs_minimum_entropy=seeded panic=1' > "$work/guest-console.log" 2>&1 || status=$?
