@@ -14,6 +14,7 @@ from qos_payload import CLASSES, PEERS, PORT, SIZE, sample
 QOS_NON_ADAPTIVE_FLOW = 2
 QOS_TRAFFIC_TYPE_BEST_EFFORT = 0
 QOS_SET_OUTGOING_DSCP_VALUE = 2
+SEND_BLOCK_SIZE = 32 * 1024
 DWORD = c.c_uint32
 HANDLE = c.c_void_p
 
@@ -66,6 +67,7 @@ def connect(af, source, target):
             net.settimeout(0.75)
             net.bind((source, 0))
             net.connect((target, PORT))
+            net.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             net.settimeout(12)
             return net
         except OSError:
@@ -87,7 +89,10 @@ def main():
                 print("QOS_API " + json.dumps({
                     "family": family, "class": traffic_class, "source_port": source_port, **qos,
                 }), flush=True)
-                net.sendall(data)
+                for start in range(0, len(data), SEND_BLOCK_SIZE):
+                    if start:
+                        time.sleep(0.020)
+                    net.sendall(data[start:start + SEND_BLOCK_SIZE])
                 net.shutdown(socket.SHUT_WR)
                 with net.makefile("rb") as reply:
                     if reply.read(32) != digest or reply.read(1):
