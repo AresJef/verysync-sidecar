@@ -63,6 +63,55 @@ identity/private-key preservation and actual owned-process exit. It matches the
 ready and receipt program fields to the owned executable digest and authenticated
 version response. It logs no keys.
 
+## Observe a prepared pair
+
+Configure only the two dedicated test nodes for the selected scenario. Confirm
+that the receiver lacks the sample before writing it to the sender. Keep the
+original length and SHA-256 and the evidence for the route or network failure.
+After synchronization, pass a private JSON plan to the read-only example:
+
+```sh
+cargo run --offline --locked --example observe_acceptance_pair -- /absolute/private/pair.json
+```
+
+```json
+{
+  "sender": {
+    "receipt": "/absolute/private/sender-connection.json",
+    "management": {"kind": "loopback", "port": 22101},
+    "volume": "SENDER_TEST_VOLUME_ID",
+    "resource": "test-folder/synthetic.bin",
+    "path_style": "unix"
+  },
+  "receiver": {
+    "receipt": "/absolute/private/receiver-connection.json",
+    "management": {"kind": "loopback", "port": 22102},
+    "volume": "RECEIVER_TEST_VOLUME_ID",
+    "resource": "test-folder/synthetic.bin",
+    "path_style": "unix"
+  },
+  "transport": "tcp",
+  "expected_bytes": 3,
+  "expected_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+}
+```
+
+The example digest is for the three bytes `abc`. Replace the paths, file-manager
+volume IDs, ports and sample details with those for the actual test. The ports
+are the dedicated local forwarding ports. Copy receipts over the authenticated
+private channel and keep them owner-only. Use `"windows"` for Windows resource
+paths. A dedicated local Unix management socket can use
+`{"kind":"unix_socket","path":"/absolute/private/gui.sock"}`.
+
+Both fresh management sessions must authenticate the identities in their node
+receipts. The example checks each peer's reported connection and address for the
+requested `tcp`, `quic` or `relay` transport. It downloads both copies into new
+private temporary files, compares each sample of up to 16 MiB against the
+declared length and SHA-256, and removes the temporary files. The report contains
+node and peer addresses. Keep it with the private topology evidence and normal
+shutdown receipts. Record routed or external topology and the actual failure and
+recovery separately from these point-in-time connection and file observations.
+
 The initial focused validation passed on all six standard native profiles
 (macOS, Linux and Windows; AMD64 and ARM64), using the same PR merge
 `ceecf3e9c7eecdd579afcf45cc2ca014933dfd9c`. Run
