@@ -92,7 +92,8 @@ applicable required outcome remains open.
   `python3 scripts/publish-github-release.py --metadata /absolute/private/release.json --check-actions`
   with GitHub CLI access to workflow metadata. This checks the candidate commit
   and tree, registered workflow identities, exact run attempts, complete job
-  listings and required acceptance steps.
+  listings and required acceptance steps. Each native diagnostic in the catalog
+  at the candidate commit must have a matching job with its execution and cleanup steps.
   For the Intel formal-resource deferral above, push the exact candidate to
   `ci/formal-candidate/r23-intel-deferred/<candidate>` in this repository.
   Set the top-level metadata field

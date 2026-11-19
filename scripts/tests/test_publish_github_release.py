@@ -1,5 +1,6 @@
 """Release identity failures must reject before creating a tag or release."""
 
+import base64
 import copy
 import hashlib
 import importlib.util
@@ -15,6 +16,16 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("release_helper", ROOT / "scripts/publish-github-release.py")
 HELPER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HELPER)
+
+
+def diagnostic_catalog_reply(rows):
+    content = json.dumps(rows).encode()
+    header = f"blob {len(content)}\0".encode()
+    return {
+        "type": "file", "path": HELPER.ENGINE_DIAGNOSTIC_MANIFEST, "encoding": "base64",
+        "size": len(content), "sha": hashlib.sha1(header + content).hexdigest(),
+        "content": base64.encodebytes(content).decode(),
+    }
 
 
 class ReleaseIdentityTests(unittest.TestCase):
@@ -233,6 +244,19 @@ class ReleaseIdentityTests(unittest.TestCase):
         candidate["candidate_runs"] = references
         commit = f'{context}/git/commits/{candidate["source"]}'
         replies = {commit: {"sha": candidate["source"], "tree": {"sha": candidate["tree"]}}}
+        native_diagnostics = [
+            {"package": name, "target": "network", "label": "peer-example", "filter": "native_case"}
+            for name in sorted(HELPER.NATIVE_TARGETS)
+        ]
+        native_steps = {
+            f"Native helper diagnosis ({row['package']} / peer-example)": (
+                "Explicitly prepare the matching fixed private core",
+                "Preserve original native effects, strict predicates and deadlines",
+                "Require exact owned-executable cleanup after the original result",
+            ) for row in native_diagnostics
+        }
+        manifest = f'{context}/contents/{HELPER.ENGINE_DIAGNOSTIC_MANIFEST}?ref={candidate["source"]}'
+        replies[manifest] = diagnostic_catalog_reply(native_diagnostics)
         expected = {}
         for lane, filename in HELPER.ACTION_WORKFLOWS.items():
             run_id = references[lane]["id"]
@@ -245,8 +269,11 @@ class ReleaseIdentityTests(unittest.TestCase):
                             "event": "workflow_dispatch", "head_sha": candidate["source"], "run_attempt": 2,
                             "status": "completed", "conclusion": "success", "repository": repo,
                             "head_repository": repo}
+            required = HELPER.CANDIDATE_ACTION_JOBS[lane]
+            if lane == "engine":
+                required = required | native_steps
             jobs = [self.candidate_job(name, index, steps) | {"run_id": run_id}
-                    for index, (name, steps) in enumerate(HELPER.CANDIDATE_ACTION_JOBS[lane].items(), 1)]
+                    for index, (name, steps) in enumerate(required.items(), 1)]
             endpoint = f"{key}/attempts/2/jobs?per_page=100&page=1"
             replies[endpoint] = {"total_count": len(jobs), "jobs": jobs}
             expected[lane] = {"id": run_id, "attempt": 2,
@@ -254,6 +281,31 @@ class ReleaseIdentityTests(unittest.TestCase):
         with patch.object(HELPER, "github", side_effect=replies.__getitem__) as github:
             self.assertEqual(HELPER.verify_candidate_actions(candidate), expected)
             self.assertNotIn("publish", [call.args[0] for call in github.call_args_list])
+        engine_id = references["engine"]["id"]
+        engine_attempt = f"{context}/actions/runs/{engine_id}/attempts/2/jobs?per_page=100&page=1"
+        engine_jobs = replies[engine_attempt]["jobs"]
+        mac_case = next(job for job in engine_jobs if job["name"] ==
+                        "Native helper diagnosis (macos-arm64-standard / peer-example)")
+        case_index = engine_jobs.index(mac_case)
+        for bad_job, message in (
+            (mac_case | {"runner_id": 0, "conclusion": "cancelled", "steps": []}, "did not complete successfully"),
+            (mac_case | {"conclusion": "skipped"}, "did not complete successfully"),
+            (mac_case | {"steps": mac_case["steps"][:-1]}, "required step"),
+        ):
+            with self.subTest(message=message), patch.object(HELPER, "github", side_effect=replies.__getitem__):
+                engine_jobs[case_index] = bad_job
+                try:
+                    with self.assertRaisesRegex(ValueError, message):
+                        HELPER.verify_candidate_actions(candidate)
+                finally:
+                    engine_jobs[case_index] = mac_case
+        engine_jobs.remove(mac_case)
+        replies[engine_attempt]["total_count"] -= 1
+        with patch.object(HELPER, "github", side_effect=replies.__getitem__):
+            with self.assertRaisesRegex(ValueError, "native diagnostic job roster"):
+                HELPER.verify_candidate_actions(candidate)
+        engine_jobs.append(mac_case)
+        replies[engine_attempt]["total_count"] += 1
         packet_run = references["windows_amd64_packets"]["id"]
         packet_attempt = f"{context}/actions/runs/{packet_run}/attempts/2/jobs?per_page=100&page=1"
         packet_step = next(
@@ -326,6 +378,28 @@ class ReleaseIdentityTests(unittest.TestCase):
             replies[engine_attempt] = {"total_count": len(engine_jobs), "jobs": engine_jobs}
             with self.assertRaisesRegex(ValueError, "omitted a required job"):
                 HELPER.verify_candidate_actions(scoped)
+
+    def test_exact_native_catalog_rejects_bad_identity_profile_and_duplicate_job(self):
+        package = "macos-arm64-standard"
+        rows = [{"package": name, "target": "network", "label": "peer-example", "filter": "native_case"}
+                for name in sorted(HELPER.NATIVE_TARGETS)]
+        rows += [{"package": package, "target": "upgrade_engine", "filter": "native_upgrade"}]
+        endpoint = self.metadata["repository"]
+        source = self.metadata["source"]
+        manifest = diagnostic_catalog_reply(rows)
+        with patch.object(HELPER, "github", return_value=manifest) as get:
+            resolved = HELPER.candidate_engine_diagnostics(endpoint, source)
+            self.assertIn("Require exact older owned-executable cleanup",
+                          resolved[f"Native helper diagnosis ({package} / upgrade_engine)"])
+            get.assert_called_once_with(f"{endpoint}/contents/{HELPER.ENGINE_DIAGNOSTIC_MANIFEST}?ref={source}")
+        for catalog, message in (
+            (manifest | {"sha": "0" * 40}, "identity differs"),
+            (diagnostic_catalog_reply(rows[:-2]), "omitted a standard profile"),
+            (diagnostic_catalog_reply(rows + [rows[0]]), "repeated a case"),
+        ):
+            with self.subTest(message=message), patch.object(HELPER, "github", return_value=catalog):
+                with self.assertRaisesRegex(ValueError, message):
+                    HELPER.candidate_engine_diagnostics(endpoint, source)
 
     def test_candidate_preflight_records_one_package_and_hosted_identity(self):
         candidate = self.metadata | {

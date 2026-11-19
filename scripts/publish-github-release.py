@@ -2,6 +2,7 @@
 """Verify an uploaded crate and accepted source before an explicit GitHub release."""
 
 import argparse
+import base64
 import hashlib
 import io
 import json
@@ -25,6 +26,19 @@ ACTION_WORKFLOWS = {
     "windows_amd64_packets": "windows-sdk-wire.yml",
     "windows_arm64_packets": "windows-arm64-sdk-wire.yml",
 }
+ENGINE_DIAGNOSTIC_MANIFEST = ".github/native-diagnostic-matrix.json"
+ENGINE_DIAGNOSTIC_PLAN = "Plan native diagnostic coverage"
+ENGINE_DIAGNOSTIC_TEST = "Preserve original native effects, strict predicates and deadlines"
+ENGINE_DIAGNOSTIC_CLEANUP = "Require exact owned-executable cleanup after the original result"
+ENGINE_DIAGNOSTIC_TARGET_STEPS = {
+    "disk_full_engine": "Require real native disk-full effects and verified volume cleanup",
+    "upgrade_engine": "Require actual fixed URL and official-provider CLI upgrade effects",
+}
+ENGINE_DIAGNOSTIC_LABEL_STEPS = {
+    "native-official-tracker-registration": "Verify explicitly authorized official tracker registration and controlled disconnect",
+    "native-core-preference-current-contract": "Verify six original core preference cases on the current native source",
+    "native-copy-range-syscalls": "Verify actual copy strategy and data on the isolated Linux receiver",
+}
 PLATFORM_CLEANUP_STEP = "Require exact owned-executable cleanup"
 RESOURCE_PLAN = "Plan frozen resource profiles"
 R23_RESOURCE_BRANCH = "ci/formal-candidate/r23-intel-deferred/"
@@ -38,6 +52,10 @@ CANDIDATE_ACTION_JOBS = {
     "engine": {
         **{name: ("Require every applicable native suite and exact cleanup",) for name in NATIVE_TARGETS},
         "Fixed archive catalog (static, no engine execution)": (),
+        ENGINE_DIAGNOSTIC_PLAN: (
+            "Verify complete coverage and invalid-selection refusals",
+            "Keep complete ready/manual coverage and scope owned draft diagnosis",
+        ),
     },
     "platforms": {
         **{f"Link legacy Windows Rust examples ({target}-win7-windows-msvc)":
@@ -326,6 +344,50 @@ def validate_candidate_jobs(source, run_id, attempt, jobs, expected):
                     f"candidate job did not complete a required step: {name} / {step}")
 
 
+def candidate_engine_diagnostics(repository, source):
+    """Bind every required diagnostic to the catalog at the candidate commit."""
+    entry = github(f"{repository}/contents/{ENGINE_DIAGNOSTIC_MANIFEST}?ref={source}")
+    require(entry["path"] == ENGINE_DIAGNOSTIC_MANIFEST and entry["type"] == "file"
+            and entry["encoding"] == "base64" and 0 < entry["size"] <= 1024 * 1024,
+            "candidate native diagnostic catalog is not a bounded exact file")
+    content = base64.b64decode("".join(entry["content"].split()), validate=True)
+    header = f"blob {len(content)}\0".encode("ascii")
+    require(len(content) == entry["size"] and hashlib.sha1(header + content).hexdigest() == entry["sha"],
+            "candidate native diagnostic catalog identity differs")
+    rows = json.loads(content)
+    require(isinstance(rows, list) and 0 < len(rows) <= 256,
+            "candidate native diagnostic catalog count is invalid")
+    required = {}
+    profiles = set()
+    for row in rows:
+        package, target = row["package"], row["target"]
+        label = row.get("label") or target
+        require(package in NATIVE_TARGETS | {"windows-386-standard"}
+                and all(isinstance(field, str) and re.fullmatch(r"[a-z0-9_-]+", field)
+                        for field in (target, label))
+                and isinstance(row["filter"], str) and bool(row["filter"]),
+                "candidate native diagnostic catalog has an invalid case")
+        name = f"Native helper diagnosis ({package} / {label})"
+        require(name not in required, f"candidate native diagnostic catalog repeated a case: {name}")
+        execution = ENGINE_DIAGNOSTIC_TARGET_STEPS.get(
+            target, ENGINE_DIAGNOSTIC_LABEL_STEPS.get(label, ENGINE_DIAGNOSTIC_TEST))
+        steps = [
+            "Explicitly prepare the matching fixed private core",
+            execution,
+            ENGINE_DIAGNOSTIC_CLEANUP,
+        ]
+        if target == "upgrade_engine":
+            steps += ["Require exact older owned-executable cleanup"]
+        if target == "ldap_trusted_ca_engine" or label == "trusted-https-identity":
+            steps += ["Remove only the exact prepared private LDAP certificate fixture"]
+        if label == "native-windows-sleep-prevention-policy":
+            steps += ["Require actual Windows requests, release boundary and complete data"]
+        required[name] = tuple(steps)
+        profiles.add(package)
+    require(profiles >= NATIVE_TARGETS, "candidate native diagnostic catalog omitted a standard profile")
+    return required
+
+
 def verify_candidate_actions(metadata):
     runs = validate_candidate_runs(metadata)
     repository = f'repos/{metadata["repository"]}'
@@ -342,6 +404,11 @@ def verify_candidate_actions(metadata):
         validate_candidate_run(metadata, workflow_path, workflow, reference, github(run_path))
         jobs = candidate_attempt_jobs(run_path, reference["attempt"])
         required = CANDIDATE_ACTION_JOBS[lane]
+        if lane == "engine":
+            diagnostics = candidate_engine_diagnostics(repository, metadata["source"])
+            require({job["name"] for job in jobs if job["name"].startswith("Native helper diagnosis (")}
+                    == diagnostics.keys(), "candidate native diagnostic job roster differs from its catalog")
+            required = required | diagnostics
         if lane == "resources":
             if deferred:
                 required = required.copy()
