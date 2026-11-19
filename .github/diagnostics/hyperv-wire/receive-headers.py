@@ -49,6 +49,24 @@ def tcp_data(layer3, family, source, target, port):
     return int.from_bytes(tcp[:2], "big"), class_octet, payload, remaining_hops
 
 
+def datagrams_until_stop(packet, stop, deadline):
+    while (remaining := deadline - time.monotonic()) > 0:
+        ready, _, _ = select.select([stop, packet], [], [], remaining)
+        if stop in ready:
+            # The engine can finish writing before this observer is scheduled.
+            # Drain ready datagrams without waiting for any additional traffic.
+            packet.setblocking(False)
+            while time.monotonic() < deadline:
+                try:
+                    yield packet.recvfrom(128)
+                except BlockingIOError:
+                    return
+            break
+        if packet in ready:
+            yield packet.recvfrom(128)
+    raise TimeoutError("the owned receive observer exceeded its 30-second bound")
+
+
 def main():
     if sys.platform != "linux" or os.geteuid() != 0 or os.environ.get("RUNNER_DISPOSABLE_RX") != "true":
         raise ValueError("run only inside the authorized disposable receiver fixture")
@@ -68,13 +86,7 @@ def main():
         packet.bind(("peer", eth_all))
         print("RECEIVER_HEADERS_READY", flush=True)
         deadline = time.monotonic() + 30
-        while (remaining := deadline - time.monotonic()) > 0:
-            ready, _, _ = select.select([sys.stdin, packet], [], [], remaining)
-            if sys.stdin in ready:
-                break
-            if packet not in ready:
-                continue
-            data, address = packet.recvfrom(128)
+        for data, address in datagrams_until_stop(packet, sys.stdin, deadline):
             if address[0] != "peer" or address[2] != packet_host:
                 continue
             item = tcp_data(data, family, source.packed, target.packed, port)
@@ -85,8 +97,6 @@ def main():
                 sizes[key] += size
                 if len(counts) > 64:
                     raise RuntimeError("unexpected number of distinct test flow headers")
-        else:
-            raise TimeoutError("the owned receive observer exceeded its 30-second bound")
     rows = [
         {"source_port": key[0], "class_octet": key[1], "remaining_hops": key[2],
          "tcp_payload_bytes": sizes[key], "packets": count}
