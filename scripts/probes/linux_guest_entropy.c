@@ -43,6 +43,18 @@ static int seed_guest(int random_fd)
 
 int main(int argc, char **argv)
 {
+#if defined(__powerpc64__)
+    if (argc == 2 && strcmp(argv[1], "power9") == 0) {
+        unsigned long result;
+        const unsigned long value = 256;
+        __asm__ volatile("cnttzd %0,%1" : "=r"(result) : "r"(value));
+        if (result != 8) {
+            return 1;
+        }
+        printf("VS_PPC64LE_ISA30 cnttzd_result=%lu\n", result);
+        return 0;
+    }
+#endif
     if (argc != 2)
         return 1;
     int random_fd = open("/dev/random", O_RDONLY | O_CLOEXEC | O_NONBLOCK);

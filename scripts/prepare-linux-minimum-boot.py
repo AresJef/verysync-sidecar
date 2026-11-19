@@ -243,9 +243,10 @@ echo "VS_MALTA_GUEST_CONTROL $machine lo"
 [ "$machine" = ppc64le ] || fail machine_identity
 adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
 [ "$adapters" = lo ] || fail external_guest_adapter
-/bin/busybox grep -q POWER9 /proc/cpuinfo || fail cpu_identity
-echo "VS_PPC64LE_GUEST_CONTROL ppc64le POWER9 lo"
+/bin/busybox grep -E '^(cpu|revision|model|machine)[[:space:]]*:' /proc/cpuinfo || fail cpu_report
 export LD_LIBRARY_PATH=/lib64
+/bin/vs-entropy-control power9 || fail cpu_isa_3_0
+echo "VS_PPC64LE_GUEST_CONTROL ppc64le POWER9 lo"
 '''
         elif archived_libc:
             marker = "VS_ARMEL_STRETCH_GUEST" if armel_stretch else "VS_ARM_VEXPRESS_CONTROL"

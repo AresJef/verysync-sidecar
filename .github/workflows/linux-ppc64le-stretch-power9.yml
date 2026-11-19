@@ -120,6 +120,7 @@ jobs:
             if [ "$status" -ne 0 ] \
                 || ! grep -aFxq 'VS_MINIMUM_BOOT_OK kernel=4.9.0-13-powerpc64le loopback=127.0.0.1' "$console" \
                 || ! grep -aFxq 'VS_PPC64LE_GUEST_CONTROL ppc64le POWER9 lo' "$console" \
+                || ! grep -aFxq 'VS_PPC64LE_ISA30 cnttzd_result=8' "$console" \
                 || ! grep -aFxq 'VS_MINIMUM_PTY_READY devpts=true ptmx=true' "$console" \
                 || ! grep -aFxq 'VS_MINIMUM_CORE_VERSION_OK v2.33.2' "$console" \
                 || ! grep -aFxq 'VS_MINIMUM_GLIBC_VERSION glibc=2.28' "$console" \
