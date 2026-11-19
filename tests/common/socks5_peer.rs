@@ -17,15 +17,17 @@ use tokio::{
 
 #[derive(Default)]
 struct Counts {
+    accepted: AtomicUsize,
     refused: AtomicUsize,
     authenticated: AtomicUsize,
     forwarded: AtomicUsize,
 }
 pub struct Socks5Peer {
     address: SocketAddr,
+    upstream: SocketAddr,
     counts: Arc<Counts>,
     stop: Option<oneshot::Sender<()>>,
-    task: Option<JoinHandle<std::io::Result<()>>>,
+    task: Option<JoinHandle<std::io::Result<TcpListener>>>,
 }
 impl Socks5Peer {
     pub async fn start(upstream: SocketAddr) -> TestResult<Self> {
@@ -37,6 +39,10 @@ impl Socks5Peer {
         if address.port() == 18886 {
             return Err("reserved live-instance port refused".into());
         }
+        Ok(Self::serve_listener(listener, address, upstream))
+    }
+
+    fn serve_listener(listener: TcpListener, address: SocketAddr, upstream: SocketAddr) -> Self {
         let counts = Arc::new(Counts::default());
         let shared = counts.clone();
         let (stop, mut stopped) = oneshot::channel();
@@ -47,6 +53,7 @@ impl Socks5Peer {
                     _=&mut stopped=>break,
                     incoming=listener.accept()=>{
                         let (socket,_)=incoming?;
+                        shared.accepted.fetch_add(1, Ordering::SeqCst);
                         if connections.len()>=32 { return Err(std::io::Error::other("owned SOCKS5 connection bound exceeded")); }
                         let counts=shared.clone();
                         connections.spawn(async move {
@@ -60,14 +67,15 @@ impl Socks5Peer {
             }
             connections.abort_all();
             while connections.join_next().await.is_some() {}
-            Ok(())
+            Ok(listener)
         });
-        Ok(Self {
+        Self {
             address,
+            upstream,
             counts,
             stop: Some(stop),
             task: Some(task),
-        })
+        }
     }
     pub fn authority(&self, password: &str) -> String {
         format!("proxy-user:{password}@{}", self.address)
@@ -79,14 +87,43 @@ impl Socks5Peer {
             self.counts.forwarded.load(Ordering::SeqCst),
         )
     }
+
+    pub fn accepted(&self) -> usize {
+        self.counts.accepted.load(Ordering::SeqCst)
+    }
+
+    /// Keep watching the original proxy port after its only sender has exited.
+    pub async fn reset_after_sender_exit(mut self) -> TestResult<Self> {
+        let listener = self.stop_listener().await?.into_std()?;
+        // All old connection tasks are gone. Drain any sockets the old sender
+        // placed in the kernel queue before we count the new generation.
+        for _ in 0..=32 {
+            match listener.accept() {
+                Ok((socket, _)) => drop(socket),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    let listener = TcpListener::from_std(listener)?;
+                    return Ok(Self::serve_listener(listener, self.address, self.upstream));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err("old SOCKS5 connection queue exceeded its bounds".into())
+    }
+
     pub async fn close(mut self) -> TestResult {
+        self.stop_listener().await?;
+        Ok(())
+    }
+
+    async fn stop_listener(&mut self) -> TestResult<TcpListener> {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        if let Some(task) = self.task.take() {
-            task.await??;
-        }
-        Ok(())
+        Ok(self
+            .task
+            .take()
+            .ok_or("owned SOCKS5 listener task missing")?
+            .await??)
     }
 }
 impl Drop for Socks5Peer {

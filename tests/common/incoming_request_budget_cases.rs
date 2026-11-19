@@ -3,6 +3,15 @@ use super::managed_fixture::{options, TestResult};
 use std::time::Duration;
 use verysync_sidecar::*;
 
+fn report_transport(stage: &str, error: &Error) {
+    if let Error::Transport { operation, source } = error {
+        eprintln!(
+            "native signed incoming budget transport: stage={stage} operation={operation} timeout={} connect={} body={}",
+            source.is_timeout(), source.is_connect(), source.is_body()
+        );
+    }
+}
+
 #[tokio::test]
 async fn native_signed_incoming_request_budgets_survive_restart_and_real_transfers() -> TestResult {
     let root = tempfile::Builder::new()
@@ -11,8 +20,13 @@ async fn native_signed_incoming_request_budgets_survive_restart_and_real_transfe
         .keep();
     let sentinel = root.join("caller-sentinel");
     std::fs::write(&sentinel, b"signed request budget caller data")?;
-    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
-    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let mut a = ManagedInstance::start(options(&root.join("a"))?)
+        .await
+        .inspect_err(|error| report_transport("start sender", error))?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?)
+        .await
+        .inspect_err(|error| report_transport("start receiver", error))?;
+    println!("native signed incoming budget stage: both owned instances ready");
     // Freeze names before connecting; native adoption must not mutate the
     // unrelated-device protection baseline during these budget checks.
     for core in [&a, &b] {
@@ -73,8 +87,10 @@ async fn native_signed_incoming_request_budgets_survive_restart_and_real_transfe
         .share_folder_with(&bf.configuration.id, &aid)
         .await?;
     let before = a.client().configuration().await?;
+    println!("native signed incoming budget stage: peer and folder setup complete");
     let mut payloads = Vec::new();
     for (phase, selected) in [-1_i64, 0, 32768].into_iter().enumerate() {
+        println!("native signed incoming budget stage: save and read value {selected}");
         let patch = GeneralOptionsPatch::default().max_concurrent_incoming_request_kib(selected);
         if phase == 1 {
             let mut snapshot = a.client().configuration().await?;
@@ -100,7 +116,10 @@ async fn native_signed_incoming_request_budgets_survive_restart_and_real_transfe
                 .max_concurrent_incoming_request_kib,
             selected
         );
-        a.restart(Duration::from_secs(30)).await?;
+        println!("native signed incoming budget stage: normally restart with {selected}");
+        a.restart(Duration::from_secs(30))
+            .await
+            .inspect_err(|error| report_transport("restart sender", error))?;
         assert_eq!(
             a.client()
                 .general_options()
@@ -108,6 +127,7 @@ async fn native_signed_incoming_request_budgets_survive_restart_and_real_transfe
                 .max_concurrent_incoming_request_kib,
             selected
         );
+        println!("native signed incoming budget stage: reconnect and transfer with {selected}");
         super::name_policy_connection_pair(&a, &b, true).await?;
         let name = format!("signed-budget-{phase}-二 %.bin");
         let bytes: Vec<u8> = (0..32768).map(|i| ((i + phase) % 251) as u8).collect();

@@ -1091,10 +1091,25 @@ async fn native_socks5_proxy_authentication_transfer_and_explicit_disable_preser
             .await?
             .requested_fields_match
     );
-    a.restart(Duration::from_secs(30)).await?;
-    // Include startup and the explicit five-second reconnect interval.
+    let restarted: TestResult<_> = tokio::time::timeout(Duration::from_secs(30), async {
+        let exit = a.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+        println!(
+            "native SOCKS5 sender exit: before_disable={before_disable:?} after_old_exit={:?}",
+            peer.counts()
+        );
+        let peer = peer.reset_after_sender_exit().await?;
+        a.restart(Duration::from_secs(30)).await?;
+        Ok(peer)
+    })
+    .await?;
+    let peer = restarted?;
+    // Count from before the new generation starts, through its full reconnect interval.
     tokio::time::sleep(Duration::from_secs(6)).await;
-    assert_eq!(peer.counts(), before_disable);
+    assert_eq!(peer.accepted(), 0);
+    assert_eq!(peer.counts(), (0, 0, 0));
+    println!("native SOCKS5 disabled generation: observer_started_before_restart=true accepted=0 reconnect_observed_seconds=6");
+    assert_eq!(a.client().instance().device_id, aid);
     assert!(!a
         .client()
         .connections()
