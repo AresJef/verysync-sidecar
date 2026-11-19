@@ -65,7 +65,9 @@ jobs:
 
           failed_run = 44337785613
           engine_path = f"{repo}/actions/runs/{failed_run}"
-          earlier = helper.github(engine_path)
+          latest = helper.github(engine_path)
+          earlier = helper.github(engine_path + "/attempts/1")
+          assert latest["run_attempt"] > earlier["run_attempt"]
           assert earlier["id"] == failed_run and earlier["workflow_id"] == workflows["engine"]["id"]
           assert earlier["run_attempt"] == 1 and earlier["event"] == "pull_request"
           assert (earlier["status"], earlier["conclusion"]) == ("completed", "failure")
@@ -108,7 +110,7 @@ jobs:
               break
           result = {"subject": subject["sha"], "tree": subject["tree"]["sha"],
                     "registered_workflows": {lane: w["id"] for lane, w in workflows.items()},
-                    "historical_engine": {"run": failed_run, "attempt": 1, "listed_jobs": len(jobs),
+                    "historical_engine": {"run": failed_run, "attempt": 1, "current_attempt": latest["run_attempt"], "listed_jobs": len(jobs),
                                           "standard_outcomes": dict(Counter(j["conclusion"] for j in standard))},
                     "historical_successful_pr_quality_rejected": passing_pr_quality,
                     "existing_manual_quality_identity_observed": found,
