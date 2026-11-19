@@ -17,6 +17,43 @@ import urllib.request
 NATIVE_TARGETS = frozenset(f"{system}-{arch}-standard" for system in ("macos", "windows", "linux")
                            for arch in ("amd64", "arm64"))
 QUALITY_JOBS = frozenset(("Minimum Rust 1.85", "Format, build, lint and docs"))
+ACTION_WORKFLOWS = {
+    "quality": "quality.yml",
+    "engine": "engine-tests.yml",
+    "platforms": "platform-matrix.yml",
+    "resources": "resource-collection.yml",
+}
+PLATFORM_CLEANUP_STEP = "Require exact owned-executable cleanup"
+CANDIDATE_ACTION_JOBS = {
+    "quality": {
+        "Minimum Rust 1.85": ("Install MSRV",),
+        "Format, build, lint and docs": ("Audit locked dependencies against current RustSec advisories",),
+    },
+    "engine": {
+        **{name: ("Require every applicable native suite and exact cleanup",) for name in NATIVE_TARGETS},
+        "Fixed archive catalog (static, no engine execution)": (),
+    },
+    "platforms": {
+        **{f"Link legacy Windows Rust examples ({target}-win7-windows-msvc)":
+           ("Record the linked architecture and bytes without executing the examples",)
+           for target in ("i686", "x86_64")},
+        **{name: (PLATFORM_CLEANUP_STEP, "Require every compatibility execution outcome")
+           for name in ("linux-386-standard (x86 on x64 Linux)", "windows-386-standard (WOW64)")},
+        **{f"linux-{arch}-standard (QEMU user emulation)":
+           (PLATFORM_CLEANUP_STEP, "Require all selected emulated outcomes and positive-inventory cases")
+           for arch in ("arm", "armv6", "armhf", "loong64", "ppc64le", "riscv64", "s390x",
+                        "mips", "mipsle", "mips64", "mips64le")},
+        "Plan complete emulation or the exact owned MIPS diagnosis": (),
+    },
+    "resources": {
+        f"Resource coverage ({name})": (
+            "Require complete fresh-process preparation on this actual profile",
+            "Collect four formal and two independent original-order cycles",
+            "Require exact owned-program cleanup",
+            "Preserve sanitized raw measurements and immutable group records",
+        ) for name in NATIVE_TARGETS
+    },
+}
 PACKAGE_LIMIT = 2 * 1024 * 1024
 PACKAGE_ROOT_FILES = frozenset((
     ".cargo_vcs_info.json", "Cargo.toml", "Cargo.toml.orig", "Cargo.lock",
@@ -43,6 +80,8 @@ def validate_package_binding(metadata):
 
 def validate_metadata(metadata):
     validate_package_binding(metadata)
+    require(metadata["version"] == "0.1.0-alpha.1",
+            "the historical alpha acceptance contract cannot authorize another release")
     require(metadata["publisher"] == "AresJef" and metadata["publisher_id"] == 448021,
             "unexpected publisher")
     for field in ("native_run", "quality_run"):
@@ -175,6 +214,95 @@ def validate_jobs(jobs, expected):
             "required job is incomplete or unsuccessful")
 
 
+def validate_candidate_runs(metadata):
+    validate_package_binding(metadata)
+    runs = metadata.get("candidate_runs")
+    require(isinstance(runs, dict) and runs.keys() == ACTION_WORKFLOWS.keys(),
+            "candidate requires quality, engine, platform and formal resource runs")
+    for reference in runs.values():
+        require(isinstance(reference, dict) and reference.keys() == {"id", "attempt"}
+                and all(type(value) is int and value > 0 for value in reference.values()),
+                "candidate run requires a positive run ID and attempt number")
+    require(len({reference["id"] for reference in runs.values()}) == len(runs),
+            "candidate workflow run IDs must be distinct")
+    return runs
+
+
+def validate_candidate_run(metadata, workflow_path, workflow, reference, run):
+    repository = metadata["repository"]
+    require(workflow["path"] == workflow_path and run["workflow_id"] == workflow["id"]
+            and run["path"].split("@", 1)[0] == workflow_path,
+            "candidate run does not use the registered workflow")
+    require(run["id"] == reference["id"] and run["run_attempt"] == reference["attempt"]
+            and run["head_sha"] == metadata["source"] and run["event"] == "workflow_dispatch"
+            and (run.get("repository") or {}).get("full_name") == repository
+            and (run.get("head_repository") or {}).get("full_name") == repository,
+            "candidate run source, repository, event or attempt differs")
+    require(run["status"] == "completed" and run["conclusion"] == "success",
+            "candidate workflow did not complete successfully")
+
+
+def candidate_attempt_jobs(run_path, attempt):
+    jobs = []
+    total = None
+    page = 1
+    while total is None or len(jobs) < total:
+        response = github(f"{run_path}/attempts/{attempt}/jobs?per_page=100&page={page}")
+        if total is None:
+            total = response["total_count"]
+            require(type(total) is int and total > 0, "candidate workflow returned no jobs")
+        members = response["jobs"]
+        require(response["total_count"] == total and len(members) == min(100, total - len(jobs)),
+                "candidate workflow job list is incomplete or changed during retrieval")
+        jobs.extend(members)
+        page += 1
+    return jobs
+
+
+def validate_candidate_jobs(source, run_id, attempt, jobs, expected):
+    require(len({job["id"] for job in jobs}) == len(jobs), "candidate workflow repeated a job ID")
+    required = {}
+    for job in jobs:
+        name = job["name"]
+        if name in expected:
+            require(name not in required, "candidate workflow repeated a required job")
+            required[name] = job
+    require(required.keys() == expected.keys(), "candidate workflow omitted a required job")
+    for name, job in required.items():
+        require(job["status"] == "completed" and job["conclusion"] == "success",
+                f"candidate job did not complete successfully: {name}")
+        require(job["run_id"] == run_id and job["run_attempt"] == attempt and job["head_sha"] == source
+                and type(job["runner_id"]) is int and job["runner_id"] > 0,
+                f"candidate job source, attempt or runner differs: {name}")
+        for step in expected[name]:
+            matching = [entry for entry in job["steps"] if entry["name"] == step]
+            require(len(matching) == 1 and matching[0]["status"] == "completed"
+                    and matching[0]["conclusion"] == "success",
+                    f"candidate job did not complete a required step: {name} / {step}")
+
+
+def verify_candidate_actions(metadata):
+    runs = validate_candidate_runs(metadata)
+    repository = f'repos/{metadata["repository"]}'
+    commit = github(f'{repository}/git/commits/{metadata["source"]}')
+    require(commit["sha"] == metadata["source"] and commit["tree"]["sha"] == metadata["tree"],
+            "repository source or tree differs")
+    counts = {}
+    for lane, filename in ACTION_WORKFLOWS.items():
+        reference = runs[lane]
+        workflow = github(f"{repository}/actions/workflows/{filename}")
+        run_path = f'{repository}/actions/runs/{reference["id"]}'
+        workflow_path = f".github/workflows/{filename}"
+        validate_candidate_run(metadata, workflow_path, workflow, reference, github(run_path))
+        jobs = candidate_attempt_jobs(run_path, reference["attempt"])
+        required = CANDIDATE_ACTION_JOBS[lane]
+        validate_candidate_jobs(metadata["source"], reference["id"], reference["attempt"], jobs, required)
+        validate_candidate_run(metadata, workflow_path, workflow, reference, github(run_path))
+        counts[lane] = {"id": reference["id"], "attempt": reference["attempt"],
+                        "required_jobs": len(required), "listed_jobs": len(jobs)}
+    return counts
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, new_url):
         return None
@@ -270,6 +398,7 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check-metadata", action="store_true")
     mode.add_argument("--check-package", type=Path, metavar="LOCAL_CRATE")
+    mode.add_argument("--check-actions", action="store_true")
     mode.add_argument("--verify", action="store_true")
     mode.add_argument("--publish", action="store_true")
     args = parser.parse_args()
@@ -280,6 +409,11 @@ def main():
         print(json.dumps({"local_package_verified": True, "source": metadata["source"],
                           "tree": metadata["tree"], "package_sha256": metadata["package_sha256"],
                           "packaged_files": count}))
+        return
+    if args.check_actions:
+        checked = verify_candidate_actions(metadata)
+        print(json.dumps({"candidate_actions_verified": True, "source": metadata["source"],
+                          "tree": metadata["tree"], "runs": checked}))
         return
     validate_metadata(metadata)
     if args.check_metadata:
