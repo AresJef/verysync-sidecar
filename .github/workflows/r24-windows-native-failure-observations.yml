@@ -1,0 +1,74 @@
+name: Diagnose two native Windows AMD64 failures
+
+on:
+  push:
+    branches: ['verify/r24/win-amd64-priority-and-gui']
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: 'Exact Windows AMD64 diagnosis (${{ matrix.case }})'
+    runs-on: windows-2022
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: priority-exit
+            target: sync_observation
+            filter: actual_folder_order_and_specific_priority_change_preserve_samples
+          - case: https-restore
+            target: authentication_engine
+            filter: native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
+      VERYSYNC_TEST_OPENER_TRACE: '0'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Confirm exact tested candidate parent and fixtures
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "dfb7bc3c1fcaaf9532bd69337fc597e1b5f93e76"
+          git diff --exit-code HEAD^ HEAD -- src Cargo.toml Cargo.lock scripts
+          git log -1 --format='%H %T %P'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Prepare the original private management helper environment
+        if: matrix.target == 'authentication_engine'
+        run: >-
+          python scripts/prepare-storage-test-environment.py
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify isolated harness contracts
+        run: python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+      - name: Install native Rust 1.85 and prefetch locked dependencies
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Stage the exact fixed private Windows AMD64 engine
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package windows-amd64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Run original native controls with diagnostic observations
+        env:
+          VS_DIAGNOSTIC_TARGET: ${{ matrix.target }}
+          VS_DIAGNOSTIC_CASE: ${{ matrix.filter }}
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target "$VS_DIAGNOSTIC_TARGET" --test-filter "$VS_DIAGNOSTIC_CASE"
+          --evidence-dir "${{ runner.temp }}/vs-r24-native-failure-observations"
+      - name: Verify exact owned test-program cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+

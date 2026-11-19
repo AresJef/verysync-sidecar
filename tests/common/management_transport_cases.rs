@@ -299,7 +299,49 @@ async fn native_listener_tls_address_and_disable_limit_preserve_explicit_owner_c
                 .address(GuiListenAddress::tcp(&initial.to_string())?)
                 .use_tls(false),
         )
-        .await?;
+        .await;
+    if let Err(error) = &restore {
+        use std::io::Read;
+        let persisted = (|| -> TestResult<serde_json::Value> {
+            let file = std::fs::File::open(core.state_directory().join("setting.dat"))?;
+            let mut bytes = Vec::new();
+            file.take(1_048_577).read_to_end(&mut bytes)?;
+            if bytes.len() > 1_048_576 {
+                return Err("native configuration exceeds diagnostic bound".into());
+            }
+            let value = rmpv::decode::read_value(&mut std::io::Cursor::new(bytes))?;
+            Ok(serde_json::json!({
+                "requested_http_address_saved": value["4"]["2"].as_str() == Some(initial.to_string().as_str()),
+                "stored_gui_tls": value["4"]["5"].as_bool()
+            }))
+        })()
+        .ok();
+        let owned_snapshot = exact_owned_listener_snapshot().await.ok();
+        let owned_process = u64::from(core.process_id());
+        let original_port_owned = owned_snapshot.as_ref().and_then(|snapshot| {
+            let pids = snapshot["pids"].as_array()?;
+            let listeners = snapshot["tcp_listeners"].as_array()?;
+            Some(
+                pids.iter().any(|pid| pid.as_u64() == Some(owned_process))
+                    && listeners.iter().any(|row| {
+                        pids.contains(&row["pid"])
+                            && row["port"].as_u64() == Some(u64::from(initial.port()))
+                    }),
+            )
+        });
+        eprintln!(
+            "native GUI HTTP restore failure observation: {}",
+            serde_json::json!({
+                "mutation_outcome_unknown": matches!(error, Error::MutationOutcomeUnknown { .. }),
+                "persisted_snapshot": persisted,
+                "original_http_port_owned": original_port_owned,
+                "request_replayed": false,
+                "endpoint_probed_after_error": false,
+                "original_error_retained": true
+            })
+        );
+    }
+    let restore = restore?;
     let http = connect_listener(
         ConnectOptions::new(core.client().endpoint().clone(), key.clone())
             .expected_device_id(id.clone())

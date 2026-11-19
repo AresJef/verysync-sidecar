@@ -1058,8 +1058,20 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     }
     a.client().pause_device(&b_id).await?;
     b.client().pause_device(&a_id).await?;
-    for instance in [&mut b, &mut a] {
-        let exit = instance.shutdown(Duration::from_secs(10)).await?;
+    for (role, instance) in [("receiver", &mut b), ("sender", &mut a)] {
+        let started = tokio::time::Instant::now();
+        let stopped = instance.shutdown(Duration::from_secs(10)).await;
+        eprintln!(
+            "private priority queue shutdown diagnostic: {}",
+            json!({
+                "role": role,
+                "normal_shutdown_returned": stopped.is_ok(),
+                "deadline_ms": 10_000,
+                "elapsed_ms": started.elapsed().as_millis(),
+                "file_bytes_checked_before_shutdown": true
+            })
+        );
+        let exit = stopped?;
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
     std::fs::remove_dir_all(root)?;
