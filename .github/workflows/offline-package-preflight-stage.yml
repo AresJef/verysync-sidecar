@@ -1,0 +1,95 @@
+name: Stage the offline release package preflight
+on:
+  push:
+    branches: [ci/offline-package-preflight-20261119-01a1ca9b]
+    paths: [.github/workflows/offline-package-preflight-stage.yml]
+
+permissions:
+  contents: read
+
+env:
+  EXACT_SOURCE: ec6816723db31630adee895c881b25c649984fe6
+  EXACT_TREE: 6e9613f80c4e0534551a188171669f9f7f3b4f64
+  CHECKER_RUST: 1.85.0-x86_64-unknown-linux-gnu
+
+jobs:
+  preflight:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/offline-package-preflight-20261119-01a1ca9b'
+    name: Check real Cargo package and reject a changed source file
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_SOURCE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Bind candidate and prepare locked Cargo inputs
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(git rev-parse HEAD)" = "$EXACT_SOURCE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_TREE"
+          test -z "$(git status --porcelain)"
+          printf 'candidate source=%s tree=%s\n' "$EXACT_SOURCE" "$EXACT_TREE"
+          rustup toolchain install "$CHECKER_RUST" --profile minimal
+          cargo +"$CHECKER_RUST" fetch --locked
+      - name: Test historical release contract and actual offline candidate
+        env:
+          RUSTUP_TOOLCHAIN: ${{ env.CHECKER_RUST }}
+        run: |
+          set -euo pipefail
+          python -B -m unittest discover -s scripts/tests -p test_publish_github_release.py
+          python -B scripts/publish-github-release.py --check-metadata
+          cargo package --no-verify --offline --locked --target-dir "$RUNNER_TEMP/release-package"
+          python -B - <<'PY'
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import tarfile
+          import tomllib
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          settings = tomllib.loads(Path("Cargo.toml").read_text())["package"]
+          name = settings["name"] + "-" + settings["version"]
+          supplied = root / "release-package" / "package" / (name + ".crate")
+          original_sha256 = hashlib.sha256(supplied.read_bytes()).hexdigest()
+          binding = {
+              "repository":"AresJef/verysync-sidecar", "crate":settings["name"],
+              "version":settings["version"], "source":os.environ["EXACT_SOURCE"],
+              "tree":os.environ["EXACT_TREE"], "package_sha256":original_sha256,
+          }
+          receipt = root / "package-binding.json"
+          receipt.write_text(json.dumps(binding))
+          command = [sys.executable, "-B", "scripts/publish-github-release.py", "--metadata", str(receipt), "--check-package"]
+          result = subprocess.run(command + [str(supplied)], text=True, capture_output=True, timeout=75)
+          if result.returncode:
+              raise SystemExit(result.stderr)
+          verified = json.loads(result.stdout)
+          assert verified == {
+              "local_package_verified":True, "source": binding["source"], "tree":binding["tree"],
+              "package_sha256":original_sha256, "packaged_files":424,
+          }
+          print(json.dumps(verified))
+          changed = root / "altered-source.crate"
+          with tarfile.open(supplied, "r:gz") as source_archive, tarfile.open(changed, "w:gz") as changed_archive:
+              for member in source_archive:
+                  data = source_archive.extractfile(member).read()
+                  if member.name == name + "/README.md":
+                      data += b"\nSynthetic changed bytes\n"
+                  member.size = len(data)
+                  changed_archive.addfile(member, io.BytesIO(data))
+          binding["package_sha256"] = hashlib.sha256(changed.read_bytes()).hexdigest()
+          assert binding["package_sha256"] != original_sha256
+          receipt.write_text(json.dumps(binding))
+          rejection = subprocess.run(command + [str(changed)], text=True, capture_output=True, timeout=75)
+          assert rejection.returncode and not rejection.stdout
+          assert "packaged file differs from the candidate Git blob" in rejection.stderr
+          print("Actual Cargo archive with a recomputed digest and modified public file rejected.")
+          PY
