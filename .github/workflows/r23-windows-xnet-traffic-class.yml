@@ -1,0 +1,93 @@
+name: Observe the pinned Go Windows socket option behavior
+on:
+  push:
+    branches: [verify/r23/windows-xnet-traffic-class]
+permissions:
+  contents: read
+jobs:
+  windows-xnet:
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    name: "Native Windows ${{ matrix.arch }} socket API controls"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            arch: amd64
+            go_sha256: 3b533bbe63e73732bf19b8facc9160417e97d13eb174dfe58a213c6d0dee0010
+          - runner: windows-11-arm
+            arch: arm64
+            go_sha256: 91d990c6346f1b0723134ac3bc833a92cb974ed977872bb4c13620c250c280cf
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      PROBE_ARCH: ${{ matrix.arch }}
+      PROBE_GO_SHA256: ${{ matrix.go_sha256 }}
+      GOTOOLCHAIN: local
+      GOENV: 'off'
+      CGO_ENABLED: '0'
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Verify the exact Go toolchain and dependency byte identities
+        shell: pwsh
+        working-directory: diagnostics/win-qos-xnet
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git rev-parse HEAD 'HEAD^{tree}'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot determine exact checkout' }
+          $archive = Join-Path $env:RUNNER_TEMP 'vs-pinned-go.zip'
+          $tools = Join-Path $env:RUNNER_TEMP 'vs-pinned-go'
+          $source = "https://go.dev/dl/go1.23.10.windows-$env:PROBE_ARCH.zip"
+          Invoke-WebRequest -Uri $source -OutFile $archive -TimeoutSec 90
+          $found = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($found -ne $env:PROBE_GO_SHA256) { throw 'Unexpected Go archive SHA-256' }
+          Expand-Archive -Path $archive -DestinationPath $tools
+          $go = Join-Path $tools 'go/bin/go.exe'
+          $version = & $go version
+          if ($LASTEXITCODE -ne 0 -or $version -ne "go version go1.23.10 windows/$env:PROBE_ARCH") {
+            throw "Unexpected Go compiler: $version"
+          }
+          Write-Output $version
+          $dependencies = @(
+            @{ ref = 'golang.org/x/net@v0.43.0'; sum = 'h1:lat02VYK2j4aLzMzecihNvTlJNQUq316m2Mr9rnM6YE=' },
+            @{ ref = 'golang.org/x/sys@v0.35.0'; sum = 'h1:vz1N37gP5bs89s7He8XuIYXpyY0+QlsKmzipCbUtyxI=' }
+          )
+          foreach ($entry in $dependencies) {
+            $raw = & $go mod download -json $entry.ref
+            if ($LASTEXITCODE -ne 0) { throw "Unable to download $($entry.ref)" }
+            $module = $raw -join "`n" | ConvertFrom-Json
+            if ($module.Sum -ne $entry.sum) { throw "Unexpected module digest for $($entry.ref)" }
+            Write-Output "$($entry.ref) $($module.Sum)"
+          }
+          & $go mod tidy
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the pinned probe module' }
+          $binary = Join-Path $env:RUNNER_TEMP 'vs-xnet-socket-probe.exe'
+          & $go build -trimpath -mod=readonly -o $binary .
+          if ($LASTEXITCODE -ne 0) { throw 'Native socket probe did not build' }
+          & $go version -m $binary
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect compiled socket probe' }
+          "VS_XNET_PROBE=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Compare original dependency results on real dual-stack TCP sockets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rows = & $env:VS_XNET_PROBE $env:PROBE_ARCH
+          $probeExit = $LASTEXITCODE
+          $rows | ForEach-Object { Write-Output $_ }
+          if ($probeExit -ne 0) { throw "Socket probe exited with code $probeExit" }
+          $observations = @($rows | ForEach-Object { $_ | ConvertFrom-Json })
+          if ($observations.Count -ne 6) { throw 'Six exact loopback observations required' }
+          foreach ($family in @('tcp4', 'tcp6')) {
+            foreach ($value in @(16, 32, 0)) {
+              $matching = @($observations | Where-Object {
+                $_.family -eq $family -and $_.requested -eq $value -and
+                $_.platform -eq $env:PROBE_ARCH -and $_.bytes_echoed -eq 16384
+              })
+              if ($matching.Count -ne 1) { throw "Missing exact $family value $value control" }
+            }
+          }
+          Write-Output 'All native loopback byte controls completed.'
