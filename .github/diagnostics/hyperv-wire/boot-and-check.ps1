@@ -4,6 +4,13 @@ param(
     [Parameter(Mandatory)][string]$GuestCore
 )
 $ErrorActionPreference = 'Stop'
+$pktmon = Join-Path $env:SystemRoot 'System32/pktmon.exe'
+function PacketMonitor {
+    $call = $args
+    $output = & $pktmon @call
+    if ($LASTEXITCODE -ne 0) { throw "Packet Monitor failed: $($call[0]) $($call[1])" }
+    return ($output | Out-String).Trim()
+}
 $iso = Join-Path (Resolve-Path $FixtureDirectory) 'receive.iso'
 $checksums = Join-Path (Resolve-Path $FixtureDirectory) 'SHA256SUMS'
 $expected = [regex]::Match((Get-Content -Raw -LiteralPath $checksums), '(?m)^([0-9a-f]{64})  receive\.iso$').Groups[1].Value
@@ -28,6 +35,12 @@ $pipe = $null
 $serial = $null
 $guestMessages = $null
 $printedConsole = $false
+$traceStarted = $false
+$filterOwned = $false
+$traceFile = Join-Path $root 'owned-p2p.etl'
+$packetFile = Join-Path $root 'owned-p2p.pcapng'
+$v4Filter = 'vs4' + $name.Substring($name.Length - 8)
+$v6Filter = 'vs6' + $name.Substring($name.Length - 8)
 try {
     $link = New-VMSwitch -Name $name -SwitchType Internal
     $switchId = $link.Id
@@ -61,7 +74,23 @@ try {
     if (!$connecting.Wait(17000)) { throw 'Owned guest console connection did not return' }
     $serial = [IO.StreamReader]::new($pipe)
     $guestMessages = $serial.ReadToEndAsync()
-    $service = Get-Service -Name 'QWAVE' -ErrorAction SilentlyContinue
+    if ((PacketMonitor status) -ne 'Packet Monitor is not running.' -or
+        (PacketMonitor filter list) -notmatch '^Packet Filters:\s+None$') {
+        throw 'Packet Monitor must have a confirmed inactive session and empty filters'
+    }
+    $null = PacketMonitor filter add $v4Filter '-i' '192.0.2.1' '192.0.2.2' '-t' 'TCP' '-p' '47529'
+    $filterOwned = $true
+    $null = PacketMonitor filter add $v6Filter '-i' '2001:db8:73f:43::1' '2001:db8:73f:43::2' '-t' 'TCP' '-p' '47529'
+    $traceRows = PacketMonitor filter list
+    if ($traceRows -notmatch [regex]::Escape($v4Filter) -or $traceRows -notmatch [regex]::Escape($v6Filter)) {
+        throw 'Both exact test filters are required'
+    }
+    $summary = PacketMonitor start '--capture' '--comp' 'all' '--pkt-size' '128' '--file-size' '16' '--log-mode' 'circular' '--file-name' $traceFile
+    $traceStarted = $true
+    if ($summary -notmatch 'PktMon') { throw 'Packet Monitor session identity was not reported' }
+    $adapterIdentity = $interface.InterfaceGuid
+    Write-Output "OWNED_WINDOWS_TRACE_STARTED if_index=$testInterface if_guid=$adapterIdentity header_cap=128"
+    $service = Get-Service -Name 'QWAVE'  -ErrorAction SilentlyContinue
     if ($service) {
         Write-Output "QOS_EXISTING_SERVICE status=$($service.Status) start=$($service.StartType)"
     } else {
@@ -82,6 +111,11 @@ try {
     Write-Output "SAME_HOST_PHASE sdk_begin vm=$($liveGuest.Id) switch=$($liveLink.Id) if_index=$($liveAdapter.ifIndex)"
     & $WindowsHarness send $GuestCore
     $wireStatus = $LASTEXITCODE
+    $null = PacketMonitor stop
+    $traceStarted = $false
+    $null = PacketMonitor etl2pcap $traceFile '--out' $packetFile
+    & python -B (Join-Path $PSScriptRoot 'host-headers.py') $packetFile
+    if ($LASTEXITCODE -ne 0) { throw 'Windows packet snapshot decoding failed' }
 
     $limit = [DateTime]::UtcNow.AddSeconds(20)
     do {
@@ -106,6 +140,23 @@ try {
     if ($wireStatus -ne 0) { throw 'The independent Windows wire gate did not pass' }
 }
 finally {
+    $traceCleanupError = $null
+    try {
+        if ($traceStarted) { $null = PacketMonitor stop }
+        if ($filterOwned) {
+            $filters = PacketMonitor filter list
+            $filterNames = @([regex]::Matches($filters, '(?m)^\s*\d+\s+(\S+)\s') | ForEach-Object { $_.Groups[1].Value })
+            if (!$filterNames -or ($filterNames | Where-Object { $_ -notin @($v4Filter, $v6Filter) })) {
+                throw 'The filter inventory is not exclusively task-owned'
+            }
+            $null = PacketMonitor filter remove
+            if ((PacketMonitor status) -ne 'Packet Monitor is not running.' -or
+                (PacketMonitor filter list) -notmatch '^Packet Filters:\s+None$') {
+                throw 'The task-owned capture or filters are still present'
+            }
+            Write-Output 'OWNED_WINDOWS_TRACE_RESTORED initial_inactive_state=true own_filters_removed=true'
+        }
+    } catch { $traceCleanupError = $_ }
     $found = Get-VM -Name $name -ErrorAction SilentlyContinue
     if ($found) {
         $path = [IO.Path]::GetFullPath([string]$found.ConfigurationLocation)
@@ -145,4 +196,5 @@ finally {
     }
     Remove-Item -LiteralPath $root -Recurse -Force
     Write-Output 'HYPERV_GUEST_CLEANUP exact_vm=true exact_switch=true route_inventory_restored=true owned_storage_removed=true'
+    if ($traceCleanupError) { throw $traceCleanupError }
 }
