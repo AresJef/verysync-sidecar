@@ -1,9 +1,21 @@
+param([string]$TcpPeer, [string]$Python)
+
 $ErrorActionPreference = 'Stop'
+$dataCalibration = ![string]::IsNullOrEmpty($TcpPeer)
+$expectedRef = if ($dataCalibration) {
+    'refs/heads/verify/r24/windows-arm64-tun-data'
+} else {
+    'refs/heads/verify/r24/windows-arm64-wintun-qualify'
+}
 if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'AresJef/verysync-sidecar' -or
-    $env:GITHUB_REF -cne 'refs/heads/verify/r24/windows-arm64-wintun-qualify' -or
+    $env:GITHUB_REF -cne $expectedRef -or
     [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64' -or
     [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -ne 'Arm64') {
     throw 'Run only on the assigned disposable native Windows ARM64 job'
+}
+if ($dataCalibration -and (!(Test-Path -LiteralPath $TcpPeer -PathType Leaf) -or
+    !(Test-Path -LiteralPath $Python -PathType Leaf))) {
+    throw 'The exact owned receiver and native Python sender are required'
 }
 
 function Get-WintunPackages {
@@ -28,6 +40,7 @@ $defaults = Get-DefaultRouteSnapshot
 $root = Join-Path $env:RUNNER_TEMP ('vs-owned-wintun-' + [guid]::NewGuid().ToString('N'))
 $adapter = [IntPtr]::Zero
 $session = [IntPtr]::Zero
+$ownedPeer = $null
 $attempted = $false
 $dllLoaded = $false
 $index = [uint32]0
@@ -177,10 +190,12 @@ public static class OwnedTunQualification
         throw "WintunCreateAdapter failed with Win32 code $code"
     }
     $index = [OwnedTunQualification]::InterfaceIndex($adapter)
-    $session = [OwnedTunQualification]::WintunStartSession($adapter, 4194304)
-    if ($session -eq [IntPtr]::Zero) {
-        $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        throw "WintunStartSession failed with Win32 code $code"
+    if (!$dataCalibration) {
+        $session = [OwnedTunQualification]::WintunStartSession($adapter, 4194304)
+        if ($session -eq [IntPtr]::Zero) {
+            $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            throw "WintunStartSession failed with Win32 code $code"
+        }
     }
 
     $cases = @(
@@ -199,16 +214,59 @@ public static class OwnedTunQualification
             !(Get-NetRoute -InterfaceIndex $index -DestinationPrefix $case.prefix -ErrorAction SilentlyContinue)) {
             throw 'The assigned test endpoint and its on-link route did not become active'
         }
-        $octet = [OwnedTunQualification]::ObserveSyn($session, $case.source, $case.peer)
-        Write-Output ("ARM64_TUN_SAMPLE " + (@{family=$case.family; observed_owned_syn=$true; octet=$octet} | ConvertTo-Json -Compress))
+        if (!$dataCalibration) {
+            $octet = [OwnedTunQualification]::ObserveSyn($session, $case.source, $case.peer)
+            Write-Output ("ARM64_TUN_SAMPLE " + (@{family=$case.family; observed_owned_syn=$true; octet=$octet} | ConvertTo-Json -Compress))
+        }
+    }
+    if ($dataCalibration) {
+        $peerStart = [Diagnostics.ProcessStartInfo]::new($TcpPeer)
+        $peerStart.UseShellExecute = $false
+        $peerStart.RedirectStandardOutput = $true
+        $peerStart.RedirectStandardError = $true
+        $peerStart.ArgumentList.Add($dll)
+        $peerStart.ArgumentList.Add($name)
+        $ownedPeer = [Diagnostics.Process]::Start($peerStart)
+        $peerErrors = $ownedPeer.StandardError.ReadToEndAsync()
+        $ready = $ownedPeer.StandardOutput.ReadLineAsync()
+        if (!$ready.Wait(8000) -or $ready.Result -cne 'ARM64_TUN_TCP_READY') {
+            if ($peerErrors.IsCompletedSuccessfully) { Write-Output $peerErrors.Result }
+            throw 'The independent receiver did not become ready on the owned adapter'
+        }
+        $peerOutput = $ownedPeer.StandardOutput.ReadToEndAsync()
+        $env:OWNED_HYPERV_QOS_CONTROL = 'true'
+        $env:OWNED_HYPERV_QOS_MECHANISM = 'qwave'
+        $senderOutput = @(& $Python -B (Join-Path $PSScriptRoot 'hyperv-wire/qos_send.py'))
+        $senderExit = $LASTEXITCODE
+        $senderOutput | Write-Output
+        if (!$ownedPeer.WaitForExit(10000)) { throw 'The independent receiver did not exit on time' }
+        Write-Output $peerErrors.Result
+        $receiverLines = @($peerOutput.Result -split '\r?\n')
+        $receiverLines | Write-Output
+        $senderApi = @($senderOutput | Where-Object { $_ -match '^QOS_API ' } |
+            ForEach-Object { $_.Substring(8) | ConvertFrom-Json -AsHashtable })
+        if ($senderExit -ne 0 -or $ownedPeer.ExitCode -ne 0 -or
+            $senderApi.Count -ne 6 -or @($senderApi | Where-Object { $_.winerror -ne 0 }).Count -ne 0 -or
+            @($receiverLines -match '^ARM64_TUN_QOS_DATA ').Count -ne 6 -or
+            !($receiverLines -contains 'ARM64_TUN_QOS_COMPLETE six_native_tcp_data_cases=true')) {
+            throw 'The complete six-case native TCP calibration did not pass'
+        }
+    } else {
+        Write-Output 'ARM64_TUN_QUALIFICATION exact_official_archive=true native_arm64=true two_owned_synthetic_syn_packets=true'
     }
     if (((Get-DefaultRouteSnapshot) -join ',') -cne ($defaults -join ',')) {
         throw 'Default route inventory changed'
     }
-    Write-Output 'ARM64_TUN_QUALIFICATION exact_official_archive=true native_arm64=true two_owned_synthetic_syn_packets=true'
 }
 finally {
     try {
+        if ($null -ne $ownedPeer) {
+            if (!$ownedPeer.HasExited) {
+                $ownedPeer.Kill($true)
+                if (!$ownedPeer.WaitForExit(5000)) { throw 'The exact owned receiver remains active' }
+            }
+            $ownedPeer.Dispose()
+        }
         if ($session -ne [IntPtr]::Zero) { [OwnedTunQualification]::WintunEndSession($session) }
         if ($adapter -ne [IntPtr]::Zero) { [OwnedTunQualification]::WintunCloseAdapter($adapter) }
         if ($attempted -and @(Get-WintunPackages).Count -and ![OwnedTunQualification]::WintunDeleteDriver()) {

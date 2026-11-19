@@ -1,0 +1,13 @@
+[package]
+name = "verysync-isolated-tun-peer"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[dependencies]
+sha2 = "=0.10.9"
+smoltcp = { version = "=0.12.0", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wintun = "=0.5.1"
