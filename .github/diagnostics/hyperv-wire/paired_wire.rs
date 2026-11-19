@@ -320,6 +320,7 @@ async fn inspect_guest(
     target: &Path,
 ) -> Result<Observation> {
     let offer: Offer = receive(stream)?;
+    println!("WIRE_GUEST_PHASE offer_received");
     ensure(
         (offer.family, offer.value) == case,
         "test cases are out of sequence",
@@ -329,10 +330,15 @@ async fn inspect_guest(
     let account = guest.client().instance().device_id.clone();
     let keys = credentials(guest)?;
     preconfigure(guest.client(), Some(bind)).await?;
+    println!("WIRE_GUEST_PHASE configured_listener={bind}");
     guest.restart(Duration::from_secs(25)).await?;
+    println!("WIRE_GUEST_PHASE exact_core_restarted");
     let client = guest.client();
     let before = client.configuration().await?;
-    listener(client, bind).await?;
+    listener(client, bind).await.map_err(|error| {
+        format!("fixed guest listener {bind} did not become observable: {error}")
+    })?;
+    println!("WIRE_GUEST_PHASE actual_listener={bind}");
     add_peer(client, &offer.sender, "dynamic".to_string()).await?;
     let key = ShareKey::new(offer.read_only_key)?;
     let authorized = client.validate_share_key(&key).await?;
@@ -343,7 +349,9 @@ async fn inspect_guest(
         .id;
     client.share_folder_with(&folder, &offer.sender).await?;
     client.resume_folder(&folder).await?;
+    println!("WIRE_GUEST_PHASE folder_shared_and_resumed");
     let capture = Capture::start(case.0, source, bind)?;
+    println!("WIRE_GUEST_PHASE independent_observer_ready");
     send(
         stream,
         &Ready {
@@ -355,6 +363,7 @@ async fn inspect_guest(
     let bytes = sample(case);
     let file = target.join(FILE);
     file_received(client, &folder, &file, &bytes).await?;
+    println!("WIRE_GUEST_PHASE exact_bytes_and_idle");
     let peer = connected(client, &offer.sender, PeerConnectionType::TcpServer).await?;
     ensure(
         peer.ip() == source && peer.port() > 0,
@@ -525,8 +534,13 @@ async fn guest() -> Result {
         fs::create_dir(&folder)?;
         let target = folder.join("data");
         fs::create_dir(&target)?;
+        println!(
+            "WIRE_GUEST_PHASE start_native_engine family={} value={}",
+            case.0, case.1
+        );
         let mut node =
             ManagedInstance::start(managed(&folder.join("state"), &binary, LINUX_SHA)?).await?;
+        println!("WIRE_GUEST_PHASE native_engine_authenticated");
         let seen = inspect_guest(&mut node, &mut stream, case, &target).await;
         let stop = closed(&mut node).await;
         seen?;

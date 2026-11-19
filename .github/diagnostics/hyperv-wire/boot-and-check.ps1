@@ -70,7 +70,7 @@ try {
         if ($current.State -ne 'Off') { Start-Sleep -Milliseconds 150 }
     } until ($current.State -eq 'Off' -or [DateTime]::UtcNow -gt $limit)
     if (!$guestMessages.Wait(5000)) { throw 'Owned guest console did not close' }
-    $markers = @($guestMessages.Result -split '\r?\n' | Where-Object { $_ -match '^(RECEIVER_GUEST_|WIRE_GUEST_)' })
+    $markers = @($guestMessages.Result -split '\r?\n' | Where-Object { $_ -match '^(RECEIVER_GUEST_|WIRE_GUEST_|Error:)' })
     $markers | Write-Output
     $printedConsole = $true
     if ($current.State -ne 'Off' -or -not ($markers -match '^RECEIVER_GUEST_BOOT kernel=6\.18\.60-0-virt architecture=x86_64$') -or
