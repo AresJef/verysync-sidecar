@@ -37,18 +37,37 @@ impl ManagedInstance {
     /// separately documented default cleanup policy.
     pub async fn shutdown(&mut self, timeout: Duration) -> Result<ManagedExit> {
         let deadline = deadline(timeout)?;
+        // Diagnostic copy only. Keep request count, ownership, and timeout unchanged.
+        let started = Instant::now();
+        let timeline_enabled =
+            std::env::var("VERYSYNC_TEST_SHUTDOWN_TIMELINE").as_deref() == Ok("1");
+        let observe = |event: &str| {
+            if timeline_enabled {
+                eprintln!(
+                    "native owned stop timing: {event} elapsed_ms={} deadline_ms={}",
+                    started.elapsed().as_millis(),
+                    timeout.as_millis(),
+                );
+            }
+        };
         let graceful = async {
             if self.exit_snapshot().is_some() {
                 return self.wait_for_exit().await;
             }
+            observe("request-started");
             self.client().request_shutdown().await?;
-            self.wait_for_exit().await
+            observe("request-confirmed");
+            let exit = self.wait_for_exit().await;
+            observe("owned-exit-report-received");
+            exit
         };
-        tokio::time::timeout_at(deadline, graceful)
-            .await
-            .map_err(|_| Error::Timeout {
-                operation: "gracefully stop owned program",
-            })?
+        let result = tokio::time::timeout_at(deadline, graceful).await;
+        if result.is_err() {
+            observe("caller-deadline-elapsed");
+        }
+        result.map_err(|_| Error::Timeout {
+            operation: "gracefully stop owned program",
+        })?
     }
 
     /// Explicitly terminate only this owner's native process group/Job and wait.
