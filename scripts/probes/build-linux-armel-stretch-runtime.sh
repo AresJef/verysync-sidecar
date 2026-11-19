@@ -5,6 +5,8 @@ source_tree="$1"
 support="$2"
 work="$3"
 arch_profile="${4:-armel}"
+archive_suite=stretch
+libc_version=2.24
 case "$arch_profile" in
   armel)
     target=armv5te-unknown-linux-gnueabi
@@ -33,6 +35,8 @@ case "$arch_profile" in
     cpu=mips32r2
     float=
     loader=ld.so.1
+    archive_suite=buster
+    libc_version=2.28
     ;;
   *) exit 2 ;;
 esac
@@ -41,10 +45,10 @@ fixture="$work/guest-runtime"
 mkdir -m 700 "$sysroot" "$fixture"
 
 for package in libc6 libc6-dev libgcc1 libatomic1 linux-libc-dev; do
-  dpkg-deb -x "$work/packages/stretch-$package.deb" "$sysroot"
+  dpkg-deb -x "$work/packages/$archive_suite-$package.deb" "$sysroot"
 done
-test -f "$sysroot/lib/$abi/ld-2.24.so"
-test -f "$sysroot/lib/$abi/libc-2.24.so"
+test -f "$sysroot/lib/$abi/ld-$libc_version.so"
+test -f "$sysroot/lib/$abi/libc-$libc_version.so"
 test -f "$sysroot/usr/lib/$abi/libc.so"
 for link in "$sysroot/usr/lib/$abi/"*.so; do
   if [[ ! -L "$link" ]]; then continue; fi
@@ -96,6 +100,7 @@ abi_label=ARMEL
 if [[ "$arch_profile" == mips || "$arch_profile" == mipsel ]]; then
   sysroot_label=MIPS
   abi_label=MIPS
+  "$abi-readelf" --wide --dyn-syms "$sysroot/lib/$abi/libc-$libc_version.so" | grep -F getrandom@@GLIBC_2.25
   source_lock="$(rustc +1.85.0 --print sysroot)/lib/rustlib/src/rust/library/Cargo.lock"
   printf '%s  %s\n' aa34aebc09586809bf72b16b62114d811baba843bb8296c10f07c90e4e5b8e31 "$source_lock" | sha256sum --check --strict
   export RUSTC_BOOTSTRAP=1 VERYSYNC_TEST_CUSTOM_STD=rust185-mips-bootstrap CARGO_BUILD_TARGET="$target"
@@ -113,8 +118,8 @@ cp "$support/linux_minimum_runtime.rs" "$work/product/examples/linux_minimum_run
 )
 install -m 755 "$CARGO_TARGET_DIR/$target/release/examples/linux_minimum_runtime" "$fixture/vs-sdk-probe"
 "$linker" -std=gnu11 -Wall -Wextra -Werror -O2 "$support/linux_guest_entropy.c" -o "$fixture/vs-entropy-control"
-install -m 755 "$sysroot/lib/$abi/ld-2.24.so" "$fixture/$loader"
-install -m 755 "$sysroot/lib/$abi/libc-2.24.so" "$fixture/libc.so.6"
+install -m 755 "$sysroot/lib/$abi/ld-$libc_version.so" "$fixture/$loader"
+install -m 755 "$sysroot/lib/$abi/libc-$libc_version.so" "$fixture/libc.so.6"
 
 needed_libraries() {
   "$abi-readelf" -d "$1" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p'
@@ -140,6 +145,6 @@ done
 
 "$abi-readelf" --version-info "$fixture/vs-sdk-probe" "$fixture/vs-entropy-control" > "$work/symbol-versions.txt"
 highest=$(grep -Eo 'GLIBC_[0-9]+(\.[0-9]+)+' "$work/symbol-versions.txt" | sort -Vu | tail -n 1)
-test "$(printf '%s\n' "$highest" GLIBC_2.24 | sort -V | tail -n 1)" = GLIBC_2.24
+test "$(printf '%s\n' "$highest" "GLIBC_$libc_version" | sort -V | tail -n 1)" = "GLIBC_$libc_version"
 printf '%s dynamic glibc max symbol ABI %s\n' "$abi_label" "$highest"
 sha256sum "$fixture"/* | tee "$work/guest-runtime-sha256.txt"

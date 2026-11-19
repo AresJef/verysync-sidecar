@@ -215,7 +215,7 @@ echo "VS_MALTA_VERSION_CONTROL_DONE"
 '''
     elif program_sha is not None:
         archived_libc = armel_stretch or legacy_armv7 or malta_control
-        libc_number = "2.24" if archived_libc else "2.17"
+        libc_number = "2.28" if malta_control else ("2.24" if archived_libc else "2.17")
         entropy_setup = '''case " $(/bin/busybox cat /proc/cmdline) " in
     *" vs_minimum_entropy=natural "*) entropy_mode=natural ;;
     *" vs_minimum_entropy=seeded "*) entropy_mode=seeded ;;
@@ -503,6 +503,6 @@ if armel_stretch or vexpress_stretch:
 if args.arm_vexpress_runtime is not None:
     receipt.update({"guest_libc": "glibc 2.24", "vexpress_profile": args.arm_vexpress_runtime})
 if malta and args.runtime_dir is not None:
-    receipt["guest_libc"] = "glibc 2.24"
+    receipt["guest_libc"] = "glibc 2.28"
 (WORK/"prepared-boot-fixture.json").write_text(json.dumps(receipt,indent=2)+"\n")
 print(json.dumps(receipt))

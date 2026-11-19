@@ -77,7 +77,8 @@ jobs:
           profile = os.environ["PROFILE"]
           assert profile in {"mips", "mipsel"}
           manifest = json.loads(Path(f"scripts/linux-minimum-boot-{profile}-packages.json").read_text())
-          wanted = [("stretch", record) for record in manifest["stretch"] + manifest["stretch-sysroot"]]
+          wanted = [("stretch", record) for record in manifest["stretch"]]
+          wanted += [("buster", record) for record in manifest["buster-sysroot"]]
           def fetch(item):
               suite, record = item
               size = int(record["size"])
@@ -116,7 +117,7 @@ jobs:
             "gcc-$GNU_ABI" "binutils-$GNU_ABI" qemu-system-mips qemu-system-data
           dpkg-query -W "gcc-$GNU_ABI" "binutils-$GNU_ABI" qemu-system-mips
           timeout --kill-after=5s 100s rustup toolchain install 1.85.0 --profile minimal --component rust-src
-      - name: Link the unchanged Rust SDK and probe against the exact archived O32 Debian libc 2.24
+      - name: Link the unchanged Rust SDK and probe against the exact archived O32 Debian libc 2.28
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/vs-malta-stretch-sdk"
@@ -148,7 +149,7 @@ jobs:
                 || ! grep -aEq '^VS_MALTA_GUEST_CONTROL mips(el)? lo$' "$console" \
                 || ! grep -aFxq 'VS_MINIMUM_PTY_READY devpts=true ptmx=true' "$console" \
                 || ! grep -aFxq 'VS_MINIMUM_CORE_VERSION_OK v2.33.2' "$console" \
-                || ! grep -aFxq 'VS_MINIMUM_GLIBC_VERSION glibc=2.24' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_GLIBC_VERSION glibc=2.28' "$console" \
                 || ! grep -aFxq 'VS_MINIMUM_ENTROPY_MODE seeded' "$console" \
                 || ! grep -aFxq 'VS_MINIMUM_ENTROPY_CREDIT_OK bits=512' "$console" \
                 || ! grep -aEq '^VS_MINIMUM_ENTROPY phase=before_sdk bits=[0-9]+ readable=1$' "$console" \
