@@ -29,6 +29,8 @@ backend = config["backend_port"]
 if not root.is_dir() or not isinstance(backend, int) or not 0 < backend <= 65535 or backend == 18886:
     raise ValueError("explicit owned backend and private directory required")
 startup_started = time.monotonic()
+backend_ca = config.get("native_tls_ca_for_lost_gui_reply")
+backend_tls = ssl.create_default_context(cadata=backend_ca) if backend_ca is not None else None
 
 
 def startup_phase(phase):
@@ -60,22 +62,29 @@ def record(**fields):
 now = datetime.datetime.now(datetime.timezone.utc)
 ca_key = ec.generate_private_key(ec.SECP256R1())
 ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Isolated management test CA")])
+ca_key_id = x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key())
+issuer_key_id = x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ca_key_id)
 ca = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name)
       .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
       .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=2))
       .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+      .add_extension(ca_key_id, critical=False)
+      .add_extension(issuer_key_id, critical=False)
       .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False,
                                   key_encipherment=False, data_encipherment=False,
                                   key_agreement=False, key_cert_sign=True, crl_sign=True,
                                   encipher_only=None, decipher_only=None), critical=True)
       .sign(ca_key, hashes.SHA256()))
 leaf_key = ec.generate_private_key(ec.SECP256R1())
+leaf_key_id = x509.SubjectKeyIdentifier.from_public_key(leaf_key.public_key())
 leaf = (x509.CertificateBuilder()
         .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")]))
         .issuer_name(ca_name).public_key(leaf_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=2))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(leaf_key_id, critical=False)
+        .add_extension(issuer_key_id, critical=False)
         .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
         .sign(ca_key, hashes.SHA256()))
@@ -87,6 +96,8 @@ native_leaf = (x509.CertificateBuilder().subject_name(x509.Name([
     .serial_number(x509.random_serial_number())
     .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=2))
     .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+    .add_extension(leaf_key_id, critical=False)
+    .add_extension(issuer_key_id, critical=False)
     .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
     .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
     .sign(ca_key, hashes.SHA256()))
@@ -172,9 +183,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
                forwarded_proxy_authorization=any(k.lower() == "proxy-authorization" for k in headers),
                target_authorization=any(k.lower() == "authorization" for k in headers),
                target_api_key=any(k.lower() == "x-api-key" for k in headers))
-        upstream = http.client.HTTPConnection("127.0.0.1", backend, timeout=8)
+        if backend_tls is None:
+            upstream = http.client.HTTPConnection("127.0.0.1", backend, timeout=8)
+        else:
+            upstream = http.client.HTTPSConnection("localhost", backend, timeout=8, context=backend_tls)
         try:
-            upstream.request(self.command, path, body, headers)
+            try:
+                upstream.request(self.command, path, body, headers)
+            except ssl.SSLCertVerificationError as error:
+                record(role=self.server.role, operation="native_tls_rejected", verify_code=error.verify_code)
+                raise
+            if (backend_tls is not None and self.server.role == "origin"
+                    and self.command == "PATCH" and path == "/rest/config/gui"):
+                # Only the owned test origin with an explicit native CA uses
+                # this branch. Keep the request sent to the real private core.
+                self.close_connection = True
+                try:
+                    upstream_status = upstream.getresponse().status
+                except (http.client.RemoteDisconnected, ConnectionResetError, ssl.SSLEOFError):
+                    upstream_status = None
+                record(role="origin", operation="gui_listener_reply_omitted", upstream_status=upstream_status)
+                return
             response = upstream.getresponse()
             data = response.read(1024 * 1024 + 1)
             if len(data) > 1024 * 1024:

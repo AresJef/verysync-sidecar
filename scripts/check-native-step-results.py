@@ -23,6 +23,10 @@ def failures(package, steps):
         inapplicable.add("native_windows_ui")
     if family not in {"macos", "linux"}:
         inapplicable.add("native_browser_engine")
+    if package == "windows-amd64-standard":
+        required.add("native_windows_gui_lost_reply")
+    else:
+        inapplicable.add("native_windows_gui_lost_reply")
     required.update(key for key in steps if key.startswith("native_") and key not in inapplicable)
     return [key for key in sorted(required) if steps.get(key, {}).get("outcome") != "success"]
 

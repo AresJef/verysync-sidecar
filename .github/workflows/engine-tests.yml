@@ -159,6 +159,17 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
+      - name: Verify one lost GUI reply and actual HTTP restoration on Windows AMD64
+        id: native_windows_gui_lost_reply
+        continue-on-error: true
+        if: matrix.package == 'windows-amd64-standard'
+        env:
+          VERYSYNC_TEST_GUI_RESTORE_LOST_REPLY: isolated-native-case
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target authentication_engine
+          --test-filter native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control
+          --evidence-dir "${{ runner.temp }}/vs-gui-single-lost-reply"
       - name: Explicitly prepare the pinned private public-CA loopback TLS fixture
         id: native_ldap_tls_preparation
         continue-on-error: true

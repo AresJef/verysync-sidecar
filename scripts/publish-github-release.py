@@ -51,6 +51,10 @@ CANDIDATE_ACTION_JOBS = {
     },
     "engine": {
         **{name: ("Require every applicable native suite and exact cleanup",) for name in NATIVE_TARGETS},
+        "windows-amd64-standard": (
+            "Verify one lost GUI reply and actual HTTP restoration on Windows AMD64",
+            "Require every applicable native suite and exact cleanup",
+        ),
         "Fixed archive catalog (static, no engine execution)": (),
         ENGINE_DIAGNOSTIC_PLAN: (
             "Verify complete coverage and invalid-selection refusals",

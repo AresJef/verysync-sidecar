@@ -81,6 +81,8 @@ applicable required outcome remains open.
   official fixed-engine archive/executable checksums.
 - Run the complete required native controller/engine matrix on that candidate,
   including actual control effects, faults, compiled examples and exact cleanup.
+  Native Windows AMD64 also checks one lost HTTPS reply, followed by exact
+  authenticated HTTP readback after the listener change.
 - Push the exact candidate to an owned `ci/formal-candidate/*` branch to run
   quality, native engine, additional-platform, formal resource and both Windows
   packet validations on the same commit. You can also dispatch registered workflows on that ref.
