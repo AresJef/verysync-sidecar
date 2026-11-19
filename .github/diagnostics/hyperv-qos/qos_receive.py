@@ -81,6 +81,8 @@ def receive_all():
                         net.settimeout(12)
                         if address[0] != source or net.getsockname()[:2] != (target, PORT):
                             raise ValueError("The flow did not originate on the private link")
+                        # A queued TCP connection can be established before the per-flow observer binds.
+                        net.sendall(b"\x01")
                         content, classes, tcp_bytes, drops = receive_and_capture(
                             net, packet, family, ipaddress.ip_address(source),
                             ipaddress.ip_address(target), address[1],

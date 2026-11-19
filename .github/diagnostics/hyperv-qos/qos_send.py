@@ -89,6 +89,8 @@ def main():
                 print("QOS_API " + json.dumps({
                     "family": family, "class": traffic_class, "source_port": source_port, **qos,
                 }), flush=True)
+                if net.recv(1) != b"\x01":
+                    raise ValueError("The independent capture socket did not acknowledge readiness")
                 for start in range(0, len(data), SEND_BLOCK_SIZE):
                     if start:
                         time.sleep(0.020)
