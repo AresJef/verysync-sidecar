@@ -199,6 +199,17 @@ constants are guarded at compile time and libc is pinned to the verified
 0.2.186 mapping; the earlier protocol-type connection failures remain historical
 evidence. ELF32 MIPS uses the separately checksummed Ubuntu QEMU 8.2.2 static
 package and reviewed binfmt-P alias; no package post-installation runs.
+
+The two fixed ELF32 MIPS programs also returned their v2.33.2 versions and
+exited in offline Debian `4.9.0-13-4kc-malta` full-system QEMU guests. Each
+guest used the matching Release 2 kernel byte order, 24Kf CPU model and
+256 MiB of memory. The first program-bearing initramfs failed to unpack
+with 128 MiB. Earlier Debian 3.2 guests stopped during early memory setup
+with both CPU models. Rust management, file effects and minimum native
+hardware for these guests require separate evidence.
+[Debian 3.2 CPU comparison](https://github.com/AresJef/verysync-sidecar/actions/runs/44429147303)
+· [Exact Debian 4.9 versions](https://github.com/AresJef/verysync-sidecar/actions/runs/44431736967)
+
 LoongArch64, RISC-V64 and S390x passed their selected pinned QEMU profiles;
 PPC64LE passed the explicit POWER9 profile, retaining the earlier POWER8 SIGILL
 without claiming a native minimum ISA.
