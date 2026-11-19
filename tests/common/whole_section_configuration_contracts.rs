@@ -161,14 +161,17 @@ async fn snapshot_target_path_style_is_checked_before_every_complete_save() -> T
 
 #[tokio::test]
 async fn complete_gui_put_retains_denial_or_unknown_body_without_replaying_write() -> TestResult {
+    let request_timeout = Duration::from_secs(1);
     for delayed in [false, true] {
         let mut write = Reply::json(serde_json::json!({"private":KEY}));
         if delayed {
-            write.delay = Duration::from_millis(150);
+            write.delay = request_timeout * 2;
         } else {
             write.status = 403;
         }
         let mut replies = handshake("windows");
+        // Setup latency must leave enough time to reach the deliberate PUT timeout.
+        replies[0].delay = Duration::from_millis(50);
         replies.extend([
             identity(),
             Reply::json(complete()),
@@ -177,12 +180,7 @@ async fn complete_gui_put_retains_denial_or_unknown_body_without_replaying_write
             write,
         ]);
         let server = ScriptedServer::start(replies).await?;
-        let client = Client::connect(
-            server
-                .options()?
-                .request_timeout(Duration::from_millis(30))?,
-        )
-        .await?;
+        let client = Client::connect(server.options()?.request_timeout(request_timeout)?).await?;
         let mut desired = client.configuration().await?;
         desired.set_gui_preferences(&GuiPreferencesPatch::default().theme("dark"))?;
         let result = client.replace_gui_configuration(&desired).await;

@@ -636,6 +636,26 @@ class DiagnosticSelection(unittest.TestCase):
         with self.assertRaises(ValueError):
             HELPER.draft_mode("push", {}, repo)
 
+    def test_owned_formal_candidate_push_uses_the_complete_diagnostic_catalog(self):
+        repo = "AresJef/verysync-sidecar"
+        event = {"repository": {"full_name": repo}, "deleted": False,
+                 "ref": "refs/heads/ci/formal-candidate/r23-intel-deferred/rc1"}
+        draft = HELPER.draft_mode("push", event, repo)
+        self.assertFalse(draft)
+        self.assertEqual(HELPER.select(self.rows, self.selection, draft=draft), self.rows)
+        for invalid in (
+            event | {"ref": "refs/heads/main"},
+            event | {"ref": "refs/heads/ci/formal-candidate/"},
+            event | {"deleted": True},
+            event | {"repository": {"full_name": "fork/verysync-sidecar"}},
+            event | {"repository": "AresJef/verysync-sidecar"},
+            event | {"ref": None},
+        ):
+            with self.subTest(event=invalid), self.assertRaises(ValueError):
+                HELPER.draft_mode("push", invalid, repo)
+        with self.assertRaises(ValueError):
+            HELPER.draft_mode("push", event, "fork/verysync-sidecar")
+
     def test_planning_does_not_mutate_the_catalog(self):
         before = copy.deepcopy(self.rows)
         HELPER.select(self.rows, self.selection, draft=True)

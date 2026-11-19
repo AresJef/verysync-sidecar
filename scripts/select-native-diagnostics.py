@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan bounded draft diagnostics; ready/dispatch always keep the whole catalog.
+"""Plan bounded draft diagnostics and preserve complete candidate coverage.
 
 This schedules evidence collection only. A selected or superseded diagnosis is
 never acceptance; the independent complete native gates remain required.
@@ -25,8 +25,17 @@ PROFILES = {
 def draft_mode(event_name, event, repository):
     if event_name == "workflow_dispatch":
         return False
+    if event_name == "push":
+        source = event.get("repository") if isinstance(event, dict) else None
+        branch = event.get("ref") if isinstance(event, dict) else None
+        if (repository != "AresJef/verysync-sidecar" or not isinstance(source, dict)
+                or source.get("full_name") != repository or event.get("deleted") is not False
+                or not isinstance(branch, str)
+                or not re.fullmatch(r"refs/heads/ci/formal-candidate/.+", branch)):
+            raise ValueError("owned formal candidate push required")
+        return False
     if event_name != "pull_request":
-        raise ValueError("explicit pull-request or manual workflow event required")
+        raise ValueError("explicit pull-request, candidate push or manual event required")
     pull = event.get("pull_request") if isinstance(event, dict) else None
     if (not isinstance(pull, dict) or type(pull.get("draft")) is not bool
             or not isinstance(repository, str) or not repository):
