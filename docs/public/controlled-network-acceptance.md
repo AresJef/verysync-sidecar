@@ -194,8 +194,10 @@ The acceptance check for this fixed Windows AMD64 direct TCP path records
 an all-zero packet class as the observed v2.33.2 limitation when the
 selected nonzero value persists correctly. It requires independent packet
 headers, both zero-value controls, native configuration and restart,
-complete data, preserved identity and exact cleanup. The Windows ARM64
-effect continues to require independent IPv4 and IPv6 packet observation.
+complete data, preserved identity and exact cleanup. A scoped run from
+`0ade4f7` met these requirements in all six cases. The guest matched 114
+data packets to the authenticated sender and recorded zero capture drops.
+[Scoped Windows AMD64 verification](https://github.com/AresJef/verysync-sidecar/actions/runs/44607251513).
 
 A separate socket-API control used Go 1.23.10 and the fixed program's
 `golang.org/x/net` v0.43.0 on native Windows AMD64 and ARM64. On both
@@ -213,3 +215,14 @@ Hyper-V reported that a required component was unavailable, and cleanup
 restored the original VM inventory. The ARM64 packet gate still requires
 independently observed IPv4 and IPv6 headers from the fixed VerySync program.
 [Alternate Windows ARM64 observer check](https://github.com/AresJef/verysync-sidecar/actions/runs/44512647766).
+
+Two independent native Windows 11 ARM64 runners tested the fixed v2.33.2
+sender on an isolated link. Each verified three IPv4 cases with observed
+octets `16`, `32` and `0`. On IPv6 the sender emitted `0` for all three
+settings. The same-link qWAVE reference emitted the requested octets in
+both families. All six files per run matched their expected SHA-256 digests,
+and both runs verified configuration persistence, identity, normal process
+exits and exact cleanup. The two nonzero IPv6 cases failed the required
+Windows ARM64 packet check in both runs.
+[First native Windows ARM64 run](https://github.com/AresJef/verysync-sidecar/actions/runs/44585772845),
+[independent native Windows ARM64 repeat](https://github.com/AresJef/verysync-sidecar/actions/runs/44587804049).
