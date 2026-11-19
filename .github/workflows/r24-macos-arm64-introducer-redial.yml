@@ -1,0 +1,70 @@
+name: Verify original macOS ARM64 introduction scopes with explicit private redial
+
+on:
+  push:
+    branches: ['verify/r24/macos-arm64-introducer-redial']
+
+permissions:
+  contents: read
+
+jobs:
+  native-introduction-reconnect:
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: macos-15
+    timeout-minutes: 32
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-aarch64-apple-darwin
+      EXACT_PARENT: dfb7bc3c1fcaaf9532bd69337fc597e1b5f93e76
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Prepare native Rust and the exact fixed independent program
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD^)" = "$EXACT_PARENT"
+          git diff --exit-code HEAD^ HEAD -- src Cargo.toml Cargo.lock releases
+          git log -1 --format='%H %T %P'
+          sw_vers
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          python scripts/prepare-test-engine.py prepare --package macos-arm64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Run the complete original ordered suite and a fresh direct transfer
+        run: |
+          set -euo pipefail
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target p2p_three_nodes --evidence-dir "$RUNNER_TEMP/vs-introducer-redial-suite"
+          python scripts/prepare-test-engine.py check-cleanup
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target p2p_three_nodes --test-filter native_introduced_peer_supplies_data_on_a_direct_connection \
+            --evidence-dir "$RUNNER_TEMP/vs-introducer-redial-repeat"
+      - name: Require original introduction, direct transfer and true cleanups
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          base = Path(os.environ["RUNNER_TEMP"])
+          for suffix, required in (("suite", 5), ("repeat", 1)):
+              text = (base / f"vs-introducer-redial-{suffix}" / "p2p-three-nodes.log").read_text()
+              assert f"test result: ok. {required} passed; 0 failed; 0 ignored;" in text
+              marker = "native introducer effects: "
+              receipts = [json.loads(line.split(marker, 1)[1]) for line in text.splitlines() if marker in line]
+              direct = [r for r in receipts if r["direct_data_from_introduced_peer_without_introducer_folder"]]
+              assert len(direct) == 1 and direct[0]["real_converged_shared_data_and_three_normal_exits"]
+              assert direct[0]["trusted_device_origin_folder_association"] == [True, True, True]
+              assert text.count("owned reconnect fixture redial seconds:") >= 3
+              print(f"MAC_INTRODUCER_ORIGINAL_SCOPE {suffix} passed={required} exact_direct_effect_and_three_exits=true")
+          PY
+      - name: Require final exact owned engine cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup

@@ -118,6 +118,9 @@ async fn observe_introduction(keep: bool, probe_direct_data: bool) -> TestResult
     let mut receiver = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut introducer = ManagedInstance::start(options(&root.join("b"))?).await?;
     let mut third = ManagedInstance::start(options(&root.join("c"))?).await?;
+    for node in [&receiver, &introducer, &third] {
+        super::private_redial::configure(node.client()).await?;
+    }
     let receiver_id = receiver.client().instance().device_id.clone();
     let introducer_id = introducer.client().instance().device_id.clone();
     let third_id = third.client().instance().device_id.clone();
