@@ -1,0 +1,15 @@
+"""Shared parameters for the isolated native TCP comparison."""
+
+import socket
+
+PEERS = (
+    (4, socket.AF_INET, "192.0.2.1", "192.0.2.2"),
+    (6, socket.AF_INET6, "2001:db8:73f:43::1", "2001:db8:73f:43::2"),
+)
+CLASSES = (0, 16, 32)
+PORT = 47529
+SIZE = 262_181
+
+
+def sample(family, traffic_class):
+    return bytes(((i * 73) ^ (i >> 7) ^ family ^ traffic_class ^ 0xA5) & 255 for i in range(SIZE))

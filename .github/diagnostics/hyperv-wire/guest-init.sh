@@ -28,4 +28,7 @@ echo "RECEIVER_GUEST_LINK name=$link boot_driver=hv_netvsc no_default_ipv4_ipv6=
 insmod /af_packet.ko
 python3 -B -c 'import socket; sock=socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(3)); sock.bind(("peer", 3)); sock.close()'
 echo 'WIRE_GUEST_CAPTURE_READY real_af_packet_socket=true'
+echo 'SAME_GUEST_PHASE qwave_begin'
+OWNED_HYPERV_QOS_CONTROL=true python3 -B /qos_receive.py
+echo 'SAME_GUEST_PHASE sdk_begin'
 OWNED_DISKLESS_HYPERV=true paired-wire guest

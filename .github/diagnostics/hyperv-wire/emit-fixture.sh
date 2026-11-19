@@ -49,7 +49,14 @@ sudo chroot ram /sbin/apk --no-cache --repositories-file /dev/null \
 sudo rm -f ram/etc/resolv.conf
 sudo install -m 0755 "$static_worker" ram/bin/paired-wire
 sudo install -m 0644 af_packet.ko ram/af_packet.ko
-sudo install -m 0644 "$diagnostics/receive-headers.py" ram/receive-headers.py
+sudo install -m 0644 "$diagnostics/receive-headers.py" ram/receive_headers.py
+sudo ln -s receive_headers.py ram/receive-headers.py
+for control in qos_payload.py qos_receive.py qos_send.py; do
+  sha256sum "$diagnostics/$control"
+done
+for control in qos_payload.py qos_receive.py; do
+  sudo install -m 0644 "$diagnostics/$control" "ram/$control"
+done
 sudo chroot ram /usr/bin/python3 --version
 sha256sum "$static_worker"
 sha256sum "$diagnostics/receive-headers.py"

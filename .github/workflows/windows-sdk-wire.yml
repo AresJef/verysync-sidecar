@@ -1,8 +1,8 @@
-name: Native Windows VerySync traffic class proof
+name: Native Windows socket marking and VerySync on the same link
 
 on:
   push:
-    branches: ['verify/windows-sdk-wire-20261119-*']
+    branches: ['verify/windows-sdk-wire-20261119-same-host-marking-control']
     paths: ['.github/workflows/windows-sdk-wire.yml', '.github/diagnostics/hyperv-wire/**']
 
 permissions:
@@ -74,7 +74,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   wire:
-    name: Observe native Windows TCP data from the isolated guest
+    name: Observe the socket control and SDK on one owned Windows link
     runs-on: windows-2022
     needs: [fixture, sender]
     timeout-minutes: 14
@@ -101,7 +101,7 @@ jobs:
           if ($image.binary_sha256 -ne '770324d3411bf6ff7d18109ba5fa1e5057056b5e93441f29185b50895f55693a') { throw 'Fixed guest program mismatch' }
           "VERYSYNC_GUEST_BINARY=$($image.binary)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Output "OWNED_GUEST_SOURCE version=$($image.version) sha256=$($image.binary_sha256)"
-      - name: Require all six authenticated data transfers and independent packet records
+      - name: Require the native socket control and all six strict SDK packet cases
         shell: pwsh
         env:
           EXPECTED_OWNED_ISO_SHA: ${{ needs.fixture.outputs.iso_sha }}

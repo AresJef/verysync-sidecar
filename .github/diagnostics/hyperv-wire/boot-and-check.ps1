@@ -61,6 +61,25 @@ try {
     if (!$connecting.Wait(17000)) { throw 'Owned guest console connection did not return' }
     $serial = [IO.StreamReader]::new($pipe)
     $guestMessages = $serial.ReadToEndAsync()
+    $service = Get-Service -Name 'QWAVE' -ErrorAction SilentlyContinue
+    if ($service) {
+        Write-Output "QOS_EXISTING_SERVICE status=$($service.Status) start=$($service.StartType)"
+    } else {
+        Write-Output 'QOS_EXISTING_SERVICE absent'
+    }
+    Write-Output "SAME_HOST_PHASE qwave_begin vm=$vmId switch=$switchId if_index=$testInterface"
+    $env:OWNED_HYPERV_QOS_CONTROL = 'true'
+    & python -B (Join-Path $PSScriptRoot 'qos_send.py')
+    if ($LASTEXITCODE -ne 0) { throw 'The native socket-marking control did not finish' }
+    $liveGuest = Get-VM -Id $vmId
+    $liveLink = Get-VMSwitch -Name $name
+    $liveAdapter = Get-NetAdapter -Name $hostName
+    $guestAdapters = @(Get-VMNetworkAdapter -VM $liveGuest)
+    if ($liveGuest.State -ne 'Running' -or $liveLink.Id -ne $switchId -or $liveLink.SwitchType -ne 'Internal' -or
+        $liveAdapter.ifIndex -ne $testInterface -or $guestAdapters.Count -ne 1 -or $guestAdapters[0].SwitchId -ne $switchId) {
+        throw 'The owned VM or switch changed between the comparison phases'
+    }
+    Write-Output "SAME_HOST_PHASE sdk_begin vm=$($liveGuest.Id) switch=$($liveLink.Id) if_index=$($liveAdapter.ifIndex)"
     & $WindowsHarness send $GuestCore
     $wireStatus = $LASTEXITCODE
 
@@ -70,12 +89,15 @@ try {
         if ($current.State -ne 'Off') { Start-Sleep -Milliseconds 150 }
     } until ($current.State -eq 'Off' -or [DateTime]::UtcNow -gt $limit)
     if (!$guestMessages.Wait(5000)) { throw 'Owned guest console did not close' }
-    $markers = @($guestMessages.Result -split '\r?\n' | Where-Object { $_ -match '^(RECEIVER_GUEST_|WIRE_GUEST_|Error:|Traceback|OSError|PermissionError|ModuleNotFoundError)' })
+    $markers = @($guestMessages.Result -split '\r?\n' | Where-Object { $_ -match '^(RECEIVER_GUEST_|WIRE_GUEST_|QOS_|SAME_GUEST_PHASE|Error:|Traceback|OSError|PermissionError|ModuleNotFoundError)' })
     $markers | Write-Output
     $printedConsole = $true
     if ($current.State -ne 'Off' -or -not ($markers -match '^RECEIVER_GUEST_BOOT kernel=6\.18\.60-0-virt architecture=x86_64$') -or
         -not ($markers -match '^RECEIVER_GUEST_LINK name=\w+ boot_driver=hv_netvsc no_default_ipv4_ipv6=true$') -or
         -not ($markers -match '^RECEIVER_GUEST_FINISH status=0$') -or
+        @($markers -match '^QOS_RECEIVED ').Count -ne 6 -or
+        -not ($markers -match '^QOS_CONTROL_LINUX_FINISH cases=6$') -or
+        -not ($markers -match '^SAME_GUEST_PHASE sdk_begin$') -or
         @($markers -match '^WIRE_GUEST_NORMAL family=').Count -ne 6 -or
         -not ($markers -match '^WIRE_GUEST_OWNED_STATE_REMOVED$')) {
         throw 'Guest identity, six normal SDK exits, or own shutdown was incomplete'
