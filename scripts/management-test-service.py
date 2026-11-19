@@ -62,22 +62,29 @@ def record(**fields):
 now = datetime.datetime.now(datetime.timezone.utc)
 ca_key = ec.generate_private_key(ec.SECP256R1())
 ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Isolated management test CA")])
+ca_key_id = x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key())
+issuer_key_id = x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ca_key_id)
 ca = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name)
       .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
       .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=2))
       .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+      .add_extension(ca_key_id, critical=False)
+      .add_extension(issuer_key_id, critical=False)
       .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False,
                                   key_encipherment=False, data_encipherment=False,
                                   key_agreement=False, key_cert_sign=True, crl_sign=True,
                                   encipher_only=None, decipher_only=None), critical=True)
       .sign(ca_key, hashes.SHA256()))
 leaf_key = ec.generate_private_key(ec.SECP256R1())
+leaf_key_id = x509.SubjectKeyIdentifier.from_public_key(leaf_key.public_key())
 leaf = (x509.CertificateBuilder()
         .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")]))
         .issuer_name(ca_name).public_key(leaf_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=2))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(leaf_key_id, critical=False)
+        .add_extension(issuer_key_id, critical=False)
         .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
         .sign(ca_key, hashes.SHA256()))
@@ -89,6 +96,8 @@ native_leaf = (x509.CertificateBuilder().subject_name(x509.Name([
     .serial_number(x509.random_serial_number())
     .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=2))
     .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+    .add_extension(leaf_key_id, critical=False)
+    .add_extension(issuer_key_id, critical=False)
     .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
     .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
     .sign(ca_key, hashes.SHA256()))
@@ -179,7 +188,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             upstream = http.client.HTTPSConnection("localhost", backend, timeout=8, context=backend_tls)
         try:
-            upstream.request(self.command, path, body, headers)
+            try:
+                upstream.request(self.command, path, body, headers)
+            except ssl.SSLCertVerificationError as error:
+                record(role=self.server.role, operation="native_tls_rejected", verify_code=error.verify_code)
+                raise
             if (backend_tls is not None and self.server.role == "origin"
                     and self.command == "PATCH" and path == "/rest/config/gui"):
                 # Only the owned test origin with an explicit native CA uses

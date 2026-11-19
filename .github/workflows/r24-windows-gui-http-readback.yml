@@ -1,8 +1,8 @@
-name: Verify one lost HTTPS reply with actual HTTP restoration on Windows AMD64
+name: Verify strict native TLS, one lost GUI reply and actual HTTP restoration
 
 on:
   push:
-    branches: ['verify/r24/windows-gui-lost-reply']
+    branches: ['verify/r24/windows-gui-strict-chain']
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
       - name: Confirm exact tested candidate parent and fixtures
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "61b2b2ca893ace327c8724f470db4c9bc92c6fcb"
+          test "$(git rev-parse HEAD^)" = "2542d982d0ac8426ac90b5a008e7987cef2680fe"
           git diff --exit-code HEAD^ HEAD -- src Cargo.toml Cargo.lock
           git log -1 --format='%H %T %P'
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
