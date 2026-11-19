@@ -25,4 +25,7 @@ ip -6 addr add 2001:db8:73f:43::2/64 dev "$link"
 test -z "$(ip -4 route show default)"
 test -z "$(ip -6 route show default)"
 echo "RECEIVER_GUEST_LINK name=$link boot_driver=hv_netvsc no_default_ipv4_ipv6=true"
+insmod /af_packet.ko
+python3 -B -c 'import socket; sock=socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(3)); sock.bind(("peer", 3)); sock.close()'
+echo 'WIRE_GUEST_CAPTURE_READY real_af_packet_socket=true'
 OWNED_DISKLESS_HYPERV=true paired-wire guest

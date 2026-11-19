@@ -16,7 +16,23 @@ printf '%s  %s\n' \
   5e0879304cfbc433bcafd007f5ef88f6c717020bf739a7636b5d5598fd1b4671 "$iso" \
   56e2810205c17a5dff78cdd7b2c2af4ccdef16f18d765d5bb0f527438b136676 "$fs" | sha256sum -c -
 mkdir -p ram iso-tree/boot/grub output
-xorriso -osirrox on -indev "$iso" -extract /boot/vmlinuz-virt iso-tree/boot/vmlinuz
+xorriso -osirrox on -indev "$iso" \
+  -extract /boot/vmlinuz-virt iso-tree/boot/vmlinuz \
+  -extract /boot/modloop-virt modloop.squashfs
+unsquashfs -no-progress -d modules modloop.squashfs
+mapfile -t packet_modules < <(find modules -type f \( -name 'af_packet.ko' -o -name 'af_packet.ko.*' \))
+test "${#packet_modules[@]}" = 1
+file="${packet_modules[0]}"
+case "$file" in
+  *.zst) zstd -q -dc "$file" > af_packet.ko ;;
+  *.xz) xz -dc "$file" > af_packet.ko ;;
+  *.gz) gzip -dc "$file" > af_packet.ko ;;
+  *.ko) cp "$file" af_packet.ko ;;
+  *) echo 'Unknown compression of the owned packet module' >&2; exit 1 ;;
+esac
+test -z "$(modinfo -F depends ./af_packet.ko)"
+modinfo -F vermagic ./af_packet.ko | grep '^6\.18\.60-0-virt '
+sha256sum af_packet.ko
 sudo tar --numeric-owner -xzf "$fs" -C ram
 sudo mkdir -p ram/proc ram/sys ram/run ram/dev
 sudo install -m 0755 "$diagnostics/guest-init.sh" ram/init
@@ -32,6 +48,7 @@ sudo chroot ram /sbin/apk --no-cache --repositories-file /dev/null \
   --repository https://dl-cdn.alpinelinux.org/alpine/v3.23/main add python3
 sudo rm -f ram/etc/resolv.conf
 sudo install -m 0755 "$static_worker" ram/bin/paired-wire
+sudo install -m 0644 af_packet.ko ram/af_packet.ko
 sudo install -m 0644 "$diagnostics/receive-headers.py" ram/receive-headers.py
 sudo chroot ram /usr/bin/python3 --version
 sha256sum "$static_worker"
