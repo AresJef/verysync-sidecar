@@ -16,7 +16,7 @@ KERNELS = {
     "amd64": {"squeeze": "2.6.32-5-amd64", "wheezy": "3.2.0-4-amd64"},
     "i386": {"squeeze": "2.6.32-5-686", "wheezy": "3.2.0-4-686-pae"},
     "armel": {"wheezy": "3.2.0-4-versatile", "stretch": "4.9.0-13-armmp"},
-    "arm-vexpress": {"wheezy": "3.2.0-4-vexpress"},
+    "arm-vexpress": {"wheezy": "3.2.0-4-vexpress", "stretch": "4.9.0-13-armmp"},
     "arm64": {"jessie": "3.16.0-6-arm64"},
     "s390x": {"wheezy": "3.2.0-4-s390x", "stretch": "4.9.0-13-s390x"},
 }
@@ -296,6 +296,8 @@ if args.distribution not in KERNELS[args.architecture]:
 if args.arm_vexpress_runtime is not None:
     if args.architecture != "arm-vexpress" or args.runtime_dir is None or args.engine_receipt is None:
         parser.error("vexpress runtime requires an exact profile, its runtime directory and its engine receipt")
+    if args.distribution == "stretch" and args.arm_vexpress_runtime != "armhf":
+        parser.error("the Stretch vexpress fixture selects only the hard-float Cortex-A15 comparison")
 elif args.architecture == "arm-vexpress" and (args.runtime_dir is not None or args.engine_receipt is not None):
     parser.error("select the exact legacy vexpress runtime profile")
 if args.armel_version_control:
@@ -339,14 +341,15 @@ _, runtime_lib, _ = RUNTIME[args.architecture]
 kernel_name, config_name = "boot/vmlinuz-"+release, "boot/config-"+release
 kernel_deb = by_name[distribution,"linux-image-"+release]
 armel_stretch = args.architecture == "armel" and distribution == "stretch"
+vexpress_stretch = args.architecture == "arm-vexpress" and distribution == "stretch"
 required_kernel_members = {kernel_name:12*1024*1024,config_name:1024*1024}
-dtb_filename = "vexpress-v2p-ca9.dtb"
-if armel_stretch:
+dtb_filename = "vexpress-v2p-ca15-tc1.dtb" if vexpress_stretch else "vexpress-v2p-ca9.dtb"
+if armel_stretch or vexpress_stretch:
     dtb_member = f"usr/lib/linux-image-{release}/{dtb_filename}"
     required_kernel_members[dtb_member] = 256*1024
 members = verified_members(kernel_deb, required_kernel_members)
 kernel,config = members[kernel_name],members[config_name]
-if armel_stretch:
+if armel_stretch or vexpress_stretch:
     dtb = members[dtb_member]
     assert dtb[:4] == bytes.fromhex("d00dfeed")
 required_platform = {
@@ -413,7 +416,7 @@ ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)
 (root / kernel_filename).write_bytes(kernel)
-if armel_stretch:
+if armel_stretch or vexpress_stretch:
     (root / dtb_filename).write_bytes(dtb)
 (root/"initramfs.cpio.gz").write_bytes(ramdisk)
 (root/"kernel-config").write_bytes(config)
@@ -424,7 +427,7 @@ receipt = {"distribution":distribution,"architecture":args.architecture,"expecte
             "expected_serial_marker":"VS_MINIMUM_BOOT_OK kernel="+release+" loopback=127.0.0.1",
             "qemu_network_adapters":0,"boot_performed":False,
             "runtime_payload_sha256":runtime_hashes}
-if armel_stretch:
+if armel_stretch or vexpress_stretch:
     receipt.update({"dtb_filename": dtb_filename, "dtb_sha256": dig(dtb), "guest_libc": "glibc 2.24"})
 if args.arm_vexpress_runtime is not None:
     receipt.update({"guest_libc": "glibc 2.24", "vexpress_profile": args.arm_vexpress_runtime})

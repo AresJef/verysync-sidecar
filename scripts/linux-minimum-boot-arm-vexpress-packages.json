@@ -58,5 +58,28 @@
       "size": "1487562",
       "sha256": "8fdb967bc5887bc67e188fff93e4e6701036334b4134c13b35080e60d34a426b"
     }
+  ],
+  "stretch": [
+    {
+      "package": "linux-image-4.9.0-13-armmp",
+      "version": "4.9.228-1",
+      "filename": "pool/main/l/linux/linux-image-4.9.0-13-armmp_4.9.228-1_armhf.deb",
+      "size": "30767074",
+      "sha256": "17668bed405007849a0f97cb7560342c0f11d26c9259e03a8a00bb824bc125f1"
+    },
+    {
+      "package": "busybox-static",
+      "version": "1:1.22.0-19+b3",
+      "filename": "pool/main/b/busybox/busybox-static_1.22.0-19+b3_armel.deb",
+      "size": "746332",
+      "sha256": "8143abdeb39e0920896c1b3dda151854ef9fddb686568fd682660a9111c5187b"
+    },
+    {
+      "package": "ca-certificates",
+      "version": "20200601~deb9u1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20200601~deb9u1_all.deb",
+      "size": "159692",
+      "sha256": "d6fc9275de84bdf598b3703a50935dc69d2e80105317a44f6cba465c073f88f9"
+    }
   ]
 }
