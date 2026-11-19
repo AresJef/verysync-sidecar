@@ -1,0 +1,47 @@
+name: Inspect TCP headers at an independent routed test receiver
+
+on:
+  push:
+    branches: ['verify/routed-wire-20261119**']
+    paths:
+      - .github/workflows/routed-wire-diagnostic.yml
+      - .github/diagnostics/routed-direct.rs
+      - .github/diagnostics/routed-direct.py
+      - .github/diagnostics/receive-headers.py
+
+permissions:
+  contents: read
+
+jobs:
+  wire:
+    name: Receiver wire data (IPv${{ matrix.family }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [4, 6]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Compile the validation-only SDK driver
+        run: |
+          cp .github/diagnostics/routed-direct.rs examples/routed_header_diagnostic.rs
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 build --locked --example routed_header_diagnostic
+      - name: Prepare the fixed native private image
+        run: >-
+          python3 scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require actual TCP data headers, bytes and normal ownership across all cases
+        env:
+          SELECTED_FAMILY: ${{ matrix.family }}
+        run: |
+          for class in 16 32 0; do
+            python3 .github/diagnostics/routed-direct.py "$SELECTED_FAMILY" \
+              target/debug/examples/routed_header_diagnostic "$class"
+          done
+      - name: Confirm no owned program is left running
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python3 scripts/prepare-test-engine.py check-cleanup
