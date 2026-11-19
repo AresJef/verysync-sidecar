@@ -10,10 +10,13 @@ families and their platform, authorization and recovery gates.
   official fixed-engine archive/executable checksums.
 - Run the complete required native controller/engine matrix on that candidate,
   including actual control effects, faults, compiled examples and exact cleanup.
-- Dispatch the registered quality, engine, additional-platform and formal resource
-  workflows on the exact candidate ref. Record each workflow's numeric run ID
-  and attempt in the private candidate metadata, under `candidate_runs` with
-  keys `quality`, `engine`, `platforms` and `resources`. Each entry
+- Dispatch the registered quality and engine workflows on the exact candidate ref.
+  An owned `ci/formal-candidate/*` branch at that same commit triggers
+  additional-platform and formal resource validation. Where both workflows are
+  registered for manual runs, you can also dispatch them on that ref.
+  Record each workflow's numeric run ID and attempt in the private candidate
+  metadata under `candidate_runs` with keys `quality`, `engine`,
+  `platforms` and `resources`. Each entry
   contains `id` and `attempt`. Run the read-only
   `python3 scripts/publish-github-release.py --metadata /absolute/private/release.json --check-actions`
   with GitHub CLI access to workflow metadata. This checks the candidate commit

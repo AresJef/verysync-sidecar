@@ -32,8 +32,15 @@ def select(catalog, event_name, event, repository):
         seen.add(row["package"])
     if event_name == "workflow_dispatch":
         return [dict(row) for row in catalog]
+    if event_name == "push":
+        if (not isinstance(event, dict) or repository != "AresJef/verysync-sidecar"
+                or (event.get("repository") or {}).get("full_name") != repository
+                or event.get("deleted") is not False
+                or not re.fullmatch(r"refs/heads/ci/formal-candidate/.+", event.get("ref", ""))):
+            raise ValueError("owned formal candidate push required")
+        return [dict(row) for row in catalog]
     if event_name != "pull_request":
-        raise ValueError("explicit pull-request or manual event required")
+        raise ValueError("explicit pull-request, candidate push or manual event required")
     pull = event.get("pull_request") if isinstance(event, dict) else None
     if (not isinstance(pull, dict) or type(pull.get("draft")) is not bool
             or not isinstance(repository, str) or not repository):

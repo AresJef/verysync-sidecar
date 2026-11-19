@@ -35,6 +35,20 @@ class EmulatedPlatformSelection(unittest.TestCase):
         self.assertEqual(SELECTOR.select(self.rows, "workflow_dispatch", {}, self.repo), self.rows)
         self.assertEqual(len(self.rows), 8)
 
+    def test_only_an_owned_formal_candidate_push_runs_the_complete_matrix(self):
+        event = {"ref": "refs/heads/ci/formal-candidate/rc1",
+                 "deleted": False, "repository": {"full_name": self.repo}}
+        self.assertEqual(SELECTOR.select(self.rows, "push", event, self.repo), self.rows)
+        self.assertEqual(SELECTOR.select(self.rows, "push", event | {"created": True}, self.repo), self.rows)
+        for invalid in (event | {"ref": "refs/heads/ci/normal-work"},
+                        event | {"ref": "refs/heads/ci/formal-candidate/"},
+                        event | {"deleted": True},
+                        event | {"repository": {"full_name": "fork/verysync-sidecar"}}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                SELECTOR.select(self.rows, "push", invalid, self.repo)
+        with self.assertRaises(ValueError):
+            SELECTOR.select(self.rows, "push", event, "fork/verysync-sidecar")
+
     def test_other_or_fork_drafts_cannot_enable_emulation(self):
         self.event["pull_request"]["head"]["repo"]["full_name"] = "fork/other"
         self.assertEqual(SELECTOR.select(self.rows, "pull_request", self.event, self.repo), [])

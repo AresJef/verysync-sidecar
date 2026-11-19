@@ -25,6 +25,8 @@ on:
       - scripts/tests/test_resource_*.py
       - .github/workflows/resource-collection.yml
   workflow_dispatch:
+  push:
+    branches: ['ci/formal-candidate/**']
 
 permissions:
   contents: read
@@ -35,7 +37,7 @@ concurrency:
 
 jobs:
   collect:
-    if: (github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'resource-formal') && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'test/native-introduction-encryption-20261118-01a1ca9b' || contains(github.event.pull_request.labels.*.name, 'resource-formal'))
+    if: (github.event_name != 'push' || (github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted)) && (github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'resource-formal') && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'test/native-introduction-encryption-20261118-01a1ca9b' || contains(github.event.pull_request.labels.*.name, 'resource-formal'))
     name: Resource coverage (${{ matrix.package }})
     runs-on: ${{ matrix.runner }}
     # Allow cold preparation, the full frozen acquisition window, and evidence saving.
@@ -98,7 +100,7 @@ jobs:
           --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
           --evidence-dir "${{ runner.temp }}/vs-resource-v25-pretrial"
       - name: Collect four formal and two independent original-order cycles
-        if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'resource-formal')
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'resource-formal')
         run: >-
           python scripts/collect-native-resources.py --stage all
           --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"

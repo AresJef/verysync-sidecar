@@ -4,6 +4,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
+  push:
+    branches: ['ci/formal-candidate/**']
 
 permissions:
   contents: read
@@ -17,7 +19,7 @@ env:
 
 jobs:
   windows-legacy-build:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false || (github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'ci/win7-default-abi-20261118-01a1ca9b')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted) || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) || (github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'ci/win7-default-abi-20261118-01a1ca9b')
     name: Link legacy Windows Rust examples (${{ matrix.target }})
     runs-on: windows-2022
     timeout-minutes: 30
@@ -91,7 +93,7 @@ jobs:
           }
 
   x86-compatibility:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted) || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     name: ${{ matrix.package }} (${{ matrix.execution }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
@@ -213,7 +215,7 @@ jobs:
           PY
 
   arm-emulated:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted) || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     name: ${{ matrix.package }} (QEMU user emulation)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -408,7 +410,7 @@ jobs:
           PY
 
   other-emulated-plan:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false || (github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted) || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) || (github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository)
     name: Plan complete emulation or the exact owned MIPS diagnosis
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -428,7 +430,7 @@ jobs:
         run: python -B scripts/select-emulated-platforms.py
 
   other-emulated:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false || (github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted) || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) || (github.event_name == 'pull_request' && github.event.pull_request.draft && github.head_ref == 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.event.pull_request.head.repo.full_name == github.repository)
     needs: other-emulated-plan
     name: ${{ matrix.package }} (QEMU user emulation)
     runs-on: ubuntu-24.04

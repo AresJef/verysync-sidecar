@@ -233,8 +233,14 @@ def validate_candidate_run(metadata, workflow_path, workflow, reference, run):
     require(workflow["path"] == workflow_path and run["workflow_id"] == workflow["id"]
             and run["path"].split("@", 1)[0] == workflow_path,
             "candidate run does not use the registered workflow")
+    candidate_push = (
+        run["event"] == "push" and workflow_path in (
+            ".github/workflows/platform-matrix.yml", ".github/workflows/resource-collection.yml",
+        ) and re.fullmatch(r"ci/formal-candidate/.+", run.get("head_branch") or "")
+    )
     require(run["id"] == reference["id"] and run["run_attempt"] == reference["attempt"]
-            and run["head_sha"] == metadata["source"] and run["event"] == "workflow_dispatch"
+            and run["head_sha"] == metadata["source"]
+            and (run["event"] == "workflow_dispatch" or candidate_push)
             and (run.get("repository") or {}).get("full_name") == repository
             and (run.get("head_repository") or {}).get("full_name") == repository,
             "candidate run source, repository, event or attempt differs")

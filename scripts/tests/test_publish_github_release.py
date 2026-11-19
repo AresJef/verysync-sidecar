@@ -140,6 +140,29 @@ class ReleaseIdentityTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 HELPER.validate_candidate_run(self.metadata, run_path, lookup, reference, run | {key: value})
 
+    def test_owned_candidate_push_is_valid_for_platforms_and_resources(self):
+        repository = {"full_name": self.metadata["repository"]}
+        reference = {"id": 30, "attempt": 1}
+        branch = "ci/formal-candidate/rc1"
+        for lane in ("platform-matrix", "resource-collection", "quality", "engine-tests"):
+            path = f".github/workflows/{lane}.yml"
+            workflow = {"id": 55, "path": path}
+            run = {"id": 30, "workflow_id": 55, "path": path, "event": "push",
+                   "head_sha": self.metadata["source"], "run_attempt": 1, "head_branch": branch,
+                   "status": "completed", "conclusion": "success",
+                   "repository": repository, "head_repository": repository}
+            if lane in ("platform-matrix", "resource-collection"):
+                HELPER.validate_candidate_run(self.metadata, path, workflow, reference, run)
+            else:
+                with self.assertRaises(ValueError):
+                    HELPER.validate_candidate_run(self.metadata, path, workflow, reference, run)
+            for wrong in ("main", "ci/normal", "ci/formal-candidate/"):
+                with self.subTest(workflow=lane, branch=wrong), self.assertRaises(ValueError):
+                    HELPER.validate_candidate_run(self.metadata, path, workflow, reference, run | {"head_branch": wrong})
+            with self.assertRaises(ValueError):
+                HELPER.validate_candidate_run(self.metadata, path, workflow, reference,
+                                              run | {"head_repository": {"full_name": "fork/verysync-sidecar"}})
+
     def candidate_job(self, name, job_id, steps=("acceptance", "cleanup")):
         return {"id": job_id, "name": name, "run_id": 51, "run_attempt": 2, "runner_id": 4,
                 "head_sha": self.metadata["source"], "status": "completed", "conclusion": "success",
