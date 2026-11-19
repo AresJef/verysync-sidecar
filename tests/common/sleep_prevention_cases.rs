@@ -1,8 +1,6 @@
 //! Actual OS idle-sleep requests are scoped to the selected private native cores.
 use super::managed_fixture::{options, TestResult};
-#[cfg(target_os = "macos")]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use verysync_sidecar::*;
 
@@ -233,10 +231,12 @@ fn copy_sleep_role_program(root: &std::path::Path, state: &str) -> TestResult<Ma
 }
 
 #[cfg(windows)]
-async fn confirm_sleep_role_cleanup(program: &std::path::Path) -> TestResult {
+async fn confirm_sleep_role_cleanup(program: &Path) -> TestResult {
     let program = program.to_owned();
+    let python = std::env::var_os("VERYSYNC_TEST_PYTHON")
+        .ok_or("explicit private Python process inventory required")?;
     let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("python")
+        std::process::Command::new(python)
             .arg(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("scripts")
@@ -253,14 +253,66 @@ async fn confirm_sleep_role_cleanup(program: &std::path::Path) -> TestResult {
     Ok(())
 }
 
+#[cfg(windows)]
+async fn confirm_sleep_case_images(root: &Path) -> TestResult<usize> {
+    let mut confirmed = 0;
+    let mut errors = Vec::new();
+    for role in ["a.exe", "b.exe"] {
+        let image = root.join(role);
+        match image.symlink_metadata() {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                match confirm_sleep_role_cleanup(&image).await {
+                    Ok(()) => confirmed += 1,
+                    Err(error) => errors.push(format!("{role}: {error}")),
+                }
+            }
+            Ok(_) => errors.push(format!("{role}: expected an owned regular executable")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => errors.push(format!("{role}: {error}")),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors.join(", ").into());
+    }
+    Ok(confirmed)
+}
+
 #[tokio::test]
 async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer() -> TestResult {
-    #[cfg(windows)]
-    let power_policy_before = super::windows_sleep_observation::powercfg("/query").await?;
     let root = tempfile::Builder::new()
         .prefix("vsawake-")
         .tempdir()?
         .keep();
+    #[cfg(windows)]
+    {
+        let original_plan = super::windows_sleep_observation::powercfg("/query").await?;
+        let worker_root = root.clone();
+        let result = tokio::spawn(async move { run_sleep_policy_case(&worker_root).await })
+            .await
+            .unwrap_or_else(|error| Err(error.into()));
+        let inventory = confirm_sleep_case_images(&root).await;
+        let current_plan = super::windows_sleep_observation::powercfg("/query").await;
+        if let Err(error) = &result {
+            eprintln!("native sleep case stopped before all effects: {error}");
+        }
+        let confirmed = inventory?;
+        assert_eq!(
+            original_plan, current_plan?,
+            "the native option must not change the host power plan"
+        );
+        println!("native_sleep_role_cleanup_checked_after_case_outcome={confirmed}");
+        result?;
+        assert_eq!(confirmed, 2);
+        println!("native_sleep_distinct_images_gone=true");
+    }
+    #[cfg(not(windows))]
+    run_sleep_policy_case(&root).await?;
+    std::fs::remove_dir_all(root)?;
+    println!("native idle-sleep policy cleanup evidence: actual_three_transfers_and_source_receiver_bytes_retained=true actual_sentinel_and_identities_retained=true actual_both_normal_owned_tree_and_state_exit=true host_power_settings_changed=false host_suspend_attempted=false");
+    Ok(())
+}
+
+async fn run_sleep_policy_case(root: &Path) -> TestResult {
     let sentinel = root.join("caller-sentinel");
     std::fs::write(&sentinel, b"caller bytes across native idle-sleep policy")?;
     let source = root.join("source");
@@ -268,8 +320,8 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
     std::fs::create_dir(&source)?;
     #[cfg(windows)]
     let (a_options, b_options) = (
-        copy_sleep_role_program(&root, "a")?,
-        copy_sleep_role_program(&root, "b")?,
+        copy_sleep_role_program(root, "a")?,
+        copy_sleep_role_program(root, "b")?,
     );
     #[cfg(not(windows))]
     let (a_options, b_options) = (options(&root.join("a"))?, options(&root.join("b"))?);
@@ -619,20 +671,5 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
-    #[cfg(windows)]
-    {
-        for options in [&a_options, &b_options] {
-            confirm_sleep_role_cleanup(options.program().path()).await?;
-        }
-        println!("native_sleep_distinct_images_gone=true");
-    }
-    std::fs::remove_dir_all(root)?;
-    #[cfg(windows)]
-    assert_eq!(
-        power_policy_before,
-        super::windows_sleep_observation::powercfg("/query").await?,
-        "the native option must not change the host power plan"
-    );
-    println!("native idle-sleep policy cleanup evidence: actual_three_transfers_and_source_receiver_bytes_retained=true actual_sentinel_and_identities_retained=true actual_both_normal_owned_tree_and_state_exit=true host_power_settings_changed=false host_suspend_attempted=false");
     Ok(())
 }

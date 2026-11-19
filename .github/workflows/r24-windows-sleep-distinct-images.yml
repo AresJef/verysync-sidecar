@@ -1,22 +1,31 @@
-name: Distinguish owned Windows AMD64 sleep requests by role
+name: Verify both Windows sleep-role images and failure cleanup
 
 on:
   push:
-    branches: ['verify/r24/windows-sleep-distinct-images']
+    branches: ['verify/r24/windows-sleep-exact-owner-guard']
 
 permissions:
   contents: read
 
 jobs:
-  native-sleep-baseline:
+  isolated-role-engine:
+    name: Windows native sleep (${{ matrix.package }}, ${{ matrix.scenario }})
     if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
-    runs-on: windows-2022
-    timeout-minutes: 20
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 24
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {package: windows-amd64-standard, runner: windows-2022, rust: x86_64-pc-windows-msvc, python: x64, scenario: transfer}
+          - {package: windows-arm64-standard, runner: windows-11-arm, rust: aarch64-pc-windows-msvc, python: arm64, scenario: transfer}
+          - {package: windows-amd64-standard, runner: windows-2022, rust: x86_64-pc-windows-msvc, python: x64, scenario: owned-failure}
     defaults:
       run:
         shell: bash
     env:
-      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      VS_SLEEP_CASE: ${{ matrix.scenario }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -24,44 +33,67 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.13'
-      - name: Prepare the fixed original toolchain and core
+          architecture: ${{ matrix.python }}
+      - name: Prepare the native toolchain and exact independent official program
         run: |
+          set -euo pipefail
+          git log -1 --format='%H %T %P'
           rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
           rustc +"$TEST_TOOLCHAIN" -vV
           cargo +"$TEST_TOOLCHAIN" fetch --locked
-          python scripts/prepare-test-engine.py prepare --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
-      - name: Observe two native images through all original sleep effects and deadlines
-        shell: pwsh
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}" --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Introduce one test-only failure after live owned startup on the control
+        if: matrix.scenario == 'owned-failure'
         run: |
-          $ErrorActionPreference = 'Stop'
-          $root = Join-Path $env:RUNNER_TEMP 'vs-sleep-role-root'
-          if (Test-Path -LiteralPath $root) { throw 'Expected a fresh private runtime root' }
-          New-Item -Path $root -ItemType Directory | Out-Null
-          $env:TEMP = $root
-          $env:TMP = $root
-          python scripts/run-isolated-engine-tests.py --toolchain $env:TEST_TOOLCHAIN --test-target configuration_engine --test-filter sleep_prevention_cases::native_sleep_prevention_tracks_actual_owned_assertions_during_transfer --evidence-dir (Join-Path $env:RUNNER_TEMP 'vs-sleep-role-evidence')
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check the exact private role executable paths after every outcome
-        if: always()
-        shell: pwsh
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("tests/common/sleep_prevention_cases.rs")
+          source = p.read_text()
+          anchor = "    let mut b = ManagedInstance::start(b_options.clone()).await?;\n"
+          if source.count(anchor) != 1:
+              raise SystemExit("The controlled diagnostic insertion point differs")
+          # Use a runtime predicate to retain compilation of the normal case.
+          line = '    if std::env::var_os("VS_SLEEP_CASE").is_some() {\n        panic!("intentional diagnostic failure after two owned native startups");\n    }\n'
+          p.write_text(source.replace(anchor, anchor + line, 1))
+          PY
+      - name: Verify native effects or the exact controlled failure teardown
         run: |
-          $ErrorActionPreference = 'Stop'
-          $root = Join-Path $env:RUNNER_TEMP 'vs-sleep-role-root'
-          $caseDirs = @(Get-ChildItem -LiteralPath $root -Directory -Filter 'vsawake-*' -ErrorAction SilentlyContinue)
-          if ($caseDirs.Count -gt 1 -or @($caseDirs | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) {
-            throw 'The isolated role directory could not be identified exactly'
-          }
-          foreach ($case in $caseDirs) {
-            foreach ($role in @('a.exe', 'b.exe')) {
-              $path = Join-Path $case.FullName $role
-              if (Test-Path -LiteralPath $path -PathType Leaf) {
-                if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unexpected role image link' }
-                $env:VERYSYNC_TEST_BINARY = $path
-                python scripts/prepare-test-engine.py check-cleanup
-                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-              }
-            }
-          }
-      - name: Confirm only the exact owned native core is gone
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          out = Path(os.environ["RUNNER_TEMP"]) / "vs-sleep-owner-guard"
+          command = [
+              sys.executable, "scripts/run-isolated-engine-tests.py",
+              "--toolchain", os.environ["TEST_TOOLCHAIN"], "--test-target", "configuration_engine",
+              "--test-filter", "sleep_prevention_cases::native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
+              "--evidence-dir", str(out),
+          ]
+          run = subprocess.run(command, check=False)
+          log = (out / "configuration-engine.log").read_text()
+          assert "native_sleep_role_cleanup_checked_after_case_outcome=2" in log
+          if os.environ["VS_SLEEP_CASE"] == "owned-failure":
+              assert run.returncode == 101
+              assert "intentional diagnostic failure after two owned native startups" in log
+              assert "native sleep case stopped before all effects" in log
+              assert "test result: FAILED. 0 passed; 1 failed; 0 ignored;" in log
+              assert "actual_three_transfers_and_source_receiver_bytes_retained=true" not in log
+              print("NATIVE_SLEEP_CONTROL expected_case_failure=true exact_role_inventories_after_failure=2")
+          else:
+              assert run.returncode == 0
+              assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in log
+              assert "native_sleep_distinct_images_gone=true" in log
+              marker = "native idle-sleep policy evidence: "
+              phases = [json.loads(line.split(marker, 1)[1]) for line in log.splitlines() if marker in line]
+              assert [p["enabled"] for p in phases] == [False, True, False]
+              assert all(p["actual_file_bytes_transferred"] and p["actual_syncing_observed"] for p in phases)
+              assert "actual_three_transfers_and_source_receiver_bytes_retained=true" in log
+              assert "actual_both_normal_owned_tree_and_state_exit=true" in log
+              print("NATIVE_SLEEP_EFFECTS three_real_transfers=true exact_role_inventories_after_success=2")
+          PY
+      - name: Verify exact original executable cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
