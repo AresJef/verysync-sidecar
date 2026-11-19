@@ -12,6 +12,8 @@ struct SleepObservation {
     #[cfg(windows)]
     native_snapshot: String,
     #[cfg(windows)]
+    requests_by_role: [bool; 2],
+    #[cfg(windows)]
     native_read_elapsed_ms: u128,
 }
 
@@ -25,6 +27,7 @@ struct WindowsSleepTrace {
     maximum_read_ms: u128,
     states: Vec<String>,
     snapshot: String,
+    requests_by_role: [bool; 2],
 }
 
 #[cfg(windows)]
@@ -39,6 +42,7 @@ impl WindowsSleepTrace {
             maximum_read_ms: 0,
             states: Vec::new(),
             snapshot: String::new(),
+            requests_by_role: [false; 2],
         }
     }
 
@@ -47,7 +51,8 @@ impl WindowsSleepTrace {
             "phase":self.phase,"selected":self.selected,"owned_root_pid":self.root_pid,
             "elapsed_ms":self.started.elapsed().as_millis(),"native_reads":self.reads,
             "maximum_native_read_ms":self.maximum_read_ms,"observed_states":self.states,
-            "last_native_snapshot":self.snapshot
+            "last_native_snapshot":self.snapshot,"sender_image_request":self.requests_by_role[0],
+            "receiver_image_request":self.requests_by_role[1]
         })
     }
 
@@ -60,6 +65,7 @@ impl WindowsSleepTrace {
         self.reads += 1;
         self.maximum_read_ms = self.maximum_read_ms.max(observation.native_read_elapsed_ms);
         self.snapshot.clone_from(&observation.native_snapshot);
+        self.requests_by_role = observation.requests_by_role;
         if let Some(state) = state {
             let state = format!("{state:?}");
             if self.states.last() != Some(&state) && self.states.len() < 16 {
@@ -110,7 +116,12 @@ fn is_system_caffeinate(pid: u32) -> TestResult<bool> {
 }
 
 #[cfg(target_os = "macos")]
-async fn observe_sleep(root: u32, known_helpers: Vec<u32>) -> TestResult<SleepObservation> {
+async fn observe_sleep(
+    _sender: &ManagedInstance,
+    receiver: &ManagedInstance,
+    known_helpers: Vec<u32>,
+) -> TestResult<SleepObservation> {
+    let root = receiver.process_id();
     tokio::task::spawn_blocking(move || {
         let ps = std::process::Command::new("/bin/ps")
             .args(["-A", "-o", "pid=,pgid=,comm="])
@@ -164,15 +175,82 @@ async fn observe_sleep(root: u32, known_helpers: Vec<u32>) -> TestResult<SleepOb
 }
 
 #[cfg(windows)]
-async fn observe_sleep(root: u32, _known_helpers: Vec<u32>) -> TestResult<SleepObservation> {
+async fn observe_sleep(
+    sender: &ManagedInstance,
+    receiver: &ManagedInstance,
+    _known_helpers: Vec<u32>,
+) -> TestResult<SleepObservation> {
     let started = std::time::Instant::now();
-    let (idle_assertion, native_snapshot) = super::windows_sleep_observation::observe(root).await?;
+    let images = sleep_role_images(sender, receiver)?;
+    let (requests_by_role, native_snapshot) =
+        super::windows_sleep_observation::observe_distinct_images(&images).await?;
     Ok(SleepObservation {
         helpers: Vec::new(),
-        idle_assertion,
+        idle_assertion: requests_by_role.into_iter().any(|active| active),
         native_snapshot,
+        requests_by_role,
         native_read_elapsed_ms: started.elapsed().as_millis(),
     })
+}
+
+#[cfg(windows)]
+fn sleep_role_images(
+    sender: &ManagedInstance,
+    receiver: &ManagedInstance,
+) -> TestResult<[String; 2]> {
+    let image = |core: &ManagedInstance| {
+        super::windows_sleep_observation::owned_native_image(
+            core.process_id(),
+            core.selected_program().path(),
+        )
+    };
+    Ok([image(sender)?, image(receiver)?])
+}
+
+#[cfg(windows)]
+fn copy_sleep_role_program(root: &std::path::Path, state: &str) -> TestResult<ManagedOptions> {
+    let base = options(&root.join(state))?;
+    let original = std::fs::read(base.program().path())?;
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(&original);
+    let expected = std::env::var("VERYSYNC_TEST_BINARY_SHA256")?;
+    if format!("{digest:x}") != expected {
+        return Err("fixed program digest differs before role-specific copy".into());
+    }
+    let program = root.join(state).with_extension("exe");
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&program)?
+        .write_all(&original)?;
+    Ok(ManagedOptions::new(
+        LocalProgram::new(program)?.expected_sha256(digest.into()),
+        base.state_directory(),
+        base.management_endpoint().clone(),
+    )?
+    .startup_timeout(Duration::from_secs(25))?)
+}
+
+#[cfg(windows)]
+async fn confirm_sleep_role_cleanup(program: &std::path::Path) -> TestResult {
+    let program = program.to_owned();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("python")
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("scripts")
+                    .join("prepare-test-engine.py"),
+            )
+            .arg("check-cleanup")
+            .env("VERYSYNC_TEST_BINARY", program)
+            .output()
+    })
+    .await??;
+    if !output.status.success() {
+        return Err("exact role-specific executable cleanup did not pass".into());
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -188,8 +266,13 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
     let source = root.join("source");
     let received = root.join("received");
     std::fs::create_dir(&source)?;
-    let a_options = options(&root.join("a"))?;
-    let b_options = options(&root.join("b"))?;
+    #[cfg(windows)]
+    let (a_options, b_options) = (
+        copy_sleep_role_program(&root, "a")?,
+        copy_sleep_role_program(&root, "b")?,
+    );
+    #[cfg(not(windows))]
+    let (a_options, b_options) = (options(&root.join("a"))?, options(&root.join("b"))?);
     let mut a = ManagedInstance::start(a_options.clone()).await?;
     let mut b = ManagedInstance::start(b_options.clone()).await?;
     let aid = a.client().instance().device_id.clone();
@@ -287,7 +370,7 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
         );
         #[cfg(windows)]
         let mut trace = WindowsSleepTrace::new(enabled, b.process_id());
-        let before = observe_sleep(b.process_id(), Vec::new()).await?;
+        let before = observe_sleep(&a, &b, Vec::new()).await?;
         #[cfg(not(windows))]
         assert!(before.helpers.is_empty() && !before.idle_assertion);
         #[cfg(windows)]
@@ -299,7 +382,7 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
             trace.phase("idle-baseline");
             let outcome = tokio::time::timeout(Duration::from_secs(150), async {
                 loop {
-                    let observation = observe_sleep(b.process_id(), Vec::new()).await?;
+                    let observation = observe_sleep(&a, &b, Vec::new()).await?;
                     trace.observe(&observation, None);
                     if !observation.idle_assertion {
                         return TestResult::Ok(());
@@ -324,7 +407,7 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
         let outcome = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let state = b.client().folder_status(&bf.configuration.id).await?.state;
-                let observation = observe_sleep(b.process_id(), known_helpers.clone()).await?;
+                let observation = observe_sleep(&a, &b, known_helpers.clone()).await?;
                 #[cfg(windows)]
                 {
                     trace.observe(&observation, state.as_ref());
@@ -380,7 +463,7 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
         trace.phase("request-release");
         let outcome = tokio::time::timeout(Duration::from_secs(release_timeout), async {
             loop {
-                let after = observe_sleep(b.process_id(), known_helpers.clone()).await?;
+                let after = observe_sleep(&a, &b, known_helpers.clone()).await?;
                 #[cfg(windows)]
                 trace.observe(&after, None);
                 if after.helpers.is_empty() && !after.idle_assertion {
@@ -403,7 +486,7 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
             // R18-U05: retain the original failed automatic-release window.
             // Never waive an inner I/O/parser error, a false-policy request,
             // unknown program or missing transfer/identity/normal-exit evidence.
-            let still = observe_sleep(b.process_id(), known_helpers.clone()).await?;
+            let still = observe_sleep(&a, &b, known_helpers.clone()).await?;
             trace.observe(&still, None);
             assert!(
                 still.idle_assertion,
@@ -421,11 +504,7 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
             }
             assert_eq!(std::fs::read(source.join(&name))?, bytes);
             assert_eq!(std::fs::read(received.join(&name))?, bytes);
-            let image = super::windows_sleep_observation::owned_native_image(b.process_id())?;
-            assert_eq!(
-                super::windows_sleep_observation::owned_native_image(a.process_id())?,
-                image
-            );
+            let images = sleep_role_images(&a, &b)?;
             trace.phase("retained-after-original-150s-idle-window");
             for core in [&a, &b] {
                 assert!(
@@ -446,14 +525,15 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
                         && exit.code == Some(0)
                 );
             }
-            // The native image was verified while both owned PIDs were live.
-            // After their normal exits, inspect only that captured private image.
+            // Resolve each private image while its owned PID is alive. After
+            // both normal exits, inspect only those two recorded images.
             tokio::time::timeout(Duration::from_secs(150), async {
                 loop {
-                    let (active, snapshot) =
-                        super::windows_sleep_observation::observe_image(&image).await?;
+                    let (requests_by_role, snapshot) =
+                        super::windows_sleep_observation::observe_distinct_images(&images).await?;
                     trace.snapshot = snapshot;
-                    if !active {
+                    trace.requests_by_role = requests_by_role;
+                    if requests_by_role == [false; 2] {
                         return TestResult::Ok(());
                     }
                     tokio::time::sleep(Duration::from_millis(25)).await;
@@ -538,6 +618,13 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
     for core in [&mut a, &mut b] {
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    }
+    #[cfg(windows)]
+    {
+        for options in [&a_options, &b_options] {
+            confirm_sleep_role_cleanup(options.program().path()).await?;
+        }
+        println!("native_sleep_distinct_images_gone=true");
     }
     std::fs::remove_dir_all(root)?;
     #[cfg(windows)]
