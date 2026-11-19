@@ -1,0 +1,128 @@
+name: Scoped native verification of the staged candidate
+
+on:
+  push:
+    branches: [ci/staged-17f3dd5-native-20261119-01a1ca9b]
+    paths: [.github/workflows/staged-candidate-focused-native.yml]
+
+permissions:
+  contents: read
+
+env:
+  EXACT_CANDIDATE: 17f3dd53322b362845a53e7872ca80382d6ac539
+  EXACT_TREE: 113d88a4e20b0a0fcde619d830d49087108952cd
+
+jobs:
+  automatic-discovery:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/staged-17f3dd5-native-20261119-01a1ca9b'
+    name: Automatic native announcements (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            architecture: x86_64
+          - package: macos-arm64-standard
+            runner: macos-15
+            architecture: arm64
+    env:
+      EXACT_PACKAGE: ${{ matrix.package }}
+      EXACT_HOST_ARCH: ${{ matrix.architecture }}
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_CANDIDATE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Verify the exact candidate, runtime and dependencies
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = "$EXACT_HOST_ARCH"
+          test "$(git rev-parse HEAD)" = "$EXACT_CANDIDATE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_TREE"
+          test -z "$(git status --porcelain)"
+          printf 'candidate source=%s tree=%s\n' "$EXACT_CANDIDATE" "$EXACT_TREE"
+          case "$EXACT_HOST_ARCH" in
+            x86_64) target=x86_64-apple-darwin ;;
+            arm64) target=aarch64-apple-darwin ;;
+            *) exit 2 ;;
+          esac
+          toolchain="1.85.0-$target"
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+          cargo "+$toolchain" fetch --locked
+          printf 'TEST_TOOLCHAIN=%s\n' "$toolchain" >> "$GITHUB_ENV"
+          python3 -B scripts/prepare-test-engine.py prepare --package "$EXACT_PACKAGE" --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Require the original automatic and shutdown effects twice in fresh fixtures
+        run: |
+          set -euo pipefail
+          overall=0
+          for trial in 1 2; do
+            result=0
+            python3 -B scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+              --test-target network \
+              --test-filter local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart \
+              --evidence-dir "$RUNNER_TEMP/vs-macos-announcement-candidate/$trial" || result=$?
+            python3 -B scripts/prepare-test-engine.py check-cleanup
+            printf 'candidate automatic discovery trial=%s result=%s\n' "$trial" "$result"
+            if [ "$result" -ne 0 ]; then overall=1; fi
+          done
+          exit "$overall"
+      - name: Require exact final owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python3 -B scripts/prepare-test-engine.py check-cleanup
+
+  provider-upgrade:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/staged-17f3dd5-native-20261119-01a1ca9b'
+    name: Original upgrade provider effects (Windows AMD64)
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
+      EXACT_PACKAGE: windows-amd64-standard
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_CANDIDATE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Verify the exact candidate, runner and locked dependencies
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_ARCH" = X64
+          test "$(git rev-parse HEAD)" = "$EXACT_CANDIDATE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_TREE"
+          test -z "$(git status --porcelain)"
+          printf 'candidate source=%s tree=%s\n' "$EXACT_CANDIDATE" "$EXACT_TREE"
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare both pinned programs privately
+        run: |
+          set -euo pipefail
+          python -B scripts/prepare-test-engine.py prepare --package "$EXACT_PACKAGE" --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          python -B scripts/prepare-test-engine.py prepare --upgrade-source --package "$EXACT_PACKAGE" --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Require the original provider check, real upgrade and owned exit
+        run: |
+          set -euo pipefail
+          python -B scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive \
+            --test-filter kernel_provider_upgrade_replaces_only_the_owned_old_copy \
+            --evidence-dir "$RUNNER_TEMP/vs-staged-provider-upgrade"
+      - name: Check exact baseline fixture cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python -B scripts/prepare-test-engine.py check-cleanup
+      - name: Check exact older fixture cleanup
+        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
+        run: python -B scripts/prepare-test-engine.py check-cleanup --upgrade-source
