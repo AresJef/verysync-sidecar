@@ -256,6 +256,8 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
         .collect::<std::io::Result<_>>()?;
     let mut samples: Vec<(PathBuf, Vec<u8>)> = Vec::new();
     for (index, enabled) in [false, true, false].into_iter().enumerate() {
+        #[cfg(windows)]
+        let previous_processes = (a.process_id(), b.process_id());
         for client in [a.client(), b.client()] {
             assert!(
                 client
@@ -308,6 +310,29 @@ async fn native_sleep_prevention_tracks_actual_owned_assertions_during_transfer(
                 }
             })
             .await;
+            if outcome.is_err() {
+                eprintln!(
+                    "SLEEP_BASELINE_GENERATIONS previous={previous_processes:?} current={:?}",
+                    (a.process_id(), b.process_id())
+                );
+                let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                    for (role, core, folder) in [
+                        ("sender", &a, &af.configuration.id),
+                        ("receiver", &b, &bf.configuration.id),
+                    ] {
+                        let status = core.client().folder_status(folder).await.map(|status| {
+                            (
+                                status.state,
+                                status.local_files,
+                                status.global_files,
+                                status.need_bytes,
+                            )
+                        });
+                        eprintln!("SLEEP_BASELINE_INDEX role={role} state_files_need={status:?}");
+                    }
+                })
+                .await;
+            }
             trace.finish(outcome)?;
         }
         let name = format!("idle-sleep-二-{index}.bin");
