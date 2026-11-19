@@ -20,6 +20,33 @@ class ReleaseIdentityTests(unittest.TestCase):
     def setUp(self):
         self.metadata = json.loads(ROOT.joinpath("releases/crates-io-release.json").read_text())
 
+    def package(self, entries=(), source=None, omitted=()):
+        manifest = '[package]\nname="verysync-sidecar"\nversion="0.1.0-alpha.1"\n'
+        contents = {
+            ".cargo_vcs_info.json": json.dumps({"git": {"sha1": source or self.metadata["source"]}}),
+            "Cargo.toml": manifest,
+            "Cargo.toml.orig": manifest,
+            "Cargo.lock": "# locked",
+            "README.md": "# Synthetic package",
+            "LICENSE-MIT": "Synthetic license fixture",
+            "LICENSE-APACHE": "Synthetic license fixture",
+            "src/lib.rs": "// synthetic public crate",
+            "docs/public/guide.md": "# Synthetic guide",
+        }
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            for name, payload in (*contents.items(), *entries):
+                if name in omitted:
+                    continue
+                data = payload.encode() if isinstance(payload, str) else payload
+                info = tarfile.TarInfo(f'verysync-sidecar-{self.metadata["version"]}/{name}')
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+        candidate = copy.deepcopy(self.metadata)
+        content = buffer.getvalue()
+        candidate["package_sha256"] = hashlib.sha256(content).hexdigest()
+        return candidate, content
+
     def test_exact_metadata_is_accepted(self):
         HELPER.validate_metadata(self.metadata)
 
@@ -43,23 +70,28 @@ class ReleaseIdentityTests(unittest.TestCase):
                 HELPER.validate_registry(self.metadata, candidate)
 
     def test_actual_archive_vcs_source_is_checked_after_checksum(self):
-        for source in (self.metadata["source"], "0" * 40):
-            buffer = io.BytesIO()
-            with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-                for name, payload in ((".cargo_vcs_info.json", json.dumps({"git": {"sha1": source}})),
-                                      ("Cargo.toml", '[package]\nname="verysync-sidecar"\nversion="0.1.0-alpha.1"\n')):
-                    data = payload.encode()
-                    info = tarfile.TarInfo(f'verysync-sidecar-{self.metadata["version"]}/{name}')
-                    info.size = len(data)
-                    archive.addfile(info, io.BytesIO(data))
-            content = buffer.getvalue()
-            candidate = copy.deepcopy(self.metadata)
-            candidate["package_sha256"] = hashlib.sha256(content).hexdigest()
-            if source == self.metadata["source"]:
-                HELPER.validate_package(candidate, content)
-            else:
-                with self.assertRaises(ValueError):
-                    HELPER.validate_package(candidate, content)
+        self.assertIn("src/lib.rs", HELPER.validate_package(*self.package()))
+        with self.assertRaisesRegex(ValueError, "archive source differs"):
+            HELPER.validate_package(*self.package(source="0" * 40))
+
+    def test_unpublished_inputs_and_binary_content_fail_even_with_the_correct_digest(self):
+        for name, data, error in (
+            ("docs/internal/work.md", "private", "outside the public package"),
+            ("tasks/raw/result.json", "{}", "outside the public package"),
+            ("src/embedded.rs", b"\x7fELF\0", "binary data"),
+            ("examples/pair.rs", b"\xff\xff", "not UTF-8"),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, error):
+                HELPER.validate_package(*self.package(((name, data),)))
+
+    def test_duplicate_alias_and_missing_license_fail_before_upload(self):
+        for name, message in (("README.md", "duplicate"), ("readme.md", "nonportable"),
+                              ("docs//public/guide.md", "unexpected"), ("docs/../README.md", "unexpected"),
+                              ("src/payload.rs:stream", "unexpected")):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, message):
+                HELPER.validate_package(*self.package(((name, "data"),)))
+        with self.assertRaisesRegex(ValueError, "license is missing"):
+            HELPER.validate_package(*self.package(omitted=("LICENSE-APACHE",)))
 
     def test_missing_or_failed_native_target_is_rejected(self):
         jobs = [{"name": name, "status": "completed", "conclusion": "success"}

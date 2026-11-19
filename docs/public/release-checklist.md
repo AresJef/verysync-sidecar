@@ -22,6 +22,15 @@ families and their platform, authorization and recovery gates.
   owned source, English documentation, licenses and sanitized metadata only.
   Official program binaries, credentials, state, raw private logs and internal
   development records stay outside the package.
+- From the clean candidate checkout, run
+  `python3 scripts/publish-github-release.py --metadata /absolute/private/release.json --check-package /absolute/package.crate`.
+  Give the metadata the candidate commit, tree and independently obtained
+  archive SHA-256. Use the same Cargo toolchain as for the supplied archive.
+  The offline check assembles a temporary reference package, checks the exact
+  member list and normalized manifest, and matches packaged public source files
+  to the candidate's Git blobs. It also checks the generated manifest's feature,
+  license and registry settings. Use the same package checksum for subsequent
+  registry verification. Review native and authorization evidence separately.
 - Check declared dependency licenses and current RustSec advisories without
   silently changing dependency compatibility or suppressing warnings.
 - Run `cargo publish --dry-run --locked --registry crates-io` from a clean source.
