@@ -152,7 +152,7 @@
       ],
       "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
       "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
-      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_note": "The fixed core reaches UDIV and returns SIGILL on Cortex-A9 and Debian 3.2.0-4-vexpress. The same package passed the Rust default-TLS gate on Cortex-A15 QEMU with Debian 4.9.0-13-armmp and ARM hard-float glibc 2.24. Physical minimum OS/ISA remains unverified.",
       "minimum_os_runtime_verified": false
     },
     {
@@ -174,7 +174,7 @@
       ],
       "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
       "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
-      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_note": "The Rust and official core passed the default-TLS old-kernel gate on offline Cortex-A9 QEMU with Debian 3.2.0-4-vexpress and ARMEL glibc 2.24. Physical minimum OS/ISA remains unverified.",
       "minimum_os_runtime_verified": false
     },
     {

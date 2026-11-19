@@ -135,6 +135,24 @@ only loopback and closed normally. Minimum native OS and kernel claims
 remain pending.
 [Debian Stretch ARMEL runtime effects](https://github.com/AresJef/verysync-sidecar/actions/runs/44423671149)
 
+The ARMv6 package and its soft-float Rust controller passed the same
+actual management, file, restart and no-CA cleanup cases in Cortex-A9
+QEMU. That fixture booted Debian Wheezy's `3.2.0-4-vexpress` kernel and
+used archived ARMEL glibc 2.24 with Wheezy platform trust.
+[Older ARMv6 runtime](https://github.com/AresJef/verysync-sidecar/actions/runs/44426181994/job/135231507073)
+
+The hard-float package reached SIGILL on the same Cortex-A9 and kernel
+before version output. The recorded A32 instruction decodes as `udiv`,
+which Cortex-A9 lacks. Both isolated guests ended normally. The same fixed
+hard-float executable passed the full Rust management, file, restart and
+no-CA cleanup cases on Cortex-A15 with Debian's `4.9.0-13-armmp` kernel,
+the archived hard-float glibc 2.24 and matching platform trust. These
+measurements cover the named full-system QEMU combinations. Other native
+hardware and kernel minima still require evidence.
+[Cortex-A9 refusal](https://github.com/AresJef/verysync-sidecar/actions/runs/44426181994/job/135231507265)
+· [Cortex-A15 runtime](https://github.com/AresJef/verysync-sidecar/actions/runs/44427000751)
+· [Arm hardware divide support](https://developer.arm.com/community/arm-community-blogs/b/architectures-and-processors-blog/posts/divide-and-conquer)
+
 The three ARM jobs passed their selected real core/controller management, file,
 startup, cancellation and host-exit effects on source 712ea2e. Each Unix case
 observed an exact-core inventory of zero, one during the controlled panic, then
