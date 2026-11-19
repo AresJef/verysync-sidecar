@@ -1,0 +1,87 @@
+name: Staged receipt and native node validation
+
+on:
+  push:
+    branches: [ci/acceptance-node-provenance-20261119-01a1ca9b]
+    paths: [.github/workflows/acceptance-node-provenance-stage.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: controlled-acceptance-node-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXACT_SOURCE: eb3e17d97cbace352e9cbae4ec7402f84d014f49
+  EXACT_TREE: 31020d67dbece482dec1aa4c1a0eda3104556f60
+
+jobs:
+  native:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/acceptance-node-provenance-20261119-01a1ca9b'
+    name: Finite isolated node (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: linux-amd64-standard
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-gnu
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+          - package: windows-arm64-standard
+            runner: windows-11-arm
+            rust: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_SOURCE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Bind the test to the immutable staged candidate
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(git rev-parse HEAD)" = "$EXACT_SOURCE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_TREE"
+          test -z "$(git status --porcelain)"
+          printf 'candidate source=%s tree=%s\n' "$EXACT_SOURCE" "$EXACT_TREE"
+      - name: Install explicit native test prerequisites
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          python -m pip install psutil==7.2.2
+      - name: Build only the selected finite example
+        run: cargo +"$TEST_TOOLCHAIN" build --example acceptance_node --locked
+      - name: Prepare the matching fixed private core explicitly
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require actual normal exits, private identity and retained synthetic bytes
+        run: |
+          example="$GITHUB_WORKSPACE/target/debug/examples/acceptance_node"
+          if [ "$RUNNER_OS" = Windows ]; then example="$example.exe"; fi
+          python scripts/verify-acceptance-node.py --example "$example" \
+            --program "$VERYSYNC_TEST_BINARY" --sha256 "$VERYSYNC_TEST_BINARY_SHA256" \
+            --evidence "$RUNNER_TEMP/acceptance-node-result.json"
+      - name: Require exact prepared-image cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
