@@ -41,7 +41,7 @@ jobs:
           test "$(git -C verified-product rev-parse 'HEAD^{tree}')" = "$PRODUCT_TREE"
           test -z "$(git -C verified-product status --porcelain)"
           work="$RUNNER_TEMP/vs-ppc64le-stretch"
-          install -d -m 700 "$work" "$work/runs"
+          install -d -m 700 "$work" "$work/runs" "$work/official-core"
           python3 -B scripts/probes/ppc64le-stretch-inputs.py "$work"
           python3 -B verified-product/scripts/prepare-test-engine.py prepare \
             --package linux-ppc64le-standard --parent "$work/official-core" > "$work/official-core-receipt.json"
