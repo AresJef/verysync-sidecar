@@ -1,0 +1,122 @@
+name: Run the five unstarted native macOS ARM64 effects
+
+on:
+  push:
+    branches: ['verify/r24/macos-arm64-unstarted-native']
+
+permissions:
+  contents: read
+
+jobs:
+  five-native-macos-cases:
+    name: Recheck five original cases on a single native macOS ARM64 runner
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: macos-15
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXACT_SOURCE: dfb7bc3c1fcaaf9532bd69337fc597e1b5f93e76
+      EXACT_TREE: a37c560e90e4b0b840dd4d84674a961d28fdedbb
+      TEST_TOOLCHAIN: 1.85.0-aarch64-apple-darwin
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
+      VERYSYNC_TEST_OPENER_TRACE: '0'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.EXACT_SOURCE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Confirm exact original source, native architecture and fixture contracts
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXACT_SOURCE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_TREE"
+          test "$(uname -m)" = arm64
+          sw_vers
+          git log -1 --format='%H %T'
+          python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+      - name: Prepare original native Rust dependencies and private management peer
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          python scripts/prepare-storage-test-environment.py --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Prepare exact official fixed baseline and pinned older upgrade source
+        run: |
+          set -euo pipefail
+          python scripts/prepare-test-engine.py prepare --package macos-arm64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          python scripts/prepare-test-engine.py prepare --package macos-arm64-standard --upgrade-source --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Require all five exact original effects and per-case process inventories
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          case_ids = {
+              'thumbnail-cache': 135683453998,
+              'native-temp-advertisement-missing-original-gate': 135683467823,
+              'native-full-index-upgrade-policy': 135683467986,
+              'native-gui-listener-boundary': 135683468129,
+              'native-local-announcement': 135683483695,
+          }
+          profiles = json.loads(Path('.github/native-diagnostic-matrix.json').read_bytes())
+          selected = {}
+          for row in profiles:
+              if row.get('label') not in case_ids or row.get('package') != 'macos-arm64-standard':
+                  continue
+              label = row['label']
+              if label in selected or row['runner'] != 'macos-15' or row['rust'] != 'aarch64-apple-darwin' or row['trace'] != '0':
+                  raise ValueError('Unexpected original native case identity')
+              selected[label] = row
+          if selected.keys() != case_ids.keys():
+              raise ValueError('Original five-case roster is incomplete')
+
+          receipts = []
+          for label, original_job in case_ids.items():
+              row = selected[label]
+              evidence = Path(os.environ['RUNNER_TEMP']) / 'vs-unstarted-native' / label
+              test = [sys.executable, 'scripts/run-isolated-engine-tests.py',
+                      '--toolchain', os.environ['TEST_TOOLCHAIN'], '--test-target', row['target'],
+                      '--test-filter', row['filter'], '--evidence-dir', str(evidence)]
+              if row['target'] == 'upgrade_engine':
+                  test.extend(('--allow-upgrade-metadata', '--serve-pinned-upgrade-archive'))
+              result = subprocess.run(test, check=False)
+              exact_current = subprocess.run(
+                  [sys.executable, 'scripts/prepare-test-engine.py', 'check-cleanup'], check=False,
+              )
+              exact_old = subprocess.run(
+                  [sys.executable, 'scripts/prepare-test-engine.py', 'check-cleanup', '--upgrade-source'], check=False,
+              )
+              log = evidence / (row['target'].replace('_', '-') + '.log')
+              actual_result = False
+              if log.is_file():
+                  actual_result = 'test result: ok. 1 passed; 0 failed; 0 ignored;' in log.read_text()
+              validated = result.returncode == 0 and actual_result and exact_current.returncode == 0 and exact_old.returncode == 0
+              receipt = {
+                  'label': label, 'original_job': original_job, 'target': row['target'], 'filter': row['filter'],
+                  'native_command_exit': result.returncode, 'actual_one_pass': actual_result,
+                  'current_program_cleanup_exit': exact_current.returncode, 'old_program_cleanup_exit': exact_old.returncode,
+                  'verified': validated,
+              }
+              receipts.append(receipt)
+              print('MAC_ARM64_UNSTARTED_NATIVE_RECEIPT ' + json.dumps(receipt), flush=True)
+              if exact_current.returncode != 0 or exact_old.returncode != 0:
+                  break
+          if len(receipts) != 5 or not all(receipt['verified'] for receipt in receipts):
+              raise SystemExit(1)
+          PY
+      - name: Verify exact baseline executable cleanup after all outcomes
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Verify exact older executable cleanup after all outcomes
+        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
