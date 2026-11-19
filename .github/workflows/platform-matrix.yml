@@ -506,7 +506,7 @@ jobs:
           MANUAL_ELF32: ${{ matrix.manual_registration }}
         run: |
           python - <<'PY'
-          import hashlib, json, os, pathlib, subprocess, urllib.request
+          import hashlib, json, os, pathlib, subprocess, urllib.error, urllib.request
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-linux-emulator'
           root.mkdir(mode=0o700)
           name = os.environ['QEMU_BINARY']
@@ -523,12 +523,21 @@ jobs:
               if (name, target) not in candidates or os.environ['RUNNER_ARCH'] != 'X64':
                   raise ValueError('undeclared MIPS32 interpreter or host architecture')
               source_name, source_sha = candidates[(name, target)]
-              url = 'https://security.ubuntu.com/ubuntu/pool/universe/q/qemu/qemu-user-static_8.2.2+ds-0ubuntu1.16_amd64.deb'
+              package_path = '/ubuntu/pool/universe/q/qemu/qemu-user-static_8.2.2+ds-0ubuntu1.16_amd64.deb'
               package_sha = 'a8f4e6121b7d1710885ba00fdb1e5a8256fb396f12ade2da9ed8a3693ad6d1bd'
-              with urllib.request.urlopen(url, timeout=30) as response:
-                  if response.geturl() != url:
-                      raise ValueError('the fixed Ubuntu package must not redirect')
-                  data = response.read(14628452 + 1)
+              for host in ('security.ubuntu.com', 'archive.ubuntu.com'):
+                  url = 'https://' + host + package_path
+                  try:
+                      with urllib.request.urlopen(url, timeout=30) as response:
+                          if response.geturl() != url:
+                              raise ValueError('the fixed Ubuntu package must not redirect')
+                          data = response.read(14628452 + 1)
+                  except urllib.error.HTTPError as error:
+                      if host != 'security.ubuntu.com' or error.code != 403:
+                          raise
+                      print('The Ubuntu security mirror returned HTTP 403 for the pinned QEMU archive.')
+                  else:
+                      break
               if len(data) != 14628452 or hashlib.sha256(data).hexdigest() != package_sha:
                   raise ValueError('the fixed Ubuntu package did not match its size and SHA-256')
               package = root / 'qemu-user-static.deb'
