@@ -13,6 +13,50 @@
       "filename": "pool/main/b/busybox/busybox-static_1.20.0-7_armel.deb",
       "size": "865964",
       "sha256": "efcddd59034ceae843ff2bb59cf7e092a83c1783b91b3a3bd7bd5348306376eb"
+    },
+    {
+      "package": "ca-certificates",
+      "version": "20130119+deb7u1",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_20130119+deb7u1_all.deb",
+      "size": "209900",
+      "sha256": "3494ecfd607e4233d8d1a656eceb6bd109d756bc0afe9d3b29dfc0acc4fe19cf"
+    }
+  ],
+  "stretch-sysroot-hard": [
+    {
+      "package": "libatomic1",
+      "version": "6.3.0-18+deb9u1",
+      "filename": "pool/main/g/gcc-6/libatomic1_6.3.0-18+deb9u1_armhf.deb",
+      "size": "6010",
+      "sha256": "5a487761eaa6025cec49867cdf857f4c46586f73880aa9fd56c167d60244d49a"
+    },
+    {
+      "package": "libgcc1",
+      "version": "1:6.3.0-18+deb9u1",
+      "filename": "pool/main/g/gcc-6/libgcc1_6.3.0-18+deb9u1_armhf.deb",
+      "size": "38478",
+      "sha256": "2c58aeae64cef60c593838099bef302d342651725efceb710d14e30383453e22"
+    },
+    {
+      "package": "libc6",
+      "version": "2.24-11+deb9u4",
+      "filename": "pool/main/g/glibc/libc6_2.24-11+deb9u4_armhf.deb",
+      "size": "2340532",
+      "sha256": "e2cdd45f68b694713f953d11e63d1b2d2c665317c85f6aa04c0e93d87e027cab"
+    },
+    {
+      "package": "libc6-dev",
+      "version": "2.24-11+deb9u4",
+      "filename": "pool/main/g/glibc/libc6-dev_2.24-11+deb9u4_armhf.deb",
+      "size": "1995398",
+      "sha256": "8a82224c7fb069c0cbfee092c446a16392c986ea969d8dbcd8ccfced516ffc1a"
+    },
+    {
+      "package": "linux-libc-dev",
+      "version": "4.9.228-1",
+      "filename": "pool/main/l/linux/linux-libc-dev_4.9.228-1_armhf.deb",
+      "size": "1487562",
+      "sha256": "8fdb967bc5887bc67e188fff93e4e6701036334b4134c13b35080e60d34a426b"
     }
   ]
 }

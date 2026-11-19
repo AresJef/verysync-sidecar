@@ -1,0 +1,186 @@
+name: Exercise both fixed Rust ARM controllers in offline Debian Wheezy guests
+
+on:
+  push:
+    branches: [ci/linux-arm-vexpress-runtime-20261119-01a1ca9b]
+    paths:
+      - .github/workflows/linux-arm-vexpress-runtime.yml
+      - scripts/linux-minimum-boot-armel-packages.json
+      - scripts/linux-minimum-boot-arm-vexpress-packages.json
+      - scripts/prepare-linux-minimum-boot.py
+      - scripts/probes/build-linux-armel-stretch-runtime.sh
+      - scripts/probes/linux_minimum_runtime.rs
+      - scripts/probes/linux_guest_entropy.c
+
+permissions:
+  contents: read
+
+jobs:
+  vexpress-runtime:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-arm-vexpress-runtime-20261119-01a1ca9b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: armv6
+            target: arm-unknown-linux-gnueabi
+            abi: arm-linux-gnueabi
+            package: linux-armv6-standard
+            archive: f427e4d3132837112c1a1fca2a92164ed1afe4d5c1f701e3af44d648f6ff3b3b
+            binary: a31ddc25222cd68245597ca5ed0f165f404b8d7f47f024b03d85800db9d22972
+          - profile: armhf
+            target: armv7-unknown-linux-gnueabihf
+            abi: arm-linux-gnueabihf
+            package: linux-armhf-standard
+            archive: 125c102243131fe5118886258e594082b2a1e32a134dbebd60c27ada32b6a3dd
+            binary: c891f85b15fe3868d98b39f57448efb112046cbea8888dd2484e7f3b05016709
+    env:
+      PRODUCT_SOURCE: c661d51e0576603543da273913a5919e62df000b
+      PRODUCT_TREE: fe22191751451e950a4fa1932f06d129c817341e
+      PROFILE: ${{ matrix.profile }}
+      RUST_TARGET: ${{ matrix.target }}
+      GNU_ABI: ${{ matrix.abi }}
+      PROGRAM_PACKAGE: ${{ matrix.package }}
+      PROGRAM_ARCHIVE: ${{ matrix.archive }}
+      PROGRAM_SHA: ${{ matrix.binary }}
+      KERNEL_SHA: b0040ec429ee61dc87d7f070b72586a069b74ea9cde2a79fd269db33c68c518e
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.PRODUCT_SOURCE }}
+          path: verified-product
+          persist-credentials: false
+      - name: Verify the product, archives and cross compiler
+        run: |
+          set -euo pipefail
+          test "$(git -C verified-product rev-parse HEAD)" = "$PRODUCT_SOURCE"
+          test "$(git -C verified-product rev-parse 'HEAD^{tree}')" = "$PRODUCT_TREE"
+          test -z "$(git -C verified-product status --porcelain)"
+          printf 'product source=%s tree=%s\n' "$PRODUCT_SOURCE" "$PRODUCT_TREE"
+          work="$RUNNER_TEMP/vs-arm-vexpress-runtime"
+          mkdir -pm 0700 "$work/packages" "$work/official-core" "$work/runs"
+          python3 - "$work" <<'PY'
+          from concurrent.futures import ThreadPoolExecutor
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          root = Path(sys.argv[1])
+          old = json.loads(Path("scripts/linux-minimum-boot-arm-vexpress-packages.json").read_text())
+          soft = json.loads(Path("scripts/linux-minimum-boot-armel-packages.json").read_text())
+          sysroot = old["stretch-sysroot-hard"] if os.environ["PROFILE"] == "armhf" else soft["stretch-sysroot"]
+          wanted = [("wheezy", record) for record in old["wheezy"]]
+          wanted.extend(("stretch", record) for record in sysroot)
+          def fetch(item):
+              suite, record = item
+              size = int(record["size"])
+              path = root / "packages" / (suite + "-" + record["package"] + ".deb")
+              subprocess.run(["curl", "--proto", "=https", "--silent", "--show-error", "--fail",
+                              "--retry", "2", "--connect-timeout", "10", "--max-time", "45",
+                              "--max-filesize", str(size), "--output", str(path),
+                              "https://archive.debian.org/debian/" + record["filename"]], check=True)
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              assert (path.stat().st_size, digest) == (size, record["sha256"])
+              print(path.name, size, digest, flush=True)
+          with ThreadPoolExecutor(max_workers=3) as executor:
+              list(executor.map(fetch, wanted))
+          PY
+          python3 -B verified-product/scripts/prepare-test-engine.py prepare \
+            --package "$PROGRAM_PACKAGE" --parent "$work/official-core" > "$work/official-core-receipt.json"
+          python3 - "$work" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          report = json.loads((Path(sys.argv[1])/"official-core-receipt.json").read_text())
+          assert (report["package"], report["version"]) == (os.environ["PROGRAM_PACKAGE"], "v2.33.2")
+          assert (report["archive_sha256"], report["binary_sha256"]) == (os.environ["PROGRAM_ARCHIVE"], os.environ["PROGRAM_SHA"])
+          print("Matched official ARM archive and actual executable hashes", report["binary_sha256"])
+          PY
+          sources="$work/ubuntu-official-sources.list"
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-security main universe' > "$sources"
+          apt_options=(-o "Dir::Etc::sourcelist=$sources" -o Dir::Etc::sourceparts=/dev/null
+            -o Acquire::Retries=1 -o Acquire::https::Timeout=25)
+          timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
+          timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends \
+            "gcc-$GNU_ABI" "binutils-$GNU_ABI" qemu-system-arm qemu-system-data
+          dpkg-query -W "gcc-$GNU_ABI" "binutils-$GNU_ABI" qemu-system-arm
+          timeout --kill-after=5s 100s rustup toolchain install 1.85.0 --profile minimal --target "$RUST_TARGET"
+      - name: Link the unchanged Rust SDK and probe against the exact soft or hard float Debian libc 2.24
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-arm-vexpress-runtime"
+          bash scripts/probes/build-linux-armel-stretch-runtime.sh "$PWD/verified-product" "$PWD/scripts/probes" "$work" "$PROFILE"
+      - name: Exercise the original Rust data and cleanup gate with both CA states
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-arm-vexpress-runtime"
+          qemu-system-arm --version
+          python3 -B scripts/prepare-linux-minimum-boot.py wheezy --architecture arm-vexpress --arm-vexpress-runtime "$PROFILE" \
+            --destination "$work/boot" --local-package-dir "$work/packages" \
+            --runtime-dir "$work/guest-runtime" --engine-receipt "$work/official-core-receipt.json"
+          root="$work/boot/wheezy"
+          printf '%s  %s\n' "$KERNEL_SHA" "$root/zImage" | sha256sum --check --strict
+          overall=0
+          for trust in absent debian; do
+            raw="$work/runs/guest-console-$trust.log"
+            console="$work/runs/guest-console-$trust.txt"
+            status=0
+            timeout --kill-after=8s 170s qemu-system-arm -machine vexpress-a9,accel=tcg -cpu cortex-a9 -m 512 -smp 1 \
+              -nodefaults -display none -audio none -serial stdio -monitor none -nic none -no-reboot \
+              -kernel "$root/zImage" -initrd "$root/initramfs.cpio.gz" \
+              -append "console=ttyAMA0 rdinit=/init vs_minimum_entropy=seeded vs_minimum_certs=$trust panic=1" > "$raw" 2>&1 || status=$?
+            tr -d '\r' < "$raw" > "$console"
+            cat "$console"
+            printf 'ARM guest %s emulator_exit=%s\n' "$trust" "$status"
+            if [ "$status" -ne 0 ] \
+                || ! grep -aFxq 'VS_MINIMUM_BOOT_OK kernel=3.2.0-4-vexpress loopback=127.0.0.1' "$console" \
+                || ! grep -aFxq 'VS_ARM_VEXPRESS_CONTROL armv7l lo' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_PTY_READY devpts=true ptmx=true' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_CORE_VERSION_OK v2.33.2' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_GLIBC_VERSION glibc=2.24' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_ENTROPY_MODE seeded' "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_ENTROPY_CREDIT_OK bits=512' "$console" \
+                || ! grep -aEq '^VS_MINIMUM_ENTROPY phase=before_sdk bits=[0-9]+ readable=1$' "$console" \
+                || ! grep -aEq '^VS_MINIMUM_ENTROPY phase=after_sdk bits=[0-9]+ readable=[01]$' "$console" \
+                || ! grep -aFxq "VS_MINIMUM_CA_MODE $trust" "$console" \
+                || ! grep -aFxq 'VS_MINIMUM_SDK_RUNTIME uid=1000 loaded_fixture_libc=true' "$console" \
+                || ! grep -aFq 'Restarting system' "$console" \
+                || grep -aq 'Kernel panic' "$console"; then
+              overall=1
+              continue
+            fi
+            if [ "$trust" = debian ]; then
+              grep -aFxq 'VS_MINIMUM_CA_BUILDER debian_ca=true builder_ok=true missing_platform_roots=false' "$console" \
+                && grep -aEq '^VS_MINIMUM_SDK_OK \{' "$console" \
+                && ! grep -aq '^VS_MINIMUM_BOOT_FAILURE ' "$console" || overall=1
+            else
+              grep -aFxq 'VS_MINIMUM_CA_BUILDER debian_ca=false builder_ok=false missing_platform_roots=true' "$console" \
+                && grep -aEq '^VS_MINIMUM_SDK_START_OBSERVATION .*"native_health_http_status":200[,}]' "$console" \
+                && grep -aFxq 'VS_MINIMUM_SDK_FAILURE_CLEANUP exact_exit_and_lease_release=true' "$console" \
+                && grep -aFxq 'VS_MINIMUM_BOOT_FAILURE sdk_runtime' "$console" \
+                && grep -aFxq 'Error: Error(management deadline exceeded while attempting to start managed instance)' "$console" || overall=1
+            fi
+          done
+          exit "$overall"
+      - name: Preserve only guest consoles and input checksums
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: debian-wheezy-vexpress-runtime-${{ matrix.profile }}
+          path: |
+            ${{ runner.temp }}/vs-arm-vexpress-runtime/runs/guest-console-*.log
+            ${{ runner.temp }}/vs-arm-vexpress-runtime/boot/prepared-boot-fixture.json
+            ${{ runner.temp }}/vs-arm-vexpress-runtime/guest-runtime-sha256.txt
+          if-no-files-found: warn

@@ -33,6 +33,10 @@ RUNTIME = {
     "arm64": ("linux-arm64-standard", "lib64", "lib/ld-linux-aarch64.so.1"),
     "s390x": ("linux-s390x-standard", "lib64", "lib/ld64.so.1"),
 }
+VEXPRESS_RUNTIME = {
+    "armv6": ("linux-armv6-standard", "lib", "lib/ld-linux.so.3"),
+    "armhf": ("linux-armhf-standard", "lib", "lib/ld-linux-armhf.so.3"),
+}
 dig = lambda payload: hashlib.sha256(payload).hexdigest()
 
 def verified_members(package, required):
@@ -90,9 +94,9 @@ def write_newc(files):
         cpio.extend(b"\0"*((-len(cpio))%4))
     return bytes(cpio)
 
-def checked_native_program(engine_receipt, architecture):
+def checked_native_program(engine_receipt, architecture, profile=None):
     engine = json.loads(engine_receipt.read_text())
-    package, _, _ = RUNTIME[architecture]
+    package, _, _ = RUNTIME[architecture] if profile is None else VEXPRESS_RUNTIME[profile]
     assert (engine["package"], engine["version"]) == (package, "v2.33.2")
     binary = Path(engine["binary"])
     assert binary.is_file() and 1_000_000 < binary.stat().st_size < 150_000_000
@@ -103,9 +107,9 @@ def checked_native_program(engine_receipt, architecture):
     return native_core, digest
 
 
-def prepare_runtime(runtime, engine_receipt, platform_ca, architecture):
-    native_core, digest = checked_native_program(engine_receipt, architecture)
-    _, runtime_lib, interpreter = RUNTIME[architecture]
+def prepare_runtime(runtime, engine_receipt, platform_ca, architecture, profile=None):
+    native_core, digest = checked_native_program(engine_receipt, architecture, profile)
+    _, runtime_lib, interpreter = RUNTIME[architecture] if profile is None else VEXPRESS_RUNTIME[profile]
     files = [(name, stat.S_IFDIR | mode, b"", 0, 0)
              for name,mode in (("dev/pts",0o755),("etc",0o755),("etc/ssl",0o755),("etc/ssl/certs",0o755),
                                (runtime_lib,0o755),("tmp",0o1777),
@@ -185,7 +189,8 @@ echo "$version"
 echo "VS_ARMEL_VERSION_CONTROL_DONE"
 '''
     elif program_sha is not None:
-        libc_number = "2.24" if armel_stretch else "2.17"
+        arm_with_archived_libc = armel_stretch or legacy_armv7
+        libc_number = "2.24" if arm_with_archived_libc else "2.17"
         entropy_setup = '''case " $(/bin/busybox cat /proc/cmdline) " in
     *" vs_minimum_entropy=natural "*) entropy_mode=natural ;;
     *" vs_minimum_entropy=seeded "*) entropy_mode=seeded ;;
@@ -198,12 +203,13 @@ if [ "$entropy_mode" = seeded ]; then
 fi
 /bin/busybox rm /.vs-entropy-seed || fail entropy_seed_removal
 '''
-        if armel_stretch:
-            runtime = '''machine=$(/bin/busybox uname -m) || fail machine_identity
+        if arm_with_archived_libc:
+            marker = "VS_ARMEL_STRETCH_GUEST" if armel_stretch else "VS_ARM_VEXPRESS_CONTROL"
+            runtime = f'''machine=$(/bin/busybox uname -m) || fail machine_identity
 [ "$machine" = armv7l ] || fail machine_identity
 adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
 [ "$adapters" = lo ] || fail external_guest_adapter
-echo "VS_ARMEL_STRETCH_GUEST armv7l lo"
+echo "{marker} armv7l lo"
 '''
         runtime += f'''/bin/busybox mount -t devpts -o gid=5,mode=0620 devpts /dev/pts || fail devpts_mount
 [ -c /dev/ptmx ] || fail private_pty
@@ -213,7 +219,7 @@ echo "VS_MINIMUM_PTY_READY devpts=true ptmx=true"
 actual_program_sha=$(/bin/busybox sha256sum /bin/verysync) || fail program_sha
 case "$actual_program_sha" in "{program_sha} "*) ;; *) fail program_sha ;; esac
 '''
-        if armel_stretch:
+        if arm_with_archived_libc:
             runtime += entropy_setup
         runtime += f'''
 version=$(/bin/verysync version --home /version-state) || fail fixed_program_version
@@ -223,7 +229,7 @@ libc_version=$(/{runtime_lib}/libc.so.6) || fail fixture_libc
 case "$libc_version" in *"version {libc_number}"*) ;; *) fail fixture_libc ;; esac
 echo "VS_MINIMUM_GLIBC_VERSION glibc={libc_number}"
 '''
-        if not armel_stretch:
+        if not arm_with_archived_libc:
             runtime += entropy_setup
         runtime += f'''
 /bin/vs-entropy-control before_sdk || fail entropy_measurement
@@ -283,11 +289,15 @@ parser.add_argument("--runtime-dir", type=Path)
 parser.add_argument("--engine-receipt", type=Path)
 parser.add_argument("--s390x-version-control", action="store_true")
 parser.add_argument("--armel-version-control", action="store_true")
+parser.add_argument("--arm-vexpress-runtime", choices=VEXPRESS_RUNTIME)
 args = parser.parse_args()
 if args.distribution not in KERNELS[args.architecture]:
     parser.error("unsupported distribution and architecture combination")
-if args.architecture == "arm-vexpress" and (args.runtime_dir is not None or args.engine_receipt is not None):
-    parser.error("the legacy vexpress fixture currently runs only the isolated boot control")
+if args.arm_vexpress_runtime is not None:
+    if args.architecture != "arm-vexpress" or args.runtime_dir is None or args.engine_receipt is None:
+        parser.error("vexpress runtime requires an exact profile, its runtime directory and its engine receipt")
+elif args.architecture == "arm-vexpress" and (args.runtime_dir is not None or args.engine_receipt is not None):
+    parser.error("select the exact legacy vexpress runtime profile")
 if args.armel_version_control:
     if args.architecture != "armel" or args.distribution != "wheezy" or args.engine_receipt is None or args.runtime_dir is not None:
         parser.error("ARMEL version control needs only the fixed ARMEL engine receipt")
@@ -392,7 +402,7 @@ if args.runtime_dir is not None:
     assert platform_ca.strip().startswith(b"-----BEGIN CERTIFICATE-----")
     assert platform_ca.strip().endswith(b"-----END CERTIFICATE-----")
     runtime_files, runtime_hashes = prepare_runtime(
-        args.runtime_dir, args.engine_receipt, platform_ca, args.architecture,
+        args.runtime_dir, args.engine_receipt, platform_ca, args.architecture, args.arm_vexpress_runtime,
     )
     files.extend(runtime_files)
 files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
@@ -416,5 +426,7 @@ receipt = {"distribution":distribution,"architecture":args.architecture,"expecte
             "runtime_payload_sha256":runtime_hashes}
 if armel_stretch:
     receipt.update({"dtb_filename": dtb_filename, "dtb_sha256": dig(dtb), "guest_libc": "glibc 2.24"})
+if args.arm_vexpress_runtime is not None:
+    receipt.update({"guest_libc": "glibc 2.24", "vexpress_profile": args.arm_vexpress_runtime})
 (WORK/"prepared-boot-fixture.json").write_text(json.dumps(receipt,indent=2)+"\n")
 print(json.dumps(receipt))
