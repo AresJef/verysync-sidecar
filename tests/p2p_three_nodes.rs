@@ -3,6 +3,8 @@
 mod introducer_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/private_redial.rs"]
+mod private_redial;
 #[path = "common/three_node_diagnostic.rs"]
 mod three_node_diagnostic;
 use managed_fixture::{options, TestResult};
