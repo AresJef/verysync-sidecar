@@ -293,25 +293,44 @@ async fn native_listener_tls_address_and_disable_limit_preserve_explicit_owner_c
     println!("native_gui_listener_stage=http_restore");
     let initial_guard = std::net::TcpListener::bind(initial)?;
     drop(initial_guard);
-    let restore = tls
-        .update_gui_listener(
-            &GuiListenerPatch::default()
-                .address(GuiListenAddress::tcp(&initial.to_string())?)
-                .use_tls(false),
-        )
-        .await?;
+    let restore_patch = GuiListenerPatch::default()
+        .address(GuiListenAddress::tcp(&initial.to_string())?)
+        .use_tls(false);
+    let restore = match tls.update_gui_listener(&restore_patch).await {
+        Ok(receipt) => Some(receipt),
+        Err(error @ Error::MutationOutcomeUnknown { .. }) => {
+            // The previous listener can close before sending its reply. Resolve
+            // this single attempt through the selected endpoint and exact state.
+            eprintln!("native_gui_listener_restore_request={error}");
+            None
+        }
+        Err(error) => return Err(error.into()),
+    };
     let http = connect_listener(
         ConnectOptions::new(core.client().endpoint().clone(), key.clone())
             .expected_device_id(id.clone())
             .request_timeout(Duration::from_secs(2))?,
     )
     .await?;
-    println!("native_gui_listener_stage=disable_management");
-    assert!(restore.requested_fields_match(&http.gui_listener().await?));
+    let readback = http.gui_listener().await?;
+    assert_eq!(
+        readback.address.tcp_authority(),
+        Some(initial.to_string().as_str())
+    );
+    assert!(!readback.use_tls);
+    assert_eq!(http.system_status().await?.device_id, id);
+    if let Some(receipt) = &restore {
+        assert!(receipt.requested_fields_match(&readback));
+    }
     assert!(
         http.configuration().await?.native_document()["gui"] == before,
         "listener update changed unrelated GUI configuration"
     );
+    println!(
+        "native_gui_listener_restore_verified acknowledgement_received={} exact_readback_and_identity=true",
+        restore.is_some()
+    );
+    println!("native_gui_listener_stage=disable_management");
     let managed_root = u64::from(core.process_id());
     let before_disable = exact_owned_listener_snapshot().await?;
     // ManagedInstance owns the monitor and its worker tree. The worker, not
