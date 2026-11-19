@@ -61,14 +61,12 @@ synthetic file after an explicit scan with the existing folder keys. Removing
 a device record does not revoke those shared keys. Treat the returned absence
 as a configuration snapshot. A durable peer-rejection policy needs separate
 native capabilities and validation; the library does not add that policy to
-this DELETE. Native validation keeps the original 20-second disconnect window
-and accepts either a disconnected remote connection snapshot or that same peer's
-native `DeviceDisconnected` event after deletion began and no later than the
-observation. A quick native reconnection can otherwise hide a real disconnect
-between polls. Earlier pause events, other peers and missing, invalid or future
-event times do not satisfy that check. A passing disconnect observation does not
-promise that the peer will remain disconnected. The complete candidate must
-still pass its platform, file-retention and normal-shutdown gates.
+this DELETE. That earlier observation used a 20-second window. It accepted a
+disconnected remote connection snapshot or a native `DeviceDisconnected` event
+for the same peer between deletion and the observation. A quick reconnection can
+hide a disconnect between polls. The current release check for an actual
+disconnect uses the explicit operation below. Both operations still require file
+retention and normal shutdown in the applicable native tests.
 
 No modifying request is automatically retried. Cancellation, a lost response,
 or failed readback can leave an applied change: inspect the exact identity and

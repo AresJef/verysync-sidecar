@@ -19,6 +19,18 @@ evidence. The pending positive cases remain available for future validation.
 | Pro license and trial | Effective license reads, refresh, persistence and trial activation | Observed empty, denied and indeterminate results and preserved state |
 | Official Pro remote management | A real official tunnel session, verified target identity and management operations | Explicit caller-configured HTTP(S) management and identity checks |
 
+Verify a real pending-device record from an isolated peer, its identity through
+the typed API, and its absence after scoped dismissal. Check that unrelated
+configuration and files are retained and that the owned instances stop normally.
+Record this outcome separately from pending-folder validation.
+See [invitation validation](invitations.md).
+
+Verify actual disconnection and retained file bytes for
+`disconnect_and_remove_device()`. For `remove_device()`, verify the single
+DELETE's configuration snapshot and file retention, then verify native
+readmission and a new transfer with the existing shared keys.
+See [device configuration](devices.md).
+
 Verify account operations, Local-API, enterprise controls and Windows packet
 traffic class against their own requirements. Apply the original positive and
 negative checks to each of these areas. Assign an explicit unresolved status
