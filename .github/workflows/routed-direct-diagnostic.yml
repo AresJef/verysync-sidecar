@@ -1,0 +1,43 @@
+name: Routed native peer diagnostic
+
+on:
+  push:
+    branches:
+      - verify/routed-direct-20261119**
+    paths:
+      - .github/workflows/routed-direct-diagnostic.yml
+      - .github/diagnostics/routed-direct.rs
+      - .github/diagnostics/routed-direct.py
+
+permissions:
+  contents: read
+
+jobs:
+  routed:
+    name: Routed VerySync TCP (IPv${{ matrix.family }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [4, 6]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Compile the validation-only driver with the locked candidate
+        run: |
+          cp .github/diagnostics/routed-direct.rs examples/routed_direct_diagnostic.rs
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 build --locked --example routed_direct_diagnostic
+      - name: Prepare the fixed native private image
+        run: >-
+          python3 scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require authenticated Rust control, direct routed data, recovery and exact cleanup
+        run: |
+          python3 .github/diagnostics/routed-direct.py "${{ matrix.family }}" \
+            target/debug/examples/routed_direct_diagnostic
+      - name: Confirm no owned program is left running
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python3 scripts/prepare-test-engine.py check-cleanup
