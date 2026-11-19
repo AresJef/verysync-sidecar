@@ -194,6 +194,25 @@ echo "VS_ARMEL_VERSION_EXIT status=$status"
 echo "$version"
 echo "VS_ARMEL_VERSION_CONTROL_DONE"
 '''
+    elif malta_control and program_sha is not None:
+        runtime = f'''machine=$(/bin/busybox uname -m) || fail machine_identity
+case "$machine" in mips|mipsel) ;; *) fail machine_identity ;; esac
+adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
+[ "$adapters" = lo ] || fail external_guest_adapter
+echo "VS_MALTA_GUEST_CONTROL $machine lo"
+/bin/vs-entropy-control before || fail entropy_measurement
+/bin/vs-entropy-control seed < /.vs-entropy-seed || fail entropy_seed
+/bin/busybox rm /.vs-entropy-seed || fail entropy_seed_removal
+/bin/vs-entropy-control before_version || fail entropy_measurement
+actual_program_sha=$(/bin/busybox sha256sum /bin/verysync) || fail program_sha
+case "$actual_program_sha" in "{program_sha} "*) ;; *) fail program_sha ;; esac
+echo "VS_MALTA_FIXED_SHA {program_sha}"
+status=0
+version=$(/bin/verysync version --home /version-state 2>&1) || status=$?
+echo "VS_MALTA_VERSION_EXIT status=$status"
+echo "$version"
+echo "VS_MALTA_VERSION_CONTROL_DONE"
+'''
     elif program_sha is not None:
         arm_with_archived_libc = armel_stretch or legacy_armv7
         libc_number = "2.24" if arm_with_archived_libc else "2.17"
@@ -303,12 +322,17 @@ parser.add_argument("--engine-receipt", type=Path)
 parser.add_argument("--s390x-version-control", action="store_true")
 parser.add_argument("--armel-version-control", action="store_true")
 parser.add_argument("--arm-vexpress-runtime", choices=VEXPRESS_RUNTIME)
+parser.add_argument("--malta-entropy-helper", type=Path)
 args = parser.parse_args()
 if args.distribution not in KERNELS[args.architecture]:
     parser.error("unsupported distribution and architecture combination")
 malta = args.architecture in {"mips", "mipsel"}
-if malta and (args.runtime_dir is not None or args.engine_receipt is not None):
-    parser.error("Malta fixture currently selects the original offline boot control")
+malta_version = args.malta_entropy_helper is not None
+if malta_version:
+    if not malta or args.distribution != "stretch" or args.engine_receipt is None or args.runtime_dir is not None:
+        parser.error("the Malta version control needs the exact Stretch program and static entropy helper")
+elif malta and (args.runtime_dir is not None or args.engine_receipt is not None):
+    parser.error("provide the exact Malta entropy helper and engine receipt or run only the boot control")
 if args.arm_vexpress_runtime is not None:
     if args.architecture != "arm-vexpress" or args.runtime_dir is None or args.engine_receipt is None:
         parser.error("vexpress runtime requires an exact profile, its runtime directory and its engine receipt")
@@ -324,7 +348,7 @@ elif args.s390x_version_control:
         parser.error("s390x version control needs only the fixed s390x engine receipt")
 elif args.architecture == "armel" and args.distribution != "stretch" and args.runtime_dir is not None:
     parser.error("ARMEL SDK runtime needs the prepared Stretch libc fixture")
-elif (args.runtime_dir is None) != (args.engine_receipt is None):
+elif not malta_version and (args.runtime_dir is None) != (args.engine_receipt is None):
     parser.error("provide both the fixed native engine receipt and runtime directory")
 os.umask(0o077)
 WORK = args.destination.resolve()
@@ -424,6 +448,21 @@ if args.s390x_version_control or args.armel_version_control:
         ("dev/urandom", stat.S_IFCHR | 0o666, b"", 1, 9),
     ])
     runtime_hashes["bin/verysync"] = program_sha
+if malta_version:
+    native_core, program_sha = checked_native_program(args.engine_receipt, args.architecture)
+    helper = args.malta_entropy_helper.read_bytes()
+    assert 0 < len(helper) < 5_000_000
+    check_static_busybox(helper, args.architecture)
+    files.extend([
+        ("bin/verysync", stat.S_IFREG | 0o755, native_core, 0, 0),
+        ("bin/vs-entropy-control", stat.S_IFREG | 0o755, helper, 0, 0),
+        ("version-state", stat.S_IFDIR | 0o700, b"", 0, 0),
+        ("tmp", stat.S_IFDIR | 0o1777, b"", 0, 0),
+        ("dev/random", stat.S_IFCHR | 0o666, b"", 1, 8),
+        ("dev/urandom", stat.S_IFCHR | 0o666, b"", 1, 9),
+        (".vs-entropy-seed", stat.S_IFREG | 0o400, os.urandom(64), 0, 0),
+    ])
+    runtime_hashes.update({"bin/verysync":program_sha, "bin/vs-entropy-control":dig(helper)})
 if args.runtime_dir is not None:
     ca_member = "usr/share/ca-certificates/mozilla/DigiCert_Global_Root_CA.crt"
     platform_ca = verified_members(by_name[distribution,"ca-certificates"], {ca_member:16384})[ca_member]

@@ -1,0 +1,122 @@
+name: Verify both fixed native VerySync versions on offline Debian Malta guests
+
+on:
+  push:
+    branches: [ci/linux-malta-stretch-version-20261119-01a1ca9b]
+    paths:
+      - .github/workflows/linux-malta-stretch-version.yml
+      - scripts/prepare-linux-minimum-boot.py
+      - scripts/probes/linux_guest_entropy.c
+      - scripts/linux-minimum-boot-mips-packages.json
+      - scripts/linux-minimum-boot-mipsel-packages.json
+
+permissions:
+  contents: read
+
+jobs:
+  boot:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/linux-malta-stretch-version-20261119-01a1ca9b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - endian: mips
+            executable: qemu-system-mips
+            kernel: 6b61c115a515c1007379a55bf944be9a54ea08e64de4d64fd3fa546121160dcf
+            compiler: mips-linux-gnu
+            program: linux-mips-standard
+            archive: 16ee91434add7aaafe4aa201d2c547d7f4af8abf804056e06b00d2b80c883ee3
+            binary: 8549baa17ce60d57fa721713da6a858aa4543bb5fb0ae46d7a25b84c736de076
+          - endian: mipsel
+            executable: qemu-system-mipsel
+            kernel: 20f5380e02f2e40d4495fd61a854e5867f5ccdf95c8c1fd3d53fe27e8be1797f
+            compiler: mipsel-linux-gnu
+            program: linux-mipsle-standard
+            archive: 7b2e51ec5b017350dd37497a8203f1effc2e98059ccec104944dfbe82a9c6536
+            binary: ac6b4491a11d7486edc3d6c5c40bc33fc85268d879290ef14bb8b17564422d58
+    env:
+      GUEST_ENDIAN: ${{ matrix.endian }}
+      QEMU_PROGRAM: ${{ matrix.executable }}
+      KERNEL_SHA256: ${{ matrix.kernel }}
+      CROSS_COMPILER: ${{ matrix.compiler }}
+      PROGRAM_PACKAGE: ${{ matrix.program }}
+      PROGRAM_ARCHIVE: ${{ matrix.archive }}
+      PROGRAM_SHA: ${{ matrix.binary }}
+      PRODUCT_SOURCE: c661d51e0576603543da273913a5919e62df000b
+      PRODUCT_TREE: fe22191751451e950a4fa1932f06d129c817341e
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.PRODUCT_SOURCE }}
+          path: verified-product
+          persist-credentials: false
+      - name: Exercise the native version in the exact older kernel
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/vs-stretch-malta-version"
+          mkdir -pm 0700 "$work/official-core"
+          test "$(git -C verified-product rev-parse HEAD)" = "$PRODUCT_SOURCE"
+          test "$(git -C verified-product rev-parse 'HEAD^{tree}')" = "$PRODUCT_TREE"
+          python3 -B verified-product/scripts/prepare-test-engine.py prepare --package "$PROGRAM_PACKAGE" \
+            --parent "$work/official-core" > "$work/official-core-receipt.json"
+          python3 - "$work" <<'PY_REPORT'
+          import json, os, sys
+          from pathlib import Path
+          receipt=json.loads((Path(sys.argv[1])/"official-core-receipt.json").read_text())
+          assert receipt["version"]=="v2.33.2"
+          assert (receipt["package"],receipt["archive_sha256"],receipt["binary_sha256"]) == (
+              os.environ["PROGRAM_PACKAGE"],os.environ["PROGRAM_ARCHIVE"],os.environ["PROGRAM_SHA"])
+          print("Native version control binds exact official archive and actual program",receipt["binary_sha256"])
+          PY_REPORT
+          sources="$work/ubuntu-official-sources.list"
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-security main universe' > "$sources"
+          apt_options=(-o "Dir::Etc::sourcelist=$sources" -o Dir::Etc::sourceparts=/dev/null
+            -o Acquire::Retries=1 -o Acquire::https::Timeout=25)
+          timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
+          timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends qemu-system-mips qemu-system-data "gcc-$CROSS_COMPILER" "libc6-dev-$GUEST_ENDIAN-cross"
+          dpkg-query -L qemu-system-mips | grep -Fx "/usr/bin/$QEMU_PROGRAM"
+          "$QEMU_PROGRAM" --version
+          "$CROSS_COMPILER-gcc" --version | sed -n '1p'
+          "$CROSS_COMPILER-gcc" -march=mips32r2 -mabi=32 -std=gnu11 -Wall -Wextra -Werror -O2 -static \
+            scripts/probes/linux_guest_entropy.c -o "$work/vs-entropy-control"
+          python3 -B scripts/prepare-linux-minimum-boot.py stretch --architecture "$GUEST_ENDIAN" \
+            --destination "$work/guest" --engine-receipt "$work/official-core-receipt.json" \
+            --malta-entropy-helper "$work/vs-entropy-control"
+          root="$work/guest/stretch"
+          printf '%s  %s\n' "$KERNEL_SHA256" "$root/vmlinux" | sha256sum --check --strict
+          status=0
+          timeout --kill-after=8s 90s "$QEMU_PROGRAM" -machine malta,accel=tcg -cpu 24Kf -m 128 -smp 1 \
+            -nodefaults -display none -audio none -serial stdio -monitor none -nic none -no-reboot \
+            -kernel "$root/vmlinux" -initrd "$root/initramfs.cpio.gz" \
+            -append 'console=ttyS0 rdinit=/init vs_minimum_entropy=seeded panic=1' > "$work/guest-console.log" 2>&1 || status=$?
+          tr -d '\r' < "$work/guest-console.log" > "$work/guest-console.txt"
+          cat "$work/guest-console.txt"
+          printf 'Guest emulator_exit=%s\n' "$status"
+          test "$status" -eq 0
+          grep -aFxq 'VS_MINIMUM_BOOT_OK kernel=4.9.0-13-4kc-malta loopback=127.0.0.1' "$work/guest-console.txt"
+          grep -aEq '^VS_MALTA_GUEST_CONTROL mips(el)? lo$' "$work/guest-console.txt"
+          grep -aFxq 'VS_MINIMUM_ENTROPY_CREDIT_OK bits=512' "$work/guest-console.txt"
+          grep -aEq '^VS_MINIMUM_ENTROPY phase=before_version bits=[0-9]+ readable=1$' "$work/guest-console.txt"
+          grep -aFxq "VS_MALTA_FIXED_SHA $PROGRAM_SHA" "$work/guest-console.txt"
+          grep -aFxq 'VS_MALTA_VERSION_EXIT status=0' "$work/guest-console.txt"
+          grep -aEq '(^|[[:space:]])v2\.33\.2([[:space:]]|$)' "$work/guest-console.txt"
+          grep -aFxq VS_MALTA_VERSION_CONTROL_DONE "$work/guest-console.txt"
+          grep -aFq 'Restarting system' "$work/guest-console.txt"
+          if grep -aqE 'Kernel panic|VS_MINIMUM_BOOT_FAILURE' "$work/guest-console.txt"; then exit 1; fi
+      - name: Preserve the original serial transcript
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: stretch-malta-version-control-${{ matrix.endian }}
+          path: |
+            ${{ runner.temp }}/vs-stretch-malta-version/guest-console.log
+            ${{ runner.temp }}/vs-stretch-malta-version/guest/prepared-boot-fixture.json
+          if-no-files-found: warn
