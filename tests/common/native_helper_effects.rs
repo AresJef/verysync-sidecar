@@ -582,6 +582,29 @@ async fn incomplete_native_peer_observation(observe_download: bool) -> TestResul
     assert_eq!(std::fs::read(origin.join("sample.bin"))?, sample);
     assert_eq!(a.client().system_status().await?.device_id, aid);
     assert_eq!(b.client().system_status().await?.device_id, bid);
+    // The index and progress effects are complete. End the fixture's private
+    // peer connection before testing normal shutdown on each independent core.
+    assert!(b.client().pause_device(&aid).await?.configuration.paused);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let source = a.client().connections().await?;
+            let receiver = b.client().connections().await?;
+            if source
+                .connections
+                .get(&bid)
+                .is_none_or(|link| !link.connected)
+                && receiver
+                    .connections
+                    .get(&aid)
+                    .is_none_or(|link| !link.connected)
+            {
+                return TestResult::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    println!("native partial-peer shutdown preparation: both private peers disconnected");
     for (index, owner) in [&mut b, &mut a].into_iter().enumerate() {
         let started = std::time::Instant::now();
         let initial = owner.shutdown(Duration::from_secs(10)).await;
