@@ -54,12 +54,15 @@ def verify(args, mode, parent):
         pid = ready["process_id"]
         process = psutil.Process(pid)
         born = process.create_time()
-        require(Path(process.exe()).resolve() == args.program.resolve(), "wrong owned image")
+        owned_image = Path(process.exe()).resolve()
+        require(owned_image == args.program.resolve(), "wrong owned image")
         state = root / "state"
         receipt_path = state / "acceptance-connection.json"
         receipt = json.loads(receipt_path.read_text())
         require("api_key" not in ready, "credential leaked in readiness")
         require(receipt["device_id"] == ready["device_id"], "receipt identity differs")
+        require(receipt["program_sha256"] == ready["program_sha256"] == sha(owned_image) == args.sha256,
+                "receipt, ready event and actual owned image digests differ")
         url = urllib.parse.urlparse(receipt["endpoint"])
         require(url.hostname == "127.0.0.1" and url.port != 18886, "unsafe management endpoint")
         if os.name != "nt":
@@ -75,6 +78,9 @@ def verify(args, mode, parent):
                 return json.load(response)
 
         require(get("rest/system/status")["myID"] == ready["device_id"], "authenticated identity differs")
+        require(receipt["program_version"] == ready["program_version"]
+                == get("rest/system/version")["version"] == "v2.33.2",
+                "receipt, ready event and actual native version differ")
         configuration = get("rest/config")
         require(configuration["folders"] == [], "unexpected selected folders")
         options = configuration["options"]
@@ -101,6 +107,8 @@ def verify(args, mode, parent):
         require(sha(sample) == sample_hash, "synthetic bytes changed or removed")
         return {"mode": mode, "normal_exit": True, "private_identity_retained": True,
                 "synthetic_bytes_retained": 2048, "management_authenticated": True,
+                "program_version": receipt["program_version"],
+                "program_sha256": receipt["program_sha256"],
                 "network_isolated": True, "elapsed_seconds": round(time.monotonic() - started, 3)}
     finally:
         if child.poll() is None:

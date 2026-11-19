@@ -1,5 +1,6 @@
 //! Finite, explicitly started node for caller-controlled acceptance networks.
 use serde_json::json;
+use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::net::TcpListener;
@@ -52,12 +53,17 @@ async fn serve(instance: &ManagedInstance, root: &std::path::Path, ttl: Duration
         .ok_or("HTTP endpoint required")?;
     let receipt = root.join("state").join("acceptance-connection.json");
     let identity = instance.client().system_status().await?.device_id;
+    let program = instance.program_info();
+    let mut program_sha256 = String::with_capacity(2 * program.sha256.len());
+    for byte in &program.sha256 {
+        write!(&mut program_sha256, "{byte:02x}")?;
+    }
     private_receipt(
         &receipt,
         &json!({
             "schema":1, "endpoint":endpoint.as_str(), "api_key":key,
             "device_id":identity.as_str(), "ttl_seconds":ttl.as_secs(),
-            "program_version":verysync_sidecar::BASELINE_ENGINE_VERSION
+            "program_version":program.version, "program_sha256":program_sha256
         }),
     )?;
     writeln!(
@@ -65,6 +71,7 @@ async fn serve(instance: &ManagedInstance, root: &std::path::Path, ttl: Duration
         "{}",
         json!({"event":"ready", "process_id":instance.process_id(),
         "device_id":identity.as_str(), "endpoint":endpoint.as_str(),
+        "program_version":program.version, "program_sha256":program_sha256,
         "receipt":receipt, "ttl_seconds":ttl.as_secs()})
     )?;
     io::stdout().flush()?;

@@ -21,7 +21,9 @@ Enable only the network behavior required by the agreed test
 through the explicit management API. No real folders are selected automatically.
 
 Readiness is one JSON line on stdout, containing the device identity, loopback
-endpoint and receipt path. The API key is written only to
+endpoint, verified program version and SHA-256, and receipt path. The private
+receipt includes the same program identity. Retain the version and digest from
+both test nodes with the network evidence. The API key is written only to
 `NEW_ROOT/state/acceptance-connection.json`. The SDK creates the state directory
 privately: Unix owner access, or a Windows protected DACL for the caller and
 SYSTEM. The receipt uses Unix mode 0600 and inherits that private Windows DACL.
@@ -57,7 +59,9 @@ features or the final same-candidate acceptance gate.
 The bounded local verifier is `scripts/verify-acceptance-node.py`. It requires an
 explicit compiled example, fixed core and digest; it checks stdin stop, EOF and
 TTL independently, authenticated status/configuration, retained synthetic bytes,
-identity/private-key preservation and actual owned-process exit. It logs no keys.
+identity/private-key preservation and actual owned-process exit. It matches the
+ready and receipt program fields to the owned executable digest and authenticated
+version response. It logs no keys.
 
 The initial focused validation passed on all six standard native profiles
 (macOS, Linux and Windows; AMD64 and ARM64), using the same PR merge
