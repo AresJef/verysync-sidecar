@@ -7,6 +7,7 @@ on:
       - 'ci/formal-candidate/**'
       - 'verify/r24/windows-amd64-packet-boundary'
       - 'verify/r24/windows-wire-stop-drain'
+      - 'verify/r24/windows-wire-receive-accounting'
 
 permissions:
   contents: read
@@ -22,7 +23,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - name: Verify queued traffic survives the receiver completion signal
+      - name: Verify the receiver drains queued traffic and rejects kernel drops
         run: python3 -B -m unittest discover -s .github/diagnostics/hyperv-wire -p test_receive_headers.py
       - name: Prepare the EFI and static Rust build prerequisites
         run: |
