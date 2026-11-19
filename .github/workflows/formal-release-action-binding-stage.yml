@@ -1,0 +1,117 @@
+name: Check the formal release Actions verifier on actual historical API records
+on:
+  push:
+    branches: [ci/formal-release-action-binding-20261119-01a1ca9b]
+    paths: [.github/workflows/formal-release-action-binding-stage.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  EXACT_SOURCE: 9d7dd22e0bd45d492d77709554c2f23a13eb148f
+  EXACT_TREE: 71aa0f4ba9a9a70178da337a9f7d75780770f449
+  EXACT_PARENT: ec6816723db31630adee895c881b25c649984fe6
+
+jobs:
+  actions-evidence:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/formal-release-action-binding-20261119-01a1ca9b'
+    name: Exercise the actual GitHub workflow registry and paginated attempt reader
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: '9d7dd22e0bd45d492d77709554c2f23a13eb148f'
+          persist-credentials: false
+      - name: Verify subject checkout, tests and frozen alpha metadata
+        shell: bash
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(git rev-parse HEAD)" = "$EXACT_SOURCE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_TREE"
+          test -z "$(git status --porcelain)"
+          python3 -B -m unittest discover -s scripts/tests -p test_publish_github_release.py
+          python3 -B scripts/publish-github-release.py --check-metadata
+      - name: Read the actual registered workflows, reject a PR and enumerate 278 actual jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 -B - <<'PY'
+          from collections import Counter
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          spec = importlib.util.spec_from_file_location("release_helper", Path("scripts/publish-github-release.py"))
+          helper = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(helper)
+          defaults = json.loads(Path("releases/crates-io-release.json").read_text())
+          repo = "repos/" + defaults["repository"]
+          subject = helper.github(f'{repo}/git/commits/{os.environ["EXACT_SOURCE"]}')
+          assert subject["sha"] == os.environ["EXACT_SOURCE"]
+          assert subject["tree"]["sha"] == os.environ["EXACT_TREE"]
+          assert [ref["sha"] for ref in subject["parents"]] == [os.environ["EXACT_PARENT"]]
+          workflows = {lane: helper.github(f"{repo}/actions/workflows/{filename}")
+                       for lane, filename in helper.ACTION_WORKFLOWS.items()}
+          assert all(workflow["path"] == f".github/workflows/{helper.ACTION_WORKFLOWS[lane]}"
+                     and type(workflow["id"]) is int and workflow["id"] > 0
+                     for lane, workflow in workflows.items())
+          assert len({value["id"] for value in workflows.values()}) == len(workflows)
+
+          failed_run = 44337785613
+          engine_path = f"{repo}/actions/runs/{failed_run}"
+          earlier = helper.github(engine_path)
+          assert earlier["id"] == failed_run and earlier["workflow_id"] == workflows["engine"]["id"]
+          assert earlier["run_attempt"] == 1 and earlier["event"] == "pull_request"
+          assert (earlier["status"], earlier["conclusion"]) == ("completed", "failure")
+          jobs = helper.candidate_attempt_jobs(engine_path, 1)
+          assert len(jobs) == 278 and len({job["id"] for job in jobs}) == 278
+          assert all(job["run_id"] == failed_run and job["run_attempt"] == 1 for job in jobs)
+          standard = [job for job in jobs if job["name"] in helper.NATIVE_TARGETS]
+          assert len(standard) == 6 and len({job["name"] for job in standard}) == 6
+          assert any(job["conclusion"] == "failure" for job in standard)
+
+          passing_pr_quality = 44335643513
+          quality_path = f"{repo}/actions/runs/{passing_pr_quality}"
+          quality = helper.github(quality_path)
+          assert quality["event"] == "pull_request" and quality["workflow_id"] == workflows["quality"]["id"]
+          assert (quality["status"], quality["conclusion"]) == ("completed", "success")
+          head = helper.github(f'{repo}/git/commits/{quality["head_sha"]}')
+          binding = {"repository": defaults["repository"], "crate": defaults["crate"], "version": "0.1.0-alpha.2",
+                     "source": head["sha"], "tree": head["tree"]["sha"], "package_sha256": "0" * 64,
+                     "candidate_runs": {
+                         "quality": {"id":passing_pr_quality, "attempt":quality["run_attempt"]},
+                         "engine": {"id":failed_run, "attempt":1},
+                         "platforms": {"id":44337786187, "attempt":1},
+                         "resources": {"id":1, "attempt":1},
+                     }}
+          proof = Path(os.environ["RUNNER_TEMP"]) / "known-pr-quality-action-binding.json"
+          proof.write_text(json.dumps(binding))
+          negative = subprocess.run((sys.executable, "-B", "scripts/publish-github-release.py",
+                                     "--metadata", str(proof), "--check-actions"), capture_output=True, text=True)
+          assert negative.returncode != 0, negative.stdout
+          assert "candidate run source, repository, event or attempt differs" in negative.stderr, negative.stderr
+
+          manual = helper.github(f"{repo}/actions/workflows/quality.yml/runs?event=workflow_dispatch&status=success&per_page=3")
+          found = False
+          for candidate in manual.get("workflow_runs", ()):
+              reference = {"id":candidate["id"], "attempt":candidate["run_attempt"]}
+              observed = helper.github(f'{repo}/actions/runs/{reference["id"]}')
+              helper.validate_candidate_run({"repository": defaults["repository"], "source": candidate["head_sha"]},
+                                            workflows["quality"]["path"], workflows["quality"], reference, observed)
+              found = True
+              break
+          result = {"subject": subject["sha"], "tree": subject["tree"]["sha"],
+                    "registered_workflows": {lane: w["id"] for lane, w in workflows.items()},
+                    "historical_engine": {"run": failed_run, "attempt": 1, "listed_jobs": len(jobs),
+                                          "standard_outcomes": dict(Counter(j["conclusion"] for j in standard))},
+                    "historical_successful_pr_quality_rejected": passing_pr_quality,
+                    "existing_manual_quality_identity_observed": found,
+                    "complete_candidate_actions_validated": False}
+          print("Actual read-only workflow evidence: " + json.dumps(result, sort_keys=True))
+          PY
