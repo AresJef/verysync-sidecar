@@ -584,16 +584,19 @@ async fn restart_rejects_changed_program_and_readiness_timeout_then_can_retry() 
         &state,
         endpoint,
     )?;
+    eprintln!("MIPS_MANAGED_RESTART_STAGE initial_authenticated_start");
     let mut instance = start_checked(settings).await?;
     assert!(managed_startup::inventory(&copy)
         .await?
         .contains(&instance.process_id()));
     let identity = instance.client().instance().device_id.clone();
+    eprintln!("MIPS_MANAGED_RESTART_STAGE initial_normal_stop");
     instance.shutdown(Duration::from_secs(10)).await?;
     std::fs::write(
         &copy,
         b"synthetic changed executable, rejected before launch",
     )?;
+    eprintln!("MIPS_MANAGED_RESTART_STAGE changed_executable_rejection");
     let rejected = instance.restart(Duration::from_secs(5)).await;
     assert!(
         matches!(rejected, Err(Error::ProgramRejected { .. })),
@@ -604,6 +607,7 @@ async fn restart_rejects_changed_program_and_readiness_timeout_then_can_retry() 
     // Occupy only the exact explicit endpoint after its old owner has stopped.
     // The new core cannot become authenticated/ready; no false success is allowed.
     let blocker = std::net::TcpListener::bind(address)?;
+    eprintln!("MIPS_MANAGED_RESTART_STAGE occupied_endpoint_rejection");
     let not_ready = instance.restart(Duration::from_secs(2)).await;
     assert!(
         matches!(
@@ -630,9 +634,12 @@ async fn restart_rejects_changed_program_and_readiness_timeout_then_can_retry() 
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    eprintln!("MIPS_MANAGED_RESTART_STAGE explicit_retry_readiness");
     instance.restart(Duration::from_secs(25)).await?;
     assert_eq!(instance.client().instance().device_id, identity);
+    eprintln!("MIPS_MANAGED_RESTART_STAGE same_identity_status");
     instance.client().system_status().await?;
+    eprintln!("MIPS_MANAGED_RESTART_STAGE final_normal_stop");
     instance.shutdown(Duration::from_secs(10)).await?;
     #[cfg(windows)]
     let python = "python";
