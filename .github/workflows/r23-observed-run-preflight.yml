@@ -1,0 +1,93 @@
+name: Verify release gates against observed runs
+on:
+  push:
+    branches: [verify/r23/observed-run-preflight]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  observe:
+    name: Read exact hosted candidate runs and exercise the release gate
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 0a6a4392c3fee3e83fbe0561a1f9357eeaf00ad2
+          persist-credentials: false
+      - name: Verify actual workflow evidence without publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - "$RUNNER_TEMP/r23-candidate.json" <<'PY'
+          import importlib.util
+          import json
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          spec = importlib.util.spec_from_file_location("candidate_release", Path("scripts/publish-github-release.py"))
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
+
+          metadata = json.loads("{\"repository\":\"AresJef/verysync-sidecar\",\"crate\":\"verysync-sidecar\",\"version\":\"0.1.0-alpha.2\",\"source\":\"0a6a4392c3fee3e83fbe0561a1f9357eeaf00ad2\",\"tree\":\"4e668a8764f94e9163353d9ce0722be840e635ae\",\"package_sha256\":\"d2d20ea21f044cd849bd5228fe582056cf590b8753a5327a89b4c4a360ff2edc\",\"deferred_formal_resource_profile\":\"macos-amd64-standard\",\"candidate_runs\":{\"quality\":{\"id\":44507962758,\"attempt\":1},\"engine\":{\"id\":44507964072,\"attempt\":1},\"platforms\":{\"id\":44507962754,\"attempt\":1},\"resources\":{\"id\":44507962811,\"attempt\":2}}}")
+          references = release.validate_candidate_runs(metadata)
+          repository = f"repos/{metadata['repository']}"
+          source = release.github(f"{repository}/git/commits/{metadata['source']}")
+          release.require(source["sha"] == metadata["source"] and source["tree"]["sha"] == metadata["tree"],
+                          "observed candidate source or tree differs")
+          observations = {}
+          for lane, filename in release.ACTION_WORKFLOWS.items():
+              reference = references[lane]
+              run_path = f"{repository}/actions/runs/{reference['id']}"
+              run = release.github(run_path)
+              jobs = release.candidate_attempt_jobs(run_path, reference["attempt"])
+              observation = {
+                  "run_id": run["id"],
+                  "actual_attempt": run["run_attempt"],
+                  "event": run["event"],
+                  "head_sha": run["head_sha"],
+                  "workflow_id": run["workflow_id"],
+                  "status": run["status"],
+                  "conclusion": run["conclusion"],
+                  "jobs": [
+                      [job["id"], job["name"], job.get("run_attempt"), job.get("runner_id"),
+                       job["status"], job["conclusion"]]
+                      for job in jobs
+                  ],
+              }
+              try:
+                  workflow = release.github(f"{repository}/actions/workflows/{filename}")
+                  release.validate_candidate_run(metadata, f".github/workflows/{filename}", workflow, reference, run)
+                  required = release.CANDIDATE_ACTION_JOBS[lane].copy()
+                  if lane == "resources":
+                      del required[f"Resource coverage ({release.R23_RESOURCE_PROFILE})"]
+                      required[release.RESOURCE_PLAN] += (release.R23_RESOURCE_RECORD,)
+                      release.require(len(jobs) == len(required), "resource job roster differs from the declared scope")
+                  release.validate_candidate_jobs(metadata["source"], reference["id"], reference["attempt"], jobs, required)
+              except (ValueError, RuntimeError, KeyError) as error:
+                  observation["gate"] = "rejected"
+                  observation["reason"] = str(error)
+              else:
+                  observation["gate"] = "accepted"
+              observations[lane] = observation
+
+          metadata_path = Path(sys.argv[1])
+          metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+          actual_cli = subprocess.run(
+              [sys.executable, str(Path("scripts/publish-github-release.py")),
+               "--metadata", str(metadata_path), "--check-actions"],
+              capture_output=True, text=True, check=False, timeout=120,
+          )
+          report = {
+              "source": metadata["source"], "tree": metadata["tree"], "lanes": observations,
+              "check_actions_cli": {"exit_code": actual_cli.returncode,
+                                    "last_diagnostic": actual_cli.stderr.strip().splitlines()[-1:]},
+          }
+          print("R23_EXACT_ACTIONS_PREFLIGHT " + json.dumps(report, sort_keys=True))
+          release.require(observations["engine"]["gate"] == "rejected" and actual_cli.returncode != 0,
+                          "known unsuccessful native engine allowed by the preflight")
+          release.require(all(observations[lane]["gate"] == "accepted" for lane in ("quality", "platforms", "resources")),
+                          "a completed candidate lane did not satisfy the release verifier")
+          PY
