@@ -1,0 +1,62 @@
+name: Start an isolated native Hyper-V receiver fixture
+
+on:
+  push:
+    branches: ['verify/windows-hyperv-receiver-20261119-a']
+    paths: ['.github/workflows/windows-hyperv-receiver.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Exact disconnected firmware boot (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2022, windows-11-arm]
+    steps:
+      - name: Start and remove only a purpose-built blank firmware test VM
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = 'vs-receiver-probe-' + [guid]::NewGuid().ToString('N')
+          $root = Join-Path $env:RUNNER_TEMP $name
+          $previous = @(Get-VM | ForEach-Object { $_.Id.ToString() } | Sort-Object)
+          if ((Test-Path -LiteralPath $root) -or (Get-VM -Name $name -ErrorAction SilentlyContinue)) {
+            throw 'Expected unique fresh private fixture'
+          }
+          $null = New-Item -ItemType Directory -Path $root
+          $vmId = $null
+          try {
+            $vm = New-VM -Name $name -Path $root -MemoryStartupBytes 256MB -Generation 2 -NoVHD -Force
+            $vmId = $vm.Id
+            $attachedDisks = @(Get-VMHardDiskDrive -VM $vm)
+            $attachedLinks = @(Get-VMNetworkAdapter -VM $vm | Where-Object { $_.SwitchName })
+            if ($attachedDisks.Count -ne 0 -or $attachedLinks.Count -ne 0) {
+              throw 'The firmware-only fixture must have no disk and no connected network'
+            }
+            Start-VM -VM $vm
+            $vm = Get-VM -Id $vmId
+            if ($vm.State -ne 'Running' -or $vm.Generation -ne 2) { throw 'Owned generation 2 firmware did not run' }
+            $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+            Write-Output "HYPERV_RECEIVER_FIRMWARE architecture=$architecture state=Running owned_disk_count=0 connected_link_count=0 exact_vm=$vmId"
+          }
+          finally {
+            $probe = Get-VM -Name $name -ErrorAction SilentlyContinue
+            if ($probe) {
+              $path = [IO.Path]::GetFullPath([string]$probe.ConfigurationLocation)
+              $normalizedRoot = [IO.Path]::GetFullPath($root).TrimEnd('\')
+              if (($vmId -and $probe.Id -ne $vmId) -or ($path -ne $normalizedRoot -and !$path.StartsWith($normalizedRoot + '\', [StringComparison]::OrdinalIgnoreCase))) {
+                throw 'Cannot establish exact VM ownership for cleanup'
+              }
+              if ($probe.State -ne 'Off') { Stop-VM -VM $probe -TurnOff -Force }
+              Remove-VM -VM $probe -Force
+            }
+            $restored = @(Get-VM | ForEach-Object { $_.Id.ToString() } | Sort-Object)
+            if (($restored -join ',') -ne ($previous -join ',')) { throw 'The host VM inventory changed outside the owned fixture' }
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+            Write-Output 'HYPERV_RECEIVER_CLEANUP exact_vm_removed=true vm_inventory_restored=true private_storage_removed=true'
+          }
