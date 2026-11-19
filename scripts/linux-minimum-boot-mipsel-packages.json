@@ -1,0 +1,18 @@
+{
+  "wheezy": [
+    {
+      "package": "busybox-static",
+      "version": "1:1.20.0-7",
+      "filename": "pool/main/b/busybox/busybox-static_1.20.0-7_mipsel.deb",
+      "size": "945450",
+      "sha256": "bb3b1e7857cc8abf5dc47629ddcc13f613d533866ede20c3d03cd6a6c1a512a7"
+    },
+    {
+      "package": "linux-image-3.2.0-4-4kc-malta",
+      "version": "3.2.78-1",
+      "filename": "pool/main/l/linux/linux-image-3.2.0-4-4kc-malta_3.2.78-1_mipsel.deb",
+      "size": "21447086",
+      "sha256": "d354477c7d486bdde38ddc5f52b6011ce769328911d1f593ce740ecb2246b469"
+    }
+  ]
+}

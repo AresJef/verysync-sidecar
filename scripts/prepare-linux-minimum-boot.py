@@ -18,11 +18,14 @@ KERNELS = {
     "armel": {"wheezy": "3.2.0-4-versatile", "stretch": "4.9.0-13-armmp"},
     "arm-vexpress": {"wheezy": "3.2.0-4-vexpress", "stretch": "4.9.0-13-armmp"},
     "arm64": {"jessie": "3.16.0-6-arm64"},
+    "mips": {"wheezy": "3.2.0-4-4kc-malta"},
+    "mipsel": {"wheezy": "3.2.0-4-4kc-malta"},
     "s390x": {"wheezy": "3.2.0-4-s390x", "stretch": "4.9.0-13-s390x"},
 }
 ELF_FORMAT = {
     "amd64": (2, 62, "<"), "i386": (1, 3, "<"), "armel": (1, 40, "<"), "arm64": (2, 183, "<"),
     "arm-vexpress": (1, 40, "<"),
+    "mips": (1, 8, ">"), "mipsel": (1, 8, "<"),
     "s390x": (2, 22, ">"),
 }
 RUNTIME = {
@@ -31,6 +34,8 @@ RUNTIME = {
     "armel": ("linux-arm-standard", "lib", "lib/ld-linux.so.3"),
     "arm-vexpress": ("linux-armv6-standard", "lib", "lib/ld-linux.so.3"),
     "arm64": ("linux-arm64-standard", "lib64", "lib/ld-linux-aarch64.so.1"),
+    "mips": ("linux-mips-standard", "lib", "lib/ld.so.1"),
+    "mipsel": ("linux-mipsle-standard", "lib", "lib/ld.so.1"),
     "s390x": ("linux-s390x-standard", "lib64", "lib/ld64.so.1"),
 }
 VEXPRESS_RUNTIME = {
@@ -151,9 +156,10 @@ def prepare_runtime(runtime, engine_receipt, platform_ca, architecture, profile=
 
 
 def boot_init(expected, program_sha=None, ca_sha=None, runtime_lib="lib64",
-              vx_control=False, armel_control=False, armel_stretch=False, legacy_armv7=False):
+              vx_control=False, armel_control=False, armel_stretch=False,
+              legacy_armv7=False, malta_control=False):
     runtime = ""
-    shutdown = "reboot" if armel_control or armel_stretch or legacy_armv7 else "poweroff"
+    shutdown = "reboot" if armel_control or armel_stretch or legacy_armv7 or malta_control else "poweroff"
     if vx_control:
         runtime = f'''auxv=$(/bin/busybox od -A n -v -t u8 /proc/self/auxv) || fail auxv_read
 set -- $auxv
@@ -259,6 +265,13 @@ adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
 [ "$adapters" = lo ] || fail external_guest_adapter
 echo "VS_ARM_VEXPRESS_CONTROL armv7l lo"
 '''
+    elif malta_control:
+        runtime = '''machine=$(/bin/busybox uname -m) || fail machine_identity
+case "$machine" in mips|mipsel) ;; *) fail machine_identity ;; esac
+adapters=$(/bin/busybox ls /sys/class/net) || fail network_enumeration
+[ "$adapters" = lo ] || fail external_guest_adapter
+echo "VS_MALTA_GUEST_CONTROL $machine lo"
+'''
     return f"""#!/bin/busybox sh
 export PATH=/bin
 fail() {{
@@ -293,6 +306,9 @@ parser.add_argument("--arm-vexpress-runtime", choices=VEXPRESS_RUNTIME)
 args = parser.parse_args()
 if args.distribution not in KERNELS[args.architecture]:
     parser.error("unsupported distribution and architecture combination")
+malta = args.architecture in {"mips", "mipsel"}
+if malta and (args.runtime_dir is not None or args.engine_receipt is not None):
+    parser.error("Malta fixture currently selects the original offline boot control")
 if args.arm_vexpress_runtime is not None:
     if args.architecture != "arm-vexpress" or args.runtime_dir is None or args.engine_receipt is None:
         parser.error("vexpress runtime requires an exact profile, its runtime directory and its engine receipt")
@@ -338,7 +354,8 @@ for package in records:
 distribution = args.distribution
 release = KERNELS[args.architecture][distribution]
 _, runtime_lib, _ = RUNTIME[args.architecture]
-kernel_name, config_name = "boot/vmlinuz-"+release, "boot/config-"+release
+kernel_member = "vmlinux" if malta else "vmlinuz"
+kernel_name, config_name = "boot/"+kernel_member+"-"+release, "boot/config-"+release
 kernel_deb = by_name[distribution,"linux-image-"+release]
 armel_stretch = args.architecture == "armel" and distribution == "stretch"
 vexpress_stretch = args.architecture == "arm-vexpress" and distribution == "stretch"
@@ -358,9 +375,14 @@ required_platform = {
     "armel": {"CONFIG_AEABI", "CONFIG_CPU_ARM926T", "CONFIG_ARCH_VERSATILE", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
     "arm-vexpress": {"CONFIG_AEABI", "CONFIG_CPU_V7", "CONFIG_ARCH_VEXPRESS", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
     "arm64": {"CONFIG_ARM64", "CONFIG_ARCH_VEXPRESS", "CONFIG_SERIAL_AMBA_PL011_CONSOLE"},
+    "mips": {"CONFIG_MIPS_MALTA", "CONFIG_CPU_MIPS32_R1", "CONFIG_CPU_BIG_ENDIAN", "CONFIG_SERIAL_8250_CONSOLE"},
+    "mipsel": {"CONFIG_MIPS_MALTA", "CONFIG_CPU_MIPS32_R1", "CONFIG_CPU_LITTLE_ENDIAN", "CONFIG_SERIAL_8250_CONSOLE"},
     "s390x": {"CONFIG_S390", "CONFIG_64BIT", "CONFIG_SCLP_VT220_CONSOLE"},
 }
-if args.architecture in {"armel", "arm-vexpress"}:
+if malta:
+    kernel_filename = "vmlinux"
+    check_elf(kernel, args.architecture)
+elif args.architecture in {"armel", "arm-vexpress"}:
     kernel_filename = "zImage"
     assert kernel[0x24:0x28] == bytes.fromhex("18286f01")
     if armel_stretch:
@@ -411,7 +433,7 @@ if args.runtime_dir is not None:
 files.append(("init",stat.S_IFREG|0o755,boot_init(release,runtime_hashes.get("bin/verysync"),
             runtime_hashes.get("candidate_debian_platform_ca"), runtime_lib,
             args.s390x_version_control, args.armel_version_control, armel_stretch,
-            args.architecture == "arm-vexpress"),0,0))
+            args.architecture == "arm-vexpress", malta),0,0))
 ramdisk = gzip.compress(write_newc(files),compresslevel=9,mtime=0)
 root=WORK/distribution
 root.mkdir(mode=0o700,exist_ok=True)
