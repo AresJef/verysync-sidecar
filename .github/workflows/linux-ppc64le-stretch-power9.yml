@@ -59,9 +59,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          timeout --kill-after=10s 135s sudo apt-get -o Acquire::Retries=1 -o Acquire::https::Timeout=18 update
-          timeout --kill-after=10s 190s sudo apt-get -o Acquire::Retries=1 -o Acquire::https::Timeout=18 install \
-            -y --no-install-recommends gcc-powerpc64le-linux-gnu binutils-powerpc64le-linux-gnu qemu-system-ppc qemu-system-data
+          work="$RUNNER_TEMP/vs-ppc64le-stretch"
+          sources="$work/ubuntu-official-sources.list"
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-security main universe' > "$sources"
+          apt_options=(-o "Dir::Etc::sourcelist=$sources" -o Dir::Etc::sourceparts=/dev/null
+            -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+          timeout --kill-after=10s 120s sudo apt-get "${apt_options[@]}" update
+          timeout --kill-after=10s 230s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends \
+            gcc-powerpc64le-linux-gnu binutils-powerpc64le-linux-gnu qemu-system-ppc qemu-system-data
+          dpkg-query -W gcc-powerpc64le-linux-gnu binutils-powerpc64le-linux-gnu qemu-system-ppc qemu-system-data
           timeout --kill-after=5s 120s rustup toolchain install 1.85.0 --profile minimal --target powerpc64le-unknown-linux-gnu
           qemu-system-ppc64 --version
       - name: Boot the authenticated Debian kernel before building the Rust controller
