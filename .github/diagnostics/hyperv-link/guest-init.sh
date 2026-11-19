@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -eux
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 mount -t devtmpfs devtmpfs /dev
 exec </dev/console >/dev/console 2>&1

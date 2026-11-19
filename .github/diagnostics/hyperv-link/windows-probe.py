@@ -11,6 +11,7 @@ ADDR = (
 
 
 def tcp(family, source, target, deadline):
+    last = None
     while time.monotonic() < deadline:
         net = socket.socket(family, socket.SOCK_STREAM, socket.IPPROTO_TCP)
         try:
@@ -18,10 +19,11 @@ def tcp(family, source, target, deadline):
             net.bind((source, 0))
             net.connect((target, 47527))
             return net
-        except OSError:
+        except OSError as e:
+            last = e
             net.close()
             time.sleep(0.4)
-    raise TimeoutError("the isolated receiver never accepted a connection")
+    raise TimeoutError(f"isolated TCP to {target} from {source} failed: {last}") from last
 
 
 def main():

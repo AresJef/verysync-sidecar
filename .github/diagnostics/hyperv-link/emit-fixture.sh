@@ -25,9 +25,12 @@ test -c ram/dev/console || sudo mknod -m 0600 ram/dev/console c 5 1
 test -c ram/dev/null || sudo mknod -m 0666 ram/dev/null c 1 3
 sudo sh -c 'cd ram && find . -print0 | cpio --null -o -H newc --quiet' | gzip -n -1 > iso-tree/boot/initramfs.cpio.gz
 cat > iso-tree/boot/grub/grub.cfg <<'GRUB'
+serial --unit=0 --speed=115200
+terminal_output serial
 set timeout=0
 set default=0
 menuentry 'Disposable receive fixture' {
+  echo RECEIVER_GRUB_BOOT
   linux /boot/vmlinuz console=ttyS0,115200n8 panic=0
   initrd /boot/initramfs.cpio.gz
 }

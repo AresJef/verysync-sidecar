@@ -24,6 +24,8 @@ $vmId = $null
 $switchId = $null
 $pipe = $null
 $serial = $null
+$guestMessages = $null
+$printedConsole = $false
 try {
     $link = New-VMSwitch -Name $name -SwitchType Internal
     $switchId = $link.Id
@@ -40,6 +42,8 @@ try {
     if (Get-NetRoute -InterfaceIndex $testInterface | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/0','::/0') }) {
         throw 'No default route may use the isolated receiver link'
     }
+    $hostState = @(Get-NetIPAddress -InterfaceIndex $testInterface | Where-Object { $_.IPAddress -in @('192.0.2.1','2001:db8:73f:43::1') } | Select-Object IPAddress,AddressState,PrefixLength)
+    Write-Output ("HYPERV_HOST_LINK " + ($hostState | ConvertTo-Json -Compress))
     $vm = New-VM -Name $name -Path $root -MemoryStartupBytes 512MB -Generation 2 -NoVHD -SwitchName $name -Force
     $vmId = $vm.Id
     $network = @(Get-VMNetworkAdapter -VM $vm)
@@ -47,11 +51,12 @@ try {
         throw 'The fixture must have exactly its internal link and no writable disk'
     }
     $dvd = Add-VMDvdDrive -VM $vm -Path $iso -Passthru
-    Set-VMFirmware -VM $vm -EnableSecureBoot Off -FirstBootDevice $dvd
+    Set-VMFirmware -VM $vm -EnableSecureBoot Off -FirstBootDevice $dvd -ConsoleMode COM1
     Set-VMComPort -VMName $name -Number 1 -Path ('\\.\pipe\' + $name)
-    Start-VM -VM $vm
     $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $name, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous)
-    $pipe.Connect(5000)
+    $connecting = $pipe.ConnectAsync(15000)
+    Start-VM -VM $vm
+    if (!$connecting.Wait(17000)) { throw 'Owned guest console connection did not return' }
     $serial = [IO.StreamReader]::new($pipe)
     $guestMessages = $serial.ReadToEndAsync()
     & python -B (Join-Path $PSScriptRoot 'windows-probe.py')
@@ -65,6 +70,7 @@ try {
     if (!$guestMessages.Wait(5000)) { throw 'Owned guest console did not close' }
     $markers = @($guestMessages.Result -split '\r?\n' | Where-Object { $_ -match '^RECEIVER_GUEST_' })
     $markers | Write-Output
+    $printedConsole = $true
     if ($current.State -ne 'Off' -or -not ($markers -match '^RECEIVER_GUEST_BOOT kernel=6\.18\.60-0-virt architecture=x86_64$') -or
         -not ($markers -match '^RECEIVER_GUEST_LINK name=\w+ boot_driver=hv_netvsc no_default_ipv4_ipv6=true$') -or
         -not ($markers -match '^RECEIVER_GUEST_FINISH status=0$') -or
@@ -74,7 +80,6 @@ try {
     Write-Output 'HYPERV_GUEST_ACTUAL no_external_route=true own_linux_shutdown=true'
 }
 finally {
-    if ($serial) { $serial.Dispose() } elseif ($pipe) { $pipe.Dispose() }
     $found = Get-VM -Name $name -ErrorAction SilentlyContinue
     if ($found) {
         $path = [IO.Path]::GetFullPath([string]$found.ConfigurationLocation)
@@ -82,7 +87,21 @@ finally {
         if (($vmId -and $found.Id -ne $vmId) -or ($path -ne $normal -and !$path.StartsWith($normal + '\', [StringComparison]::OrdinalIgnoreCase))) {
             throw 'Refuse to remove a VM whose exact ownership is unavailable'
         }
+        if (!$printedConsole) {
+            Write-Output "HYPERV_GUEST_STATE_AT_FAILURE state=$($found.State) uptime=$($found.Uptime)"
+            $existing = @(Get-NetIPAddress -InterfaceIndex $testInterface | Where-Object { $_.IPAddress -in @('192.0.2.1','2001:db8:73f:43::1') } | Select-Object IPAddress,AddressState,PrefixLength)
+            Write-Output ("HYPERV_HOST_LINK_AT_FAILURE " + ($existing | ConvertTo-Json -Compress))
+        }
         if ($found.State -ne 'Off') { Stop-VM -VM $found -TurnOff -Force }
+        if (!$printedConsole -and $guestMessages) {
+            try {
+                if ($guestMessages.Wait(5500) -and $guestMessages.IsCompletedSuccessfully) {
+                    $rows = @($guestMessages.Result -split '\r?\n')
+                    $rows | Select-Object -Last 120 | ForEach-Object { Write-Output ("HYPERV_SERIAL " + $_) }
+                } else { Write-Output 'HYPERV_SERIAL owned serial stream remained open after power off' }
+            } catch { Write-Output 'HYPERV_SERIAL owned serial stream read failed after power off' }
+        }
+        if ($serial) { $serial.Dispose() } elseif ($pipe) { $pipe.Dispose() }
         Remove-VM -VM $found -Force
     }
     $foundLink = Get-VMSwitch -Name $name -ErrorAction SilentlyContinue
