@@ -49,6 +49,9 @@ peers on selected loopback endpoints, with TCP, UDP, tracker, discovery and NAT
 disabled at the peers. They independently observe relay-only peer connections,
 an active relay session, proxied bytes, a successful probe, a failed probe after
 server shutdown, listener closure and normal exit of all three owned trees.
+The file check requires matching digests from both peers through the public
+resource API, relay connections after resuming, retained receiver contents
+while paused, and increasing native relay byte counters.
 This does not establish public-pool operation, WAN reachability or rate limits
 under load. On the tested free isolated engine, a requested authentication flag
 was read back as disabled; that observation does not establish a cause or a

@@ -643,9 +643,30 @@ async fn relay_ready(
     }
     Ok(result??)
 }
+async fn wait_for_relay_traffic(client: &Client, previous_bytes: u64) -> TestResult<u64> {
+    let bytes = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let status = client.relay_server_status().await?;
+            if let (Some(sessions), Some(bytes)) =
+                (status.num_active_sessions, status.bytes_proxied)
+            {
+                if sessions > 0 && bytes > previous_bytes {
+                    return Ok::<_, Error>(bytes);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    Ok(bytes)
+}
+
 #[tokio::test]
 async fn actual_owned_private_relay_session_with_tcp_and_udp_disabled() -> TestResult {
-    use verysync_sidecar::{RelayProbeResult, RelayServerPatch, TransportPatch};
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        JoinFolderOptions, RelayProbeResult, RelayServerPatch, TargetPath, TransportPatch,
+    };
     let root = tempfile::Builder::new().prefix("vsnr-").tempdir()?.keep();
     let mut relay = ManagedInstance::start(options(&root.join("relay"))?).await?;
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
@@ -762,18 +783,63 @@ async fn actual_owned_private_relay_session_with_tcp_and_udp_disabled() -> TestR
             ));
         }
     }
-    tokio::time::timeout(Duration::from_secs(20), async {
-        loop {
-            let active = relay.client().relay_server_status().await?;
-            if active.num_active_sessions.is_some_and(|v| v > 0)
-                && active.bytes_proxied.is_some_and(|v| v > 0)
-            {
-                break Ok::<_, Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await??;
+    let baseline = wait_for_relay_traffic(relay.client(), 0).await?;
+    let (a_plan, source) = pair_node(&a, &root.join("a-receipt.json")).await?;
+    let (b_plan, target) = pair_node(&b, &root.join("b-receipt.json")).await?;
+    let source_file = source.join("synthetic.bin");
+    let target_file = target.join("synthetic.bin");
+    assert!(!target_file.try_exists()?);
+    let original: Vec<_> = (0..262_181_u32).map(|i| (i ^ (i >> 7)) as u8).collect();
+    std::fs::write(&source_file, &original)?;
+
+    let keys = a.client().generate_share().await?;
+    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
+    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
+    let af = a
+        .client()
+        .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(source)))
+        .await?;
+    let bf = b
+        .client()
+        .join_folder(&JoinFolderOptions::new(ro, TargetPath::local(target)))
+        .await?;
+    a.client()
+        .share_folder_with(&af.configuration.id, &b_id)
+        .await?;
+    b.client()
+        .share_folder_with(&bf.configuration.id, &a_id)
+        .await?;
+    wait_for_pair_file(&target_file, &original).await?;
+
+    let plan_path = root.join("observe-relayed-file.json");
+    let mut plan = json!({"sender":a_plan,"receiver":b_plan,"transport":"relay",
+        "expected_bytes":original.len(),"expected_sha256":format!("{:x}", Sha256::digest(&original))});
+    std::fs::write(&plan_path, serde_json::to_vec(&plan)?)?;
+    let first = acceptance_pair::run(&plan_path).await?;
+    assert_eq!(first.bytes, original.len() as u64);
+    let first_traffic = wait_for_relay_traffic(relay.client(), baseline).await?;
+
+    a.client().pause_device(&b_id).await?;
+    b.client().pause_device(&a_id).await?;
+    connection(a.client(), &b_id, false).await?;
+    connection(b.client(), &a_id, false).await?;
+    assert!(acceptance_pair::run(&plan_path).await.is_err());
+
+    let next: Vec<_> = original.iter().map(|v| v ^ 0x5a).collect();
+    std::fs::write(&source_file, &next)?;
+    a.client().request_scan(&af.configuration.id).await?;
+    assert_eq!(std::fs::read(&target_file)?, original);
+    a.client().resume_device(&b_id).await?;
+    b.client().resume_device(&a_id).await?;
+    wait_for_pair_file(&target_file, &next).await?;
+
+    plan["expected_sha256"] = json!(format!("{:x}", Sha256::digest(&next)));
+    std::fs::write(&plan_path, serde_json::to_vec(&plan)?)?;
+    let recovered = acceptance_pair::run(&plan_path).await?;
+    assert_ne!(first.file_sha256, recovered.file_sha256);
+    assert_eq!(first.bytes, recovered.bytes);
+    let recovery_traffic = wait_for_relay_traffic(relay.client(), first_traffic).await?;
+
     a.client().pause_device(&b_id).await?;
     b.client().pause_device(&a_id).await?;
     connection(a.client(), &b_id, false).await?;
@@ -805,6 +871,22 @@ async fn actual_owned_private_relay_session_with_tcp_and_udp_disabled() -> TestR
     let exit = relay.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     std::fs::remove_dir_all(root)?;
+    println!(
+        "public private relay file evidence: {}",
+        json!({
+            "first_file_bytes":first.bytes,
+            "first_file_sha256":first.file_sha256,
+            "first_authenticated_relay_types":[first.sender.peer_connection_type,first.receiver.peer_connection_type],
+            "recovered_file_bytes":recovered.bytes,
+            "recovered_file_sha256":recovered.file_sha256,
+            "recovered_authenticated_relay_types":[recovered.sender.peer_connection_type,recovered.receiver.peer_connection_type],
+            "relay_proxied_bytes_before_first":baseline,
+            "relay_proxied_bytes_after_first":first_traffic,
+            "relay_proxied_bytes_after_recovery":recovery_traffic,
+            "receiver_retained_original_while_paused":true,
+            "all_three_normal_owned_tree_exits":true
+        })
+    );
     println!(
         "public private relay evidence: {}",
         json!({"actual_disabled_runtime_and_missing_counters":true,"actual_empty_disabled_rate_samples":true,"explicit_private_listener_and_status":true,"actual_selected_private_relay_url":true,"actual_positive_relay_probe":true,"actual_closed_relay_negative_probe":true,"actual_runtime_timeout_units_seconds":true,"actual_relay_connection_types":true,"actual_running_rate_samples":true,"tcp_udp_tracker_discovery_nat_disabled":true,"relay_only_device_selectors":true,"actual_both_peers_connected":true,"actual_relay_session_and_proxied_bytes":true,"actual_server_disabled":true,"actual_owned_relay_listener_closed":true,"actual_three_normal_tree_exits":true})
