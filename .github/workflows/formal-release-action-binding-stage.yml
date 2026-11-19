@@ -71,6 +71,15 @@ jobs:
           assert earlier["id"] == failed_run and earlier["workflow_id"] == workflows["engine"]["id"]
           assert earlier["run_attempt"] == 1 and earlier["event"] == "pull_request"
           assert (earlier["status"], earlier["conclusion"]) == ("completed", "failure")
+          for size in (100, 30, 10):
+              endpoint = f"{engine_path}/attempts/1/jobs?per_page={size}&page=1"
+              transport = subprocess.run(("gh", "api", "--method", "GET", endpoint), capture_output=True, text=True)
+              if transport.returncode == 0:
+                  snapshot = json.loads(transport.stdout)
+                  print(f"Historical attempt direct page size {size}: {len(snapshot['jobs'])} of {snapshot['total_count']}.", flush=True)
+                  break
+              safe_words = " ".join(word for word in transport.stderr.split() if word.isdigit() or word.startswith(("HTTP", "Timeout", "timeout")))
+              print(f"Historical attempt direct page size {size}: gh exit {transport.returncode}, {safe_words or 'no HTTP status'}.", flush=True)
           jobs = helper.candidate_attempt_jobs(engine_path, 1)
           assert len(jobs) == 278 and len({job["id"] for job in jobs}) == 278
           assert all(job["run_id"] == failed_run and job["run_attempt"] == 1 for job in jobs)
