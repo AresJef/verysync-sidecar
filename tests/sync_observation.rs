@@ -1058,8 +1058,21 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     }
     a.client().pause_device(&b_id).await?;
     b.client().pause_device(&a_id).await?;
-    for instance in [&mut b, &mut a] {
-        let exit = instance.shutdown(Duration::from_secs(10)).await?;
+    eprintln!("priority shutdown observation: all_512_files_match=true both_pause_requests_completed=true");
+    for (role, instance) in [("receiver", &mut b), ("source", &mut a)] {
+        eprintln!("priority shutdown observation: role={role} begin");
+        let started = std::time::Instant::now();
+        let outcome = instance.shutdown(Duration::from_secs(10)).await;
+        let status = match &outcome {
+            Ok(_) => "called-and-observed-exit",
+            Err(Error::Timeout { .. }) => "deadline",
+            Err(_) => "other-error",
+        };
+        eprintln!(
+            "priority shutdown observation: role={role} result={status} elapsed_ms={}",
+            started.elapsed().as_millis(),
+        );
+        let exit = outcome?;
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
     std::fs::remove_dir_all(root)?;

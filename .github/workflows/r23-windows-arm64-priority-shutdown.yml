@@ -1,0 +1,49 @@
+name: Observe Windows ARM64 priority-test shutdown
+on:
+  push:
+    branches: [verify/r23/windows-arm64-priority-shutdown]
+permissions:
+  contents: read
+jobs:
+  priority-shutdown:
+    name: Windows ARM64 native priority shutdown (${{ matrix.workload }})
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [isolated, suite]
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Prepare the fixed source, compiler and test engine
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          python scripts/prepare-test-engine.py prepare --package windows-arm64-standard \
+            --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe priority effects and the original normal-stop result
+        env:
+          WORKLOAD: ${{ matrix.workload }}
+        run: |
+          selection=()
+          if [[ "$WORKLOAD" == "isolated" ]]; then
+            selection=(--test-filter actual_folder_order_and_specific_priority_change_preserve_samples)
+          fi
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target sync_observation "${selection[@]}" \
+            --evidence-dir "${{ runner.temp }}/priority-shutdown-proxy"
+      - name: Confirm exact owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
