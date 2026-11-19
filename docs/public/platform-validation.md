@@ -205,10 +205,29 @@ exited in offline Debian `4.9.0-13-4kc-malta` full-system QEMU guests. Each
 guest used the matching Release 2 kernel byte order, 24Kf CPU model and
 256 MiB of memory. The first program-bearing initramfs failed to unpack
 with 128 MiB. Earlier Debian 3.2 guests stopped during early memory setup
-with both CPU models. Rust management, file effects and minimum native
-hardware for these guests require separate evidence.
+with both CPU models. Minimum native hardware requires separate evidence.
 [Debian 3.2 CPU comparison](https://github.com/AresJef/verysync-sidecar/actions/runs/44429147303)
 · [Exact Debian 4.9 versions](https://github.com/AresJef/verysync-sidecar/actions/runs/44431736967)
+
+The Rust 1.85 MIPS32 controllers failed to link against the original
+Stretch glibc 2.24. The Rust standard library and managed bootstrap both
+require `getrandom`. The archived Buster O32 glibc 2.28 supplies the
+symbol, and both controller binaries linked with the expected
+`/lib/ld.so.1` interpreter. The first attempt with Buster stopped when
+the guest fixture rejected that loader name.
+[Stretch link results](https://github.com/AresJef/verysync-sidecar/actions/runs/44433606538)
+· [Buster link and fixture results](https://github.com/AresJef/verysync-sidecar/actions/runs/44434639120)
+
+With the fixture accepting the exact archived loader, both 24Kf guests
+ran the Rust 1.85 default-TLS controller on the Debian Stretch 4.9 kernel
+with Buster glibc 2.28. With the archived CA installed, each controller
+authenticated to the fixed core, created a folder, wrote and downloaded 29
+verified bytes and retained its identity and data after restart. With the
+CA absent, both reached the original management deadline while the native
+health endpoint returned HTTP 200. All four guests released the exact
+core and state and exited normally. Evidence covers these named, offline
+full-system QEMU combinations.
+[MIPS and MIPSel Rust runtime results](https://github.com/AresJef/verysync-sidecar/actions/runs/44435447736)
 
 LoongArch64, RISC-V64 and S390x passed their selected pinned QEMU profiles;
 PPC64LE passed the explicit POWER9 profile, retaining the earlier POWER8 SIGILL
