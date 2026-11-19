@@ -1,7 +1,8 @@
 # Windows packet observer feasibility
 
-The existing actual packet-class evidence uses macOS/Linux observers. Windows
-effects remain a required unverified scope; configuration readback is separate.
+This page records the Windows loopback feasibility checks for the in-box
+Packet Monitor. The [independent receiver results][receiver] cover the later
+Windows AMD64 measurements and the remaining ARM64 packet requirements.
 
 The first Windows-specific diagnostic reads the in-box Packet Monitor command
 syntax, current status and administrator availability in fresh GitHub Windows
@@ -77,13 +78,9 @@ rule. The corrected helper explicitly reconfirms whole-table ownership before
 using this native operation; additional or unknown rules prevent removal.
 The original source/results and this correction remain separate.
 
-The diagnostic is retained for explicit manual reproduction. A required Windows
-VerySync packet-class gate remains open and must use a validated observer or an
-actual controlled external receiver, with the original 16/32/0 selections,
-complete file bytes, protected state and normal owned exits. An observer failure
-does not waive that gate or complete the configuration group.
+Run the loopback diagnostic through an explicit `workflow_dispatch` for
+manual reproduction. The Windows acceptance checks still require a validated
+independent observer for the owned IPv4 and IPv6 traffic at values 16, 32 and 0,
+along with complete file bytes, protected state and normal process exits.
 
-The failed loopback observer is retained as an explicit `workflow_dispatch`
-reproduction tool. Ordinary pull requests do not repeat that unchanged native
-capture path. The required Windows VerySync wire-class acceptance remains open;
-this diagnostic scheduling change grants no support or acceptance credit.
+[receiver]: controlled-network-acceptance.md#windows-packet-traffic-class

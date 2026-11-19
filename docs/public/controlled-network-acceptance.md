@@ -140,6 +140,8 @@ paired nodes checked both sample versions and shut down normally. The capture
 recorded header counts and indicated TCP payload lengths.
 [Receiver header diagnostic](https://github.com/AresJef/verysync-sidecar/actions/runs/44458772679).
 
+## Windows packet traffic class
+
 An isolated Windows Server 2022 AMD64 runner booted a diskless Linux guest
 with one Hyper-V internal switch and no guest default route. Explicitly bound
 Windows sockets sent and received the same 1 MiB synthetic sample on IPv4 and
@@ -175,3 +177,12 @@ nonzero cases failed the strict packet-effect check. This evidence covers
 the observed Windows Server 2022 AMD64 direct TCP path. Windows ARM64 and
 remote paths require their own observations.
 [Same-host native comparison](https://github.com/AresJef/verysync-sidecar/actions/runs/44471010544).
+
+The `windows-11-vs2026-arm` runner (image `20261112.217.1`) accepted IPv4
+Winsock traffic-class values 16, 32 and 0. Each value read back exactly, and
+each one-byte synthetic TCP sample reached its loopback peer. A separate
+disconnected Generation 2 firmware fixture could not start on that host.
+Hyper-V reported that a required component was unavailable, and cleanup
+restored the original VM inventory. The ARM64 packet gate still requires
+independently observed IPv4 and IPv6 headers from the fixed VerySync program.
+[Alternate Windows ARM64 observer check](https://github.com/AresJef/verysync-sidecar/actions/runs/44512647766).
