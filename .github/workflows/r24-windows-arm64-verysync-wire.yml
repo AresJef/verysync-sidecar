@@ -1,0 +1,63 @@
+name: Observe fixed VerySync file traffic on native Windows ARM64
+
+on:
+  push:
+    branches: ['verify/r24/windows-arm64-verysync-wire']
+
+permissions:
+  contents: read
+
+jobs:
+  native-wire:
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: windows-11-arm
+    timeout-minutes: 24
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+          architecture: arm64
+      - name: Build the exact native Rust receiver and SDK harness
+        shell: pwsh
+        run: |
+          $toolchain = '1.85.0-aarch64-pc-windows-msvc'
+          $peer = '.github/diagnostics/windows-arm64-tun-peer/Cargo.toml'
+          rustup toolchain install $toolchain --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install the exact ARM64 Rust toolchain' }
+          rustc "+$toolchain" -vV
+          if ($LASTEXITCODE -ne 0) { throw 'Could not confirm native Rust' }
+          cargo "+$toolchain" fetch --manifest-path $peer --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch calibration inputs' }
+          cargo "+$toolchain" test --manifest-path $peer --locked --offline
+          if ($LASTEXITCODE -ne 0) { throw 'Exact calibration sample check failed' }
+          cargo "+$toolchain" build --manifest-path $peer --locked --offline
+          if ($LASTEXITCODE -ne 0) { throw 'Independent native receiver could not be built' }
+          cargo "+$toolchain" fetch --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the original SDK lockfile' }
+          Copy-Item .github/diagnostics/hyperv-wire/paired_wire.rs examples/paired_wire_arm64_diagnostic.rs
+          Copy-Item .github/diagnostics/hyperv-wire/paired_wire_arm64.rs examples/paired_wire_arm64.rs
+          cargo "+$toolchain" build --locked --offline --example paired_wire_arm64_diagnostic
+          if ($LASTEXITCODE -ne 0) { throw 'The actual native SDK harness could not be built' }
+      - name: Explicitly prepare the pinned native ARM64 VerySync
+        shell: pwsh
+        run: |
+          python -B scripts/prepare-test-engine.py prepare --package windows-arm64-standard --parent $env:RUNNER_TEMP --github-env $env:GITHUB_ENV
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare the explicit pinned ARM64 program' }
+      - name: Verify independent qWAVE controls and strict actual SDK file traffic
+        shell: pwsh
+        run: |
+          $peer = Resolve-Path -LiteralPath '.github/diagnostics/windows-arm64-tun-peer/target/debug/verysync-isolated-tun-peer.exe'
+          $harness = Resolve-Path -LiteralPath 'target/debug/examples/paired_wire_arm64_diagnostic.exe'
+          $python = (Get-Command python -CommandType Application).Source
+          & $python -B -c 'import platform; assert platform.machine().upper() == "ARM64"'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify the native ARM64 socket sender' }
+          ./.github/diagnostics/windows-arm64-wintun-qualification.ps1 -TcpPeer "$peer" -Python "$python" -SdkHarness "$harness"
+      - name: Confirm exact native program cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        shell: pwsh
+        run: |
+          python -B scripts/prepare-test-engine.py check-cleanup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

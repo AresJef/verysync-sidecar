@@ -1,8 +1,11 @@
-param([string]$TcpPeer, [string]$Python)
+param([string]$TcpPeer, [string]$Python, [string]$SdkHarness)
 
 $ErrorActionPreference = 'Stop'
 $dataCalibration = ![string]::IsNullOrEmpty($TcpPeer)
-$expectedRef = if ($dataCalibration) {
+$exerciseSdk = ![string]::IsNullOrEmpty($SdkHarness)
+$expectedRef = if ($exerciseSdk) {
+    'refs/heads/verify/r24/windows-arm64-verysync-wire'
+} elseif ($dataCalibration) {
     'refs/heads/verify/r24/windows-arm64-tun-data'
 } else {
     'refs/heads/verify/r24/windows-arm64-wintun-qualify'
@@ -16,6 +19,9 @@ if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'AresJef/ver
 if ($dataCalibration -and (!(Test-Path -LiteralPath $TcpPeer -PathType Leaf) -or
     !(Test-Path -LiteralPath $Python -PathType Leaf))) {
     throw 'The exact owned receiver and native Python sender are required'
+}
+if ($exerciseSdk -and (!$dataCalibration -or !(Test-Path -LiteralPath $SdkHarness -PathType Leaf))) {
+    throw 'The real two-core case requires the owned calibration and SDK programs'
 }
 
 function Get-WintunPackages {
@@ -258,6 +264,10 @@ public static class OwnedTunQualification
         }
     } else {
         Write-Output 'ARM64_TUN_QUALIFICATION exact_official_archive=true native_arm64=true two_owned_synthetic_syn_packets=true'
+    }
+    if ($exerciseSdk) {
+        & $SdkHarness arm64-owned-wire $TcpPeer $dll $name
+        if ($LASTEXITCODE -ne 0) { throw 'The fixed native SDK did not pass the ARM64 wire conditions' }
     }
     if (((Get-DefaultRouteSnapshot) -join ',') -cne ($defaults -join ',')) {
         throw 'Default route inventory changed'

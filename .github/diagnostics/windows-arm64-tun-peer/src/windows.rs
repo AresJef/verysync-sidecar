@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::env;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
@@ -236,11 +237,103 @@ fn receive_case(
     Err(format!("timeout observing complete TCP calibration for IPv{family} class {class}").into())
 }
 
+enum Mode {
+    Calibration,
+    Relay { family: u8, owned_port: u16 },
+}
+
+fn relay_case(interface: &mut Interface, device: &mut Tun, family: u8, owned_port: u16) -> Report {
+    device.link = LINKS[usize::from(family == 6)];
+    let backend = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, owned_port));
+    let mut sockets = SocketSet::new(Vec::new());
+    let mut socket = tcp::Socket::new(
+        tcp::SocketBuffer::new(vec![0; 128 * 1024]),
+        tcp::SocketBuffer::new(vec![0; 128 * 1024]),
+    );
+    socket.listen((device.link.receiver, PORT))?;
+    let handle = sockets.add(socket);
+    let mut opened = None;
+    let mut received_fin = false;
+    let mut backend_eof = false;
+    let started = WallClock::now();
+    println!("ARM64_TUN_RELAY_READY family={family} native_receiver_port={owned_port}");
+    io::stdout().flush()?;
+
+    while started.elapsed() < Duration::from_secs(75) {
+        interface.poll(Instant::now(), device, &mut sockets);
+        if let Some(error) = device.failure.take() {
+            return Err(error.into());
+        }
+        let socket = sockets.get_mut::<tcp::Socket>(handle);
+        if opened.is_none() && socket.state() == tcp::State::Established {
+            let peer = socket
+                .remote_endpoint()
+                .ok_or("missing controlled TCP source")?;
+            if peer.addr != device.link.sender {
+                return Err("the front connection escaped its isolated peer".into());
+            }
+            let stream = TcpStream::connect_timeout(&backend, Duration::from_secs(3))?;
+            stream.set_nonblocking(true)?;
+            stream.set_nodelay(true)?;
+            let upstream_port = stream.local_addr()?.port();
+            println!(
+                "ARM64_TUN_RELAY_OPEN family={family} source_port={} upstream_source_port={upstream_port} native_receiver_port={owned_port}",
+                peer.port
+            );
+            io::stdout().flush()?;
+            opened = Some((stream, peer.port, upstream_port));
+        }
+        if let Some((stream, source_port, upstream_port)) = opened.as_mut() {
+            if socket.can_recv() {
+                socket.recv(|bytes| match stream.write(bytes) {
+                    Ok(0) => (
+                        0,
+                        Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "relay write ended",
+                        )),
+                    ),
+                    Ok(count) => (count, Ok(())),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => (0, Ok(())),
+                    Err(error) => (0, Err(error)),
+                })??;
+            }
+            if !received_fin && socket.state() == tcp::State::CloseWait && !socket.can_recv() {
+                stream.shutdown(Shutdown::Write)?;
+                received_fin = true;
+            }
+            if !backend_eof && socket.can_send() {
+                backend_eof = socket.send(|space| match stream.read(space) {
+                    Ok(count) => (count, Ok(count == 0)),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => (0, Ok(false)),
+                    Err(error) => (0, Err(error)),
+                })??;
+                if backend_eof {
+                    socket.close();
+                }
+            }
+            if socket.state() == tcp::State::Closed {
+                let stats = device
+                    .flows
+                    .get(source_port)
+                    .filter(|row| row.bytes >= SAMPLE_SIZE && row.packets > 0)
+                    .ok_or("missing full-size actual TCP data for the recorded source port")?;
+                println!(
+                    "ARM64_TUN_RELAY_CLOSED family={family} source_port={source_port} upstream_source_port={upstream_port} tcp_bytes={} packets={} front_fin={received_fin} backend_eof={backend_eof} octets={:?}",
+                    stats.bytes, stats.packets, stats.classes
+                );
+                return Ok(());
+            }
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    Err("the owned TCP relay exceeded its exact 75-second bound".into())
+}
+
 pub fn run() -> Report {
     if !cfg!(target_arch = "aarch64")
         || env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
         || env::var("GITHUB_REPOSITORY").as_deref() != Ok("AresJef/verysync-sidecar")
-        || env::var("GITHUB_REF").as_deref() != Ok("refs/heads/verify/r24/windows-arm64-tun-data")
     {
         return Err("use only the assigned disposable native Windows ARM64 job".into());
     }
@@ -250,6 +343,26 @@ pub fn run() -> Report {
         .next()
         .and_then(|name| name.into_string().ok())
         .ok_or("missing exact owned adapter name")?;
+    let mode = match env::var("GITHUB_REF").as_deref() {
+        Ok("refs/heads/verify/r24/windows-arm64-verysync-wire") if args.len() != 0 => {
+            let family = args
+                .next()
+                .and_then(|value| value.to_str()?.parse::<u8>().ok())
+                .filter(|family| [4, 6].contains(family))
+                .ok_or("missing explicit owned address family")?;
+            let owned_port = args
+                .next()
+                .and_then(|value| value.to_str()?.parse::<u16>().ok())
+                .filter(|port| *port != 0 && *port != PORT)
+                .ok_or("missing exact private receiver loopback port")?;
+            Mode::Relay { family, owned_port }
+        }
+        Ok(
+            "refs/heads/verify/r24/windows-arm64-tun-data"
+            | "refs/heads/verify/r24/windows-arm64-verysync-wire",
+        ) => Mode::Calibration,
+        _ => return Err("the owned TCP test requires a dedicated verification ref".into()),
+    };
     if !path.is_absolute()
         || path.file_name().and_then(|part| part.to_str()) != Some("wintun.dll")
         || !adapter_name.starts_with("VS-Wintun-")
@@ -281,6 +394,9 @@ pub fn run() -> Report {
     });
     if !both_ips_added {
         return Err("the owned layer-3 peer needs both isolated endpoints".into());
+    }
+    if let Mode::Relay { family, owned_port } = mode {
+        return relay_case(&mut interface, &mut device, family, owned_port);
     }
     println!("ARM64_TUN_TCP_READY");
     io::stdout().flush()?;
