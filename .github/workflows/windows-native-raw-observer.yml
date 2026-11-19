@@ -1,0 +1,35 @@
+name: Qualify a native Winsock packet observer
+
+on:
+  push:
+    branches: ['verify/r24/windows-native-raw-observer']
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    name: "Owned IP header qualification (${{ matrix.runner }})"
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2022, windows-11-arm, windows-11-vs2026-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Observe only the owned synthetic TCP streams with native Winsock
+        shell: pwsh
+        env:
+          OWNED_WINDOWS_RAW_OBSERVER: 'true'
+          OWNED_HYPERV_QOS_MECHANISM: qwave
+        run: |
+          git rev-parse HEAD 'HEAD^{tree}'
+          python -I -B -c "import pathlib, runpy, sys; path=pathlib.Path('.github/diagnostics/hyperv-wire').resolve(); sys.path.insert(0,str(path)); runpy.run_path(str(path/'windows-raw-observer.py'),run_name='__main__')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
