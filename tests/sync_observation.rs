@@ -1536,10 +1536,67 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
         })
         .await;
     }
+    // Preserve the original first result. Inspect both depths without writing
+    // files or configuration so later reads cannot hide its assertion.
+    let observations = tokio::time::timeout(Duration::from_secs(10), async {
+        use verysync_sidecar::{RawMethod, RawRequest, RequestEffect, SelectiveTree};
+        let mut counts = [0_usize; 4];
+        let mut first_failure = None;
+        for iteration in 0..32 {
+            let depths = if iteration % 2 == 0 { [1, 2] } else { [2, 1] };
+            for depth in depths {
+                let base = SelectiveBrowseOptions::new(SelectiveScope::FolderRoot).levels(depth);
+                let unfiltered = b.client().browse_selective(folder, &base).await?;
+                let filtered = b.client().browse_selective(folder, &base.directories_only(true)).await?;
+                let request = RawRequest::new(
+                    RawMethod::Get,
+                    ["rest", "db", "browse", "selective"],
+                    RequestEffect::ReadOnly,
+                )?
+                .query("folder", folder.as_str())
+                .query("prefix", "")
+                .query("levels", depth.to_string())
+                .query("dirsonly", "true");
+                let response = b.client().raw_request(&request).await?;
+                let raw: SelectiveTree = serde_json::from_slice(response.body_bytes())?;
+                let nested_only = |tree: &SelectiveTree| {
+                    tree.entries.len() == 1 && tree.entries.get("nested").is_some_and(|entry| entry.is_directory)
+                };
+                let controls = [
+                    unfiltered.entries.get("nested").is_some_and(|entry| entry.is_directory),
+                    nested_only(&filtered),
+                    response.status() == 200 && nested_only(&raw),
+                    filtered.entries.keys().eq(raw.entries.keys()),
+                ];
+                for (passed, count) in controls.iter().zip(&mut counts) {
+                    *count += usize::from(*passed);
+                }
+                if !controls.into_iter().all(|passed| passed) && first_failure.is_none() {
+                    first_failure = Some(json!({
+                        "iteration":iteration,"depth":depth,"native_status":response.status(),
+                        "unfiltered_entries":unfiltered.entries.len(),
+                        "typed_directories":filtered.entries.len(),"raw_directories":raw.entries.len(),
+                        "controls":controls,
+                    }));
+                }
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((counts, first_failure))
+    })
+    .await??;
+    println!(
+        "LINUX_SELECTIVE_MATCHED_READS {}",
+        json!({
+            "paired_depth_reads":64,"unfiltered_nested":observations.0[0],
+            "typed_directory_only":observations.0[1],"actual_raw_directory_only":observations.0[2],
+            "typed_and_raw_keys_equal":observations.0[3],"first_failure":observations.1,
+        })
+    );
     assert_eq!(
         dirs.entries.keys().map(String::as_str).collect::<Vec<_>>(),
         vec!["nested"]
     );
+    assert_eq!(observations.0, [64; 4]);
     let search = SelectiveSearchOptions::new("child")?.limit(1);
     let page = b.client().search_selective(folder, &search).await?;
     assert!(page.search && page.has_more);
