@@ -29,6 +29,8 @@ backend = config["backend_port"]
 if not root.is_dir() or not isinstance(backend, int) or not 0 < backend <= 65535 or backend == 18886:
     raise ValueError("explicit owned backend and private directory required")
 startup_started = time.monotonic()
+backend_ca = config.get("native_tls_ca_for_lost_gui_reply")
+backend_tls = ssl.create_default_context(cadata=backend_ca) if backend_ca is not None else None
 
 
 def startup_phase(phase):
@@ -172,9 +174,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                forwarded_proxy_authorization=any(k.lower() == "proxy-authorization" for k in headers),
                target_authorization=any(k.lower() == "authorization" for k in headers),
                target_api_key=any(k.lower() == "x-api-key" for k in headers))
-        upstream = http.client.HTTPConnection("127.0.0.1", backend, timeout=8)
+        if backend_tls is None:
+            upstream = http.client.HTTPConnection("127.0.0.1", backend, timeout=8)
+        else:
+            upstream = http.client.HTTPSConnection("localhost", backend, timeout=8, context=backend_tls)
         try:
             upstream.request(self.command, path, body, headers)
+            if (backend_tls is not None and self.server.role == "origin"
+                    and self.command == "PATCH" and path == "/rest/config/gui"):
+                # Only the owned test origin with an explicit native CA uses
+                # this branch. Keep the request sent to the real private core.
+                self.close_connection = True
+                try:
+                    upstream_status = upstream.getresponse().status
+                except (http.client.RemoteDisconnected, ConnectionResetError, ssl.SSLEOFError):
+                    upstream_status = None
+                record(role="origin", operation="gui_listener_reply_omitted", upstream_status=upstream_status)
+                return
             response = upstream.getresponse()
             data = response.read(1024 * 1024 + 1)
             if len(data) > 1024 * 1024:

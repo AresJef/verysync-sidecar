@@ -293,10 +293,34 @@ async fn native_listener_tls_address_and_disable_limit_preserve_explicit_owner_c
     println!("native_gui_listener_stage=http_restore");
     let initial_guard = std::net::TcpListener::bind(initial)?;
     drop(initial_guard);
+    let mut omit_reply = if std::env::var_os("VERYSYNC_TEST_GUI_RESTORE_LOST_REPLY").as_deref()
+        == Some(std::ffi::OsStr::new("isolated-native-case"))
+    {
+        Some(
+            management_service::ManagementService::start_with_lost_gui_reply(
+                &root.join("lost-reply-peer"),
+                changed.port(),
+                &ca,
+            )?,
+        )
+    } else {
+        None
+    };
+    let request_client = if let Some(peer) = &omit_reply {
+        connect_listener(
+            ConnectOptions::new(peer.endpoint(true)?, key.clone())
+                .expected_device_id(id.clone())
+                .transport(ManagementTransport::default().trusted_certificates_pem(&peer.pem()?)?)
+                .request_timeout(Duration::from_secs(10))?,
+        )
+        .await?
+    } else {
+        tls
+    };
     let restore_patch = GuiListenerPatch::default()
         .address(GuiListenAddress::tcp(&initial.to_string())?)
         .use_tls(false);
-    let restore = match tls.update_gui_listener(&restore_patch).await {
+    let restore = match request_client.update_gui_listener(&restore_patch).await {
         Ok(receipt) => Some(receipt),
         Err(error @ Error::MutationOutcomeUnknown { .. }) => {
             // The previous listener can close before sending its reply. Resolve
@@ -306,6 +330,25 @@ async fn native_listener_tls_address_and_disable_limit_preserve_explicit_owner_c
         }
         Err(error) => return Err(error.into()),
     };
+    if let Some(peer) = &mut omit_reply {
+        assert!(
+            restore.is_none(),
+            "the test origin must omit the native reply"
+        );
+        let observations = peer.observations()?;
+        let omitted: Vec<_> = observations
+            .iter()
+            .filter(|record| record["operation"] == "gui_listener_reply_omitted")
+            .collect();
+        let patches = observations
+            .iter()
+            .filter(|record| record["method"] == "PATCH")
+            .count();
+        assert_eq!(omitted.len(), 1);
+        assert_eq!(patches, 1, "the native operation must not be replayed");
+        peer.stop()?;
+        println!("native_gui_listener_single_reply_omitted=true");
+    }
     let http = connect_listener(
         ConnectOptions::new(core.client().endpoint().clone(), key.clone())
             .expected_device_id(id.clone())

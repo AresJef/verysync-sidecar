@@ -20,6 +20,18 @@ pub struct ManagementService {
 }
 impl ManagementService {
     pub fn start(root: &Path, backend_port: u16) -> TestResult<Self> {
+        Self::start_fixture(root, backend_port, None)
+    }
+
+    pub fn start_with_lost_gui_reply(
+        root: &Path,
+        backend_port: u16,
+        native_ca: &[u8],
+    ) -> TestResult<Self> {
+        Self::start_fixture(root, backend_port, Some(std::str::from_utf8(native_ca)?))
+    }
+
+    fn start_fixture(root: &Path, backend_port: u16, native_ca: Option<&str>) -> TestResult<Self> {
         std::fs::create_dir(root)?;
         let python = std::env::var_os("VERYSYNC_STORAGE_TEST_PYTHON")
             .ok_or("explicit private management test Python required")?;
@@ -51,7 +63,8 @@ impl ManagementService {
         serde_json::to_writer(
             &mut input,
             &serde_json::json!({"root":root,"backend_port":backend_port,
-            "username":"isolated-proxy-user","password":service.password}),
+            "username":"isolated-proxy-user","password":service.password,
+            "native_tls_ca_for_lost_gui_reply":native_ca}),
         )?;
         input.write_all(b"\n")?;
         drop(input);

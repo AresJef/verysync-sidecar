@@ -1,14 +1,15 @@
-name: Verify the native HTTPS to HTTP transition on Windows AMD64
+name: Verify one lost HTTPS reply with actual HTTP restoration on Windows AMD64
 
 on:
   push:
-    branches: ['verify/r24/windows-gui-http-readback']
+    branches: ['verify/r24/windows-gui-lost-reply']
 
 permissions:
   contents: read
 
 jobs:
   diagnose:
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
     name: 'Exact Windows AMD64 diagnosis (${{ matrix.case }})'
     runs-on: windows-2022
     timeout-minutes: 20
@@ -26,6 +27,7 @@ jobs:
       TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
       VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
       VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
+      VERYSYNC_TEST_GUI_RESTORE_LOST_REPLY: isolated-native-case
       VERYSYNC_TEST_OPENER_TRACE: '0'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -35,8 +37,8 @@ jobs:
       - name: Confirm exact tested candidate parent and fixtures
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "dfb7bc3c1fcaaf9532bd69337fc597e1b5f93e76"
-          git diff --exit-code HEAD^ HEAD -- src Cargo.toml Cargo.lock scripts
+          test "$(git rev-parse HEAD^)" = "61b2b2ca893ace327c8724f470db4c9bc92c6fcb"
+          git diff --exit-code HEAD^ HEAD -- src Cargo.toml Cargo.lock
           git log -1 --format='%H %T %P'
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
