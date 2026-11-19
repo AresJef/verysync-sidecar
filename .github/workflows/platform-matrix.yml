@@ -450,6 +450,7 @@ jobs:
       TARGET_CC: ${{ matrix.cc }}
       TARGET_CXX: ${{ matrix.cxx }}
       TARGET_AR: ${{ matrix.compiler }}-ar
+      MIPS32_UBUNTU_SNAPSHOT: 20261118T120000Z
       VERYSYNC_TEST_EMULATION_PROFILE: ${{ matrix.package }}
       VERYSYNC_CARGO: cargo
       CARGO_PROFILE_DEV_OPT_LEVEL: '3'
@@ -494,10 +495,32 @@ jobs:
           platforms: ${{ matrix.platform }}
           cache-image: false
       - name: Install the explicit GNU cross compiler and controller sysroot
+        env:
+          MANUAL_ELF32: ${{ matrix.manual_registration }}
+          APT_PACKAGES: ${{ matrix.apt }}
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes ${{ matrix.apt }}
-          dpkg-query -W ${{ matrix.apt }}
+          set -euo pipefail
+          apt_options=()
+          if [[ "$MANUAL_ELF32" == true ]]; then
+            snapshot_root="$RUNNER_TEMP/vs-mips32-ubuntu-snapshot"
+            mkdir -p "$snapshot_root/lists"
+            cat > "$snapshot_root/ubuntu.sources" <<EOF
+          Types: deb
+          URIs: https://snapshot.ubuntu.com/ubuntu/$MIPS32_UBUNTU_SNAPSHOT
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Architectures: amd64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+            apt_options=(-o "Dir::Etc::sourcelist=$snapshot_root/ubuntu.sources"
+              -o Dir::Etc::sourceparts=- -o "Dir::State::lists=$snapshot_root/lists"
+              -o Acquire::Languages=none -o APT::Update::Error-Mode=any
+              -o Acquire::Retries=1 -o Acquire::https::Timeout=45)
+          fi
+          read -r -a packages <<< "$APT_PACKAGES"
+          sudo apt-get "${apt_options[@]}" update
+          sudo apt-get "${apt_options[@]}" install --no-install-recommends --yes "${packages[@]}"
+          dpkg-query -W "${packages[@]}"
           "$TARGET_CC" --version
           "$TARGET_CC" -print-sysroot
           "$TARGET_CC" -print-file-name=libc.so
@@ -506,7 +529,7 @@ jobs:
           MANUAL_ELF32: ${{ matrix.manual_registration }}
         run: |
           python - <<'PY'
-          import hashlib, json, os, pathlib, subprocess, urllib.request
+          import hashlib, json, os, pathlib, subprocess, urllib.error, urllib.request
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vs-linux-emulator'
           root.mkdir(mode=0o700)
           name = os.environ['QEMU_BINARY']
@@ -523,12 +546,30 @@ jobs:
               if (name, target) not in candidates or os.environ['RUNNER_ARCH'] != 'X64':
                   raise ValueError('undeclared MIPS32 interpreter or host architecture')
               source_name, source_sha = candidates[(name, target)]
-              url = 'https://security.ubuntu.com/ubuntu/pool/universe/q/qemu/qemu-user-static_8.2.2+ds-0ubuntu1.16_amd64.deb'
+              snapshot_id = os.environ['MIPS32_UBUNTU_SNAPSHOT']
+              snapshot_origin = 'https://snapshot.ubuntu.com/ubuntu/' + snapshot_id
+              archive_origins = (snapshot_origin, 'https://azure.archive.ubuntu.com/ubuntu')
+              package_path = '/pool/universe/q/qemu/qemu-user-static_8.2.2+ds-0ubuntu1.16_amd64.deb'
               package_sha = 'a8f4e6121b7d1710885ba00fdb1e5a8256fb396f12ade2da9ed8a3693ad6d1bd'
-              with urllib.request.urlopen(url, timeout=30) as response:
-                  if response.geturl() != url:
-                      raise ValueError('the fixed Ubuntu package must not redirect')
-                  data = response.read(14628452 + 1)
+
+              class NoRedirect(urllib.request.HTTPRedirectHandler):
+                  def redirect_request(self, request, file, code, message, headers, destination):
+                      return None
+
+              opener = urllib.request.build_opener(NoRedirect())
+              for origin in archive_origins:
+                  url = origin + package_path
+                  try:
+                      with opener.open(url, timeout=30) as response:
+                          if response.geturl() != url:
+                              raise ValueError('the fixed Ubuntu package must not redirect')
+                          data = response.read(14628452 + 1)
+                  except urllib.error.HTTPError as error:
+                      if origin != snapshot_origin or error.code not in (403, 503):
+                          raise
+                      print(f'The Ubuntu Snapshot Service returned HTTP {error.code} for the pinned QEMU archive.')
+                  else:
+                      break
               if len(data) != 14628452 or hashlib.sha256(data).hexdigest() != package_sha:
                   raise ValueError('the fixed Ubuntu package did not match its size and SHA-256')
               package = root / 'qemu-user-static.deb'
