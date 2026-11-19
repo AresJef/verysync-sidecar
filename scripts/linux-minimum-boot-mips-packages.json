@@ -14,5 +14,21 @@
       "size": "21250398",
       "sha256": "43b77577af991cc55f33bc560b25d71dc2be29c3bfc32ea39a5403214148eecc"
     }
+  ],
+  "stretch": [
+    {
+      "package": "busybox-static",
+      "version": "1:1.22.0-19+b3",
+      "filename": "pool/main/b/busybox/busybox-static_1.22.0-19+b3_mips.deb",
+      "size": "812738",
+      "sha256": "6ae69734f196b8c885469df334ea261cba4ab4c1ad41dd879e2d8bb3af0e750e"
+    },
+    {
+      "package": "linux-image-4.9.0-13-4kc-malta",
+      "version": "4.9.228-1",
+      "filename": "pool/main/l/linux/linux-image-4.9.0-13-4kc-malta_4.9.228-1_mips.deb",
+      "size": "32163946",
+      "sha256": "ab380a561590c16bf855eae2efa7ef8480d9c6e34686dc7ed4f852e13090a78f"
+    }
   ]
 }

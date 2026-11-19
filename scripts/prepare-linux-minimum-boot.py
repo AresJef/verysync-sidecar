@@ -18,8 +18,8 @@ KERNELS = {
     "armel": {"wheezy": "3.2.0-4-versatile", "stretch": "4.9.0-13-armmp"},
     "arm-vexpress": {"wheezy": "3.2.0-4-vexpress", "stretch": "4.9.0-13-armmp"},
     "arm64": {"jessie": "3.16.0-6-arm64"},
-    "mips": {"wheezy": "3.2.0-4-4kc-malta"},
-    "mipsel": {"wheezy": "3.2.0-4-4kc-malta"},
+    "mips": {"wheezy": "3.2.0-4-4kc-malta", "stretch": "4.9.0-13-4kc-malta"},
+    "mipsel": {"wheezy": "3.2.0-4-4kc-malta", "stretch": "4.9.0-13-4kc-malta"},
     "s390x": {"wheezy": "3.2.0-4-s390x", "stretch": "4.9.0-13-s390x"},
 }
 ELF_FORMAT = {
@@ -399,6 +399,9 @@ else:
     assert kernel[0x202:0x206] == b"HdrS"
 check = {"CONFIG_BLK_DEV_INITRD", "CONFIG_BINFMT_ELF", "CONFIG_PROC_FS", "CONFIG_SYSFS", "CONFIG_INET"}
 check.update(required_platform[args.architecture])
+if malta and distribution == "stretch":
+    check.remove("CONFIG_CPU_MIPS32_R1")
+    check.add("CONFIG_CPU_MIPS32_R2")
 if args.architecture == "i386" and distribution == "wheezy":
     check.add("CONFIG_X86_PAE")
 if args.runtime_dir is not None:
