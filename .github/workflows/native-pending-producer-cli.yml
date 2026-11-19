@@ -1,0 +1,46 @@
+name: Native pending-device option discovery
+
+on:
+  push:
+    branches: ['verify/native-pending-producer-cli-20261119']
+    paths: ['.github/workflows/native-pending-producer-cli.yml', '.github/diagnostics/pending-cli/**']
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Historical admission option on ${{ matrix.package }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 7
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            package: linux-amd64-standard
+          - runner: windows-2022
+            package: windows-amd64-standard
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Prepare only the exact official image for the current runner
+        shell: bash
+        run: python -B scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}" --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Observe the isolated Linux native help and parser
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          export VS_SIDE_CAR_BASE_NET_NAMESPACE="$(readlink /proc/self/ns/net)"
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP,VERYSYNC_TEST_BINARY,VERYSYNC_TEST_BINARY_SHA256,VS_SIDE_CAR_BASE_NET_NAMESPACE \
+            unshare --net --setgid "$(id -g)" --setuid "$(id -u)" -- \
+            "$(command -v python)" -B .github/diagnostics/pending-cli/pending-cli-probe.py
+      - name: Observe the private Windows native help and parser
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python -B .github/diagnostics/pending-cli/pending-cli-probe.py
+      - name: Verify no process remains for the prepared program
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        shell: bash
+        run: python -B scripts/prepare-test-engine.py check-cleanup
