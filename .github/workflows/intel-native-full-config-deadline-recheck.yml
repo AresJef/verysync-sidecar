@@ -1,0 +1,76 @@
+name: Full native Intel configuration suite with deadline observations
+
+on:
+  push:
+    branches: [verify/r24/intel-full-config-f9171fb]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Complete packaged configuration (${{ matrix.profile }})
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: macos-amd64-standard
+            runner: macos-15-intel
+            rust_host: x86_64-apple-darwin
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          path: candidate
+          ref: f9171fb196948dd378ff8e0d72fe8f5e36605d36
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Verify archived candidate and pinned native compiler
+        working-directory: candidate
+        env:
+          EXPECTED_RUST_HOST: ${{ matrix.rust_host }}
+        run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/mac-config-candidate-target"
+          printf 'CARGO_TARGET_DIR=%s\n' "$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          test "$(rustc +"$TEST_TOOLCHAIN" -vV | sed -n 's/^host: //p')" = "$EXPECTED_RUST_HOST"
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          cargo +"$TEST_TOOLCHAIN" package --no-verify --offline --locked
+          RUSTUP_TOOLCHAIN="$TEST_TOOLCHAIN" python3 -B scripts/publish-github-release.py \
+            --metadata ../.github/diagnostics/intel-native-config-timeout-candidate.json \
+            --check-package "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate"
+      - name: Prepare the matching pinned native fixture
+        working-directory: candidate
+        run: >-
+          python3 scripts/prepare-test-engine.py prepare --package "${{ matrix.profile }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require the original configuration and real file effects
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/mac-config-crate"
+          tar -xzf "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate" -C "$RUNNER_TEMP/mac-config-crate"
+          cd "$RUNNER_TEMP/mac-config-crate/verysync-sidecar-0.1.0-alpha.2"
+          evidence="$RUNNER_TEMP/mac-config-native"
+          python3 scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target configuration_engine --evidence-dir "$evidence"
+          application_log="$evidence/configuration-engine.log"
+          grep -F 'native SOCKS5 disabled generation: observer_started_before_restart=true accepted=0 reconnect_observed_seconds=6' "$application_log"
+          grep -F 'native SOCKS5 proxy evidence:' "$application_log"
+          grep -F 'native incoming admission cleanup:' "$application_log"
+          grep -F 'native signed incoming budget cleanup evidence:' "$application_log"
+          grep -E '^test result: ok. 34 passed; 0 failed; 0 ignored;' "$application_log"
+      - name: Require final exact owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        working-directory: candidate
+        run: python3 scripts/prepare-test-engine.py check-cleanup
