@@ -1,0 +1,203 @@
+"""Frozen-cycle evidence is complete, immutable and bounded on resume."""
+import importlib.util
+import json
+from pathlib import Path
+import re
+import sys
+import tempfile
+import time
+import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+SPEC = importlib.util.spec_from_file_location("resource_collection", Path(__file__).resolve().parents[1] / "collect-native-resources.py")
+COLLECT = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(COLLECT)
+PLAN_SPEC = importlib.util.spec_from_file_location(
+    "resource_plan", Path(__file__).resolve().parents[1] / "plan-resource-collection.py"
+)
+PLAN = importlib.util.module_from_spec(PLAN_SPEC)
+PLAN_SPEC.loader.exec_module(PLAN)
+
+
+class ResourceCollectionContracts(unittest.TestCase):
+    def test_compilation_identity_draft_does_not_duplicate_unrelated_native_acquisition(self):
+        root = Path(__file__).resolve().parents[2]
+        branch = 'ci/compiled-input-resources-v27-20261118-01a1ca9b'
+        workflow = (root / '.github/workflows/engine-tests.yml').read_text()
+        conditions = [line[len('    if: '):] for line in workflow.splitlines()
+                      if line.startswith('    if: ') and branch in line]
+        self.assertEqual(len(conditions), 10)
+        timer = (root / '.github/workflows/macos-timer-diagnostics.yml').read_text()
+        conditions.append(next(line[len('    if: '):] for line in timer.splitlines()
+                               if line.startswith('    if: ')))
+        for event, draft, repo in [('pull_request', True, 'AresJef/verysync-sidecar'),
+                                    ('pull_request', False, 'AresJef/verysync-sidecar'),
+                                    ('pull_request', True, 'external/fork'),
+                                    ('workflow_dispatch', True, 'AresJef/verysync-sidecar')]:
+            github = SimpleNamespace(event_name=event, head_ref=branch,
+                repository='AresJef/verysync-sidecar', event=SimpleNamespace(pull_request=SimpleNamespace(
+                    draft=draft, head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
+            context = {'github': github, 'false': False, 'true': True}
+            for condition in conditions:
+                expression = re.sub(r'!(?!=)', 'not ', condition.replace('&&', ' and ').replace('||', ' or '))
+                actual = eval(expression, {'__builtins__': {}}, context)
+                if event == 'pull_request' and draft and repo == github.repository:
+                    self.assertFalse(actual)
+                else:
+                    github.head_ref = 'unrelated'
+                    self.assertEqual(actual, eval(expression, {'__builtins__': {}}, context))
+                    github.head_ref = branch
+
+    def test_checkout_repair_keeps_ready_manual_and_formal_all_six_native_profiles(self):
+        branch = 'ci/compiled-input-resources-v27-20261118-01a1ca9b'
+        results = []
+        for event, draft, head, repo, labels, expected in [
+            ('pull_request', True, branch, 'AresJef/verysync-sidecar', [], 2),
+            ('pull_request', True, branch, 'AresJef/verysync-sidecar', ['resource-formal'], 6),
+            ('pull_request', False, branch, 'AresJef/verysync-sidecar', [], 6),
+            ('workflow_dispatch', True, branch, 'AresJef/verysync-sidecar', [], 6),
+            ('pull_request', True, branch, 'external/fork', [], 6),
+            ('pull_request', True, 'unrelated', 'AresJef/verysync-sidecar', [], 6),
+        ]:
+            payload = {"pull_request": {"draft": draft, "head": {"ref": head, "repo": {"full_name": repo}},
+                                        "labels": [{"name": label} for label in labels]}}
+            actual, deferred = PLAN.select_profiles(event, PLAN.REPOSITORY, "refs/pull/1/merge", payload)
+            self.assertEqual(len(actual), expected)
+            self.assertEqual(len({row['package'] for row in actual}), expected)
+            self.assertFalse(deferred)
+            results.append(actual)
+        self.assertEqual(results[0], [row for row in results[1] if row['package'].startswith('windows-')])
+        self.assertTrue(all(value == results[1] for value in results[1:]))
+
+    def test_r23_only_defers_intel_measurement_on_the_owned_candidate_push(self):
+        branch = PLAN.R23_REF + "first-stable"
+        repo = PLAN.REPOSITORY
+        event = {"ref": branch, "repository": {"full_name": repo}, "deleted": False}
+        profiles, deferred = PLAN.select_profiles("push", repo, branch, event)
+        full, _ = PLAN.select_profiles("workflow_dispatch", repo, branch, event)
+        self.assertEqual(deferred, "macos-amd64-standard")
+        self.assertEqual(len(full), 6)
+        self.assertEqual(profiles, [row for row in full if row["package"] != deferred])
+        for name, repository, ref, payload in (
+            ("workflow_dispatch", repo, branch, event), ("pull_request", repo, branch, event),
+            ("push", repo, branch, event | {"deleted": True}),
+            ("push", repo, branch, event | {"ref": "refs/heads/main"}),
+            ("push", repo, branch, event | {"repository": {"full_name": "fork/verysync-sidecar"}}),
+            ("push", "fork/verysync-sidecar", branch, event),
+            ("push", repo, PLAN.R23_REF, event | {"ref": PLAN.R23_REF}),
+        ):
+            with self.subTest(name=name, repository=repository, ref=ref, payload=payload):
+                self.assertEqual(PLAN.select_profiles(name, repository, ref, payload), (full, ""))
+
+    def test_owned_introduction_draft_leaves_resource_collection_to_the_frozen_candidate(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/resource-collection.yml').read_text()
+        expression = next(line[len('    if: '):] for line in workflow.splitlines()
+                          if line.startswith('    if: '))
+        expression = expression.replace('github.event.pull_request.labels.*.name', 'labels')
+        expression = re.sub(r'!(?!=)', 'not ', expression.replace('&&', ' and ').replace('||', ' or '))
+        repository = 'AresJef/verysync-sidecar'
+        branch = 'test/native-introduction-encryption-20261118-01a1ca9b'
+        for event, draft, head, origin, labels, expected in [
+            ('pull_request', True, branch, repository, [], False),
+            ('pull_request', True, branch, repository, ['resource-formal'], True),
+            ('pull_request', False, branch, repository, [], True),
+            ('pull_request', True, branch, 'external/fork', [], True),
+            ('pull_request', True, 'unrelated', repository, [], True),
+            ('workflow_dispatch', True, branch, repository, [], True),
+        ]:
+            with self.subTest(event=event, draft=draft, head=head, origin=origin, labels=labels):
+                action = 'labeled' if labels else 'synchronize'
+                github = SimpleNamespace(event_name=event, head_ref=head, repository=repository,
+                    event=SimpleNamespace(action=action, label=SimpleNamespace(name=next(iter(labels), None)),
+                        pull_request=SimpleNamespace(draft=draft,
+                            head=SimpleNamespace(repo=SimpleNamespace(full_name=origin)))))
+                actual = eval(expression, {'__builtins__': {}}, {'github': github, 'labels': labels,
+                    'contains': lambda values, value: value in values})
+                self.assertEqual(actual, expected)
+
+    def test_host_text_newlines_cannot_change_durable_record_bytes(self):
+        original = COLLECT.tempfile.NamedTemporaryFile
+        def windows_text_default(*args, **kwargs):
+            if "b" not in kwargs.get("mode", "w+b"):
+                kwargs.setdefault("newline", "\r\n")
+            return original(*args, **kwargs)
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "record.json"
+            value = {"frozen": "identity", "attempt": 1}
+            with patch.object(COLLECT.tempfile, "NamedTemporaryFile", side_effect=windows_text_default):
+                COLLECT.save(path, value)
+            self.assertEqual(path.read_bytes(), (json.dumps(value, indent=2)+"\n").encode())
+
+    def test_frozen_bytes_are_copied_without_reserializing_the_protocol(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "frozen.json"
+            original = b'{"frozen":"identity"}\r\n'
+            COLLECT.save_bytes(path, original)
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_missing_or_wrong_original_order_never_reaches_metric_acceptance(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); order = ["idle", "stream-small", "stream-large", "many-small"]
+            COLLECT.save(root / "frozen-protocol.json", {"formal_orders": [order]})
+            fingerprint = COLLECT.digest(root / "frozen-protocol.json")
+            metrics = Mock()
+            for supplied in [order[:-1], list(reversed(order))]:
+                manifest = {"cycle": 0, "order": order, "slots": [{"scenario": s} for s in supplied]}
+                with self.assertRaisesRegex(ValueError, "coverage"):
+                    COLLECT.verify_group(manifest, root, fingerprint, "formal", metrics)
+            metrics.summarize.assert_not_called()
+
+    def test_raw_hash_or_frozen_source_mismatch_is_rejected(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); order = ["idle"]
+            COLLECT.save(root / "frozen-protocol.json", {"formal_orders": [order], "source_inputs": {"sampler_sha256": "expected"}})
+            folder = root / "slot"; folder.mkdir()
+            for filename in ["preparation-result.json", "samples.jsonl", "events.jsonl", "quality-result.json"]:
+                COLLECT.save(folder / filename, {})
+            COLLECT.save(folder / "preparation-result.json", {"stage": "formal", "protocol_sha256": COLLECT.digest(root / "frozen-protocol.json"), "source": {"sampler_sha256": "changed"}})
+            hashes = {p.name: COLLECT.digest(p) for p in folder.iterdir()}
+            manifest = {"cycle": 0, "order": order, "slots": [{"scenario": "idle", "directory": "slot", "sha256": hashes}]}
+            metrics = Mock()
+            with self.assertRaisesRegex(ValueError, "source"):
+                COLLECT.verify_group(manifest, root, COLLECT.digest(root / "frozen-protocol.json"), "formal", metrics)
+            (folder / "samples.jsonl").write_text("changed\n")
+            with self.assertRaisesRegex(ValueError, "raw record"):
+                COLLECT.verify_group(manifest, root, COLLECT.digest(root / "frozen-protocol.json"), "formal", metrics)
+            metrics.summarize.assert_not_called()
+
+    def test_expired_resume_preserves_deadline_and_starts_no_new_group(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); protocol = root / "protocol.json"
+            config = {"collector_sha256": COLLECT.digest(SPEC.origin), "source_inputs": {},
+                      "formal_orders": [["idle"]], "maximum_group_attempts": 3,
+                      "estimated_complete_group_s": 120, "save_reserve_s": 30}
+            COLLECT.save(protocol, config)
+            original = time.time()-1
+            state = {"protocol_sha256": COLLECT.digest(protocol), "stage": "formal", "deadline_unix": original,
+                     "accepted": {}, "attempts": {}, "status": "INCOMPLETE"}
+            COLLECT.save(root / "collection-state.json", state)
+            metrics = Mock(); metrics.source_identity.return_value = {}
+            argv = [str(SPEC.origin), "--stage", "formal", "--resume", "--protocol", str(protocol),
+                    "--evidence-dir", str(root), "--cargo", "/synthetic/not-executed"]
+            with patch.object(sys, "argv", argv), patch.object(COLLECT, "metrics_module", return_value=metrics), patch.object(COLLECT.subprocess, "run") as run:
+                self.assertEqual(COLLECT.main(), 2)
+                run.assert_not_called()
+            saved = json.loads((root / "collection-state.json").read_text())
+            self.assertEqual(saved["deadline_unix"], original)
+            self.assertEqual(saved["attempts"], {})
+
+    def test_committed_protocol_binds_actual_collector_and_sampler_sources(self):
+        root = Path(__file__).resolve().parents[2]
+        config = json.loads((root / "tests/fixtures/resource-protocol.json").read_text())
+        self.assertEqual(config["collector_sha256"], COLLECT.digest(SPEC.origin))
+        self.assertEqual(config["source_inputs"]["sampler_sha256"], COLLECT.digest(root / "scripts/measure-native-resources.py"))
+        self.assertEqual(config["source_inputs"]["wrapper_sha256"], COLLECT.digest(root / "scripts/run-isolated-engine-tests.py"))
+        self.assertEqual(config["preflight_sha256"], COLLECT.digest(root / "scripts/preflight-native-resources.py"))
+        self.assertEqual(config["reporter_sha256"], COLLECT.digest(root / "scripts/report-native-resources.py"))
+        self.assertEqual(len(config["formal_orders"]), 4)
+        self.assertEqual(len(config["independent_orders"]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

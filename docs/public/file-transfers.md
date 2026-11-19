@@ -13,6 +13,25 @@ Content-Disposition filenames are never used. Existing parent directories must
 already exist and belong to a location the caller trusts. This is not a
 filesystem sandbox against a concurrent actor changing those directories.
 
+Local parent components and directory links retain the controller operating
+system's own path semantics. The SDK does not lexically collapse a link followed
+by `..` or assume that Windows and POSIX resolve that input identically. Remote
+`ResourcePath` components instead retain the connected target's syntax and
+reject parent traversal. Case sensitivity and Unicode filename equivalence are
+properties of the actual target filesystem; the SDK does not normalize or fold
+the names to infer those properties.
+
+A dedicated native test independently probes the filesystem before checking
+actual metadata/content/checksums and a download through a linked local parent.
+It exercises a real path exceeding 320 UTF-16 units, literal Chinese/percent/space
+names, case and Unicode-equivalent name pairs, and a remote directory link.
+Native paths that cannot be represented in the management protocol must return
+`PathEncoding` while preserving the complete native folder configuration. Local
+download destinations use native filesystem operations without that protocol
+conversion. A local macOS run has passed; complete
+current-source target evidence remains independently required. This test does
+not establish support beyond the target filesystem's own limits.
+
 ```rust,no_run
 # async fn transfer(client: &verysync_sidecar::Client,
 #     remote: &verysync_sidecar::ResourcePath,
@@ -58,6 +77,14 @@ Individual management reads, including checksum requests, retain the connection'
 request timeout and buffered-response bound. Streamed payloads bypass the small
 management-body buffer without buffering the complete file. No throughput,
 process-memory or disk-durability guarantee is implied by these limits.
+
+Stopping the owned engine can interrupt a transfer independently of cancelling
+its Rust future. A native fault test explicitly force-stops the exact owned tree
+after a nonempty incomplete download, requires a connection/integrity error, and
+checks the retained bytes against the source prefix. It then explicitly restarts
+the same state, verifies identity and configuration, and downloads the complete
+source into a new destination without changing the old partial file. A local
+macOS run has passed; the current six-profile fault evidence remains required.
 
 Ordinary receive failures flush accepted local writes before returning. A
 deadline can interrupt this flush. On failure or cancellation, a new output can remain empty
@@ -105,3 +132,19 @@ These APIs are unreleased. Native effects are verified locally on macOS ARM64;
 the complete same-source multi-platform acceptance is pending. Archive decoding
 libraries used by the isolated tests are development dependencies and are not
 required by applications using these streaming methods.
+
+## Real disk-full boundary
+
+The interruption fixture performs large synthetic-file generation and independent
+hash verification on Tokio's blocking pool. These checks preserve the full byte
+and hash assertions while allowing the single-threaded test runtime to service
+the management connection before the final normal shutdown.
+
+The explicit CI driver `scripts/run-bounded-disk-full-tests.py` provisions a small owned filesystem only in the matching GitHub runner environment. It uses a private tmpfs on Linux, an owned disk image on macOS, and an owned VHD on Windows. Actual capacity is checked by both the driver and the Rust case before creating payloads. No physical disk is selected, and cleanup checks the exact mount or image identity. The driver is never invoked by Cargo builds or library calls.
+
+After verified detach, the driver removes only its exact mount-directory entry,
+including a dangling Windows volume mount point whose target no longer exists.
+Unknown siblings still cause a cleanup failure; cleanup never recursively walks
+a mounted filesystem. Native provisioning failures retain bounded diagnostics.
+
+The `disk_full_engine` case requires a real native disk-full local I/O error while streaming a 64 MiB resource to that filesystem. It verifies the nonempty retained prefix, source bytes, configuration, identity, and volume sentinel. Only the caller explicitly removes its partial output; a new 1 MiB download must then complete and match its hash. Engine state and source data remain outside the bounded filesystem. Native results on all six standard platform profiles are pending; compilation and fixture guard tests do not establish disk-full acceptance.

@@ -816,12 +816,20 @@ impl Client {
                 },
             )
         })?;
+        // A complete native run can legitimately contain an execution error.
+        // Only this exact run route and fully valid record schema distinguish
+        // it from an API-error envelope. Identity is still checked by its caller.
+        let native_run_record = parts.len() == 3
+            && parts[0] == "jobs"
+            && parts[2] == "run"
+            && serde_json::from_value::<LocalSyncRun>(decoded.clone()).is_ok();
         // Local Sync also uses HTTP-success error envelopes; preserve any extra
         // native error-code fields rather than accepting a malformed success.
         if decoded
             .get("error")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|e| !e.is_empty())
+            && !native_run_record
         {
             return Err(mutation_error(
                 operation,
@@ -878,13 +886,23 @@ fn requested_subset(expected: &serde_json::Value, actual: &serde_json::Value) ->
                     selected_job_setting_matches(key, v, Some(actual))
                 }
                 Some(actual) => requested_subset(v, actual),
-                // Verified v2.33.2 endpoint serialization omits disabled SSH
-                // compression. Only this known SFTP false default is equivalent;
-                // missing credentials, true values and null remain mismatches.
+                // Verified v2.33.2 endpoint serialization omits false TLS
+                // bypass flags. SFTP also omits disabled compression and an
+                // empty password for explicit private-key authentication.
+                // Explicit null, enabled bypass and unknown options still fail.
                 None => {
-                    key == "enableCompression"
+                    let protocol = a.get("fsType").and_then(serde_json::Value::as_str);
+                    (key == "insecureTls"
                         && v == &serde_json::Value::Bool(false)
-                        && a.get("fsType").and_then(serde_json::Value::as_str) == Some("sftp")
+                        && matches!(protocol, Some("sftp" | "webdav")))
+                        || (protocol == Some("sftp")
+                            && ((key == "enableCompression"
+                                && v == &serde_json::Value::Bool(false))
+                                || (key == "password"
+                                    && v.as_str() == Some("")
+                                    && a.get("privateKey")
+                                        .and_then(serde_json::Value::as_str)
+                                        .is_some_and(|key| !key.is_empty()))))
                 }
             }
         }),
@@ -899,6 +917,66 @@ fn unknown(operation: &'static str, source: Error) -> Error {
 mod subset_contracts {
     use super::{requested_subset, selected_job_setting_matches};
     use serde_json::json;
+    #[test]
+    fn only_known_storage_tls_false_defaults_can_be_omitted() {
+        for protocol in ["webdav", "sftp"] {
+            let expected = json!({"fsType": protocol, "insecureTls": false});
+            assert!(requested_subset(&expected, &json!({"fsType": protocol})));
+            assert!(requested_subset(&expected, &expected));
+            for actual in [
+                json!({"fsType": protocol, "insecureTls": true}),
+                json!({"fsType": protocol, "insecureTls": null}),
+                json!({"fsType": protocol, "insecureTls": "false"}),
+                json!({"fsType": "unknown"}),
+            ] {
+                assert!(!requested_subset(&expected, &actual));
+            }
+            assert!(!requested_subset(
+                &json!({"fsType": protocol, "insecureTls": true}),
+                &json!({"fsType": protocol})
+            ));
+            assert!(!requested_subset(
+                &json!({"fsType": protocol, "unverifiedFlag": false}),
+                &json!({"fsType": protocol})
+            ));
+        }
+        for protocol in ["basic", "ftp", "smb", "unknown"] {
+            assert!(!requested_subset(
+                &json!({"fsType": protocol, "insecureTls": false}),
+                &json!({"fsType": protocol})
+            ));
+        }
+        assert!(!requested_subset(
+            &json!({"insecureTls": false}),
+            &json!({})
+        ));
+    }
+    #[test]
+    fn sftp_key_readback_only_equates_missing_empty_password_with_explicit_key() {
+        let expected = json!({"fsType":"sftp","privateKey":"private-pem","password":""});
+        assert!(requested_subset(
+            &expected,
+            &json!({"fsType":"sftp","privateKey":"private-pem"})
+        ));
+        for actual in [
+            json!({"fsType":"sftp"}),
+            json!({"fsType":"sftp","privateKey":"different"}),
+            json!({"fsType":"sftp","privateKey":"private-pem","password":null}),
+        ] {
+            assert!(!requested_subset(&expected, &actual));
+        }
+        for expected in [
+            json!({"fsType":"ftp","privateKey":"private-pem","password":""}),
+            json!({"fsType":"sftp","privateKey":"","password":""}),
+            json!({"fsType":"sftp","password":""}),
+            json!({"fsType":"sftp","privateKey":"private-pem","password":"required"}),
+        ] {
+            assert!(!requested_subset(
+                &expected,
+                &json!({"fsType":"sftp","privateKey":"private-pem"})
+            ));
+        }
+    }
     #[test]
     fn only_the_observed_sftp_compression_false_default_can_be_omitted() {
         assert!(selected_job_setting_matches(

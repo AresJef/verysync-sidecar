@@ -1,0 +1,12 @@
+{
+  "draft_cases": [
+    {
+      "target": "p2p_three_nodes",
+      "filter": "introducer_cases"
+    },
+    {
+      "target": "configuration_engine",
+      "filter": "encrypted_folder_cases"
+    }
+  ]
+}

@@ -5,6 +5,55 @@ use crate::{
 };
 
 impl Client {
+    /// Read the global default template without reading or changing ignore files.
+    pub async fn default_ignore_patterns(&self) -> Result<crate::IgnoreDefaults> {
+        self.system_status().await?;
+        self.connection
+            .get_json(
+                "read default ignore patterns",
+                "rest/config/defaults/ignores",
+            )
+            .await
+    }
+
+    /// Replace the global template once, retaining unknown native fields and
+    /// returning complete actual readback. Empty explicitly selects no lines.
+    /// This does not parse rules, alter existing ignore files or retry a write.
+    /// Independent writers are not coordinated by the shared Client clone lock.
+    pub async fn set_default_ignore_patterns(
+        &self,
+        patterns: &IgnorePatterns,
+    ) -> Result<crate::ConfigurationSectionUpdate<crate::IgnoreDefaults>> {
+        let _guard = self.connection.mutation_lock.lock().await;
+        let mut desired = self.default_ignore_patterns().await?;
+        desired.lines = patterns.patterns().to_owned();
+        let body = serde_json::to_value(&desired).map_err(|_| Error::InvalidConfiguration {
+            reason: "default ignore template cannot be encoded",
+        })?;
+        let url = self
+            .connection
+            .management_url("rest/config/defaults/ignores", &[])?;
+        self.connection
+            .request_bytes(
+                "replace default ignore patterns",
+                reqwest::Method::PUT,
+                url,
+                Some(&body),
+                true,
+            )
+            .await?;
+        let configuration = self.default_ignore_patterns().await.map_err(|source| {
+            Error::MutationOutcomeUnknown {
+                operation: "read back default ignore patterns",
+                source: Box::new(source),
+            }
+        })?;
+        Ok(crate::ConfigurationSectionUpdate {
+            requested_fields_match: configuration == desired,
+            configuration,
+        })
+    }
+
     /// Read current rules and parser diagnostics without changing the file.
     /// A malformed stored file is an observable snapshot with parse_error set.
     pub async fn ignore_patterns(&self, folder: &FolderId) -> Result<IgnoreSnapshot> {

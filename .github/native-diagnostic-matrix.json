@@ -1,0 +1,2295 @@
+[
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "devices",
+    "label": "device-control-acceptance",
+    "filter": "actual_",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "devices",
+    "label": "device-control-acceptance",
+    "filter": "actual_",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "devices",
+    "label": "device-control-acceptance",
+    "filter": "actual_",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "devices",
+    "label": "device-control-acceptance",
+    "filter": "actual_",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "devices",
+    "label": "device-control-acceptance",
+    "filter": "actual_",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "devices",
+    "label": "device-control-acceptance",
+    "filter": "actual_",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "label": "default-ignore-template",
+    "filter": "native_default_ignore_template",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "label": "default-ignore-template",
+    "filter": "native_default_ignore_template",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "label": "default-ignore-template",
+    "filter": "native_default_ignore_template",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "label": "default-ignore-template",
+    "filter": "native_default_ignore_template",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "label": "default-ignore-template",
+    "filter": "native_default_ignore_template",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "label": "default-ignore-template",
+    "filter": "native_default_ignore_template",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "label": "whole-section-replacement",
+    "filter": "native_whole_section",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "label": "whole-section-replacement",
+    "filter": "native_whole_section",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "label": "whole-section-replacement",
+    "filter": "native_whole_section",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "label": "whole-section-replacement",
+    "filter": "native_whole_section",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "label": "whole-section-replacement",
+    "filter": "native_whole_section",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "label": "whole-section-replacement",
+    "filter": "native_whole_section",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "label": "narrow-config-reads",
+    "filter": "native_narrow_configuration_reads_preserve_identity_folders_and_state",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "label": "narrow-config-reads",
+    "filter": "native_narrow_configuration_reads_preserve_identity_folders_and_state",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "label": "narrow-config-reads",
+    "filter": "native_narrow_configuration_reads_preserve_identity_folders_and_state",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "label": "narrow-config-reads",
+    "filter": "native_narrow_configuration_reads_preserve_identity_folders_and_state",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "label": "narrow-config-reads",
+    "filter": "native_narrow_configuration_reads_preserve_identity_folders_and_state",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "label": "narrow-config-reads",
+    "filter": "native_narrow_configuration_reads_preserve_identity_folders_and_state",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "label": "inline-sftp-key",
+    "filter": "public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "label": "inline-sftp-key",
+    "filter": "public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "label": "inline-sftp-key",
+    "filter": "public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "label": "inline-sftp-key",
+    "filter": "public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "label": "inline-sftp-key",
+    "filter": "public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "label": "inline-sftp-key",
+    "filter": "public_sftp_inline_key_copies_real_bytes_and_preserves_native_probe_boundary",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "upgrade_engine",
+    "label": "official-provider-cli",
+    "filter": "stopped_owner_cli_checks_and_upgrades_the_dedicated_program",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "authentication_engine",
+    "label": "native-local-api",
+    "filter": "native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_state",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "authentication_engine",
+    "label": "native-local-api",
+    "filter": "native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_state",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "authentication_engine",
+    "label": "native-local-api",
+    "filter": "native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_state",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "authentication_engine",
+    "label": "native-local-api",
+    "filter": "native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_state",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "authentication_engine",
+    "label": "native-local-api",
+    "filter": "native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_state",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "authentication_engine",
+    "label": "native-local-api",
+    "filter": "native_local_api_explicit_startup_and_no_gui_key_reads_preserve_owned_state",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "file_transfer_engine",
+    "label": "process-failure-recovery",
+    "filter": "public_owned_process_failure_retains_partial_download_and_recovers_explicitly",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "file_transfer_engine",
+    "label": "process-failure-recovery",
+    "filter": "public_owned_process_failure_retains_partial_download_and_recovers_explicitly",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "file_transfer_engine",
+    "label": "process-failure-recovery",
+    "filter": "public_owned_process_failure_retains_partial_download_and_recovers_explicitly",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "file_transfer_engine",
+    "label": "process-failure-recovery",
+    "filter": "public_owned_process_failure_retains_partial_download_and_recovers_explicitly",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "file_transfer_engine",
+    "label": "process-failure-recovery",
+    "filter": "public_owned_process_failure_retains_partial_download_and_recovers_explicitly",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "file_transfer_engine",
+    "label": "process-failure-recovery",
+    "filter": "public_owned_process_failure_retains_partial_download_and_recovers_explicitly",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "file_transfer_engine",
+    "filter": "public_native_paths_match_long_unicode_case_and_link_filesystem_effects",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "file_transfer_engine",
+    "filter": "public_native_paths_match_long_unicode_case_and_link_filesystem_effects",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "file_transfer_engine",
+    "filter": "public_native_paths_match_long_unicode_case_and_link_filesystem_effects",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "file_transfer_engine",
+    "filter": "public_native_paths_match_long_unicode_case_and_link_filesystem_effects",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "file_transfer_engine",
+    "filter": "public_native_paths_match_long_unicode_case_and_link_filesystem_effects",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "file_transfer_engine",
+    "filter": "public_native_paths_match_long_unicode_case_and_link_filesystem_effects",
+    "trace": "0"
+  },
+  {
+    "package": "windows-386-standard",
+    "runner": "windows-2022",
+    "rust": "i686-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_folder_open_requests_capture_exact_owned_target_dispatch",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_folder_open_requests_capture_exact_owned_target_dispatch",
+    "trace": "1"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_folder_open_requests_capture_exact_owned_target_dispatch",
+    "trace": "1"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "maintenance_engine",
+    "filter": "actual_",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "maintenance_engine",
+    "filter": "actual_",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "disk_full_engine",
+    "filter": "public_real_disk_full_retains_prefix_and_recovers_after_explicit_release",
+    "label": "real-disk-full",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "disk_full_engine",
+    "filter": "public_real_disk_full_retains_prefix_and_recovers_after_explicit_release",
+    "label": "real-disk-full",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "disk_full_engine",
+    "filter": "public_real_disk_full_retains_prefix_and_recovers_after_explicit_release",
+    "label": "real-disk-full",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "disk_full_engine",
+    "filter": "public_real_disk_full_retains_prefix_and_recovers_after_explicit_release",
+    "label": "real-disk-full",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "disk_full_engine",
+    "filter": "public_real_disk_full_retains_prefix_and_recovers_after_explicit_release",
+    "label": "real-disk-full",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "disk_full_engine",
+    "filter": "public_real_disk_full_retains_prefix_and_recovers_after_explicit_release",
+    "label": "real-disk-full",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "file_history_engine",
+    "filter": "public_remote_",
+    "label": "remote-version-archives",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "file_history_engine",
+    "filter": "public_remote_",
+    "label": "remote-version-archives",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "file_history_engine",
+    "filter": "public_remote_",
+    "label": "remote-version-archives",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "file_history_engine",
+    "filter": "public_remote_",
+    "label": "remote-version-archives",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "file_history_engine",
+    "filter": "public_remote_",
+    "label": "remote-version-archives",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "file_history_engine",
+    "filter": "public_remote_",
+    "label": "remote-version-archives",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "files_engine",
+    "filter": "public_native_thumbnails",
+    "label": "thumbnail-cache",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "files_engine",
+    "filter": "public_native_thumbnails",
+    "label": "thumbnail-cache",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "files_engine",
+    "filter": "public_native_thumbnails",
+    "label": "thumbnail-cache",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "files_engine",
+    "filter": "public_native_thumbnails",
+    "label": "thumbnail-cache",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "files_engine",
+    "filter": "public_native_thumbnails",
+    "label": "thumbnail-cache",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "files_engine",
+    "filter": "public_native_thumbnails",
+    "label": "thumbnail-cache",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data",
+    "label": "native-socks5-proxy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data",
+    "label": "native-socks5-proxy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data",
+    "label": "native-socks5-proxy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data",
+    "label": "native-socks5-proxy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data",
+    "label": "native-socks5-proxy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data",
+    "label": "native-socks5-proxy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "engine_control",
+    "filter": "actual_native_helpers_",
+    "label": "native-helper-effects",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "engine_control",
+    "filter": "actual_native_helpers_",
+    "label": "native-helper-effects",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "engine_control",
+    "filter": "actual_native_helpers_",
+    "label": "native-helper-effects",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "engine_control",
+    "filter": "actual_native_helpers_",
+    "label": "native-helper-effects",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_helpers_",
+    "label": "native-helper-effects",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_helpers_",
+    "label": "native-helper-effects",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_ftp_",
+    "label": "ftp-disconnect-recovery",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data",
+    "label": "remote-device-name-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data",
+    "label": "remote-device-name-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data",
+    "label": "remote-device-name-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data",
+    "label": "remote-device-name-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data",
+    "label": "remote-device-name-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_remote_device_name_policy_uses_global_selection_and_preserves_real_data",
+    "label": "remote-device-name-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "ldap_trusted_ca_engine",
+    "filter": "native_trusted_ca_",
+    "label": "ldap-verified-transport",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "ldap_trusted_ca_engine",
+    "filter": "native_trusted_ca_",
+    "label": "ldap-verified-transport",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "ldap_trusted_ca_engine",
+    "filter": "native_trusted_ca_",
+    "label": "ldap-verified-transport",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "ldap_trusted_ca_engine",
+    "filter": "native_trusted_ca_",
+    "label": "ldap-verified-transport",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "ldap_trusted_ca_engine",
+    "filter": "native_trusted_ca_",
+    "label": "ldap-verified-transport",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "ldap_trusted_ca_engine",
+    "filter": "native_trusted_ca_",
+    "label": "ldap-verified-transport",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_home_free_threshold_blocks_index_updates_and_explicit_reset_recovers",
+    "label": "native-home-free-space-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart",
+    "label": "native-temporary-retention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart",
+    "label": "native-temporary-retention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart",
+    "label": "native-temporary-retention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart",
+    "label": "native-temporary-retention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart",
+    "label": "native-temporary-retention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart",
+    "label": "native-temporary-retention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
+    "label": "native-sleep-prevention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
+    "label": "native-sleep-prevention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_folder_concurrency_has_ordered_single_and_double_sync_effects",
+    "label": "native-folder-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer",
+    "label": "native-dial-missing-original-gates",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer",
+    "label": "native-dial-missing-original-gates",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer",
+    "label": "native-dial-missing-original-gates",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer",
+    "label": "native-dial-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer",
+    "label": "native-dial-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_dial_concurrency_limits_one_device_pending_targets_and_recovers_real_transfer",
+    "label": "native-dial-concurrency-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_signed_incoming_request_budgets_survive_restart_and_real_transfers",
+    "label": "native-signed-incoming-budget",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_signed_incoming_request_budgets_survive_restart_and_real_transfers",
+    "label": "native-signed-incoming-budget",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_signed_incoming_request_budgets_survive_restart_and_real_transfers",
+    "label": "native-signed-incoming-budget",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_signed_incoming_request_budgets_survive_restart_and_real_transfers",
+    "label": "native-signed-incoming-budget",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_signed_incoming_request_budgets_survive_restart_and_real_transfers",
+    "label": "native-signed-incoming-budget",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_signed_incoming_request_budgets_survive_restart_and_real_transfers",
+    "label": "native-signed-incoming-budget",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_general_signed_integer_domains_survive_partial_full_saves_and_restart",
+    "label": "native-general-signed-domains",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_general_signed_integer_domains_survive_partial_full_saves_and_restart",
+    "label": "native-general-signed-domains",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_general_signed_integer_domains_survive_partial_full_saves_and_restart",
+    "label": "native-general-signed-domains",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_general_signed_integer_domains_survive_partial_full_saves_and_restart",
+    "label": "native-general-signed-domains",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_general_signed_integer_domains_survive_partial_full_saves_and_restart",
+    "label": "native-general-signed-domains",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_general_signed_integer_domains_survive_partial_full_saves_and_restart",
+    "label": "native-general-signed-domains",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "sync_observation",
+    "filter": "actual_folder_order_and_specific_priority_change_preserve_samples",
+    "label": "native-priority-queue",
+    "trace": "0"
+  },
+  {
+    "package": "windows-386-standard",
+    "runner": "windows-2022",
+    "rust": "i686-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_helpers_consume_official_add_url_before_native_start_refusal",
+    "label": "native-link-producer-win386",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "upgrade_engine",
+    "filter": "kernel_streamed_archive_upload_replaces_only_the_owned_old_copy",
+    "label": "native-kernel-upload-windows",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "upgrade_engine",
+    "filter": "kernel_streamed_archive_upload_replaces_only_the_owned_old_copy",
+    "label": "native-kernel-upload-windows",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
+    "label": "native-windows-sleep-prevention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_sleep_prevention_tracks_actual_owned_assertions_during_transfer",
+    "label": "native-windows-sleep-prevention-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_temporary_index_threshold_controls_partial_block_advertisement",
+    "label": "native-temporary-index-minimum-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_temporary_index_threshold_controls_partial_block_advertisement",
+    "label": "native-temp-advertisement-missing-original-gate",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_temporary_index_threshold_controls_partial_block_advertisement",
+    "label": "native-temporary-index-minimum-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_temporary_index_threshold_controls_partial_block_advertisement",
+    "label": "native-temporary-index-minimum-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_temporary_index_threshold_controls_partial_block_advertisement",
+    "label": "native-temporary-index-minimum-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_temporary_index_threshold_controls_partial_block_advertisement",
+    "label": "native-temporary-index-minimum-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "upgrade_engine",
+    "filter": "native_full_index_upgrade_policy_changes_actual_unchanged_index_resend",
+    "label": "native-full-index-upgrade-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "upgrade_engine",
+    "filter": "native_full_index_upgrade_policy_changes_actual_unchanged_index_resend",
+    "label": "native-full-index-upgrade-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "upgrade_engine",
+    "filter": "native_full_index_upgrade_policy_changes_actual_unchanged_index_resend",
+    "label": "native-full-index-upgrade-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "upgrade_engine",
+    "filter": "native_full_index_upgrade_policy_changes_actual_unchanged_index_resend",
+    "label": "native-full-index-upgrade-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "upgrade_engine",
+    "filter": "native_full_index_upgrade_policy_changes_actual_unchanged_index_resend",
+    "label": "native-full-index-upgrade-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "upgrade_engine",
+    "filter": "native_full_index_upgrade_policy_changes_actual_unchanged_index_resend",
+    "label": "native-full-index-upgrade-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "label": "trusted-https-identity",
+    "filter": "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "label": "trusted-https-identity",
+    "filter": "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "label": "trusted-https-identity",
+    "filter": "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "label": "trusted-https-identity",
+    "filter": "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "label": "trusted-https-identity",
+    "filter": "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "label": "trusted-https-identity",
+    "filter": "public_https_webdav_trusted_chain_hostname_credentials_and_data_are_verified",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "label": "strict-storage-tls-flag",
+    "filter": "public_strict_storage_tls_flag_survives_create_update_and_restart",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "engine_control",
+    "filter": "actual_native_folder_download_progress_preserves_inflight_block_and_byte_counters",
+    "label": "native-partial-peer-shutdown",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "authentication_engine",
+    "filter": "native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control",
+    "label": "native-gui-listener-boundary",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "authentication_engine",
+    "filter": "native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control",
+    "label": "native-gui-listener-boundary",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "authentication_engine",
+    "filter": "native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control",
+    "label": "native-gui-listener-boundary",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "authentication_engine",
+    "filter": "native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control",
+    "label": "native-gui-listener-boundary",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "authentication_engine",
+    "filter": "native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control",
+    "label": "native-gui-listener-boundary",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "authentication_engine",
+    "filter": "native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control",
+    "label": "native-gui-listener-boundary",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_ftp_anonymous_authentication_has_actual_refusal_and_data_effects",
+    "label": "native-ftp-anonymous-authentication",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_ftp_anonymous_authentication_has_actual_refusal_and_data_effects",
+    "label": "native-ftp-anonymous-authentication",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_ftp_anonymous_authentication_has_actual_refusal_and_data_effects",
+    "label": "native-ftp-anonymous-authentication",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_ftp_anonymous_authentication_has_actual_refusal_and_data_effects",
+    "label": "native-ftp-anonymous-authentication",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_ftp_anonymous_authentication_has_actual_refusal_and_data_effects",
+    "label": "native-ftp-anonymous-authentication",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_ftp_anonymous_authentication_has_actual_refusal_and_data_effects",
+    "label": "native-ftp-anonymous-authentication",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies",
+    "label": "native-sftp-server-identity",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies",
+    "label": "native-sftp-server-identity",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies",
+    "label": "native-sftp-server-identity",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies",
+    "label": "native-sftp-server-identity",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies",
+    "label": "native-sftp-server-identity",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "local_sync_protocol_engine",
+    "filter": "public_sftp_server_identity_reports_actual_wrong_and_matching_host_policies",
+    "label": "native-sftp-server-identity",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_backend_requests_preserve_actual_outage_errors_and_data",
+    "label": "native-backend-request-outage",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_backend_requests_preserve_actual_outage_errors_and_data",
+    "label": "native-backend-request-outage",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_backend_requests_preserve_actual_outage_errors_and_data",
+    "label": "native-backend-request-outage",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_backend_requests_preserve_actual_outage_errors_and_data",
+    "label": "native-backend-request-outage",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_backend_requests_preserve_actual_outage_errors_and_data",
+    "label": "native-backend-request-outage",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "local_sync_runtime_engine",
+    "filter": "public_backend_requests_preserve_actual_outage_errors_and_data",
+    "label": "native-backend-request-outage",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "sync_observation",
+    "filter": "lan_bandwidth_cases::actual_lan_bandwidth_toggle_changes_enforcement_and_preserves_bytes",
+    "label": "native-lan-bandwidth-inclusion",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "sync_observation",
+    "filter": "lan_bandwidth_cases::actual_lan_bandwidth_toggle_changes_enforcement_and_preserves_bytes",
+    "label": "native-lan-bandwidth-inclusion",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "sync_observation",
+    "filter": "lan_bandwidth_cases::actual_lan_bandwidth_toggle_changes_enforcement_and_preserves_bytes",
+    "label": "native-lan-bandwidth-inclusion",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "sync_observation",
+    "filter": "lan_bandwidth_cases::actual_lan_bandwidth_toggle_changes_enforcement_and_preserves_bytes",
+    "label": "native-lan-bandwidth-inclusion",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "sync_observation",
+    "filter": "lan_bandwidth_cases::actual_lan_bandwidth_toggle_changes_enforcement_and_preserves_bytes",
+    "label": "native-lan-bandwidth-inclusion",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "sync_observation",
+    "filter": "lan_bandwidth_cases::actual_lan_bandwidth_toggle_changes_enforcement_and_preserves_bytes",
+    "label": "native-lan-bandwidth-inclusion",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "network",
+    "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
+    "label": "native-local-announcement",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "network",
+    "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
+    "label": "native-local-announcement",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "network",
+    "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
+    "label": "native-local-announcement",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "network",
+    "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
+    "label": "native-local-announcement",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "network",
+    "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
+    "label": "native-local-announcement",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "network",
+    "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
+    "label": "native-local-announcement",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "network",
+    "filter": "local_announcement_cases::actual_local_announcements_discover_dynamic_peers_and_stop_after_restart",
+    "label": "native-local-announcement-macos-address-diagnosis",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "authentication_engine",
+    "filter": "explicit_tunnel_probe_cases::native_tunnel_probe_uses_explicit_nondefault_auxiliary_ports",
+    "label": "native-explicit-auxiliary-tunnel-probe",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "progress_interval_cases::native_progress_interval_enables_disables_and_restores_actual_transfer_events",
+    "label": "native-progress-interval-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "progress_interval_cases::native_progress_interval_enables_disables_and_restores_actual_transfer_events",
+    "label": "native-progress-interval-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "progress_interval_cases::native_progress_interval_enables_disables_and_restores_actual_transfer_events",
+    "label": "native-progress-interval-policy",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "progress_interval_cases::native_progress_interval_enables_disables_and_restores_actual_transfer_events",
+    "label": "native-progress-interval-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "progress_interval_cases::native_progress_interval_enables_disables_and_restores_actual_transfer_events",
+    "label": "native-progress-interval-policy",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "progress_interval_cases::native_progress_interval_enables_disables_and_restores_actual_transfer_events",
+    "label": "native-progress-interval-policy",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
+    "label": "native-incoming-admission-cap",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
+    "label": "native-incoming-admission-cap",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
+    "label": "native-incoming-admission-linux-cleanup",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
+    "label": "native-incoming-admission-cap",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
+    "label": "native-incoming-admission-cap",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files",
+    "label": "native-incoming-admission-cap",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "network",
+    "filter": "tracker_observation_cases::native_tracker_registers_and_exposes_controlled_disconnect",
+    "label": "native-official-tracker-registration",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "network",
+    "filter": "tracker_observation_cases::native_tracker_registers_and_exposes_controlled_disconnect",
+    "label": "native-official-tracker-registration",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "network",
+    "filter": "tracker_observation_cases::native_tracker_registers_and_exposes_controlled_disconnect",
+    "label": "native-official-tracker-registration",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "network",
+    "filter": "tracker_observation_cases::native_tracker_registers_and_exposes_controlled_disconnect",
+    "label": "native-official-tracker-registration",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "network",
+    "filter": "tracker_observation_cases::native_tracker_registers_and_exposes_controlled_disconnect",
+    "label": "native-official-tracker-registration",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "network",
+    "filter": "tracker_observation_cases::native_tracker_registers_and_exposes_controlled_disconnect",
+    "label": "native-official-tracker-registration",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart",
+    "label": "native-core-preference-current-contract",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart",
+    "label": "native-core-preference-current-contract",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart",
+    "label": "native-core-preference-current-contract",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart",
+    "label": "native-core-preference-current-contract",
+    "trace": "0"
+  },
+  {
+    "package": "windows-amd64-standard",
+    "runner": "windows-2022",
+    "rust": "x86_64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart",
+    "label": "native-core-preference-current-contract",
+    "trace": "0"
+  },
+  {
+    "package": "windows-arm64-standard",
+    "runner": "windows-11-arm",
+    "rust": "aarch64-pc-windows-msvc",
+    "target": "configuration_engine",
+    "filter": "native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart",
+    "label": "native-core-preference-current-contract",
+    "trace": "0"
+  },
+  {
+    "package": "macos-amd64-standard",
+    "runner": "macos-15-intel",
+    "rust": "x86_64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_extended_attribute_filter_uses_first_rule_and_preserves_files",
+    "label": "native-extended-attribute-filter",
+    "trace": "0"
+  },
+  {
+    "package": "macos-arm64-standard",
+    "runner": "macos-15",
+    "rust": "aarch64-apple-darwin",
+    "target": "configuration_engine",
+    "filter": "native_extended_attribute_filter_uses_first_rule_and_preserves_files",
+    "label": "native-extended-attribute-filter",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_extended_attribute_filter_uses_first_rule_and_preserves_files",
+    "label": "native-extended-attribute-filter",
+    "trace": "0"
+  },
+  {
+    "package": "linux-arm64-standard",
+    "runner": "ubuntu-24.04-arm",
+    "rust": "aarch64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_extended_attribute_filter_uses_first_rule_and_preserves_files",
+    "label": "native-extended-attribute-filter",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "network",
+    "filter": "probe_pending_device_after_unknown_native_announcement",
+    "label": "native-pending-announcement-source",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_copy_ownership_from_parent_changes_received_group_and_preserves_data",
+    "label": "native-parent-group-control",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_receiver_permission_selection_controls_actual_file_modes",
+    "label": "native-receiver-permissions",
+    "trace": "0"
+  },
+  {
+    "package": "linux-amd64-standard",
+    "runner": "ubuntu-24.04",
+    "rust": "x86_64-unknown-linux-gnu",
+    "target": "configuration_engine",
+    "filter": "native_copy_range_methods_reuse_old_blocks_and_preserve_bytes",
+    "label": "native-copy-range-syscalls",
+    "trace": "0"
+  }
+]

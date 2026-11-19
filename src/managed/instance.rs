@@ -30,6 +30,9 @@ pub struct ManagedExit {
     pub forced: bool,
     /// Whether the private process group or Job has no live members.
     pub tree_stopped: bool,
+    /// Whether the owned upstream state lock was observed available after tree
+    /// exit. The separate library lease is released before publishing this report.
+    pub state_released: bool,
     /// Bounded private output, excluded from ordinary Debug text.
     pub diagnostic: ProcessDiagnostic,
 }
@@ -127,6 +130,7 @@ impl ManagedInstance {
                     });
                 }
                 let connection = ConnectOptions::new(options.endpoint.clone(), context.key.clone())
+                    .transport(options.transport.clone())
                     .expected_device_id(context.identity.clone())
                     .version_policy(options.version_policy)
                     .request_timeout(options.request_timeout)?;
@@ -173,6 +177,129 @@ impl ManagedInstance {
     pub fn client(&self) -> &Client {
         &self.client
     }
+    /// Update GUI preferences once and adopt the same-key connection after reload.
+    pub async fn update_gui_preferences(
+        &mut self,
+        patch: &crate::GuiPreferencesPatch,
+        timeout: Duration,
+    ) -> Result<crate::GuiPreferencesUpdate> {
+        let update = self.client.update_gui_preferences(patch, timeout).await?;
+        self.client = update.client.clone();
+        Ok(update)
+    }
+
+    /// Select a native GUI authentication mode once and adopt the API-key
+    /// connection after GUI reload. Actual LDAP login is verified separately.
+    pub async fn set_gui_auth_mode(
+        &mut self,
+        mode: &crate::GuiAuthMode,
+        timeout: Duration,
+    ) -> Result<crate::GuiAuthModeUpdate> {
+        let update = self.client.set_gui_auth_mode(mode, timeout).await?;
+        self.client = update.client.clone();
+        Ok(update)
+    }
+
+    /// Set local GUI credentials once and adopt the authenticated API-key
+    /// connection after native GUI reload. No core restart or force is used.
+    /// A separate GUI login verifies the supplied password.
+    pub async fn set_local_gui_credentials(
+        &mut self,
+        credentials: &crate::GuiCredentials,
+        timeout: Duration,
+    ) -> Result<crate::GuiCredentialUpdate> {
+        let update = self
+            .client
+            .set_local_gui_credentials(credentials, timeout)
+            .await?;
+        self.client = update.client.clone();
+        Ok(update)
+    }
+
+    /// Rotate the management key once and adopt the freshly authenticated
+    /// connection for subsequent owned lifecycle operations. The root process
+    /// is not restarted. Old borrowed clients retain their previous credential.
+    /// Check the returned readback/refusal flags. After cancellation or unknown
+    /// outcome, explicitly reconnect with the retained proposed key.
+    pub async fn rotate_api_key(
+        &mut self,
+        key: ApiKey,
+        timeout: Duration,
+    ) -> Result<crate::ApiKeyRotation> {
+        let rotation = self.client.rotate_api_key(key, timeout).await?;
+        self.client = rotation.client.clone();
+        Ok(rotation)
+    }
+
+    /// Read-only credential recovery for this same owned identity. A failed
+    /// authentication leaves the owner and its original connection intact.
+    /// Performs no key change, restart or process termination.
+    pub async fn reconnect_with_api_key(&mut self, key: ApiKey) -> Result<()> {
+        let client = self.client.reconnect_with_api_key(key).await?;
+        self.client = client;
+        Ok(())
+    }
+
+    /// Explicitly authenticate and adopt a new direct local management endpoint
+    /// for this same owned identity. Preserve process ownership and the shared
+    /// mutation lock; no configuration write, restart or process action follows.
+    /// Successful adoption also selects the endpoint/trust for future owned
+    /// starts. Active connection request limits come from the supplied options;
+    /// configured managed-start deadlines keep their independent selections.
+    /// Failure leaves the old client and startup selections intact.
+    pub async fn reconnect_management(&mut self, options: ConnectOptions) -> Result<()> {
+        if self.exit_snapshot().is_some() {
+            return Err(Error::ManagedFailure {
+                reason: "cannot adopt a management connection after owned exit",
+            });
+        }
+        if options
+            .expected_device_id
+            .as_ref()
+            .is_some_and(|id| id != &self.client.instance().device_id)
+        {
+            return Err(Error::InvalidConfiguration {
+                reason: "replacement management options conflict with the owned identity",
+            });
+        }
+        let state = if options.endpoint.socket_path()
+            == Some(self.options.state.join("gui.sock").as_path())
+        {
+            self.options.state.clone()
+        } else {
+            self.state.clone()
+        };
+        // Reuse the same local ownership address constraints before connecting;
+        // remote/prefixed endpoints cannot become a managed startup selection.
+        let selected = ManagedOptions::new(
+            self.options.program.clone(),
+            state,
+            options.endpoint.clone(),
+        )?;
+        let endpoint = options.endpoint.clone();
+        let transport = options.transport.clone();
+        let client = self
+            .client
+            .connect_management_replacement(
+                options.expected_device_id(self.client.instance().device_id.clone()),
+            )
+            .await?;
+        if self.exit_snapshot().is_some() {
+            return Err(Error::ManagedFailure {
+                reason: "owned instance exited during management reconnection",
+            });
+        }
+        if client.instance().version.version != self.info.version {
+            return Err(Error::ProgramRejected {
+                reason: "replacement management version differs from the owned program",
+            });
+        }
+        self.options.state = selected.state;
+        self.options.endpoint = endpoint;
+        self.options.transport = transport;
+        self.client = client;
+        Ok(())
+    }
 
     /// Inspect the executable identity checked at startup.
     pub fn program_info(&self) -> &ProgramInfo {
@@ -202,9 +329,9 @@ impl ManagedInstance {
     pub async fn wait_for_exit(&mut self) -> Result<ManagedExit> {
         loop {
             if let Some(report) = self.exit.borrow().as_ref().cloned() {
-                if !report.tree_stopped {
+                if !report.tree_stopped || !report.state_released {
                     return Err(Error::ManagedFailure {
-                        reason: "owned process-tree cleanup could not be confirmed",
+                        reason: "owned process-tree or state cleanup could not be confirmed",
                     });
                 }
                 return Ok(report);
@@ -251,6 +378,7 @@ fn owner_thread(
         &mut prepared.lease,
         options.lifetime,
         options.upgrade_checks,
+        prepared.outbound_proxy.as_deref(),
     );
     let (mut process, mut capture) = match spawned {
         Ok(pair) => pair,
@@ -310,7 +438,12 @@ fn owner_thread(
             }
         }
     };
-    let tree_stopped = process.finish().is_ok() && process.tree_stopped().unwrap_or(false);
+    // Process status and upstream resource release are separate observations.
+    // Use the same final five-second cleanup window rather than extending it.
+    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+    let tree_stopped =
+        process.finish_before(cleanup_deadline).is_ok() && process.tree_stopped().unwrap_or(false);
+    let state_released = tree_stopped && lease.confirm_engine_released(cleanup_deadline).is_ok();
     let _ = capture.seek(SeekFrom::Start(0));
     let mut diagnostic = Vec::new();
     let _ = Read::by_ref(&mut capture)
@@ -321,6 +454,7 @@ fn owner_thread(
         signal: exit_signal(status.as_ref()),
         forced,
         tree_stopped,
+        state_released,
         diagnostic: ProcessDiagnostic::new(diagnostic),
     };
     drop(process);
@@ -337,6 +471,7 @@ fn spawn_core(
     lease: &mut super::state::StateLease,
     lifetime: super::ManagedLifetime,
     upgrade_checks: super::ManagedUpgradeChecks,
+    outbound_proxy: Option<&str>,
 ) -> Result<(OwnedProcess, File)> {
     let mut capture = super::native::open_private(&state.join(".verysync-sidecar-core.log"), false)
         .map_err(|e| io_error("open private core diagnostics", e))?;
@@ -356,6 +491,11 @@ fn spawn_core(
         command.arg("--no-upgrade");
     } else {
         command.env_remove("STNOUPGRADE");
+    }
+    if let Some(proxy) = outbound_proxy {
+        command
+            .env("ALL_PROXY", proxy)
+            .env("ALL_PROXY_NO_FALLBACK", "1");
     }
     lease.release_engine_lock_for_spawn();
     let retained = lifetime == super::ManagedLifetime::CallerOwned;

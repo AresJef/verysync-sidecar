@@ -21,15 +21,18 @@ fn archive_second(value: &str) -> Result<i64> {
             "native clock or archive timestamp is not bounded RFC3339",
         ));
     }
-    let time = chrono::DateTime::parse_from_rfc3339(value).map_err(|_| {
-        restore_precondition("native clock or archive timestamp is not verified RFC3339")
-    })?;
-    if time.timestamp_subsec_nanos() >= 1_000_000_000 {
+    if value.as_bytes().get(17..19) == Some(b"60") {
         return Err(restore_precondition(
             "native leap-second timestamps are not verified",
         ));
     }
-    Ok(time.timestamp())
+    let time = crate::timestamps::parse_rfc3339(value).ok_or_else(|| {
+        restore_precondition("native clock or archive timestamp is not verified RFC3339")
+    })?;
+    // Timestamp::as_second truncates negative fractions; native archive buckets
+    // use floor seconds, including instants before the Unix epoch.
+    i64::try_from(time.as_nanosecond().div_euclid(1_000_000_000))
+        .map_err(|_| restore_precondition("native timestamp is outside verified seconds"))
 }
 fn archive_components(value: &str, style: crate::PathStyle) -> Result<Vec<String>> {
     let path = TargetPath::remote(style, value)?;
@@ -41,6 +44,28 @@ fn archive_components(value: &str, style: crate::PathStyle) -> Result<Vec<String
 }
 
 impl Client {
+    /// Read the versioner's whole-folder inventory once through the distinct
+    /// native route. This differs from prefix archive browsing. Fresh identity
+    /// and folder checks precede the read; paused/unavailable versioners retain
+    /// native errors. Empty maps are valid; null/malformed maps are errors.
+    /// Existing response/deadline bounds apply. No recursive requests, restore,
+    /// scan, timestamp rewriting or controller filesystem access occurs.
+    pub async fn folder_version_inventory(
+        &self,
+        folder: &FolderId,
+    ) -> Result<FolderVersionHistory> {
+        self.system_status().await?;
+        self.folder(folder).await?;
+        let records: std::collections::BTreeMap<String, Vec<crate::ArchivedFileVersion>> = self
+            .connection
+            .get_json_with_query(
+                "read whole folder version inventory",
+                "rest/folder/versions",
+                &[("folder", folder.as_str())],
+            )
+            .await?;
+        Ok(FolderVersionHistory(records))
+    }
     async fn require_past_archive_second(&self, latest: i64) -> Result<()> {
         // Use the target's fresh clock immediately before writing. Never use
         // controller wall time or rewrite the native token submitted in POST.
@@ -357,6 +382,9 @@ impl Client {
     /// archives. Native retention can clean the selected location. Target paths
     /// are not opened or expanded on the controller.
     /// The basic backend uses native target-relative/absolute/tilde semantics.
+    /// RemoteUri selects the URI's native FTP/SFTP backend, not the controller's
+    /// path syntax or Local Sync option format. Successful configuration readback
+    /// is not an authentication, host-verification or archival success receipt.
     /// Changing location can make earlier archives absent from current browsing;
     /// it does not migrate them or change an external versioner's command.
     ///
@@ -374,28 +402,12 @@ impl Client {
         folder: &FolderId,
         location: &VersionArchiveLocation,
     ) -> Result<FolderVersioningUpdate> {
-        let path = match location {
-            VersionArchiveLocation::FolderDefault => "",
-            VersionArchiveLocation::BasicDirectory(path) => {
-                if path.style() != self.folder_path_style()? {
-                    return Err(Error::InvalidPath {
-                        reason: "archive path syntax differs from the target",
-                    });
-                }
-                let value = path.to_protocol()?;
-                if value.len() > 32768 {
-                    return Err(Error::InvalidPath {
-                        reason: "archive path exceeds its text bound",
-                    });
-                }
-                value
-            }
-        };
+        let path = location.protocol(self.folder_path_style()?)?;
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
         let mut expected = self.read_folder_versioning(folder).await?;
         expected.filesystem_path = path.to_owned();
-        expected.filesystem_type = "basic".to_owned();
+        expected.filesystem_type = location.filesystem_type().to_owned();
         self.write_folder_versioning(folder, expected, "set native version archive location")
             .await
     }
@@ -520,5 +532,26 @@ impl Client {
                 },
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod timestamp_contracts {
+    use super::archive_second;
+    #[test]
+    fn archive_seconds_preserve_negative_fraction_floor_and_offset_equivalence() {
+        assert_eq!(archive_second("1969-12-31T23:59:59.500Z").unwrap(), -1);
+        assert_eq!(archive_second("1970-01-01T07:59:59.500+08:00").unwrap(), -1);
+        assert_eq!(archive_second("1970-01-01T00:00:00.999999999Z").unwrap(), 0);
+    }
+    #[test]
+    fn archive_seconds_never_normalize_leaps_or_discard_unknown_precision() {
+        for value in [
+            "2016-12-31T23:59:60Z",
+            "2026-11-17T03:00:00.1234567890Z",
+            "2026-11-17T03:00:00Z[UTC]",
+        ] {
+            assert!(archive_second(value).is_err());
+        }
     }
 }

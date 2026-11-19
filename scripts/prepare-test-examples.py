@@ -4,9 +4,31 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
+import sys
+
+
+def build_artifacts(cargo, selection, env=None):
+    """Use Cargo's actual executable paths, including explicit cross targets."""
+    command = [*cargo, "build", *selection, "--locked", "--message-format=json"]
+    result = subprocess.run(command, capture_output=True, text=True, env=env)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    artifacts = {}
+    for line in result.stdout.splitlines():
+        message = json.loads(line)
+        if message.get("reason") == "compiler-message":
+            rendered = message.get("message", {}).get("rendered")
+            if rendered:
+                sys.stderr.write(rendered)
+        if (message.get("reason") == "compiler-artifact"
+                and "example" in message.get("target", {}).get("kind", [])
+                and message.get("executable")):
+            artifacts[message["target"]["name"]] = Path(message["executable"])
+    if result.returncode:
+        raise subprocess.CalledProcessError(result.returncode, command)
+    return artifacts
 
 
 def main():
@@ -16,17 +38,18 @@ def main():
     parser.add_argument("--github-env", type=Path)
     args = parser.parse_args()
     cargo = [args.cargo, f"+{args.toolchain}"]
-    subprocess.run([*cargo, "build", "--examples", "--locked"], check=True)
-    subprocess.run([*cargo, "build", "--example", "cache_program", "--features", "download", "--locked"], check=True)
-    metadata = json.loads(subprocess.check_output(
-        [*cargo, "metadata", "--no-deps", "--format-version", "1"], text=True
-    ))
-    directory = Path(metadata["target_directory"]).joinpath("debug", "examples")
+    artifacts = build_artifacts(cargo, ["--examples"])
+    artifacts.update(build_artifacts(cargo, ["--example", "cache_program", "--features", "download"]))
+    names = ("connect_existing", "create_folder", "manage_existing", "manage_owned", "cache_program")
+    if any(name not in artifacts for name in names):
+        raise ValueError("Cargo did not identify every required compiled example")
+    directories = {artifacts[name].parent for name in names}
+    if len(directories) != 1:
+        raise ValueError("compiled examples must have one explicitly identified directory")
+    directory = directories.pop()
     records = []
-    for name in ("connect_existing", "create_folder", "manage_existing", "manage_owned", "cache_program"):
-        executable = directory.joinpath(name)
-        if os.name == "nt":
-            executable = executable.with_suffix(".exe")
+    for name in names:
+        executable = artifacts[name]
         if not executable.is_file() or executable.is_symlink():
             raise ValueError("expected regular compiled example is missing")
         records.append({"name": name, "sha256": hashlib.sha256(executable.read_bytes()).hexdigest()})

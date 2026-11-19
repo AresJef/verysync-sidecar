@@ -1,8 +1,10 @@
 //! Explicit invitation records, per-peer ignores and folder associations.
 use super::Client;
+use crate::invitations::FolderPeer;
 use crate::{
-    DeviceId, Error, FolderId, FolderPeerUpdate, IgnoredFolder, IgnoredFolderUpdate,
-    PendingDeviceInfo, PendingDismissal, PendingFolderOffers, ResponseDiagnostic, Result,
+    DeviceId, Error, FolderId, FolderPeerEncryptionUpdate, FolderPeerUpdate, IgnoredFolder,
+    IgnoredFolderUpdate, PendingDeviceInfo, PendingDismissal, PendingFolderOffers,
+    ResponseDiagnostic, Result,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -190,6 +192,68 @@ impl Client {
         self.change_folder_peer(folder, device, false).await
     }
 
+    /// Read whether this exact folder association has an encryption password.
+    ///
+    /// An omitted native field remains absent. The password is used only to
+    /// compute its presence and is never included in the returned value.
+    pub async fn folder_peer_encryption_password_is_set(
+        &self,
+        folder: &FolderId,
+        device: &DeviceId,
+    ) -> Result<Option<bool>> {
+        self.require_remote_device(device)?;
+        self.system_status().await?;
+        let peers = folder_peers(&self.folder(folder).await?)?;
+        let peer = &peers[folder_peer_index(&peers, device)?];
+        Ok(folder_peer_password(peer)?.map(|value| !value.is_empty()))
+    }
+
+    /// Set or clear the native encryption password for one existing folder association.
+    ///
+    /// Pass a nonempty password to set it, or `None` to clear it by sending the
+    /// native empty value. The same association may be shared with other peers
+    /// using different passwords. This call preserves all other peer fields,
+    /// including unknown native fields, and submits one configuration PATCH.
+    ///
+    /// Clones of this client serialize edits. Independent configuration
+    /// writers must coordinate with the caller. Keep the peer and directory
+    /// paused while establishing an encrypted configuration. The receipt
+    /// reports the native readback. Successful transfer and recovery require
+    /// independent verification. After an uncertain outcome, read current
+    /// configuration before considering another write.
+    pub async fn set_folder_peer_encryption_password(
+        &self,
+        folder: &FolderId,
+        device: &DeviceId,
+        password: Option<&str>,
+    ) -> Result<FolderPeerEncryptionUpdate> {
+        self.require_remote_device(device)?;
+        let requested = password.unwrap_or_default();
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        self.device(device).await?;
+        let mut peers = folder_peers(&self.folder(folder).await?)?;
+        let index = folder_peer_index(&peers, device)?;
+        peers[index].extra.insert(
+            "encryptionPassword".to_owned(),
+            Value::String(requested.to_owned()),
+        );
+        self.write_folder_peers(folder, &peers, "set folder peer encryption password")
+            .await?;
+
+        let observed = async {
+            let peers = folder_peers(&self.folder(folder).await?)?;
+            let actual = folder_peer_password(&peers[folder_peer_index(&peers, device)?])?;
+            Ok(FolderPeerEncryptionUpdate {
+                password_is_set: actual.map(|value| !value.is_empty()),
+                requested_password_matches: actual == Some(requested),
+            })
+        };
+        observed
+            .await
+            .map_err(|error| uncertain("read back folder peer encryption password", error))
+    }
+
     async fn require_folder_offer(
         &self,
         folder: &FolderId,
@@ -245,7 +309,7 @@ impl Client {
         let mut peers = folder_peers(&previous)?;
         if present {
             if !peers.iter().any(|v| v.device_id == *device) {
-                peers.push(crate::invitations::FolderPeer {
+                peers.push(FolderPeer {
                     device_id: device.clone(),
                     extra: BTreeMap::new(),
                 });
@@ -253,15 +317,7 @@ impl Client {
         } else {
             peers.retain(|v| v.device_id != *device);
         }
-        let url = self.connection.folder_url(folder)?;
-        self.connection
-            .request_bytes(
-                "change folder peer association",
-                reqwest::Method::PATCH,
-                url,
-                Some(&json!({"devices":peers})),
-                true,
-            )
+        self.write_folder_peers(folder, &peers, "change folder peer association")
             .await?;
         let configuration = self
             .folder(folder)
@@ -274,6 +330,25 @@ impl Client {
             configuration,
         })
     }
+
+    async fn write_folder_peers(
+        &self,
+        folder: &FolderId,
+        peers: &[FolderPeer],
+        operation: &'static str,
+    ) -> Result<()> {
+        let url = self.connection.folder_url(folder)?;
+        self.connection
+            .request_bytes(
+                operation,
+                reqwest::Method::PATCH,
+                url,
+                Some(&json!({"devices":peers})),
+                true,
+            )
+            .await
+            .map(|_| ())
+    }
 }
 fn has_offer(
     records: &BTreeMap<FolderId, PendingFolderOffers>,
@@ -284,12 +359,37 @@ fn has_offer(
         .get(folder)
         .is_some_and(|v| v.offered_by.contains_key(device))
 }
-fn folder_peers(folder: &crate::FolderConfig) -> Result<Vec<crate::invitations::FolderPeer>> {
+fn folder_peers(folder: &crate::FolderConfig) -> Result<Vec<FolderPeer>> {
     let value = folder.extra.get("devices").cloned().unwrap_or(Value::Null);
     serde_json::from_value(value).map_err(|_| Error::InvalidResponse {
         operation: "decode configured folder peers",
         response: ResponseDiagnostic::new(200, Vec::new()),
     })
+}
+fn folder_peer_index(peers: &[FolderPeer], device: &DeviceId) -> Result<usize> {
+    let mut matches = peers
+        .iter()
+        .enumerate()
+        .filter(|(_, peer)| peer.device_id == *device);
+    let (index, _) = matches.next().ok_or(Error::FolderPeerNotAssociated)?;
+    if matches.next().is_some() {
+        return Err(Error::InvalidResponse {
+            operation: "locate unique folder peer association",
+            response: ResponseDiagnostic::new(200, Vec::new()),
+        });
+    }
+    Ok(index)
+}
+fn folder_peer_password(peer: &FolderPeer) -> Result<Option<&str>> {
+    peer.extra
+        .get("encryptionPassword")
+        .map(|value| {
+            value.as_str().ok_or_else(|| Error::InvalidResponse {
+                operation: "decode folder peer encryption password",
+                response: ResponseDiagnostic::new(200, Vec::new()),
+            })
+        })
+        .transpose()
 }
 fn uncertain(operation: &'static str, source: Error) -> Error {
     Error::MutationOutcomeUnknown {

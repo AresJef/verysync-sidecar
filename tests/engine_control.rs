@@ -2,13 +2,45 @@
 
 #[path = "common/engine_fixture.rs"]
 mod engine_fixture;
+#[path = "common/managed_fixture.rs"]
+mod managed_fixture;
 
+#[path = "common/auxiliary_maintenance_effects.rs"]
+mod auxiliary_maintenance_effects;
+#[path = "common/direct_restart_effects.rs"]
+mod direct_restart_effects;
+#[path = "common/gui_resource_effects.rs"]
+mod gui_resource_effects;
+#[path = "common/hardware_effects.rs"]
+mod hardware_effects;
+#[path = "common/native_helper_effects.rs"]
+mod native_helper_effects;
 #[path = "common/response_proxy.rs"]
 mod response_proxy;
+#[path = "common/target_directory_effects.rs"]
+mod target_directory_effects;
 
 use engine_fixture::{EngineFixture, TestBinary, TestResult};
 use reqwest::{Method, StatusCode};
 use verysync_sidecar::{ApiKey, Client, ConnectOptions, DeviceId, Error, ManagementEndpoint};
+
+fn expected_core_architecture() -> TestResult<&'static str> {
+    match std::env::consts::ARCH {
+        "aarch64" => Ok("arm64"),
+        "x86_64" => Ok("amd64"),
+        "x86" => Ok("386"),
+        "arm" => Ok("arm"),
+        "loongarch64" => Ok("loong64"),
+        "powerpc64" if cfg!(target_endian = "little") => Ok("ppc64le"),
+        "riscv64" => Ok("riscv64"),
+        "s390x" => Ok("s390x"),
+        "mips" if cfg!(target_endian = "little") => Ok("mipsle"),
+        "mips" => Ok("mips"),
+        "mips64" if cfg!(target_endian = "little") => Ok("mips64le"),
+        "mips64" => Ok("mips64"),
+        other => Err(format!("fixture architecture mapping not yet verified: {other}").into()),
+    }
+}
 
 fn endpoint(instance: &EngineFixture) -> verysync_sidecar::Result<ManagementEndpoint> {
     #[cfg(unix)]
@@ -42,14 +74,7 @@ async fn connect_auth_version_and_identity_through_the_public_api() -> TestResul
             std::env::consts::OS
         }
     );
-    assert_eq!(
-        info.version.arch,
-        if cfg!(target_arch = "aarch64") {
-            "arm64"
-        } else {
-            "amd64"
-        }
-    );
+    assert_eq!(info.version.arch, expected_core_architecture()?);
     assert_eq!(
         info.version.version,
         verysync_sidecar::BASELINE_ENGINE_VERSION
@@ -148,15 +173,7 @@ async fn two_private_instances_have_separate_identity_authentication_and_cleanup
         } else {
             std::env::consts::OS
         };
-        let expected_arch = match std::env::consts::ARCH {
-            "aarch64" => "arm64",
-            "x86_64" => "amd64",
-            other => {
-                return Err(
-                    format!("fixture architecture mapping not yet verified: {other}").into(),
-                )
-            }
-        };
+        let expected_arch = expected_core_architecture()?;
         assert_eq!(version["os"], expected_os);
         assert_eq!(version["arch"], expected_arch);
         let config = instance.read_json("/rest/config").await?;
@@ -740,9 +757,18 @@ async fn capabilities_report_matches_native_coordinates_without_inventing_author
         let client=Client::connect(ConnectOptions::new(endpoint(&instance)?,ApiKey::new(instance.api_key())?)
             .expected_device_id(DeviceId::parse(instance.device_id())?)).await?;
         let report=client.capabilities();
+        assert_eq!(report.target.engine_arch, expected_core_architecture()?);
+        let expected_validation = if cfg!(feature="tls") && matches!(
+            (std::env::consts::OS, std::env::consts::ARCH),
+            ("macos" | "linux" | "windows", "x86_64" | "aarch64")
+        ) {
+            TargetValidation::MatchesRecordedCoordinates
+        } else {
+            TargetValidation::OutsideNativeEvidence
+        };
         let runtime=report.library.iter().find(|entry|entry.capability==Capability::ManagedRuntime).ok_or("runtime scope missing")?;
         let raw=report.library.iter().find(|entry|entry.capability==Capability::RawManagement).ok_or("raw scope missing")?;
-        Ok(serde_json::json!({"baseline_snapshot_correct":report.target.engine_version==verysync_sidecar::BASELINE_ENGINE_VERSION,"native_coordinates_match":report.target_validation==TargetValidation::MatchesRecordedCoordinates,"authenticated_at_handshake_only":report.instance.authentication==InstanceObservation::ObservedAtHandshake,"unprobed_license_unknown":report.instance.commercial_license==InstanceObservation::Unknown,"unprobed_permissions_unknown":report.instance.operation_authorization==InstanceObservation::Unknown,"runtime_start_typed_evidence_pending":runtime.implementation==ImplementationStatus::Typed && runtime.verification==VerificationStatus::Pending,"raw_is_transport_only":raw.implementation==ImplementationStatus::RawTransport,"raw_evidence_explicit":matches!(raw.verification,VerificationStatus::NativeEvidence {engine_version,..} if engine_version==verysync_sidecar::BASELINE_ENGINE_VERSION),"debug_key_safe":!format!("{report:?}").contains(instance.api_key())}))
+        Ok(serde_json::json!({"baseline_snapshot_correct":report.target.engine_version==verysync_sidecar::BASELINE_ENGINE_VERSION,"target_evidence_classification_correct":report.target_validation==expected_validation,"authenticated_at_handshake_only":report.instance.authentication==InstanceObservation::ObservedAtHandshake,"unprobed_license_unknown":report.instance.commercial_license==InstanceObservation::Unknown,"unprobed_permissions_unknown":report.instance.operation_authorization==InstanceObservation::Unknown,"runtime_start_typed_evidence_pending":runtime.implementation==ImplementationStatus::Typed && runtime.verification==VerificationStatus::Pending,"raw_is_transport_only":raw.implementation==ImplementationStatus::RawTransport,"raw_evidence_explicit":matches!(raw.verification,VerificationStatus::NativeEvidence {engine_version,..} if engine_version==verysync_sidecar::BASELINE_ENGINE_VERSION),"debug_key_safe":!format!("{report:?}").contains(instance.api_key())}))
     }.await;
     let stopped = instance.shutdown().await;
     let report = verified?;

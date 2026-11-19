@@ -1,4 +1,8 @@
 //! Actual version retention and restoration through public Rust APIs.
+#[path = "common/storage_service.rs"]
+mod archive_storage_service;
+#[path = "common/ftp_archive_scope.rs"]
+mod ftp_archive_scope;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 use managed_fixture::{options, TestResult};
@@ -7,18 +11,512 @@ use verysync_sidecar::{
     CreateDeviceOptions, DevicePatch, DeviceTransport, FileVersionRestore, FolderVersioningPolicy,
     JoinFolderOptions, ManagedInstance, TargetPath,
 };
+
+#[tokio::test]
+async fn public_remote_sftp_archive_location_retains_and_restores_versions() -> TestResult {
+    remote_archive_case(verysync_sidecar::StorageProtocol::Sftp, false).await
+}
+#[tokio::test]
+async fn public_remote_sftp_key_file_archive_authenticates_without_password_fallback() -> TestResult
+{
+    remote_archive_case(verysync_sidecar::StorageProtocol::Sftp, true).await
+}
+#[tokio::test]
+async fn public_remote_ftp_archive_location_checks_first_generation_boundary() -> TestResult {
+    remote_archive_case(verysync_sidecar::StorageProtocol::Ftp, false).await
+}
+fn ftp_peer_events(peer: &archive_storage_service::Service) -> TestResult<(bool, Vec<String>)> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&peer.observation_log)?
+        .take(65537)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 65536 {
+        return Err("owned FTP observation exceeds its byte bound".into());
+    }
+    let text = std::str::from_utf8(&bytes)?;
+    for field in ["user", "password"] {
+        let credential = peer
+            .endpoint
+            .extra()
+            .get(field)
+            .and_then(|value| value.as_str())
+            .ok_or("explicit synthetic FTP credential missing")?;
+        if text.contains(credential) {
+            return Err("owned FTP observation disclosed a credential".into());
+        }
+    }
+    let mut authenticated = false;
+    let mut commands = Vec::new();
+    for line in text.lines() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+            if value["owned_ftp_event"] == "authenticated" {
+                authenticated = true;
+            } else if value["owned_ftp_event"] == "command" {
+                if let Some(command) = value["command"].as_str() {
+                    commands.push(command.to_owned());
+                }
+            }
+        }
+    }
+    Ok((authenticated, commands))
+}
+
+fn sftp_peer_auth(
+    peer: &archive_storage_service::Service,
+) -> TestResult<(usize, usize, std::collections::BTreeSet<u64>)> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&peer.observation_log)?
+        .take(65537)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 65536 {
+        return Err("owned SFTP observation exceeds bound".into());
+    }
+    let text = std::str::from_utf8(&bytes)?;
+    for field in ["user", "password"] {
+        let credential = peer.endpoint.extra()[field]
+            .as_str()
+            .ok_or("synthetic SFTP credential")?;
+        assert!(
+            !text.contains(credential),
+            "peer observation must omit credentials"
+        );
+    }
+    assert!(!text.contains("PRIVATE KEY"));
+    let mut accepted = 0;
+    let mut rejected = 0;
+    let mut sessions = std::collections::BTreeSet::new();
+    for line in text.lines() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+            if value["owned_sftp_auth"] == "publickey" {
+                if value["accepted"] == true {
+                    accepted += 1;
+                } else if value["accepted"] == false {
+                    rejected += 1;
+                }
+            } else if value["owned_sftp_auth"] == "password" {
+                assert_eq!(
+                    value["accepted"], false,
+                    "key-only peer cannot accept password fallback"
+                );
+            } else if value["owned_sftp_session"] == true {
+                sessions.insert(
+                    value["connection_id"]
+                        .as_u64()
+                        .ok_or("bounded peer connection identity")?,
+                );
+            }
+        }
+    }
+    Ok((accepted, rejected, sessions))
+}
+
+async fn remote_archive_case(
+    protocol: verysync_sidecar::StorageProtocol,
+    key_auth: bool,
+) -> TestResult {
+    use verysync_sidecar::VersionArchiveLocation;
+    let root = tempfile::Builder::new().prefix("varc-").tempdir()?.keep();
+    let mut peer = if key_auth {
+        archive_storage_service::Service::start_key_only_sftp(&root.join("peer"))?
+    } else if protocol == verysync_sidecar::StorageProtocol::Ftp {
+        archive_storage_service::Service::start_observed_ftp(&root.join("peer"))?
+    } else {
+        archive_storage_service::Service::start(protocol, &root.join("peer"), Duration::ZERO)?
+    };
+    let archive = peer.share.join("archive");
+    let key_file = root.join("peer").join("key 路径 %.pem");
+    let mut key_bytes = None;
+    if key_auth {
+        std::fs::copy(
+            root.join("peer").join("synthetic-client-key.pem"),
+            &key_file,
+        )?;
+        key_bytes = Some(std::fs::read(&key_file)?);
+    }
+    std::fs::create_dir(&archive)?;
+    assert_eq!(std::fs::read_dir(&archive)?.count(), 0);
+    let mut uri = url::Url::parse(peer.endpoint.uri())?;
+    uri.set_username(peer.endpoint.extra()["user"].as_str().ok_or("peer user")?)
+        .map_err(|_| "synthetic URI user")?;
+    uri.set_password(if key_auth {
+        None
+    } else {
+        peer.endpoint.extra()["password"].as_str()
+    })
+    .map_err(|_| "synthetic URI password")?;
+    uri.set_path("/archive");
+    if key_auth {
+        uri.query_pairs_mut().append_pair(
+            "privateKey",
+            key_file.to_str().ok_or("synthetic UTF-8 key path")?,
+        );
+        uri.query_pairs_mut()
+            .append_pair("parallelConnections", "1")
+            .append_pair("sftpChannels", "2")
+            .append_pair("connectTimeout", "6");
+    }
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let source = root.join("source");
+    let receive = root.join("receive");
+    std::fs::create_dir(&source)?;
+    let name = if protocol == verysync_sidecar::StorageProtocol::Ftp {
+        "archive-ascii.txt"
+    } else {
+        "archive 二 %.txt"
+    };
+    let old = b"retained original archive bytes";
+    let new = b"new remote content with a different length";
+    std::fs::write(source.join(name), old)?;
+    let (af, bf) = register(&a, &b, &source, &receive).await?;
+    b.client()
+        .set_folder_versioning(
+            &bf.id,
+            FolderVersioningPolicy::Simple {
+                keep: 3,
+                cleanout_days: 0,
+                cleanup_interval_seconds: 3600,
+            },
+        )
+        .await?;
+    let prior = b.client().folder_versioning(&bf.id).await?;
+    if key_auth {
+        let mut wrong = uri.clone();
+        wrong.set_query(None);
+        wrong.query_pairs_mut().append_pair(
+            "privateKey",
+            root.join("peer")
+                .join("synthetic-host-key.pem")
+                .to_str()
+                .ok_or("synthetic UTF-8 wrong key path")?,
+        );
+        let update = b
+            .client()
+            .set_version_archive_location(
+                &bf.id,
+                &VersionArchiveLocation::remote_uri(wrong.as_str())?,
+            )
+            .await?;
+        assert!(update.requested_fields_match);
+        let error = b.client().folder_versions(&bf.id, None).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                verysync_sidecar::Error::Http { .. }
+                    | verysync_sidecar::Error::Api { .. }
+                    | verysync_sidecar::Error::AccessDenied { .. }
+            ),
+            "wrong key requires an actual native response, not a timeout"
+        );
+        let (accepted, rejected, sessions) = sftp_peer_auth(&peer)?;
+        assert_eq!(accepted, 0);
+        assert!(sessions.is_empty());
+        assert!(
+            rejected > 0,
+            "peer must observe actual wrong public key rejection"
+        );
+        assert_eq!(std::fs::read_dir(&archive)?.count(), 0);
+        assert_eq!(std::fs::read(source.join(name))?, old);
+        eprintln!("private remote archive stage: wrong key rejected by actual key-only peer");
+    }
+    let location = VersionArchiveLocation::remote_uri(uri.as_str())?;
+    assert!(!format!("{location:?}").contains(uri.as_str()));
+    let changed = b
+        .client()
+        .set_version_archive_location(&bf.id, &location)
+        .await?;
+    assert!(changed.requested_fields_match);
+    let observed = b.client().folder_versioning(&bf.id).await?;
+    if key_auth {
+        let debug = format!("{location:?} {observed:?}");
+        for secret in [
+            peer.endpoint.extra()["user"].as_str().ok_or("peer user")?,
+            key_file.to_str().ok_or("synthetic UTF-8 key path")?,
+        ] {
+            assert!(!debug.contains(secret));
+        }
+    }
+    assert_eq!(observed.filesystem_type, peer.endpoint.filesystem_type());
+    assert_eq!(observed.filesystem_path, uri.as_str());
+    assert_eq!(observed.params, prior.params);
+    assert_eq!(
+        observed.cleanup_interval_seconds,
+        prior.cleanup_interval_seconds
+    );
+    eprintln!("private remote archive stage: configured");
+    if key_auth {
+        assert!(b.client().folder_versions(&bf.id, None).await?.0.is_empty());
+        let (_, _, one_connection) = sftp_peer_auth(&peer)?;
+        assert_eq!(
+            one_connection.len(),
+            1,
+            "explicit one-connection pool must be observed at peer"
+        );
+        uri.query_pairs_mut()
+            .clear()
+            .append_pair(
+                "privateKey",
+                key_file.to_str().ok_or("synthetic UTF-8 key path")?,
+            )
+            .append_pair("parallelConnections", "2")
+            .append_pair("sftpChannels", "2")
+            .append_pair("connectTimeout", "6");
+        let update = b
+            .client()
+            .set_version_archive_location(
+                &bf.id,
+                &VersionArchiveLocation::remote_uri(uri.as_str())?,
+            )
+            .await?;
+        assert!(update.requested_fields_match);
+        assert!(b.client().folder_versions(&bf.id, None).await?.0.is_empty());
+        let (_, _, two_connections) = sftp_peer_auth(&peer)?;
+        assert_eq!(
+            two_connections.difference(&one_connection).count(),
+            2,
+            "explicit two-connection pool must create two real authenticated peer sessions"
+        );
+    }
+    a.client().resume_folder(&af.id).await?;
+    b.client().resume_folder(&bf.id).await?;
+    a.client().request_scan(&af.id).await?;
+    data(&receive.join(name), old).await?;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    std::fs::write(source.join(name), new)?;
+    a.client().request_scan(&af.id).await?;
+    // The refusal check requires both exact artifacts and their observed scope.
+    let refusal_profile = if protocol == verysync_sidecar::StorageProtocol::Ftp {
+        match (
+            ftp_archive_scope::observed_refusal_profile(&a),
+            ftp_archive_scope::observed_refusal_profile(&b),
+        ) {
+            (Some(first), Some(second)) if first == second => Some(first),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some(profile) = refusal_profile {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let errors = b
+                    .client()
+                    .folder_errors(&bf.id, verysync_sidecar::ListPage::new(1, 10)?)
+                    .await?;
+                if errors.errors.as_ref().is_some_and(|rows| {
+                    rows.iter().any(|e| {
+                        e.path == name
+                            && e.error
+                                .contains("simple versioner: archive: file does not exist")
+                    })
+                }) {
+                    return Ok::<_, verysync_sidecar::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await??;
+        assert!(b
+            .client()
+            .folder_status(&bf.id)
+            .await?
+            .pull_errors
+            .is_some_and(|n| n > 0));
+        assert_eq!(std::fs::read(receive.join(name))?, old);
+        assert_eq!(std::fs::read(source.join(name))?, new);
+        assert_eq!(std::fs::read_dir(&archive)?.count(), 0);
+        let (authenticated, commands) = ftp_peer_events(&peer)?;
+        assert!(
+            authenticated,
+            "owned FTP peer did not record accepted authentication"
+        );
+        assert!(!commands
+            .iter()
+            .any(|command| command == "STOR" || command == "APPE"));
+        assert!(commands.iter().any(|command| command == "USER"));
+        assert!(commands.iter().any(|command| command == "PASS"));
+        let exit = a.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+        let exit = b.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+        peer.stop()?;
+        std::fs::remove_dir_all(root)?;
+        println!(
+            "public native FTP archive refusal evidence: {}",
+            serde_json::json!({
+            "actual_owned_ftp_authentication_accepted":true,
+            "actual_user_and_pass_commands_observed":true,
+            "actual_no_upload_command_in_observed_window":true,
+            "actual_peer_observation_credentials_redacted":true,
+            "native_target_os":std::env::consts::OS,"native_target_arch":std::env::consts::ARCH,
+            "verified_standard_package":profile.hosted_runner.is_none().then_some(profile.package.as_str()),
+            "verified_additional_package":profile.hosted_runner.is_some().then_some(profile.package.as_str()),
+            "verified_hosted_runner":profile.hosted_runner,
+            "actual_fixed_archive_and_binary_fingerprints_matched":true,
+            "observed_command_names":commands,
+            "actual_typed_location_readback":true,"actual_native_archive_not_found_error":true,
+            "actual_nonzero_pull_error_counter":true,"actual_receiver_old_bytes_retained":true,
+            "actual_source_new_bytes_retained":true,"actual_no_remote_archive_invented":true,
+            "actual_both_normal_owned_tree_exits":true,"positive_ftp_archival":false,
+            "scope":"fixed v2.33.2 first generation on dedicated standard FTP peer; documented reproduced targets only"})
+        );
+        return Ok(());
+    }
+    if let Err(error) = data(&receive.join(name), new).await {
+        let errors = b
+            .client()
+            .folder_errors(&bf.id, verysync_sidecar::ListPage::new(1, 10)?)
+            .await;
+        eprintln!(
+            "private remote archive failure snapshot: {}",
+            serde_json::json!({
+            "protocol":peer.endpoint.filesystem_type(),
+            "actual_receiver_old":std::fs::read(receive.join(name)).is_ok_and(|v|v==old),
+            "actual_source_new":std::fs::read(source.join(name)).is_ok_and(|v|v==new),
+            "native_archive_not_found":errors.ok().and_then(|p|p.errors).is_some_and(|rows|
+                rows.iter().any(|e|e.path==name && e.error.contains("simple versioner: archive: file does not exist"))),
+            "remote_archive_entries":std::fs::read_dir(&archive).ok().map(|v|v.count()),
+            "original_data_deadline_retained":true,
+            "ftp_authentication_observed":if protocol == verysync_sidecar::StorageProtocol::Ftp {
+                ftp_peer_events(&peer).ok().map(|value| value.0)
+            } else { None }})
+        );
+        return Err(error);
+    }
+
+    let files = std::fs::read_dir(&archive)?
+        .map(|x| x.map(|v| v.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(files
+        .iter()
+        .any(|p| std::fs::read(p).ok().as_deref() == Some(old.as_slice())));
+    let history = b.client().folder_versions(&bf.id, None).await?;
+    let stamp = history
+        .0
+        .get(name)
+        .and_then(|v| v.first())
+        .ok_or("native SFTP archive not listed")?
+        .version_time
+        .clone();
+    eprintln!("private remote archive stage: real bytes archived and listed");
+    let exit = a.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    past_archive_generation(&b, &stamp).await?;
+    let report = b
+        .client()
+        .restore_file_versions(
+            &bf.id,
+            &[FileVersionRestore::new(
+                TargetPath::local(Path::new(name)),
+                stamp,
+            )?],
+        )
+        .await?;
+    assert_eq!(report.error_count(), 0);
+    data(&receive.join(name), old).await?;
+    assert_eq!(std::fs::read(source.join(name))?, new);
+    if key_auth {
+        let (accepted, rejected, _) = sftp_peer_auth(&peer)?;
+        assert!(accepted > 0 && rejected > 0);
+    }
+    let exit = b.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    b.restart(Duration::from_secs(30)).await?;
+    assert_eq!(
+        b.client().folder_versioning(&bf.id).await?.filesystem_path,
+        uri.as_str()
+    );
+    assert!(!b.client().folder_versions(&bf.id, None).await?.0.is_empty());
+    data(&receive.join(name), old).await?;
+    let retained = std::fs::read_dir(&archive)?
+        .map(|x| x.and_then(|v| std::fs::read(v.path()).map(|bytes| (v.file_name(), bytes))))
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    let changed = b
+        .client()
+        .set_version_archive_location(&bf.id, &VersionArchiveLocation::FolderDefault)
+        .await?;
+    assert!(changed.requested_fields_match);
+    let unchanged = std::fs::read_dir(&archive)?
+        .map(|x| x.and_then(|v| std::fs::read(v.path()).map(|bytes| (v.file_name(), bytes))))
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    assert_eq!(retained, unchanged);
+    let exit = b.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    if let Some(bytes) = key_bytes {
+        assert_eq!(std::fs::read(&key_file)?, bytes);
+    }
+    peer.stop()?;
+    std::fs::remove_dir_all(root)?;
+    println!(
+        "public remote version archive evidence: {}",
+        serde_json::json!({
+        "actual_typed_remote_archive_location":true,"actual_original_policy_preserved":true,
+        "actual_old_bytes_archived_on_remote_peer":true,"actual_native_version_browse":true,
+        "actual_restored_old_bytes":true,"actual_source_new_bytes_retained":true,
+        "actual_selected_filename_restored":true,"protocol":peer.endpoint.filesystem_type(),
+        "filename_kind":if protocol == verysync_sidecar::StorageProtocol::Sftp { "unicode-percent" } else { "ascii" },"actual_normal_restart_keeps_remote_location":true,
+        "actual_reset_default_preserves_remote_archives":true,"actual_both_normal_owned_tree_exits":true,
+        "actual_key_only_peer":key_auth,"actual_target_key_file_consumed":key_auth,
+        "actual_wrong_key_native_response_and_peer_rejection":key_auth,"actual_no_password_fallback":key_auth,
+        "actual_private_peer_auth_observation":key_auth,
+        "actual_unicode_percent_target_key_path":key_auth,"actual_key_file_bytes_retained":key_auth,
+        "actual_one_then_two_authenticated_connections":key_auth,"actual_private_uri_debug":key_auth,
+        "explicit_sftp_request_concurrency_selection":if key_auth { Some(2) } else { None },
+        "explicit_connect_timeout_seconds":if key_auth { Some(6) } else { None },
+        "request_concurrency_or_timeout_bound_measured":false,"server_host_identity_verified":false})
+    );
+    Ok(())
+}
+
+fn history_result<T>(
+    stage: &'static str,
+    started: std::time::Instant,
+    result: verysync_sidecar::Result<T>,
+) -> verysync_sidecar::Result<T> {
+    if let Err(error) = &result {
+        let mut cause = error;
+        for depth in 0..4 {
+            eprintln!(
+                "private history failure: stage={stage} elapsed_ms={} depth={depth} error={cause:?}",
+                started.elapsed().as_millis()
+            );
+            match cause {
+                verysync_sidecar::Error::MutationOutcomeUnknown { source, .. } => cause = source,
+                verysync_sidecar::Error::Http { response }
+                | verysync_sidecar::Error::Api { response, .. }
+                | verysync_sidecar::Error::AccessDenied { response }
+                | verysync_sidecar::Error::InvalidResponse { response, .. } => {
+                    eprintln!(
+                        "private history response: status={} bytes={} body_omitted=true",
+                        response.status(),
+                        response.body_bytes().len()
+                    );
+                    break;
+                }
+                _ => break,
+            }
+        }
+    }
+    result
+}
+
 async fn past_archive_generation(core: &ManagedInstance, stamp: &str) -> TestResult {
-    let selected = chrono::DateTime::parse_from_rfc3339(stamp)?.timestamp();
+    let selected = stamp
+        .parse::<jiff::Timestamp>()?
+        .as_nanosecond()
+        .div_euclid(1_000_000_000);
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let status = core.client().system_status().await?;
-            let now = chrono::DateTime::parse_from_rfc3339(
-                status
-                    .now_time
-                    .as_deref()
-                    .ok_or("native current clock absent")?,
-            )?
-            .timestamp();
+            let now = status
+                .now_time
+                .as_deref()
+                .ok_or("native current clock absent")?
+                .parse::<jiff::Timestamp>()?
+                .as_nanosecond()
+                .div_euclid(1_000_000_000);
             if now > selected {
                 break;
             }
@@ -260,6 +758,10 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
     let new = b"second distinct synthetic replacement version bytes";
     std::fs::write(source.join("version-sample.bin"), initial_bytes)?;
     let (af, bf) = register(&a, &b, &source, &receive).await?;
+    assert!(matches!(
+        b.client().folder_version_inventory(&bf.id).await,
+        Err(verysync_sidecar::Error::Http { response }) if response.status()==500
+    ));
     let initial = b.client().folder_versioning(&bf.id).await?;
     assert_eq!(initial.kind, "");
     let configured = b
@@ -282,12 +784,28 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
         configured.configuration.filesystem_type,
         initial.filesystem_type
     );
+    // Establish the separate lazy native disk buffer before real peer changes.
+    match b
+        .client()
+        .subscribe_disk_events(verysync_sidecar::EventOptions::default())
+        .await
+    {
+        Ok(stream) => stream.close().await?,
+        Err(verysync_sidecar::Error::Transport { .. }) => (),
+        Err(error) => return Err(error.into()),
+    }
     a.client().resume_folder(&af.id).await?;
     b.client().resume_folder(&bf.id).await?;
     a.client().request_scan(&af.id).await?;
     eprintln!("private version stage: initial-transfer");
     data(&receive.join("version-sample.bin"), initial_bytes).await?;
     assert!(b.client().folder_versions(&bf.id, None).await?.0.is_empty());
+    assert!(b
+        .client()
+        .folder_version_inventory(&bf.id)
+        .await?
+        .0
+        .is_empty());
     for bytes in [old.as_slice(), middle.as_slice(), new.as_slice()] {
         // Archive names use one-second timestamps; create distinct revisions.
         tokio::time::sleep(Duration::from_millis(1100)).await;
@@ -296,7 +814,59 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
         eprintln!("private version stage: remote-update");
         data(&receive.join("version-sample.bin"), bytes).await?;
     }
+    let remote_cursor = verysync_sidecar::EventCursor {
+        source: verysync_sidecar::EventSource::Disk,
+        device_id: b.client().instance().device_id.clone(),
+        engine_started_at: b.client().system_status().await?.start_time,
+        last_id: 0,
+    };
+    let mut disk = b
+        .client()
+        .subscribe_disk_events(
+            verysync_sidecar::EventOptions::default().resume_from(remote_cursor)?,
+        )
+        .await?;
+    let remote_changes = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut count = 0;
+        while count < 4 {
+            let item = disk.next().await.ok_or("remote disk stream ended")??;
+            if let verysync_sidecar::EventStreamItem::Event(event) = item {
+                assert_eq!(event.cursor.source, verysync_sidecar::EventSource::Disk);
+                assert!(!format!("{event:?}").contains("version-sample.bin"));
+                if event.kind == verysync_sidecar::EventKind::RemoteChangeDetected
+                    && event.data()["folderID"] == bf.id.as_str()
+                    && event.data()["path"] == "version-sample.bin"
+                {
+                    assert_eq!(event.data()["action"], "modified");
+                    assert_eq!(event.data()["type"], "file");
+                    count += 1;
+                }
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(count)
+    })
+    .await??;
+    assert_eq!(remote_changes, 4);
+    disk.close().await?;
     let history = b.client().folder_versions(&bf.id, None).await?;
+    let inventory = b.client().folder_version_inventory(&bf.id).await?;
+    assert_eq!(inventory.0.len(), history.0.len());
+    for (name, versions) in &history.0 {
+        let all = inventory
+            .0
+            .get(name)
+            .ok_or("whole inventory omitted a known native archive")?;
+        let records = |items: &[verysync_sidecar::ArchivedFileVersion]| {
+            items
+                .iter()
+                .map(|v| (v.version_time.clone(), v.mod_time.clone(), v.size))
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(records(all), records(versions));
+    }
+    assert!(!format!("{inventory:?}").contains("version-sample.bin"));
+    assert_eq!(std::fs::read(receive.join("version-sample.bin"))?, new);
+
     let versions = history
         .0
         .get("version-sample.bin")
@@ -366,7 +936,7 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
     std::fs::remove_dir_all(root)?;
     println!(
         "public version history evidence: {}",
-        serde_json::json!({"actual_default_disabled":true,"actual_simple_configuration":true,"actual_archive_location_preserved":true,"actual_remote_old_to_new_update":true,"actual_keep_two_after_three_remote_updates":true,"actual_file_prefix_observes_empty_descendants":true,"actual_nonempty_versions_and_original_size":true,"actual_source_stopped_before_restore":true,"actual_exact_old_bytes_restored":true,"actual_restored_sha256":true,"actual_stopped_source_new_bytes_preserved":true,"actual_disable_preserves_archives":true,"actual_normal_both_owned_tree_exits":true})
+        serde_json::json!({"actual_remote_disk_change_events":4,"actual_default_disabled":true,"whole_version_inventory_empty_and_actual_two_archives":true,"whole_inventory_retains_exact_browse_records":true,"paused_versioner_error_not_empty":true,"actual_simple_configuration":true,"actual_archive_location_preserved":true,"actual_remote_old_to_new_update":true,"actual_keep_two_after_three_remote_updates":true,"actual_file_prefix_observes_empty_descendants":true,"actual_nonempty_versions_and_original_size":true,"actual_source_stopped_before_restore":true,"actual_exact_old_bytes_restored":true,"actual_restored_sha256":true,"actual_stopped_source_new_bytes_preserved":true,"actual_disable_preserves_archives":true,"actual_normal_both_owned_tree_exits":true})
     );
     Ok(())
 }
@@ -474,7 +1044,12 @@ async fn public_free_audit_settings_report_unretained_enable_and_empty_pages() -
         assert_eq!(result.total, 0);
         assert!(result.records.is_none() && result.error.is_none());
     }
-    core.client().reset_audit_history().await?;
+    let started = std::time::Instant::now();
+    history_result(
+        "empty-audit-reset",
+        started,
+        core.client().reset_audit_history().await,
+    )?;
     assert_eq!(core.client().audit_history(1, 10).await?.total, 0);
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
@@ -793,7 +1368,21 @@ shutil.move(str(source),str(destination/'kept.bin'))
     a.client().request_scan(&af.id).await?;
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let status = b.client().folder_status(&bf.id).await?;
+            let started = std::time::Instant::now();
+            let status = b.client().folder_status(&bf.id).await;
+            if status.is_err() {
+                eprintln!(
+                    "private failed-archiver state: {}",
+                    serde_json::json!({
+                        "callback_marker_present":external.join("failed-invocation.json").is_file(),
+                        "receiver_previous_bytes_retained":std::fs::read(receive.join(name)).is_ok_and(|bytes|bytes==final_bytes),
+                        "source_refused_bytes_retained":std::fs::read(source.join(name)).is_ok_and(|bytes|bytes==refused),
+                        "external_archive_bytes_retained":std::fs::read(external.join("kept.bin")).is_ok_and(|bytes|bytes==new),
+                        "no_extra_native_request":true
+                    })
+                );
+            }
+            let status = history_result("failed-archiver-folder-status", started, status)?;
             if status.pull_errors.is_some_and(|n| n > 0)
                 && external.join("failed-invocation.json").is_file()
             {

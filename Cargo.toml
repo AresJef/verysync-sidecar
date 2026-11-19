@@ -18,7 +18,9 @@ include = [
     "/src/**/*.rs",
     "/examples/**/*.rs",
     "/tests/**/*.rs",
+    "/tests/fixtures/resource-protocol.json",
     "/scripts/**/*.py",
+    "/scripts/trace-native-folder-opener.ps1",
     "/scripts/storage-test-requirements.txt",
     "/docs/public/**/*.md",
     "/docs/capabilities.csv",
@@ -32,7 +34,7 @@ include = [
 ]
 
 [dependencies]
-chrono = { version = "=0.4.42", default-features = false, features = ["std"] }
+jiff = { version = "=0.2.38", default-features = false, features = ["std"] }
 flate2 = { version = "1.1.11", default-features = false, features = ["miniz_oxide"], optional = true }
 fs2 = "0.4.3"
 percent-encoding = "2.3.2"
@@ -49,7 +51,8 @@ url = "2.5.8"
 rawzip = { version = "0.5.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.191"
+# Keep the verified MIPS64 GNU ABI until newer bindings pass the compile guard.
+libc = "=0.2.186"
 
 [target.'cfg(windows)'.dependencies]
 dunce = "1.0.5"
@@ -59,6 +62,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 default = ["tls"]
 tls = ["reqwest/rustls"]
 engine-tests = []
+host-configuration-tests = ["engine-tests"]
 download = ["tls", "dep:flate2", "dep:tar", "dep:rawzip"]
 
 [dev-dependencies]
@@ -71,6 +75,16 @@ rmpv = "1.3.1"
 sha2 = "0.10.9"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
+
+[[test]]
+name = "ldap_trusted_ca_engine"
+path = "tests/ldap_trusted_ca_engine.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "browser_engine"
+path = "tests/browser_engine.rs"
+required-features = ["engine-tests"]
 
 [[test]]
 name = "engine_control"
@@ -193,6 +207,16 @@ path = "tests/file_transfer_engine.rs"
 required-features = ["engine-tests", "download"]
 
 [[test]]
+name = "disk_full_engine"
+path = "tests/disk_full_engine.rs"
+required-features = ["engine-tests", "download"]
+
+[[test]]
+name = "resource_usage_engine"
+path = "tests/resource_usage_engine.rs"
+required-features = ["engine-tests", "download"]
+
+[[test]]
 name = "file_history_engine"
 path = "tests/file_history_engine.rs"
 required-features = ["engine-tests"]
@@ -245,4 +269,29 @@ required-features = ["engine-tests"]
 [[test]]
 name = "local_sync_configuration_engine"
 path = "tests/local_sync_configuration_engine.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "configuration_engine"
+path = "tests/configuration_engine.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "authentication_engine"
+path = "tests/authentication_engine.rs"
+required-features = ["engine-tests"]
+
+[[example]]
+name = "native_folder_opener"
+path = "examples/native_folder_opener.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "wallpaper_engine"
+path = "tests/wallpaper_engine.rs"
+required-features = ["engine-tests"]
+
+[[test]]
+name = "host_control_engine"
+path = "tests/host_control_engine.rs"
 required-features = ["engine-tests"]

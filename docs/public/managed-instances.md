@@ -35,7 +35,7 @@ async fn open_dedicated(
 The caller supplies a Tokio runtime with I/O/timers, an absolute executable path,
 an absolute state path whose parent already exists, and an explicit endpoint.
 On Unix use `state.join("gui.sock")`; the portable socket path limit is checked.
-HTTP uses a literal loopback IP and an explicit nondefault port, with no proxy
+HTTP(S) uses a literal loopback IP and an explicit nondefault port, with no proxy
 prefix or TLS. Startup does not discover a running instance or choose a default
 management address. State must be representable losslessly by the program's
 UTF-8 configuration protocol; local filesystem operations retain native paths.
@@ -48,6 +48,10 @@ protected owner/SYSTEM DACL on Windows. The program's identity, GUI/API credenti
 folders and unrelated settings persist across subsequent starts. Fresh state
 disables discovery, trackers, relays, NAT, TCP punching, automatic upgrades and tray/browser
 startup; explicitly configured later networking settings are retained.
+The creating process explicitly unlocks its library lease when ownership ends.
+An incidental duplicate file descriptor does not extend that lifetime; an
+inherited owner value in another process must not unlock the creating process's
+lease. Process-tree exit remains a separate shutdown requirement.
 Unix child processes also receive state-local HOME and XDG profile/cache paths;
 the caller's environment is not changed. Windows retains its dedicated
 APPDATA/LOCALAPPDATA/USERPROFILE and temporary paths.
@@ -81,7 +85,14 @@ Startup returns only after authenticated management readiness and comparison
 with the persisted device identity. Spawn, HTTP acknowledgement, configuration
 readback and process-tree exit are separate observations. `wait_for_exit()` sends
 no shutdown request; it waits for actual exit/empty native containment and release
-of the state lease. A timeout around that wait leaves the owner intact. Dropping
+of the state lease. `ManagedExit` reports `tree_stopped` and `state_released`
+separately. After containment exit, the owner observes the exact upstream state
+lock becoming available while still holding its separate library lease. Both
+conditions share the existing final five-second cleanup window; no second startup
+is attempted and no startup request is retried. If resource release cannot be
+confirmed, the exit wait reports cleanup failure. Lock availability is a point in
+time observation, not exclusion against unrelated launchers after lease release.
+A timeout around that wait leaves the owner intact. Dropping
 the owner requests exact cleanup; a cloned management Client does not keep it
 alive. Await an explicit exit observation when completion matters.
 
@@ -224,6 +235,31 @@ observes its retained process tree and lease release; `force_stop` is an explici
 owned termination action. A borrowed Client cannot safely force a PID it does
 not own. Saved identity/configuration and local samples remain after shutdown.
 
+`Client::request_restart` is the distinct native `POST /rest/system/restart`
+action. It checks identity, sends one request and validates the fixed engine's
+`ok: restarting` acknowledgement. It does not wait, retry, launch a replacement
+program or certify another management generation. A missing/malformed or
+unrecognized success body is `MutationOutcomeUnknown`; reconcile explicitly.
+
+An external native monitor may relaunch its program. The library deliberately
+runs its owned inner program with monitoring owned by the caller's Rust handle;
+the native restart request makes that inner program exit normally with code 3.
+Observe that exact tree/lease exit, then explicitly use `ManagedInstance::restart`
+when a new owned generation is wanted. For ordinary owned restarts, use that
+method directly. The native test separately verifies the request receipt,
+unforced exit code 3, subsequent explicit relaunch with the same device ID and a
+changed start time, retained folder settings/data, and final normal zero-code exit.
+A borrowed client cannot observe OS-tree exit by itself. For an externally
+monitored instance, compare authenticated identity/start-time observations
+separately; successful command acknowledgement alone is insufficient.
+
+```no_run
+# async fn request(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+client.request_restart().await?;
+// Observe the caller's external monitor or owned lifecycle explicitly.
+# Ok(()) }
+```
+
 The compiled `manage_owned` example accepts:
 
 ```text
@@ -339,3 +375,43 @@ inside its own temporary process, then frees its calibration console. Acceptance
 rejects an additional/unverified owned console or a newly visible console window,
 while preserving the raw association/member observations. It does not detach or
 hide the caller's existing console.
+
+`Error::ManagedStateInUse { lock }` distinguishes `ManagedStateLock::LibraryLease`
+from `ManagedStateLock::EngineLock`. These report which admission lock was busy,
+without exposing private paths or authorizing deletion, takeover or termination.
+The error does not imply that the native engine lock has a library owner.
+
+## Explicit owned HTTPS and endpoint adoption (unreleased)
+
+`ManagedOptions` accepts an explicit HTTP or HTTPS URL with a literal loopback
+IP, a nondefault port and no prefix. HTTPS requires the `tls` feature. Supply
+client trust and an explicit proxy through `management_transport()`; normal
+certificate and hostname verification stays enabled. The fixed native GUI TLS
+flag is selected from the managed endpoint on each explicit startup.
+
+Server certificate/key provisioning is separate. The native automatically
+generated GUI certificate names its host and may not match a loopback-IP URL.
+Prepare matching native certificate/key material with private permissions in
+the controlled owned state while its core is stopped, and supply the appropriate
+client trust. This API does not install certificates, change system trust or
+silently bypass a mismatch. A default HTTP/Unix startup can establish owned
+state before that explicit provisioning. The synchronization identity key pair
+is separate from the GUI TLS pair.
+
+`ManagedInstance::reconnect_management(ConnectOptions)` performs read-only
+authentication and requires the original owned device identity and program
+version. A conflicting expected ID, remote/prefixed endpoint or socket outside
+the selected private state is rejected. The exact native process owner and
+mutation lock shared with existing clients remain in place. Failure retains
+the prior client and startup selections. An exited owner cannot adopt another
+connection. This method does not update native GUI configuration, issue a
+shutdown or transfer ownership to an arbitrary running process.
+
+After successful explicit adoption, future owned starts retain the selected
+local endpoint and management trust/proxy policy. Active connection limits
+come from the supplied ConnectOptions; managed-start deadlines keep their
+independent configuration. `connect_existing()` also checks the stored native
+TLS selection and uses the selected transport. A plaintext selection does not
+match persisted HTTPS state. Native normal start, stop, same-state restart and
+read-only existing connection are tested separately from the earlier listener
+write and from complete same-source platform acceptance, which remains pending.

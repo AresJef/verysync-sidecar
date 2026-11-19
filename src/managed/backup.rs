@@ -174,9 +174,9 @@ impl ManagedInstance {
     /// cooperative; the private worker retains its locks until I/O has ended.
     pub async fn backup_state(&self, options: StateBackupOptions) -> Result<StateBackup> {
         if !self.state_ready_for_backup
-            || !self
-                .exit_snapshot()
-                .is_some_and(|e| e.tree_stopped && !e.forced && e.code == Some(0))
+            || !self.exit_snapshot().is_some_and(|e| {
+                e.tree_stopped && e.state_released && !e.forced && e.code == Some(0)
+            })
         {
             return Err(rejected("a known normally stopped generation is required"));
         }

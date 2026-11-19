@@ -1,6 +1,7 @@
 # Public-source allowlist. Internal plans, research and machine state stay local.
 /*
 !/.gitignore
+!/.gitattributes
 !/Cargo.toml
 !/Cargo.lock
 !/LICENSE-MIT

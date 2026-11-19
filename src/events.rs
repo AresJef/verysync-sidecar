@@ -1,6 +1,6 @@
 //! Bounded, caller-owned event subscriptions for the fixed baseline.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::time::Duration;
 
@@ -10,6 +10,112 @@ use tokio::task::JoinHandle;
 
 use crate::{Client, DeviceId, Error, ResponseDiagnostic, Result, BASELINE_ENGINE_VERSION};
 
+/// A fixed native event buffer. Sequence IDs belong only to their source.
+///
+/// Disk changes use a separate native subscription from ordinary engine events.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum EventSource {
+    /// Ordinary engine events from `GET /rest/events` with the native default mask.
+    Standard,
+    /// Local and remote disk changes from `GET /rest/events/disk`.
+    Disk,
+    /// A canonical explicit name selection on `GET /rest/events`.
+    Filtered(EventFilter),
+    /// Native Local-API index-event buffer; optional canonical filter. Cursors
+    /// are never interchangeable with GUI-key standard/disk/filtered sources.
+    LocalIndex(Option<EventFilter>),
+}
+
+/// A bounded, canonical selection of native event names.
+///
+/// Names are sorted and deduplicated, so input order does not change a cursor's
+/// source. Unknown names remain explicit; validation does not prove that the
+/// fixed native engine recognizes them. Ordinary Debug excludes all names.
+#[derive(Clone, Eq, PartialEq)]
+pub struct EventFilter {
+    names: String,
+}
+impl EventFilter {
+    /// Select 1..=64 event kinds, each name at most 128 UTF-8 bytes.
+    ///
+    /// Empty names, commas, controls and whitespace are rejected. Unknown names
+    /// can be supplied through [`EventKind::Unknown`] without losing spelling.
+    ///
+    /// ```
+    /// use verysync_sidecar::{EventFilter, EventKind};
+    /// let filter = EventFilter::new([
+    ///     EventKind::StateChanged,
+    ///     EventKind::ConfigurationSaved,
+    ///     EventKind::StateChanged,
+    /// ])?;
+    /// assert_eq!(filter.names().collect::<Vec<_>>(), ["ConfigSaved", "StateChanged"]);
+    /// # Ok::<(), verysync_sidecar::Error>(())
+    /// ```
+    pub fn new(kinds: impl IntoIterator<Item = EventKind>) -> Result<Self> {
+        Self::from_names(kinds.into_iter().map(|kind| match kind {
+            EventKind::ConfigurationSaved => "ConfigSaved".to_owned(),
+            EventKind::FolderPaused => "FolderPaused".to_owned(),
+            EventKind::FolderResumed => "FolderResumed".to_owned(),
+            EventKind::StateChanged => "StateChanged".to_owned(),
+            EventKind::LocalChangeDetected => "LocalChangeDetected".to_owned(),
+            EventKind::RemoteChangeDetected => "RemoteChangeDetected".to_owned(),
+            EventKind::Unknown(name) => name,
+        }))
+    }
+    fn from_names(names: impl IntoIterator<Item = String>) -> Result<Self> {
+        let mut selected = BTreeSet::new();
+        for (index, name) in names.into_iter().enumerate() {
+            if index >= 64
+                || name.is_empty()
+                || name.len() > 128
+                || name
+                    .chars()
+                    .any(|c| c == ',' || c.is_control() || c.is_whitespace())
+            {
+                return Err(invalid_options());
+            }
+            selected.insert(name);
+        }
+        if selected.is_empty() {
+            return Err(invalid_options());
+        }
+        Ok(Self {
+            names: selected.into_iter().collect::<Vec<_>>().join(","),
+        })
+    }
+    /// Inspect the selected names in canonical order; these can be sensitive.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.names.split(',')
+    }
+    pub(crate) fn query_value(&self) -> &str {
+        &self.names
+    }
+}
+impl fmt::Debug for EventFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventFilter")
+            .field("name_count", &self.names().count())
+            .finish()
+    }
+}
+impl Serialize for EventFilter {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        self.names.serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for EventFilter {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let names = String::deserialize(deserializer)?;
+        Self::from_names(names.split(',').map(str::to_owned)).map_err(serde::de::Error::custom)
+    }
+}
+
 /// A consumed position in the upstream event sequence, bound to engine identity.
 ///
 /// The start time is the upstream string, not a durable generation identifier.
@@ -17,7 +123,9 @@ use crate::{Client, DeviceId, Error, ResponseDiagnostic, Result, BASELINE_ENGINE
 /// no unobserved restart occurred between subscriptions.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EventCursor {
-    /// Authenticated engine device identity.
+    /// Native buffer whose sequence IDs this cursor describes.
+    pub source: EventSource,
+    /// Selected engine device identity.
     pub device_id: DeviceId,
     /// Reported engine start time, when available.
     pub engine_started_at: Option<String>,
@@ -27,6 +135,7 @@ pub struct EventCursor {
 impl fmt::Debug for EventCursor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EventCursor")
+            .field("source", &self.source)
             .field("device_id", &self.device_id)
             .field("generation_reported", &self.engine_started_at.is_some())
             .field("last_id", &self.last_id)
@@ -46,6 +155,10 @@ pub enum EventKind {
     FolderResumed,
     /// One folder's activity state changed.
     StateChanged,
+    /// The native engine detected a local filesystem change.
+    LocalChangeDetected,
+    /// The native engine applied a change received from a peer.
+    RemoteChangeDetected,
     /// Another upstream name, retained without discarding its payload.
     Unknown(String),
 }
@@ -56,6 +169,8 @@ impl fmt::Debug for EventKind {
             Self::FolderPaused => "FolderPaused",
             Self::FolderResumed => "FolderResumed",
             Self::StateChanged => "StateChanged",
+            Self::LocalChangeDetected => "LocalChangeDetected",
+            Self::RemoteChangeDetected => "RemoteChangeDetected",
             Self::Unknown(_) => "Unknown(..)",
         })
     }
@@ -306,6 +421,8 @@ impl WireEvent {
             "FolderPaused" => EventKind::FolderPaused,
             "FolderResumed" => EventKind::FolderResumed,
             "StateChanged" => EventKind::StateChanged,
+            "LocalChangeDetected" => EventKind::LocalChangeDetected,
+            "RemoteChangeDetected" => EventKind::RemoteChangeDetected,
             _ => EventKind::Unknown(self.name),
         };
         EngineEvent {
@@ -327,14 +444,15 @@ pub(crate) fn validate_wire(events: &[WireEvent], limit: usize) -> bool {
         && events.windows(2).all(|pair| pair[0].id < pair[1].id)
 }
 
-async fn head(client: &Client) -> Result<EventCursor> {
+async fn head(client: &EventConnection, source: &EventSource) -> Result<EventCursor> {
     let status = client.system_status().await?;
-    let latest = client.event_wire(0, 1).await?;
+    let latest = client.event_wire(source, 0, 1).await?;
     let after = client.system_status().await?;
     if status.start_time != after.start_time {
         return Err(Error::EventGenerationChanged);
     }
     Ok(EventCursor {
+        source: source.clone(),
         device_id: status.device_id,
         engine_started_at: status.start_time,
         last_id: latest.last().map_or(0, |e| e.id),
@@ -350,35 +468,157 @@ impl Client {
     /// snapshot before requesting a known available tail; this avoids the fixed
     /// engine's broken response observed for a cursor ahead of its current ID.
     pub async fn subscribe_events(&self, options: EventOptions) -> Result<EventSubscription> {
-        tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
-            reason: "event subscriptions require a Tokio runtime with I/O and timers",
-        })?;
-        if let Some(cursor) = &options.cursor {
-            if cursor.device_id != self.instance().device_id {
-                return Err(Error::IdentityMismatch {
-                    expected: cursor.device_id.clone(),
-                    actual: self.instance().device_id.clone(),
-                });
-            }
-        }
-        verify_version(self).await?;
-        let latest = head(self).await?;
-        let cursor = options.cursor.clone().unwrap_or_else(|| latest.clone());
-        let (sender, receiver) = mpsc::channel(options.queue_capacity);
-        let worker_cursor = cursor.clone();
-        let client = self.clone();
-        let task = tokio::spawn(async move {
-            run(client, options, worker_cursor, latest, sender).await;
-        });
-        Ok(EventSubscription {
-            receiver,
-            task: Some(task),
-            cursor,
-        })
+        self.subscribe_event_source(EventSource::Standard, options)
+            .await
+    }
+
+    /// Observe the fixed native disk-change buffer using a caller-owned stream.
+    ///
+    /// Uses the same bounded queue, continuity checks and finite read recovery
+    /// as [`Self::subscribe_events`]. Disk and ordinary cursors are rejected when
+    /// supplied to the other source, before network reads. No configuration or
+    /// file mutation is performed to manufacture an event.
+    ///
+    /// In v2.33.2 a newly created, empty disk buffer can interrupt its response.
+    /// Initial errors are returned without starting a task or retrying. That
+    /// first request registers the native disk subscription; after an actual
+    /// change, callers can explicitly try again. A successful initial read
+    /// excludes earlier changes unless a disk cursor is supplied.
+    pub async fn subscribe_disk_events(&self, options: EventOptions) -> Result<EventSubscription> {
+        self.subscribe_event_source(EventSource::Disk, options)
+            .await
+    }
+
+    /// Observe an explicit native name selection using its own source-bound cursor.
+    ///
+    /// Names are sent as one `events` query value per `GET /rest/events`. The native
+    /// engine maintains buffers by their resolved mask; a new selection begins
+    /// observing only after registration and can have the same empty-buffer
+    /// interruption described in [`Self::subscribe_disk_events`]. No event is
+    /// manufactured, no initial read is retried and history is not reconstructed.
+    /// Unknown names are passed explicitly, without claiming native recognition.
+    pub async fn subscribe_filtered_events(
+        &self,
+        filter: EventFilter,
+        options: EventOptions,
+    ) -> Result<EventSubscription> {
+        self.subscribe_event_source(EventSource::Filtered(filter), options)
+            .await
+    }
+
+    async fn subscribe_event_source(
+        &self,
+        source: EventSource,
+        options: EventOptions,
+    ) -> Result<EventSubscription> {
+        subscribe(EventConnection::Management(self.clone()), source, options).await
     }
 }
 
-async fn verify_version(client: &Client) -> Result<()> {
+impl crate::LocalApiClient {
+    /// Observe the native licensed Local-API index buffer using the same bounded
+    /// queue, source-bound cursor, explicit gap notifications and finite read
+    /// recovery as management streams. Initial failures start no task and are
+    /// not retried. This registers a native in-memory event subscription only;
+    /// it never enables licensing, manufactures an event or changes files.
+    pub async fn subscribe_index_events(&self, options: EventOptions) -> Result<EventSubscription> {
+        subscribe(
+            EventConnection::LocalApi(self.clone()),
+            EventSource::LocalIndex(None),
+            options,
+        )
+        .await
+    }
+    /// Observe one explicit canonical name filter on the Local-API index source.
+    /// Filtered/default and GUI-key cursors remain distinct. Unknown names are
+    /// sent explicitly, without claiming native recognition or reliable history.
+    pub async fn subscribe_filtered_index_events(
+        &self,
+        filter: EventFilter,
+        options: EventOptions,
+    ) -> Result<EventSubscription> {
+        subscribe(
+            EventConnection::LocalApi(self.clone()),
+            EventSource::LocalIndex(Some(filter)),
+            options,
+        )
+        .await
+    }
+}
+
+#[derive(Clone)]
+enum EventConnection {
+    Management(Client),
+    LocalApi(crate::LocalApiClient),
+}
+impl EventConnection {
+    fn instance(&self) -> &crate::InstanceInfo {
+        match self {
+            Self::Management(client) => client.instance(),
+            Self::LocalApi(client) => client.instance(),
+        }
+    }
+    async fn version(&self) -> Result<crate::EngineVersion> {
+        match self {
+            Self::Management(client) => client.version().await,
+            Self::LocalApi(client) => client.version().await,
+        }
+    }
+    async fn system_status(&self) -> Result<crate::SystemStatus> {
+        match self {
+            Self::Management(client) => client.system_status().await,
+            Self::LocalApi(client) => client.system_status().await,
+        }
+    }
+    async fn event_wire(
+        &self,
+        source: &EventSource,
+        since: u64,
+        limit: usize,
+    ) -> Result<Vec<WireEvent>> {
+        match self {
+            Self::Management(client) => client.event_wire(source, since, limit).await,
+            Self::LocalApi(client) => client.index_event_wire(source, since, limit).await,
+        }
+    }
+}
+async fn subscribe(
+    client: EventConnection,
+    source: EventSource,
+    options: EventOptions,
+) -> Result<EventSubscription> {
+    tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
+        reason: "event subscriptions require a Tokio runtime with I/O and timers",
+    })?;
+    if let Some(cursor) = &options.cursor {
+        if cursor.source != source {
+            return Err(Error::InvalidConfiguration {
+                reason: "event cursor belongs to another native event source",
+            });
+        }
+        if cursor.device_id != client.instance().device_id {
+            return Err(Error::IdentityMismatch {
+                expected: cursor.device_id.clone(),
+                actual: client.instance().device_id.clone(),
+            });
+        }
+    }
+    verify_version(&client).await?;
+    let latest = head(&client, &source).await?;
+    let cursor = options.cursor.clone().unwrap_or_else(|| latest.clone());
+    let (sender, receiver) = mpsc::channel(options.queue_capacity);
+    let worker_cursor = cursor.clone();
+    let task = tokio::spawn(async move {
+        run(client, options, worker_cursor, latest, sender).await;
+    });
+    Ok(EventSubscription {
+        receiver,
+        task: Some(task),
+        cursor,
+    })
+}
+
+async fn verify_version(client: &EventConnection) -> Result<()> {
     if client.version().await?.version != BASELINE_ENGINE_VERSION {
         return Err(Error::IncompatibleVersion {
             actual: "event engine is outside the fixed baseline".to_owned(),
@@ -406,7 +646,7 @@ async fn gap(
     .await
 }
 async fn batch(
-    client: &Client,
+    client: &EventConnection,
     options: &EventOptions,
     cursor: &mut EventCursor,
     latest: EventCursor,
@@ -427,7 +667,7 @@ async fn batch(
         *cursor = latest;
     } else if latest.last_id > cursor.last_id {
         let events = client
-            .event_wire(cursor.last_id, options.batch_limit)
+            .event_wire(&cursor.source, cursor.last_id, options.batch_limit)
             .await?;
         if client.system_status().await?.start_time != cursor.engine_started_at {
             return Err(Error::EventGenerationChanged);
@@ -467,7 +707,7 @@ fn invalid_batch() -> Error {
     }
 }
 async fn run(
-    client: Client,
+    client: EventConnection,
     options: EventOptions,
     mut cursor: EventCursor,
     initial: EventCursor,
@@ -494,7 +734,7 @@ async fn run(
             }
             let latest = match snapshot.take() {
                 Some(latest) => latest,
-                None => head(&client).await?,
+                None => head(&client, &cursor.source).await?,
             };
             if recovering
                 && !send(

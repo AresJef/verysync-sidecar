@@ -5,6 +5,74 @@ use managed_fixture::{options, TestResult};
 use std::{collections::BTreeMap, time::Duration};
 use verysync_sidecar::{CoreLogLevel, ManagedInstance};
 
+fn native_cli_output_shape(bytes: &[u8]) -> serde_json::Value {
+    let text = String::from_utf8_lossy(bytes);
+    let labels = [
+        "Configuration file:",
+        "Device private key & certificate files:",
+        "GUI / API HTTPS private key & certificate files:",
+        "Database location:",
+        "Log file:",
+        "GUI override directory:",
+        "Default sync folder directory:",
+    ];
+    let known_words = [
+        "configuration",
+        "file",
+        "device",
+        "private",
+        "key",
+        "certificate",
+        "files",
+        "gui",
+        "api",
+        "https",
+        "database",
+        "location",
+        "log",
+        "override",
+        "directory",
+        "default",
+        "sync",
+        "folder",
+        "error",
+        "failed",
+        "cannot",
+        "not",
+        "supported",
+        "support",
+        "windows",
+        "platform",
+        "shell",
+        "completions",
+        "completion",
+        "install",
+        "uninstall",
+        "unknown",
+        "command",
+        "powershell",
+        "bash",
+        "zsh",
+        "fish",
+        "on",
+    ];
+    let lines = text.lines().take(64).map(|line| {
+        let trimmed = line.trim();
+        serde_json::json!({
+            "bytes":line.len(),
+            "leading_ascii_whitespace":line.bytes().take_while(u8::is_ascii_whitespace).take(4).collect::<Vec<_>>(),
+            "heading":labels.iter().position(|label| *label == trimmed),
+            "absolute_path_shape":std::path::Path::new(trimmed).is_absolute(),
+            "known_words":line.split_whitespace().take(32).filter_map(|word| {
+                let word=word.trim_matches(|c:char| !c.is_ascii_alphabetic());
+                known_words.iter().find(|known| known.eq_ignore_ascii_case(word)).copied()
+            }).collect::<Vec<_>>(),
+            "carriage_returns":line.bytes().filter(|b| *b == b'\r').count(),
+        })
+    }).collect::<Vec<_>>();
+    serde_json::json!({"bytes":bytes.len(),"utf8":std::str::from_utf8(bytes).is_ok(),"nul":bytes.contains(&0),"utf8_bom":bytes.starts_with(&[239,187,191]),"line_limit":64,"lines":lines,"raw_values_logged":false})
+}
+
 #[tokio::test]
 async fn public_stopped_database_commands_capture_counts_metadata_and_reset_effects() -> TestResult
 {
@@ -547,13 +615,14 @@ async fn public_profiles_metrics_and_clone_serialization_preserve_the_owned_core
             "first_end_ns":first.0.checked_add(first.1),"second_start_ns":second.0,
             "controller_elapsed_ns":start.elapsed().as_nanos()})
     );
-    // Verify both complete requested one-second native intervals and actual
-    // non-overlap, rather than inferring serialization from a caller clock.
+    // Verify complete requested one-second native intervals. Native pprof uses
+    // a wall-clock Unix start and a monotonic elapsed duration; adding them is
+    // not a reliable cross-request non-overlap assertion (Windows CI observed
+    // an 11.2us overlap). The separate transport body-gate contract verifies
+    // clone request ordering through full response completion without changing
+    // native profile bytes or adding an arbitrary timestamp tolerance.
+    // https://github.com/golang/go/blob/go1.24.2/src/runtime/pprof/proto.go
     assert!(first.1 >= 1_000_000_000 && second.1 >= 1_000_000_000);
-    assert!(first
-        .0
-        .checked_add(first.1)
-        .is_some_and(|end| end <= second.0));
     assert!(format!("{heap:?} {one:?} {before:?}").len() < 512);
     assert_eq!(core.client().system_status().await?.device_id, identity);
     let gui = core
@@ -697,5 +766,239 @@ async fn public_core_errors_logs_levels_and_owned_diagnostics() -> TestResult {
         })
     );
     std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_stopped_native_storage_paths_preserve_owned_state_and_identity() -> TestResult {
+    use verysync_sidecar::{Error, NativeStoragePathsOutcome};
+    let root = tempfile::Builder::new().prefix("vpaths-").tempdir()?.keep();
+    let sentinel = root.join("synthetic sample \u{4e8c}.txt");
+    let sample = b"native paths must never modify synchronization data";
+    std::fs::write(&sentinel, sample)?;
+    let state_input = root.join("owned state \u{4e8c}");
+    let mut core = ManagedInstance::start(options(&state_input)?).await?;
+    let id = core.client().instance().device_id.clone();
+    let native_home = core
+        .client()
+        .native_system_paths()
+        .await?
+        .user_home_directory;
+    let expected_default = std::path::PathBuf::from(native_home.to_protocol()?).join("Sync");
+    assert!(matches!(
+        core.inspect_native_storage_paths(Duration::from_secs(10))
+            .await,
+        Err(Error::ManagedFailure { .. })
+    ));
+    assert_eq!(core.client().system_status().await?.device_id, id);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    let state = core.state_directory().to_owned();
+    let protected = [
+        "setting.dat",
+        "key.pem",
+        "cert.pem",
+        "https-key.pem",
+        "https-cert.pem",
+    ];
+    let before = protected
+        .iter()
+        .map(|name| std::fs::read(state.join(name)))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(matches!(
+        core.inspect_native_storage_paths(Duration::ZERO).await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert!(core
+        .inspect_native_storage_paths(Duration::from_nanos(1))
+        .await
+        .is_err());
+    let exit = core
+        .inspect_native_storage_paths(Duration::from_secs(10))
+        .await?;
+    if exit.outcome != NativeStoragePathsOutcome::Success {
+        eprintln!(
+            "native paths output diagnostic: code={:?} outcome={:?} shape={}",
+            exit.code,
+            exit.outcome,
+            native_cli_output_shape(exit.diagnostic.body_bytes())
+        );
+    }
+    assert_eq!(exit.outcome, NativeStoragePathsOutcome::Success);
+    assert!(exit.tree_stopped && exit.code == Some(0));
+    let paths = exit.paths.as_ref().ok_or("missing native typed paths")?;
+    assert_eq!(paths.configuration_file, state.join("setting.dat"));
+    assert_eq!(paths.device_private_key, state.join("key.pem"));
+    assert_eq!(paths.device_certificate, state.join("cert.pem"));
+    assert_eq!(paths.https_private_key, state.join("https-key.pem"));
+    assert_eq!(paths.https_certificate, state.join("https-cert.pem"));
+    assert_eq!(paths.database_directory, state.join("index-v2"));
+    assert_eq!(paths.log_file, state.join("verysync.log"));
+    assert_eq!(paths.gui_override_directory, state.join("gui"));
+    assert_eq!(paths.default_sync_directory, expected_default);
+    // Windows can report its native account home rather than the environment
+    // profile. Never open or change that caller-owned default location.
+    if expected_default.starts_with(&state) {
+        assert!(!paths.default_sync_directory.exists());
+    }
+    if let Some(prefix) = &exit.native_preamble {
+        assert!(!prefix.body_bytes().is_empty());
+        assert!(exit
+            .diagnostic
+            .body_bytes()
+            .starts_with(prefix.body_bytes()));
+    }
+    assert!(!format!("{exit:?}").contains("owned state"));
+    assert!(std::str::from_utf8(exit.diagnostic.body_bytes())?.contains("Configuration file:"));
+    for (name, bytes) in protected.iter().zip(&before) {
+        assert_eq!(&std::fs::read(state.join(name))?, bytes);
+    }
+    assert_eq!(std::fs::read(&sentinel)?, sample);
+    core.restart(Duration::from_secs(10)).await?;
+    assert_eq!(core.client().instance().device_id, id);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert_eq!(std::fs::read(&sentinel)?, sample);
+    std::fs::remove_dir_all(&root)?;
+    eprintln!("native storage paths evidence: {{\"actual_complete_nine_native_paths\":true,\"explicit_owned_home_and_profile\":true,\"default_matches_native_home\":true,\"outside_default_path_never_opened\":true,\"absent_owned_default_directory_stays_absent\":true,\"native_preamble_retained\":true,\"running_owner_refused\":true,\"invalid_deadlines_refused\":true,\"configuration_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"synthetic_sample_retained\":true,\"both_normal_owned_tree_exits\":true}}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_native_completion_instructions_keep_private_text_and_owned_profile() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        LocalProgram, ManagedOptions, NativeCompletionAction, NativeCompletionOutcome,
+    };
+    let root = tempfile::Builder::new()
+        .prefix("vcomplete-")
+        .tempdir()?
+        .keep();
+    let state = root.join("core");
+    let selected = options(&state)?;
+    let filename = if cfg!(windows) {
+        "owned engine \u{4e8c}.exe"
+    } else {
+        "owned engine \u{4e8c}"
+    };
+    let program = root.join(filename);
+    std::fs::copy(selected.program().path(), &program)?;
+    let digest: [u8; 32] = Sha256::digest(std::fs::read(&program)?).into();
+    #[cfg(unix)]
+    let endpoint = verysync_sidecar::ManagementEndpoint::unix_socket(state.join("gui.sock"))?;
+    #[cfg(windows)]
+    let endpoint = {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        verysync_sidecar::ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?
+    };
+    let opts = ManagedOptions::new(
+        LocalProgram::new(&program)?.expected_sha256(digest),
+        &state,
+        endpoint,
+    )?
+    .startup_timeout(Duration::from_secs(25))?;
+    let mut core = ManagedInstance::start(opts).await?;
+    let id = core.client().instance().device_id.clone();
+    assert!(matches!(
+        core.native_completion_instructions(
+            NativeCompletionAction::Install,
+            Duration::from_secs(10)
+        )
+        .await,
+        Err(verysync_sidecar::Error::ManagedFailure { .. })
+    ));
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    let protected = [
+        "setting.dat",
+        "key.pem",
+        "cert.pem",
+        "https-key.pem",
+        "https-cert.pem",
+    ];
+    let before = protected
+        .iter()
+        .map(|n| std::fs::read(core.state_directory().join(n)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let sentinel = core.state_directory().join("profile").join(".zshrc");
+    let bytes = b"synthetic shell customization must remain unchanged\n";
+    std::fs::write(&sentinel, bytes)?;
+    assert!(matches!(
+        core.native_completion_instructions(NativeCompletionAction::Install, Duration::ZERO)
+            .await,
+        Err(verysync_sidecar::Error::InvalidConfiguration { .. })
+    ));
+    #[cfg(unix)]
+    {
+        let outside = root.join("outside-profile.txt");
+        std::fs::write(&outside, b"outside owned-state boundary")?;
+        let alias = core
+            .state_directory()
+            .join("profile")
+            .join("unexpected-alias");
+        std::os::unix::fs::symlink(&outside, &alias)?;
+        assert!(matches!(
+            core.native_completion_instructions(
+                NativeCompletionAction::Install,
+                Duration::from_secs(10)
+            )
+            .await,
+            Err(verysync_sidecar::Error::UnmanagedState)
+        ));
+        assert_eq!(std::fs::read(&outside)?, b"outside owned-state boundary");
+        assert_eq!(std::fs::read(&sentinel)?, bytes);
+        std::fs::remove_file(alias)?;
+    }
+    let mut instruction_receipts = 0;
+    let mut unsupported_shell_receipts = 0;
+    for action in [
+        NativeCompletionAction::Install,
+        NativeCompletionAction::Uninstall,
+    ] {
+        let exit = core
+            .native_completion_instructions(action, Duration::from_secs(10))
+            .await?;
+        assert_eq!(exit.action, action);
+        if exit.outcome != NativeCompletionOutcome::InstructionText {
+            eprintln!("native completion output diagnostic: action={action:?} code={:?} outcome={:?} shape={}", exit.code, exit.outcome, native_cli_output_shape(exit.diagnostic.body_bytes()));
+        }
+        assert!(exit.tree_stopped);
+        if cfg!(windows) && exit.code == Some(1) {
+            // This exact upstream dependency resolves Windows' COMSPEC, but
+            // provides templates only for bash/zsh/fish. Other failures stay red.
+            let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_owned());
+            let expected = format!(": error: unsupported shell {shell}");
+            let text = std::str::from_utf8(exit.diagnostic.body_bytes())?;
+            assert!(text
+                .lines()
+                .last()
+                .is_some_and(|line| line.ends_with(&expected)));
+            assert_eq!(exit.outcome, NativeCompletionOutcome::Failure);
+            assert!(exit.instruction_text().is_none());
+            unsupported_shell_receipts += 1;
+        } else {
+            assert_eq!(exit.code, Some(0));
+            assert_eq!(exit.outcome, NativeCompletionOutcome::InstructionText);
+            let text = exit
+                .instruction_text()
+                .ok_or("missing native completion instructions")?;
+            assert!(text.contains(filename));
+            assert_eq!(text.as_bytes(), exit.diagnostic.body_bytes());
+            instruction_receipts += 1;
+        }
+        assert!(!format!("{exit:?}").contains(filename));
+        assert_eq!(std::fs::read(&sentinel)?, bytes);
+        for (n, expected) in protected.iter().zip(&before) {
+            assert_eq!(&std::fs::read(core.state_directory().join(n))?, expected);
+        }
+    }
+    core.restart(Duration::from_secs(10)).await?;
+    assert_eq!(core.client().instance().device_id, id);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert_eq!(std::fs::read(&sentinel)?, bytes);
+    std::fs::remove_dir_all(&root)?;
+    assert_eq!(instruction_receipts + unsupported_shell_receipts, 2);
+    eprintln!("native completion evidence: {{\"instruction_text_receipts\":{instruction_receipts},\"native_unsupported_shell_receipts\":{unsupported_shell_receipts},\"unicode_and_space_program_path_preserved\":true,\"no_sdk_shell_evaluation\":true,\"synthetic_shell_configuration_retained\":true,\"private_state_and_identity_bytes_retained\":true,\"same_identity_after_explicit_restart\":true,\"both_normal_owned_tree_exits\":true}}");
     Ok(())
 }

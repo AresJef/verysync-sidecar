@@ -1,0 +1,269 @@
+"""Synthetic offline contracts are not native runtime evidence."""
+import copy
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from test_resource_measurement_quality import fixture
+
+SPEC = importlib.util.spec_from_file_location("resource_report", Path(__file__).resolve().parents[1] / "report-native-resources.py")
+REPORT = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(REPORT)
+COLLECT = REPORT.module("report_test_collector", "collect-native-resources.py")
+METRICS = REPORT.module("report_test_metrics", "measure-native-resources.py")
+PROTOCOL = Path(__file__).resolve().parents[2] / "tests/fixtures/resource-protocol.json"
+
+
+def save(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((json.dumps(value, indent=2)+"\n").encode("utf-8"))
+
+
+def add_darwin_receipts(report, protocol):
+    policy=protocol.get("observer_process_activity")
+    if policy is not None:
+        receipt={"scope":"observer-process-only","worker_started_before_begin":True,
+                 "requested_options":policy['darwin_options'],"started":True,"ended":False,
+                 "usage_role":"measurement","diagnostic_only":False,
+                 "idle_sleep_disabled":False,"display_sleep_disabled":False,"system_settings_changed":False}
+        report['observer_process_activity']=receipt
+        report['observer_process_activity_after']={**receipt,'ended':True}
+    if "darwin_metric_reader" in protocol:
+        library = "f" * 64
+        report["source"]["darwin_reader_library_sha256"] = library
+        report["metric_reader"] = {"kind": "darwin-proc-taskallinfo", "owned_processes": 2,
+                                   "library_sha256": library}
+
+
+def dataset(root, *, windows_paths=False, changed_source=False, reused_process=False, readiness=None,
+            rss_change=None):
+    protocol = REPORT.read(PROTOCOL)
+    if readiness is False:
+        protocol.pop("preparation_readiness", None)
+    elif readiness is not None:
+        protocol["preparation_readiness"] = readiness
+    fingerprint = hashlib.sha256((json.dumps(protocol, indent=2)+"\n").encode()).hexdigest()
+    source = {**protocol["source_inputs"], "profile": "release", "rustc_version": "rustc 1.85.0 (synthetic)",
+              "source_commit": "SYNTHETIC-TEST-ONLY", "source_tree": "SYNTHETIC-TEST-ONLY"}
+    next_case = 0
+
+    def attempt(folder, stage, scenario, *, changed=False, reused=False):
+        nonlocal next_case
+        report, rows = fixture()
+        case = 0 if reused else next_case
+        next_case += 1
+        report.update(stage=stage, formal_sample=stage != "pilot", scenario=scenario,
+                      repeats=protocol["scenarios"][scenario]["repeats"], source=copy.deepcopy(source),
+                      protocol_sha256=fingerprint,
+                      calibration={"psutil": "7.2.2", "clock": {"monotonic": True, "adjustable": False},
+                                   "platform": "synthetic-Linux-test-only",
+                                   "metric_reads": 1000, "cpu_observed_span_s": .1,
+                                   "rss_touched_bytes": 16777216, "rss_growth_bytes": 16777216},
+                      observer_thread_policy={"policy": "unchanged", "scope": "observer-thread-only"},
+                      observer_process_activity={"scope":"not-applicable","started":False})
+        if "darwin_metric_reader" in protocol:
+            report["metric_reader"] = {"kind": "psutil"}
+        if changed:
+            report["source"]["sampler_sha256"] = "wrong"
+        report["identities"] = copy.deepcopy(report["before"])
+        for points in [report["identities"], report["before"], report["after"]] + [[r["controller"], r["engine"]] for r in rows]:
+            for index, point in enumerate(points):
+                point.update(pid=100+case*2+index, creation_time=100+case)
+        if rss_change and scenario == "stream-large":
+            amount, independent_only = rss_change
+            if not independent_only or stage == "independent":
+                for row in rows:
+                    row["controller"]["rss_bytes"] += amount
+        config = protocol["scenarios"][scenario]
+        report["events"][0].update(scenario=scenario, repeats=config["repeats"], bytes_each=config["bytes_each"], files=config["files"],
+                                   controller_sha256=[1]*32, engine_sha256="a"*64, engine_version="v2.33.2")
+        calls = 0 if scenario == "idle" else config["files"]*config["repeats"]
+        report["events"][2].update(completed_calls=calls, transferred_bytes=calls*config["bytes_each"])
+        quality = METRICS.summarize(report, rows)
+        save(folder / "preparation-result.json", report); save(folder / "quality-result.json", quality)
+        for filename, values in [("samples.jsonl", rows), ("events.jsonl", report["events"])]:
+            (folder / filename).write_text("".join(json.dumps(v)+"\n" for v in values))
+        return quality, {p.name: REPORT.digest(p) for p in folder.iterdir()}
+
+    for stage in ["formal", "independent"]:
+        directory = root / stage; save(directory / "frozen-protocol.json", protocol)
+        state = {"status": "COMPLETE", "protocol_sha256": fingerprint, "accepted": {}}
+        for cycle, order in enumerate(protocol[stage+"_orders"]):
+            group = {"cycle": cycle, "attempt": 1, "order": order, "slots": [], "status": "VALID", "start_unix": 0, "end_unix": 120}
+            for slot, scenario in enumerate(order):
+                path = directory / f"cycle-{cycle}-attempt-1/slot-{slot}-{scenario}"
+                last = stage == "independent" and cycle == 1 and slot == 3
+                quality, hashes = attempt(path, stage, scenario, changed=changed_source and last, reused=reused_process and last)
+                relative = path.relative_to(directory).as_posix()
+                group["slots"].append({"scenario": scenario, "directory": relative.replace("/", "\\") if windows_paths else relative,
+                                       "exit_code": 0, "quality": quality, "sha256": hashes})
+            target = directory / f"cycle-{cycle}-attempt-1/accepted-group.json"
+            save(target, group); save(target.with_name("attempt.json"), group)
+            relative = target.relative_to(directory).as_posix()
+            state["accepted"][str(cycle)] = {"manifest": relative.replace("/", "\\") if windows_paths else relative, "sha256": REPORT.digest(target)}
+        save(directory / "collection-state.json", state)
+    save(root / "collection-state.json", {"stage": "all", "status": "COMPLETE", "protocol_sha256": fingerprint})
+    preparation = root / "preparation"
+    trials = []
+    for cycle, order in enumerate(protocol["formal_orders"][:2]):
+        for slot, scenario in enumerate(order):
+            attempt(preparation / f"cycle-{cycle}-slot-{slot}-{scenario}", "pilot", scenario)
+            trials.append({"cycle": cycle, "slot": slot, "scenario": scenario, "exit_code": 0})
+    save(preparation / "pretrial-result.json", {"status": "PREPARATION_COMPLETE", "protocol_sha256": fingerprint, "attempts": trials})
+    return protocol, fingerprint
+
+
+class ResourceReportContracts(unittest.TestCase):
+    def report(self, root, protocol, fingerprint):
+        return REPORT.profile_report("macos-arm64-standard", root, protocol, fingerprint, COLLECT, METRICS)
+
+    def test_all_registered_cycles_and_windows_manifest_paths_validate_offline(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); protocol, fingerprint = dataset(root, windows_paths=True)
+            result = self.report(root, protocol, fingerprint)
+            self.assertEqual(result["performance"], "PASS")
+            self.assertEqual(result["accepted_native_cases"], 24)
+            self.assertEqual(result["fresh_formal_and_independent_processes"], 48)
+            self.assertEqual(result["attempted_cases"], 24)
+
+    def test_hosted_profile_gate_requires_pass_and_exact_source(self):
+        gate = Path(REPORT.__file__).with_name("check-native-resource-profile.py")
+        source = "SYNTHETIC-TEST-ONLY"
+        for rss_change, tree, engine, expected, diagnostic in [
+            (None, source, "a" * 64, 0, '"performance": "PASS"'),
+            (None, "another-tree", "a" * 64, 1, "source or engine identity differs"),
+            (None, source, "b" * 64, 1, "source or engine identity differs"),
+            ((32 << 20, False), source, "a" * 64, 1, "performance=FAIL"),
+            ((12 << 20, True), source, "a" * 64, 1, "performance=INCONCLUSIVE"),
+        ]:
+            with self.subTest(rss_change=rss_change, tree=tree, engine=engine), tempfile.TemporaryDirectory() as name:
+                root = Path(name)
+                collection = root / "collection"
+                dataset(collection, rss_change=rss_change)
+                check = subprocess.run([
+                    sys.executable, str(gate), "--profile", "linux-amd64-standard",
+                    "--protocol", str(PROTOCOL), "--collection", str(collection),
+                    "--preparation", str(collection / "preparation"), "--output", str(root / "report"),
+                    "--source", source, "--tree", tree, "--engine-sha256", engine,
+                ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                self.assertIn(diagnostic, check.stdout)
+                self.assertEqual(check.returncode, expected)
+                self.assertTrue((root / "report/resource-report.json").is_file())
+
+    def test_windows_text_defaults_do_not_rewrite_synthetic_frozen_identity(self):
+        original = Path.write_text
+        def windows_default(path, data, *args, **kwargs):
+            kwargs.setdefault("newline", "\r\n")
+            return original(path, data, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as name, patch.object(Path, "write_text", windows_default):
+            root = Path(name); protocol, fingerprint = dataset(root, windows_paths=True)
+            self.assertEqual(self.report(root, protocol, fingerprint)["performance"], "PASS")
+
+    def test_changed_raw_bytes_are_never_accepted(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); protocol, fingerprint = dataset(root)
+            path = next((root / "formal").rglob("samples.jsonl")); path.write_text("{}\n")
+            with self.assertRaisesRegex(ValueError, "raw record"):
+                self.report(root, protocol, fingerprint)
+
+    def test_changed_source_and_reused_independent_process_are_rejected(self):
+        for option, message in [("changed_source", "source"), ("reused_process", "fresh processes")]:
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as name:
+                root = Path(name); protocol, fingerprint = dataset(root, **{option: True})
+                with self.assertRaisesRegex(ValueError, message):
+                    self.report(root, protocol, fingerprint)
+
+    def test_missing_cycle_or_preparation_never_becomes_pass(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); protocol, fingerprint = dataset(root)
+            prep = root / "preparation/pretrial-result.json"; prep.unlink()
+            self.assertEqual(self.report(root, protocol, fingerprint)["performance"], "INCONCLUSIVE")
+            state_path = root / "independent/collection-state.json"; state = REPORT.read(state_path)
+            del state["accepted"]["1"]; save(state_path, state)
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                self.report(root, protocol, fingerprint)
+
+    def test_record_paths_cannot_escape_on_either_host_syntax(self):
+        for path in ["../outside", "..\\outside", "/absolute", "C:\\outside", "\\\\host\\share"]:
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                REPORT.record_path(Path("/synthetic"), path)
+
+    def test_darwin_observer_receipt_must_follow_worker_start(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); protocol, _ = dataset(root)
+            folder = next((root / "formal").rglob("preparation-result.json")).parent
+            report = REPORT.read(folder / "preparation-result.json")
+            report["calibration"]["platform"] = "macOS-synthetic-test-only"
+            add_darwin_receipts(report,protocol)
+            expected = protocol["observer_policy"].get("darwin_qos_class", 0x19)
+            policy = "darwin-user-interactive" if expected == 0x21 else "darwin-user-initiated"
+            report["observer_thread_policy"].update(requested=expected, observed=expected,
+                policy=policy, worker_started_before_assignment=True)
+            save(folder / "preparation-result.json", report)
+            _, quality = REPORT.check_attempt(folder, protocol, "formal", METRICS)
+            self.assertEqual(quality["status"], "VALID")
+            report["observer_thread_policy"]["worker_started_before_assignment"] = False
+            save(folder / "preparation-result.json", report)
+            with self.assertRaisesRegex(ValueError, "observer scheduling policy"):
+                REPORT.check_attempt(folder, protocol, "formal", METRICS)
+
+    def test_current_activity_contract_rejects_missing_end_or_sleep_inhibitors(self):
+        with tempfile.TemporaryDirectory() as name:
+            root=Path(name);protocol,_=dataset(root)
+            folder=next((root/'formal').rglob('preparation-result.json')).parent
+            report=REPORT.read(folder/'preparation-result.json')
+            report['calibration']['platform']='macOS-synthetic-test-only'
+            report['observer_thread_policy'].update(requested=33,observed=33,policy='darwin-user-interactive',worker_started_before_assignment=True)
+            add_darwin_receipts(report,protocol);save(folder/'preparation-result.json',report)
+            REPORT.check_attempt(folder,protocol,'formal',METRICS)
+            report['observer_process_activity_after']['ended']=False;save(folder/'preparation-result.json',report)
+            with self.assertRaisesRegex(ValueError,'process activity'):REPORT.check_attempt(folder,protocol,'formal',METRICS)
+            report['observer_process_activity_after']['ended']=True
+            report['observer_process_activity']['idle_sleep_disabled']=True;save(folder/'preparation-result.json',report)
+            with self.assertRaisesRegex(ValueError,'process activity'):REPORT.check_attempt(folder,protocol,'formal',METRICS)
+
+    def test_darwin_observer_receipt_must_match_the_frozen_class_and_name(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); protocol, _ = dataset(root)
+            protocol["observer_policy"]["darwin_qos_class"] = 0x21
+            folder = next((root / "formal").rglob("preparation-result.json")).parent
+            report = REPORT.read(folder / "preparation-result.json")
+            report["calibration"]["platform"] = "macOS-synthetic-test-only"
+            add_darwin_receipts(report,protocol)
+            report["observer_thread_policy"].update(requested=0x21, observed=0x21,
+                policy="darwin-user-interactive", worker_started_before_assignment=True)
+            save(folder / "preparation-result.json", report)
+            _, quality = REPORT.check_attempt(folder, protocol, "formal", METRICS)
+            self.assertEqual(quality["status"], "VALID")
+            for field, value in [("requested", 0x19), ("observed", 0x19),
+                                 ("policy", "darwin-user-initiated")]:
+                original = report["observer_thread_policy"][field]
+                report["observer_thread_policy"][field] = value
+                save(folder / "preparation-result.json", report)
+                with self.assertRaisesRegex(ValueError, "observer scheduling policy"):
+                    REPORT.check_attempt(folder, protocol, "formal", METRICS)
+                report["observer_thread_policy"][field] = original
+            save(folder / "preparation-result.json", report)
+            protocol["observer_policy"]["darwin_qos_class"] = 0xff
+            with self.assertRaisesRegex(ValueError, "observer scheduling policy"):
+                REPORT.check_attempt(folder, protocol, "formal", METRICS)
+
+    def test_memory_stability_failure_and_insufficiency_remain_separate(self):
+        protocol = REPORT.read(PROTOCOL)
+        def cases(small, large):
+            return {name: [{"controller": {"sampled_peak_rss_bytes": value}} for value in
+                           (large if name == "stream-large" else small)] for name in protocol["scenarios"]}
+        self.assertEqual(REPORT.conclude(cases([10]*6, [20]*6), protocol)["performance"], "PASS")
+        self.assertEqual(REPORT.conclude(cases([10]*6, [20000000]*6), protocol)["performance"], "FAIL")
+        self.assertEqual(REPORT.conclude(cases([10]*6, [20]*5+[10000000]), protocol)["performance"], "INCONCLUSIVE")
+        self.assertEqual(REPORT.describe([1, 2, 100])["maximum"], 100)
+        self.assertEqual(REPORT.describe([1, 2, 100])["mean"], 103/3)
+
+
+if __name__ == "__main__":
+    unittest.main()

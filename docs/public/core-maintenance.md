@@ -18,6 +18,16 @@ encodes it as a query value. It performs no automatic polling, deduplication,
 pagination, or conversion to the controller's timezone. Native log rotation and
 concurrent writes can create gaps; this is not a durable logging subscription.
 
+`core_log_text(since)` reads the native `/rest/system/log.txt` snapshot once.
+`CoreLogText.text` preserves exact UTF-8, native prefixes and line endings;
+it is neither reconstructed from JSON log entries nor written to a controller
+logger. Empty filtered output is valid. Invalid UTF-8 remains an error with
+bounded private response bytes. The timestamp has the same bounded,
+control-free input rules as `core_log`, retains its offset and precision, and is
+encoded once. Reads check the target identity and retain normal response limits
+and deadlines without retry, polling or draining the native log. Ordinary Debug
+omits text values; inspect and redact the explicit field before logging it.
+
 `core_log_levels()` returns active native package identifiers, their levels and
 descriptions. `set_core_log_levels()` updates only 1–128 explicitly selected
 existing packages. `Debug`, `Info`, `Warn` and `Error` map to the verified native
@@ -32,6 +42,9 @@ readback does not promise persistence across a program restart.
 use std::collections::BTreeMap;
 use verysync_sidecar::CoreLogLevel;
 
+let text_snapshot = client.core_log_text(None).await?;
+// Inspect text_snapshot.text explicitly; redact it before application logging.
+# let _ = text_snapshot;
 let before = client.core_log_levels().await?;
 let changed = client.set_core_log_levels(&BTreeMap::from([
     ("main".to_owned(), CoreLogLevel::Debug),
@@ -105,7 +118,12 @@ caller's telemetry configuration. The isolated local native case verifies both
 authenticated collection and denied unauthenticated collection while that flag
 remains false. It also checks native GC count observation, complete heap/CPU
 gzip data, clone serialization, unchanged instance identity and normal owned
-process exit. Same-source six-native acceptance for profiles and metrics remains
+process exit. A separate response-body gate contract verifies that a cloned
+profile call cannot send its identity or profile request before the preceding
+profile body is complete. Native pprof timestamps combine a wall-clock start
+with an elapsed duration; their sum is retained for diagnostics and is not used
+as a cross-request ordering clock. No timestamp tolerance or speed claim is
+introduced. Same-source six-native acceptance for profiles and metrics remains
 pending; these observations are functional evidence, not a performance score.
 
 ## Explicit synchronization-index reset
@@ -203,3 +221,44 @@ if result.outcome == DatabaseCommandOutcome::Success {
 }
 # Ok(()) }
 ```
+
+## Explicit native support archive
+
+`Client::collect_core_support_bundle()` explicitly collects
+`GET /rest/debug/support` from the authenticated fixed v2.33.2 program. It
+returns `CoreSupportBundle` with unchanged private ZIP bytes through
+`body_bytes()` / `into_body_bytes()`. The SDK performs no file save, extraction,
+entry rewriting or native-filename-based path selection. Native HTTP attachment
+headers remain available through the separate raw-request API when needed.
+
+The fixed handler gathers configuration, in-memory logs, version/platform,
+usage information, metrics and connection statistics. It also attempts native
+heap, CPU and goroutine profiles, including a native four-second CPU collection.
+Unavailable components can be omitted by the engine; a returned ZIP does not
+promise every profile was collected. This is a functional archive operation,
+not a performance benchmark or a CPU-sampling quality guarantee.
+
+Although this is an HTTP GET, collection changes native GC/profiler state. It
+uses the connection's mutation lock and is never retried. Existing deadlines
+and response-byte bounds apply without extension. Cancellation, a lost response,
+a response limit or malformed archive acknowledgement can leave
+`MutationOutcomeUnknown`; collection can continue on the target after the future
+ends. The library does not take control of the caller's logging, profiler or
+process lifetime. It does not change the GUI debugging preference; an isolated
+free baseline instance returned a valid archive with that preference false.
+
+The SDK checks only a nonempty ZIP signature and minimum byte length. It does
+not decompress, validate CRCs, validate archive paths or prove complete native
+redaction. Treat the bytes and any explicit decoded fields as sensitive target
+data. The native configuration entry was observed to replace the management API
+key with `REDACTED`; this is not a guarantee that all logs, profiles, paths or
+other values are safe to publish. The response bound limits compressed bytes;
+callers must bound decompression and validate entries before using archive tools.
+
+Native validation independently decodes the archive with the Python standard
+library, checks all CRCs and required metadata, validates available compressed
+profile members and the native API-key redaction, then verifies that a separate
+4-KiB response bound rejects a real collection. Identity, unchanged settings,
+synthetic file SHA and normal owned process-tree exit are checked separately.
+Synthetic contracts cover exact bytes, malformed/empty acknowledgements, native
+errors, authorization refusal, response bounds and no automatic retries.

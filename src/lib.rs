@@ -42,11 +42,32 @@
 #![doc = include_str!("../docs/public/file-resources.md")]
 #![doc = include_str!("../docs/public/file-transfers.md")]
 #![doc = include_str!("../docs/public/file-history.md")]
+#![doc = include_str!("../docs/public/configuration.md")]
+#![doc = include_str!("../docs/public/management-authentication.md")]
+#![doc = include_str!("../docs/public/official-accounts.md")]
+#![doc = include_str!("../docs/public/licenses.md")]
+#![doc = include_str!("../docs/public/remote-management.md")]
+#![doc = include_str!("../docs/public/management-transport.md")]
+#![doc = include_str!("../docs/public/gui-listener.md")]
+#![doc = include_str!("../docs/public/target-directories.md")]
+#![doc = include_str!("../docs/public/native-helpers.md")]
+#![doc = include_str!("../docs/public/native-hardware.md")]
+#![doc = include_str!("../docs/public/native-gui-resources.md")]
+
+// Linux MIPS uses the reverse of the generic Linux stream/datagram values.
+// An incorrect libc architecture selection otherwise becomes a runtime
+// EPROTOTYPE during management connection establishment.
+#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "mips64"))]
+const _: () = assert!(libc::SOCK_STREAM == 2 && libc::SOCK_DGRAM == 1);
 
 mod auth;
+mod auxiliary;
 mod capabilities;
 mod client;
+mod configuration;
+mod device_options;
 mod devices;
+mod diagnostics_preferences;
 mod endpoint;
 mod engine_source;
 mod error;
@@ -55,47 +76,80 @@ mod file_history;
 mod file_mutations;
 mod file_transfers;
 mod files;
+mod folder_options;
+mod folder_policies;
 mod folders;
+mod gui_listener;
+mod gui_preferences;
+mod gui_session;
+mod hardware;
 mod ignores;
 mod invitations;
+mod ldap;
+mod licenses;
 mod local_sync;
 mod local_sync_events;
 mod maintenance;
 mod managed;
+mod management_auth;
+mod management_transport;
 mod network;
+mod official_account;
 mod operations;
 mod path;
 mod raw;
 mod recovery;
 mod relay;
 mod releases;
+mod remote_management;
 mod scans;
 mod scheduling;
 mod selective;
 mod sharing;
 mod status;
 mod sync_observation;
+mod system_preferences;
+mod timestamps;
 mod transports;
 mod upgrades;
 
 pub use auth::{ApiKey, DeviceId};
+pub use auxiliary::{
+    FolderTemporaryCleanup, NativeFolderOpenLocation, NativeFolderOpenReceipt, NativeGuiMetadata,
+    NativeHealth, NativeHealthStatus, NativeMigrationProgress, NativePathWriteability,
+    NativeQrCode, NativeRandomString, NativeSystemPaths, NativeUsageReport,
+    NativeWallpaperResponse, NativeWallpaperStatus, PendingNativeLink, TargetDirectoryCreation,
+    TargetDirectoryEntry, TargetDirectoryLocation, TargetIpLocation, TargetPathBrowseOptions,
+    TargetPathCompletions,
+};
 pub use capabilities::{
     library_capabilities, Capability, CapabilityReport, ImplementationStatus, InstanceConditions,
     InstanceObservation, LibraryCapability, TargetSnapshot, TargetValidation, VerificationStatus,
 };
 pub use client::{
-    Client, ConnectOptions, EngineVersion, InstanceInfo, VersionCompatibility, VersionPolicy,
+    Client, ConnectOptions, EngineVersion, InstanceInfo, LocalApiClient, LocalApiConnectOptions,
+    LocalApiExitAcknowledgement, LocalApiExitAction, LocalApiFolder,
+    LocalApiFolderCollectionUpdate, LocalApiHardware, LocalApiHistoryFilter, LocalApiHistoryPage,
+    LocalApiHistoryRecord, LocalApiPeer, LocalApiScanAcknowledgement,
+    LocalApiUpgradeAcknowledgement, VersionCompatibility, VersionPolicy,
 };
+pub use configuration::{
+    ConfigurationSectionUpdate, ConfigurationSnapshot, ConfigurationSyncState, ConfigurationUpdate,
+    DiskFreeRequirement, DiskSpaceUnit, FolderDefaults, FolderDefaultsPatch, GeneralOptions,
+    GeneralOptionsPatch, GuiConfigurationReplacement,
+};
+pub use device_options::{DeviceAdvancedConfig, DeviceAdvancedPatch, IntroductionSource};
 pub use devices::{
     CreateDeviceOptions, DeviceCompression, DeviceConfig, DeviceDefaults, DevicePatch,
     DeviceRemoval, DeviceUpdate,
 };
+pub use diagnostics_preferences::{CrashReportingPatch, DiagnosticsOptions};
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use engine_source::{EngineSource, LocalProgram, ProgramInfo};
-pub use error::{Error, ProcessDiagnostic, ResponseDiagnostic, Result};
+pub use error::{Error, ManagedStateLock, ProcessDiagnostic, ResponseDiagnostic, Result};
 pub use events::{
-    EngineEvent, EventCursor, EventGap, EventGapReason, EventKind, EventOptions, EventStreamItem,
-    EventSubscription,
+    EngineEvent, EventCursor, EventFilter, EventGap, EventGapReason, EventKind, EventOptions,
+    EventSource, EventStreamItem, EventSubscription,
 };
 pub use file_history::{
     ArchivedFileVersion, AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate,
@@ -113,11 +167,32 @@ pub use file_transfers::{
 pub use files::{
     ResourceChecksum, ResourceInfo, ResourcePath, ResourcePreview, ResourceVolume, ResourceVolumeId,
 };
+pub use folder_options::{FolderAdvancedConfig, FolderAdvancedPatch};
+pub use folder_policies::{
+    BlockPullOrder, CopyRangeMethod, ExtendedAttributeFilter, ExtendedAttributeRule, FolderType,
+};
 pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
-pub use ignores::{IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
+pub use gui_listener::{
+    GuiListenAddress, GuiListenerConfig, GuiListenerPatch, GuiListenerUpdate, GuiSocketPermissions,
+};
+pub use gui_preferences::{GuiPreferences, GuiPreferencesPatch, GuiPreferencesUpdate};
+pub use gui_session::{
+    GuiCredentialUpdate, GuiCredentials, GuiLoginOptions, GuiLogoutReceipt, GuiSession,
+};
+pub use hardware::{
+    NativeBlockDisk, NativeBlockHardware, NativeBlockPartition, NativeCpuCore, NativeCpuHardware,
+    NativeCpuPackage, NativeMemoryHardware, NativeMemoryModule, NativeNetworkHardware,
+    NativeNetworkInterface, NativeNicCapability,
+};
+pub use ignores::{IgnoreDefaults, IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
 pub use invitations::{
-    DeviceIgnoreUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
-    PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
+    DeviceIgnoreUpdate, FolderPeerEncryptionUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder,
+    IgnoredFolderUpdate, PendingDeviceInfo, PendingDismissal, PendingFolderOffer,
+    PendingFolderOffers,
+};
+pub use ldap::{GuiAuthModeUpdate, LdapConfiguration, LdapPatch, LdapTransport};
+pub use licenses::{
+    LicenseChange, LicenseEntries, LicenseExpiry, LicenseRecord, LicenseRequestKind, LicenseStatus,
 };
 pub use local_sync::{
     CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncActionResult,
@@ -137,22 +212,30 @@ pub use local_sync_events::{
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
-    CoreLogSnapshot, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest,
-    IndexResetAcknowledgement, IndexResetScope,
+    CoreLogSnapshot, CoreLogText, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest,
+    CoreSupportBundle, IndexResetAcknowledgement, IndexResetScope,
 };
 #[cfg(feature = "download")]
 pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
 pub use managed::{
     DatabaseCommand, DatabaseCommandExit, DatabaseCommandOutcome, DatabaseCountRow,
     KernelUpgradeCommand, KernelUpgradeExit, ManagedExit, ManagedInstance, ManagedLifetime,
-    ManagedOptions, ManagedUpgradeChecks, ProgramTransition, StateBackup, StateBackupInfo,
-    StateBackupOptions,
+    ManagedOptions, ManagedUpgradeChecks, NativeBrowserExit, NativeBrowserOutcome,
+    NativeCompletionAction, NativeCompletionExit, NativeCompletionOutcome, NativeStoragePaths,
+    NativeStoragePathsExit, NativeStoragePathsOutcome, NativeWatchLimitExit,
+    NativeWatchLimitObservation, NativeWatchLimitOutcome, ProgramTransition, StateBackup,
+    StateBackupInfo, StateBackupOptions,
 };
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
+pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
+pub use management_transport::{ManagementProxy, ManagementTransport};
 pub use network::{
     ConnectionSnapshot, ConnectionTotals, DeviceTransport, DiscoveryRecord, ListenerStatus,
     NetworkConfig, NetworkPatch, NetworkUpdate, PeerConnection, PeerConnectionType,
+};
+pub use official_account::{
+    OfficialAccountChange, OfficialAccountCredentials, OfficialAccountState, OfficialAccountStatus,
 };
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};
@@ -166,6 +249,7 @@ pub use releases::{
     official_programs, ArchiveFormat, BuildVariant, OfficialProgram, PinnedVersion, ProgramAbi,
     ProgramArchitecture, ProgramOs, ProgramTarget,
 };
+pub use remote_management::DeviceTunnelProbe;
 pub use scans::{FolderScanConfig, FolderScanPatch, FolderScanUpdate};
 pub use scheduling::{
     BandwidthPatch, BandwidthUpdate, FolderPullOrder, FolderSchedulingConfig,
@@ -180,11 +264,14 @@ pub use sharing::{
     GeneratedShare, JoinFolderOptions, JoinFolderResult, JoinPeerObservation, ShareKey,
     SharePermission, ValidatedShare,
 };
-pub use status::{FolderId, FolderState, FolderStatus, SystemStatus};
+pub use status::{FolderId, FolderState, FolderStatus, SystemPing, SystemStatus};
 pub use sync_observation::{
-    CompletionSnapshot, DeviceStatistics, FolderErrorPage, FolderStatistics, FolderSyncError,
+    CompletionSnapshot, DeviceStatistics, FileDownloadProgress, FolderDownloadProgress,
+    FolderErrorPage, FolderStatistics, FolderSyncError, IndexBrowseOptions, IndexFileAvailability,
+    IndexFileInfo, IndexFileMetadata, IndexFileSignature, IndexTree, IndexTreeEntry,
     LastFileObservation, ListPage, NeedPage, SyncFile, SyncFileKind, SyncFilePage,
 };
+pub use system_preferences::{NativePathSelection, SystemPreferences, SystemPreferencesPatch};
 pub use transports::{
     TrackerStatus, TransportConfig, TransportPatch, TransportStatus, TransportUpdate,
 };

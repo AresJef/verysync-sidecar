@@ -37,7 +37,9 @@ async fn observe(client: &Client) -> Result<()> {
 Without a resume cursor, `subscribe_events` establishes the current position
 before returning and excludes earlier history. `EventOptions::resume_from`
 accepts a previously consumed `EventCursor`. A cursor includes the authenticated
-device ID, last sequence ID and the engine's reported start time when available.
+device ID, native `EventSource`, last sequence ID and the engine's reported start
+time when available. Ordinary and disk buffers have independent sequence IDs;
+a cursor from one source is rejected by the other before any network reads.
 It is serializable, but is not a server-side subscription or a durable checkpoint.
 The subscription's `cursor()` advances only when `next()` returns an event or
 gap; a producer filling its queue does not acknowledge those unconsumed items.
@@ -50,6 +52,88 @@ event is not proof that files have synchronized. Ordinary Debug omits payload
 values, extra values, unknown names and the reported generation string. Real
 configuration events can include management credentials. Avoid logging or
 publishing `data()` and `extra()` indiscriminately.
+
+## Disk changes
+
+`Client::subscribe_disk_events(EventOptions)` reads the separate fixed
+`GET /rest/events/disk` buffer. It shares the bounded queue, cancellation,
+generation checks, finite read recovery and explicit gap notifications described
+here. Its cursors use `EventSource::Disk`; ordinary subscriptions use
+`EventSource::Standard`. Persist the complete cursor, including its source.
+
+`EventKind::LocalChangeDetected` and `RemoteChangeDetected` identify native disk
+change records. Inspect `data()` explicitly for the target-native `path`,
+`folder` / `folderID`, `action`, file `type`, `label`, `modifiedBy` and
+`modifiedTime`. Strings and unknown fields are retained without controller-side
+filesystem access, path normalization, timestamp conversion or identity
+expansion. A native `modifiedBy` short identifier is not a full `DeviceId`.
+These records describe native changes; a file event alone does not prove that a
+whole folder, every peer or an external network has synchronized. Debug hides
+paths and all payload values.
+
+The v2.33.2 disk buffer is created lazily. When it contains no records, the first
+request can interrupt its response instead of returning an empty list. The
+library returns that initial transport error without starting a background task
+or silently retrying. That request has registered the native subscription; the
+caller can explicitly try again after an actual change occurs. The library
+does not write a file, scan a folder or change configuration to seed the buffer.
+An empty list, if returned, remains a valid empty observation. After successful
+initial reads, the shared bounded recovery policy applies.
+
+Without a resume cursor, a successful subscription starts after the latest
+available disk record. To consume available records from the beginning, supply
+an explicit disk cursor with `last_id: 0`, the authenticated device identity and
+the currently reported start time; the usual resumed-continuity gap is still
+reported. The buffer is finite and is not a durable audit trail. Earlier changes
+that predate native subscription registration cannot be recovered through this
+endpoint. No event-name filter is invented for its fixed disk mask.
+
+## Native name selections
+
+Use `EventFilter::new` and `Client::subscribe_filtered_events` to select event
+names on the native `GET /rest/events?events=...` endpoint:
+
+```rust
+use verysync_sidecar::{Client, EventFilter, EventKind, EventOptions, Result};
+
+async fn selected(client: &Client) -> Result<()> {
+    let filter = EventFilter::new([
+        EventKind::ConfigurationSaved,
+        EventKind::StateChanged,
+    ])?;
+    let stream = client.subscribe_filtered_events(filter, EventOptions::default()).await?;
+    // Consume events and gaps before committing application state.
+    stream.close().await
+}
+```
+
+The selection accepts 1 through 64 entries, each at most 128 UTF-8 bytes. Empty
+names, commas, whitespace and controls are rejected before network reads. Names
+are sorted and deduplicated, so reordered or duplicate input has the same
+`EventSource::Filtered(filter)` cursor identity. Names serialize as one canonical
+comma-separated string; deserialization revalidates the same bounds. Debug
+shows only the number of selected names; inspect `filter.names()` explicitly.
+Known `EventKind` variants map to their verified native spellings. Explicit
+`EventKind::Unknown(name)` values preserve other spellings, without claiming that
+the fixed engine recognizes them. Native unknown-name behavior is not converted
+into a supported-feature claim.
+
+Selections are performed by the engine, without fetching and discarding a
+broader stream in the SDK. A filtered cursor is rejected by ordinary, disk or
+different-filter subscriptions before network reads. Resume with the same
+canonical filter. The native program caches finite buffers by the resolved
+event mask until its service exits. Creating selections can therefore allocate
+native buffers; closing the SDK stream cancels its task and does not delete a
+shared native buffer. The SDK conservatively keeps different canonical name
+selections distinct even if the native program resolves them to the same mask.
+
+New native masks begin observing after registration; their empty buffer can
+produce the initial interruption described for disk events. No initial retry,
+implicit mutation or reconstruction of earlier history is performed. Retained
+history and continuity remain subject to the same gap and generation limits.
+The default ordinary mask excludes disk changes; explicitly selected disk names
+on the ordinary endpoint are still a distinct SDK source from the fixed disk
+endpoint.
 
 ## Continuity and recovery
 
@@ -109,3 +193,16 @@ ahead-cursor recovery, actual normal engine shutdown and same-identity restart
 with reconnection and generation-gap notification. Synthetic transport tests
 exercise malformed/unknown schemas, finite/disabled recovery and cancellation
 observed as an actual closed HTTP connection. Evidence is recorded separately.
+
+Native disk-event tests separately observe three actual local file changes,
+bounded backpressure and four received changes during a real two-core private
+transfer. They retain the original archive/restoration byte checks, normal
+owned process exits and caller data. The initial empty-buffer interruption is
+recorded as a native limitation, with no implicit mutation or retry. These are
+functional observations, not event latency or throughput guarantees.
+
+Native filter tests separately observe a configuration-save-only stream, a
+folder-pause-only stream and a union of configuration/state changes. They verify
+independent source-bound cursors, equivalent reordered/duplicate selections,
+credential-safe Debug, retained caller data and normal owned exit. Successful
+native effects do not imply every unknown event name is recognized.

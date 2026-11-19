@@ -2,6 +2,7 @@ name: Engine fixture
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +16,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  retire-superseded-drafts:
+    name: Retire only superseded draft native CI
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify retirement ownership, source ancestry and preserved outcomes
+        run: python -m unittest discover -s scripts/tests -p test_draft_ci_retirement.py
+      - name: Cancel only older owned draft ancestor runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/cancel-superseded-draft-ci.py
   artifact-catalog:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.head_ref != 'ci/native-boundary-diagnostics-20261117-01a1ca9b' && github.head_ref != 'test/ftp-anonymous-native-20261117-01a1ca9b' && github.head_ref != 'test/native-sftp-server-identity-20261118-01a1ca9b' && github.head_ref != 'test/native-backend-outage-20261118-01a1ca9b' && github.head_ref != 'test/native-local-announcement-20261118-01a1ca9b' && github.head_ref != 'test/macos-local-announcement-address-20261118-01a1ca9b' && github.head_ref != 'test/native-explicit-tunnel-20261118-01a1ca9b' && github.head_ref != 'test/native-folder-concurrency-current-20261118-01a1ca9b' && github.head_ref != 'test/native-progress-interval-20261118-01a1ca9b' && github.head_ref != 'test/native-incoming-admission-cap-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-timeout-stage-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-prepared-index-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-staged-deadlines-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-linux-cleanup-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-readonly-exit-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-reconciled-caller-20261118-01a1ca9b' && github.head_ref != 'test/native-official-tracker-20261118-01a1ca9b' && github.head_ref != 'test/native-missing-policy-evidence-20261118-01a1ca9b' && github.head_ref != 'test/native-core-preferences-current-20261118-01a1ca9b' && (github.head_ref != 'test/native-xattr-filter-20261118-01a1ca9b' && github.head_ref != 'test/native-pending-announcement-20261118-01a1ca9b' && github.head_ref != 'test/native-parent-group-control-20261118-01a1ca9b' && github.head_ref != 'test/native-receiver-permissions-20261118-01a1ca9b' && github.head_ref != 'test/native-copy-range-syscalls-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/windows-packet-observer-feasibility-20261118-01a1ca9b' && github.head_ref != 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b' && github.head_ref != 'test/controlled-acceptance-node-20261118-01a1ca9b' && github.head_ref != 'ci/api-compatibility-tooling-20261118-01a1ca9b' && github.head_ref != 'test/native-storage-backend-acceptance-20261118-01a1ca9b' && github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b' && github.head_ref != 'ci/darwin-owned-process-read-20261118-01a1ca9b' && github.head_ref != 'ci/win7-default-abi-20261118-01a1ca9b') && github.head_ref != 'test/native-lan-bandwidth-20261118-01a1ca9b' && github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b' && github.head_ref != 'test/native-remote-advertisement-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/strict-storage-tls-defaults-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/trusted-https-webdav-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository))
     name: Fixed archive catalog (static, no engine execution)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -29,12 +50,14 @@ jobs:
         run: cargo +1.85.0 test --features engine-tests,download --test download_catalog --locked -- --nocapture
 
   fixture:
+    if: (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.head_ref != 'ci/native-boundary-diagnostics-20261117-01a1ca9b' && github.head_ref != 'test/ftp-anonymous-native-20261117-01a1ca9b' && github.head_ref != 'test/native-sftp-server-identity-20261118-01a1ca9b' && github.head_ref != 'test/native-backend-outage-20261118-01a1ca9b' && github.head_ref != 'test/native-local-announcement-20261118-01a1ca9b' && github.head_ref != 'test/macos-local-announcement-address-20261118-01a1ca9b' && github.head_ref != 'test/native-explicit-tunnel-20261118-01a1ca9b' && github.head_ref != 'test/native-folder-concurrency-current-20261118-01a1ca9b' && github.head_ref != 'test/native-progress-interval-20261118-01a1ca9b' && github.head_ref != 'test/native-incoming-admission-cap-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-timeout-stage-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-prepared-index-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-staged-deadlines-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-linux-cleanup-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-readonly-exit-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-reconciled-caller-20261118-01a1ca9b' && github.head_ref != 'test/native-official-tracker-20261118-01a1ca9b' && github.head_ref != 'test/native-missing-policy-evidence-20261118-01a1ca9b' && github.head_ref != 'test/native-core-preferences-current-20261118-01a1ca9b' && (github.head_ref != 'test/native-xattr-filter-20261118-01a1ca9b' && github.head_ref != 'test/native-pending-announcement-20261118-01a1ca9b' && github.head_ref != 'test/native-parent-group-control-20261118-01a1ca9b' && github.head_ref != 'test/native-receiver-permissions-20261118-01a1ca9b' && github.head_ref != 'test/native-copy-range-syscalls-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/windows-packet-observer-feasibility-20261118-01a1ca9b' && github.head_ref != 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b' && github.head_ref != 'test/controlled-acceptance-node-20261118-01a1ca9b' && github.head_ref != 'ci/api-compatibility-tooling-20261118-01a1ca9b' && github.head_ref != 'test/native-storage-backend-acceptance-20261118-01a1ca9b' && github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b' && github.head_ref != 'ci/darwin-owned-process-read-20261118-01a1ca9b' && github.head_ref != 'ci/win7-default-abi-20261118-01a1ca9b') && github.head_ref != 'test/native-lan-bandwidth-20261118-01a1ca9b' && github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b' && github.head_ref != 'test/native-remote-advertisement-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/strict-storage-tls-defaults-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/trusted-https-webdav-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository)))
     name: ${{ matrix.package }}
     runs-on: ${{ matrix.runner }}
-    # Complete native suites grew from baseline control to protocols/recovery.
-    # Two source1535 profiles reached the old 45-minute job capacity; individual
-    # native deadlines/workloads remain unchanged and failures still gate.
-    timeout-minutes: 55
+    # Source136 Windows native bundles reached cache suites at the65-minute
+    # job limit; later required suites and cleanup never completed. Reserve the
+    # full bundle allowance; individual operation deadlines and outcome gates
+    # remain unchanged. A cancelled/partial bundle still cannot pass acceptance.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +85,8 @@ jobs:
         shell: bash
     env:
       TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -72,7 +97,9 @@ jobs:
       - name: Check extraction and exact process inventory contracts
         run: |
           python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+          python -m unittest discover -s scripts/tests -p test_prepare_test_examples.py
           python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+          python -m unittest discover -s scripts/tests -p test_ldap_tls_fixture.py
       - name: Install native Rust toolchain
         run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
       - name: Record compiler identity
@@ -124,6 +151,42 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target managed_instance --test-filter restart_preserves_identity_folders_settings_and_samples
           --evidence-dir "${{ runner.temp }}/vs-managed-ui-proxy"
+      - name: Verify management, account, license and remote-tunnel boundaries
+        id: native_authentication_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
+      - name: Explicitly prepare the pinned private public-CA loopback TLS fixture
+        id: native_ldap_tls_preparation
+        continue-on-error: true
+        run: >-
+          python scripts/prepare-ldap-tls-fixture.py prepare
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify strict public-CA LDAP without system trust modification
+        id: native_ldap_trusted_ca_engine
+        continue-on-error: true
+        timeout-minutes: 4
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target ldap_trusted_ca_engine
+          --evidence-dir "${{ runner.temp }}/vs-ldap-trusted-ca-proxy"
+      - name: Verify actual sync, selective browse, recovery and bounded transfers
+        id: native_sync_observation
+        continue-on-error: true
+        env:
+          VERYSYNC_BANDWIDTH_PHASE: acceptance
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target sync_observation
+          --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
+      - name: Verify fixed-version upgrades, state restoration and cancellation
+        id: native_upgrade_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
       - name: Verify mounted resource metadata, checksums and native previews
         id: native_files_engine
         continue-on-error: true
@@ -145,6 +208,27 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target file_transfer_engine
           --evidence-dir "${{ runner.temp }}/vs-file-transfer-proxy"
+      - name: Verify real disk-full retention and explicit recovery on an owned bounded filesystem
+        id: native_disk_full_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-bounded-disk-full-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --evidence-dir "${{ runner.temp }}/vs-disk-full"
+      - name: Verify native host watch-limit observations and explicit refusals
+        id: native_host_watch_limit
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target host_control_engine
+          --evidence-dir "${{ runner.temp }}/vs-host-watch-limit-observations"
+      - name: Verify native browser fallback and released desktop actor in private state
+        id: native_browser_engine
+        continue-on-error: true
+        if: startsWith(matrix.package, 'macos-') || startsWith(matrix.package, 'linux-')
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target browser_engine
+          --evidence-dir "${{ runner.temp }}/vs-native-browser-proxy"
       - name: Verify actual version retention, deleted-file restoration and free audit conditions
         id: native_file_history_engine
         continue-on-error: true
@@ -205,6 +289,12 @@ jobs:
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target local_sync_configuration_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-configuration-proxy"
+      - name: Verify actual creation defaults, inheritance and persisted configuration
+        id: native_configuration_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target configuration_engine --evidence-dir "${{ runner.temp }}/vs-configuration-proxy"
       - name: Verify public host exit and native descriptor or Job ownership
         id: native_managed_lifetime
         continue-on-error: true
@@ -240,17 +330,8 @@ jobs:
         continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target network --allow-private-discovery
+          --test-target network --allow-private-discovery --test-filter actual_
           --evidence-dir "${{ runner.temp }}/vs-network-proxy"
-      - name: Verify actual sync, selective browse, recovery and bounded transfers
-        id: native_sync_observation
-        continue-on-error: true
-        env:
-          VERYSYNC_BANDWIDTH_PHASE: acceptance
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target sync_observation
-          --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
       - name: Verify read-only handoff to a fresh third node with the source stopped
         id: native_p2p_three_nodes
         continue-on-error: true
@@ -258,19 +339,25 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target p2p_three_nodes
           --evidence-dir "${{ runner.temp }}/vs-three-node-proxy"
-      - name: Verify fixed-version upgrades, state restoration and cancellation
-        id: native_upgrade_engine
-        continue-on-error: true
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
-          --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
       - name: Run independent-engine fixture contracts
         id: native_engine_control
         continue-on-error: true
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
           --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-control-proxy"
+      - name: Verify native wallpaper source denial without external permission
+        id: native_wallpaper_denied
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target wallpaper_engine --evidence-dir "${{ runner.temp }}/vs-wallpaper-denied"
+      - name: Verify explicit native wallpaper image and conditional resource
+        id: native_wallpaper_resource
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target wallpaper_engine --allow-wallpaper-source
+          --evidence-dir "${{ runner.temp }}/vs-wallpaper-resource"
       - name: Exercise public bounded events, gaps, cancellation and actual restart recovery
         id: native_events
         continue-on-error: true
@@ -336,6 +423,10 @@ jobs:
         id: native_cleanup_upgrade
         if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Remove only this job's private public-CA fixture
+        id: native_ldap_tls_cleanup
+        if: always()
+        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "${{ runner.temp }}"
       - name: Require every applicable native suite and exact cleanup
         if: always()
         env:
@@ -343,20 +434,362 @@ jobs:
           NATIVE_MATRIX_PACKAGE: ${{ matrix.package }}
         run: python scripts/check-native-step-results.py
 
-  smb-diagnostic:
-    name: SMB diagnosis only (${{ matrix.package }})
+  device-removal-diagnostic:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.head_ref != 'ci/native-boundary-diagnostics-20261117-01a1ca9b' && github.head_ref != 'test/ftp-anonymous-native-20261117-01a1ca9b' && github.head_ref != 'test/native-sftp-server-identity-20261118-01a1ca9b' && github.head_ref != 'test/native-backend-outage-20261118-01a1ca9b' && github.head_ref != 'test/native-local-announcement-20261118-01a1ca9b' && github.head_ref != 'test/macos-local-announcement-address-20261118-01a1ca9b' && github.head_ref != 'test/native-explicit-tunnel-20261118-01a1ca9b' && github.head_ref != 'test/native-folder-concurrency-current-20261118-01a1ca9b' && github.head_ref != 'test/native-progress-interval-20261118-01a1ca9b' && github.head_ref != 'test/native-incoming-admission-cap-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-timeout-stage-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-prepared-index-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-staged-deadlines-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-linux-cleanup-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-readonly-exit-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-reconciled-caller-20261118-01a1ca9b' && github.head_ref != 'test/native-official-tracker-20261118-01a1ca9b' && github.head_ref != 'test/native-missing-policy-evidence-20261118-01a1ca9b' && github.head_ref != 'test/native-core-preferences-current-20261118-01a1ca9b' && (github.head_ref != 'test/native-xattr-filter-20261118-01a1ca9b' && github.head_ref != 'test/native-pending-announcement-20261118-01a1ca9b' && github.head_ref != 'test/native-parent-group-control-20261118-01a1ca9b' && github.head_ref != 'test/native-receiver-permissions-20261118-01a1ca9b' && github.head_ref != 'test/native-copy-range-syscalls-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/windows-packet-observer-feasibility-20261118-01a1ca9b' && github.head_ref != 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b' && github.head_ref != 'test/controlled-acceptance-node-20261118-01a1ca9b' && github.head_ref != 'ci/api-compatibility-tooling-20261118-01a1ca9b' && github.head_ref != 'test/native-storage-backend-acceptance-20261118-01a1ca9b' && github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b' && github.head_ref != 'ci/darwin-owned-process-read-20261118-01a1ca9b' && github.head_ref != 'ci/win7-default-abi-20261118-01a1ca9b') && github.head_ref != 'test/native-lan-bandwidth-20261118-01a1ca9b' && github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b' && github.head_ref != 'test/native-remote-advertisement-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/strict-storage-tls-defaults-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/trusted-https-webdav-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository))
+    name: Device removal diagnosis only (linux-amd64-standard)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install the native Rust toolchain
+        run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+      - name: Fetch fixed dependencies explicitly
+        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare the fixed isolated core explicitly
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require single-DELETE snapshot, retained files and actual shared-key readmission
+        id: device_first
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --test-filter actual_single_delete_preserves_files_and_allows_share_key_readmission
+          --evidence-dir "${{ runner.temp }}/vs-device-removal-first"
+      - name: Require exact owned-core cleanup before the independent repetition
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require first actual explicit disconnect and removal with retained files
+        id: device_second
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --test-filter actual_explicit_disconnect_and_remove_preserves_files
+          --evidence-dir "${{ runner.temp }}/vs-device-removal-second"
+      - name: Verify exact owned-core cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Repeat explicit observed-disconnect and removal independently
+        id: device_explicit
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --test-filter actual_explicit_disconnect_and_remove_preserves_files
+          --evidence-dir "${{ runner.temp }}/vs-device-explicit-disconnect-remove"
+      - name: Require exact cleanup after the explicit operation
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require actual readmission and both explicit disconnect cases; not full acceptance
+        if: always()
+        env:
+          FIRST_OUTCOME: ${{ steps.device_first.outcome }}
+          SECOND_OUTCOME: ${{ steps.device_second.outcome }}
+          EXPLICIT_OUTCOME: ${{ steps.device_explicit.outcome }}
+        run: >-
+          python -c "import os,sys; sys.exit(0 if all(os.environ[k]=='success' for k in ['FIRST_OUTCOME','SECOND_OUTCOME','EXPLICIT_OUTCOME']) else 1)"
+
+
+  hardware-diagnostic:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.head_ref != 'ci/native-boundary-diagnostics-20261117-01a1ca9b' && github.head_ref != 'test/ftp-anonymous-native-20261117-01a1ca9b' && github.head_ref != 'test/native-sftp-server-identity-20261118-01a1ca9b' && github.head_ref != 'test/native-backend-outage-20261118-01a1ca9b' && github.head_ref != 'test/native-local-announcement-20261118-01a1ca9b' && github.head_ref != 'test/macos-local-announcement-address-20261118-01a1ca9b' && github.head_ref != 'test/native-explicit-tunnel-20261118-01a1ca9b' && github.head_ref != 'test/native-folder-concurrency-current-20261118-01a1ca9b' && github.head_ref != 'test/native-progress-interval-20261118-01a1ca9b' && github.head_ref != 'test/native-incoming-admission-cap-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-timeout-stage-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-prepared-index-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-staged-deadlines-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-linux-cleanup-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-readonly-exit-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-reconciled-caller-20261118-01a1ca9b' && github.head_ref != 'test/native-official-tracker-20261118-01a1ca9b' && github.head_ref != 'test/native-missing-policy-evidence-20261118-01a1ca9b' && github.head_ref != 'test/native-core-preferences-current-20261118-01a1ca9b' && (github.head_ref != 'test/native-xattr-filter-20261118-01a1ca9b' && github.head_ref != 'test/native-pending-announcement-20261118-01a1ca9b' && github.head_ref != 'test/native-parent-group-control-20261118-01a1ca9b' && github.head_ref != 'test/native-receiver-permissions-20261118-01a1ca9b' && github.head_ref != 'test/native-copy-range-syscalls-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/windows-packet-observer-feasibility-20261118-01a1ca9b' && github.head_ref != 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b' && github.head_ref != 'test/controlled-acceptance-node-20261118-01a1ca9b' && github.head_ref != 'ci/api-compatibility-tooling-20261118-01a1ca9b' && github.head_ref != 'test/native-storage-backend-acceptance-20261118-01a1ca9b' && github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b' && github.head_ref != 'ci/darwin-owned-process-read-20261118-01a1ca9b' && github.head_ref != 'ci/win7-default-abi-20261118-01a1ca9b') && github.head_ref != 'test/native-lan-bandwidth-20261118-01a1ca9b' && github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b' && github.head_ref != 'test/native-remote-advertisement-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/strict-storage-tls-defaults-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/trusted-https-webdav-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository))
+    name: Native hardware diagnosis only (${{ matrix.package }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
-          - package: windows-amd64-standard
-            runner: windows-2022
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install native Rust and fetch dependencies before runtime isolation
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed private Mac core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify native hardware data and exact observed backend-refusal conditions
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target engine_control --test-filter hardware_effects
+          --evidence-dir "${{ runner.temp }}/vs-hardware-component-diagnosis"
+      - name: Observe the upstream Darwin CPU prerequisite after the original result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, shutil, subprocess
+          binary = shutil.which('sysctl')
+          if binary is None:
+              raise ValueError('the native sysctl prerequisite is absent')
+          result = subprocess.run([binary, '-a'], capture_output=True, timeout=15)
+          print(json.dumps({'prerequisite': 'ghw v0.13.0 CPU sysctl -a',
+                            'exit_code': result.returncode,
+                            'stdout_bytes': len(result.stdout), 'stderr_bytes': len(result.stderr),
+                            'permission_error_marker': any(marker in result.stderr.lower() for marker in [b'operation not permitted', b'permission denied']),
+                            'native_output_logged': False, 'sdk_runtime_acceptance': False}))
+          PY
+      - name: Require exact owned-executable cleanup after the original result
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+
+  native-diagnostic-plan:
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository))) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/windows-packet-observer-feasibility-20261118-01a1ca9b' && github.head_ref != 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b' && github.head_ref != 'test/controlled-acceptance-node-20261118-01a1ca9b' && github.head_ref != 'ci/api-compatibility-tooling-20261118-01a1ca9b' && github.head_ref != 'test/native-storage-backend-acceptance-20261118-01a1ca9b' && github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b' && github.head_ref != 'ci/darwin-owned-process-read-20261118-01a1ca9b' && github.head_ref != 'ci/win7-default-abi-20261118-01a1ca9b') || github.event.pull_request.head.repo.full_name != github.repository)
+    name: Plan native diagnostic coverage
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Verify complete coverage and invalid-selection refusals
+        run: python -m unittest discover -s scripts/tests -p test_native_diagnostic_selection.py
+      - name: Keep complete ready/manual coverage and scope owned draft diagnosis
+        id: plan
+        run: python scripts/select-native-diagnostics.py
+
+  windows-folder-opener-diagnosis:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository))
+    name: Native helper diagnosis (${{ matrix.package }} / ${{ matrix.label || matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    needs: native-diagnostic-plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.native-diagnostic-plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
+      VERYSYNC_TEST_OPENER_TRACE: ${{ matrix.trace }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Prepare the explicit x64 protocol-peer interpreter on Windows ARM
+        if: (matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine' || matrix.target == 'authentication_engine') && matrix.package == 'windows-arm64-standard'
+        id: storage_tools_python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+          architecture: x64
+          update-environment: false
+      - name: Prepare private protocol-peer tools for storage and management cases
+        if: matrix.target == 'local_sync_protocol_engine' || matrix.target == 'file_history_engine' || matrix.target == 'local_sync_runtime_engine' || matrix.target == 'ldap_trusted_ca_engine' || matrix.target == 'authentication_engine'
+        env:
+          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
+        run: >-
+          python scripts/prepare-storage-test-environment.py
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require Cargo artifact and separate Winsock preflight contracts
+        run: python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+      - name: Install the explicit Windows x86 assembly build prerequisite
+        if: matrix.package == 'windows-386-standard'
+        shell: pwsh
+        run: |
+          choco install nasm --version=2.16.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory = Join-Path $env:ProgramFiles 'NASM'
+          $nasmBinary = Join-Path $nasmDirectory 'nasm.exe'
+          & $nasmBinary -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasmDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install native Rust and fetch locked dependencies
+        run: |
+          if [[ "${{ matrix.package }}" == "windows-386-standard" ]]; then
+            rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal --force-non-host
+          else
+            rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          fi
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare the matching fixed private core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Prepare the pinned private certificate for both strict LDAP transport cases
+        if: matrix.target == 'ldap_trusted_ca_engine' || matrix.label == 'trusted-https-identity'
+        run: >-
+          python scripts/prepare-ldap-tls-fixture.py prepare
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Prepare the pinned older source for the focused official-provider case
+        if: matrix.target == 'upgrade_engine'
+        run: >-
+          python scripts/prepare-test-engine.py prepare --upgrade-source
+          --package "${{ matrix.package }}" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe actual Windows x86 socket-provider guard inputs without changing them
+        if: matrix.package == 'windows-386-standard'
+        run: |
+          python - <<'PY'
+          import ctypes, importlib.util, json, os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('owned_opener_guard', 'scripts/run-isolated-engine-tests.py')
+          helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
+          query = ctypes.WinDLL('kernel32', use_last_error=True).GetSystemWow64DirectoryW
+          query.argtypes = [ctypes.POINTER(ctypes.c_wchar), ctypes.c_uint]; query.restype = ctypes.c_uint
+          for capacity in [260, 32768]:
+              buffer = ctypes.create_unicode_buffer(capacity); returned = query(buffer, capacity)
+              print('native WOW64 buffer control: '+json.dumps({'capacity': capacity,
+                    'returned': returned, 'filled_utf16_units': len(buffer.value.encode('utf-16-le', 'surrogatepass'))//2,
+                    'metadata_only': True}), flush=True)
+          paths = [('host-system32', Path(os.environ['SYSTEMROOT']) / 'System32' / 'mswsock.dll'),
+                   ('queried-wow64', helper.windows_wow64_directory() / 'mswsock.dll')]
+          for label, path in paths:
+              row = {'label': label, 'path': str(path), 'absolute': path.is_absolute(),
+                     'exists': path.exists(), 'is_file': path.is_file(),
+                     'is_symlink': path.is_symlink(), 'is_junction': path.is_junction(),
+                     'host_python_pointer_bits': ctypes.sizeof(ctypes.c_void_p)*8,
+                     'metadata_only': True, 'guard_overridden': False}
+              try:
+                  row.update(resolved_path=str(path.resolve(strict=True)),
+                             pe_machine=hex(helper.windows_pe_machine(path)))
+                  if path.is_symlink(): row['link_target'] = os.readlink(path)
+              except OSError as error:
+                  row.update(error_type=type(error).__name__, error=str(error)[:240])
+              print('native socket-provider guard metadata: '+json.dumps(row), flush=True)
+          PY
+      - name: Verify actual copy strategy and data on the isolated Linux receiver
+        if: matrix.label == 'native-copy-range-syscalls'
+        run: |
+          set -euo pipefail
+          if ! command -v strace >/dev/null; then
+            tool_dir=$(mktemp -d "$RUNNER_TEMP/vs-strace.XXXXXX")
+            (
+              cd "$tool_dir"
+              apt-get download strace
+              dpkg-deb -x ./strace_*.deb "$tool_dir/unpacked"
+            )
+            export PATH="$tool_dir/unpacked/usr/bin:$PATH"
+          fi
+          python scripts/run-native-copy-range-test.py --toolchain "$TEST_TOOLCHAIN" \
+            --evidence-dir "$RUNNER_TEMP/vs-native-copy-range"
+      - name: Preserve original native effects, strict predicates and deadlines
+        if: matrix.target != 'disk_full_engine' && matrix.target != 'upgrade_engine' && matrix.label != 'native-official-tracker-registration' && matrix.label != 'native-core-preference-current-contract' && matrix.label != 'native-copy-range-syscalls'
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target "${{ matrix.target }}"
+          --test-filter "${{ matrix.filter }}"
+          --evidence-dir "${{ runner.temp }}/vs-windows-folder-opener-diagnosis"
+      - name: Verify explicitly authorized official tracker registration and controlled disconnect
+        if: matrix.label == 'native-official-tracker-registration'
+        run: >-
+          python scripts/run-official-tracker-test.py --toolchain "$TEST_TOOLCHAIN"
+          --allow-official-tracker
+          --evidence-dir "${{ runner.temp }}/vs-official-tracker"
+      - name: Verify six original core preference cases on the current native source
+        if: matrix.label == 'native-core-preference-current-contract'
+        run: |
+          set -euo pipefail
+          vs_failed=0
+          for vs_case in \
+            native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart \
+            native_crash_preferences_preserve_fixed_usage_fields_and_survive_restart \
+            native_system_preferences_write_real_event_audit_and_preserve_target_selections \
+            native_temporary_retention_scans_expire_only_aged_native_inputs_and_survive_restart \
+            native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data \
+            native_narrow_configuration_reads_preserve_identity_folders_and_state
+          do
+            vs_status=0
+            python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+              --test-target configuration_engine --test-filter "$vs_case" \
+              --evidence-dir "${{ runner.temp }}/vs-current-preferences/$vs_case" || vs_status=$?
+            printf 'native core preference command receipt: {"case":"%s","exit_code":%s}\n' "$vs_case" "$vs_status"
+            if [ "$vs_status" -ne 0 ]; then vs_failed=1; fi
+          done
+          exit "$vs_failed"
+      - name: Require actual Windows requests, release boundary and complete data
+        if: matrix.label == 'native-windows-sleep-prevention-policy'
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          text = (Path(os.environ["RUNNER_TEMP"]) / "vs-windows-folder-opener-diagnosis/configuration-engine.log").read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in text
+          marker = "native idle-sleep policy evidence: "
+          phases = [json.loads(line.split(marker, 1)[1]) for line in text.splitlines() if marker in line]
+          assert [p["enabled"] for p in phases] == [False, True, False]
+          for phase in phases:
+              assert phase["actual_syncing_observed"] and phase["actual_file_bytes_transferred"]
+              assert phase["actual_system_idle_sleep_assertion_observed"] == phase["enabled"]
+              assert phase["actual_owned_windows_private_image_system_request_observed"] == phase["enabled"]
+              assert not phase["windows_request_unique_pid_attribution_claimed"]
+              if phase["native_request_retained_past_original_150s_idle_window"]:
+                  assert phase["enabled"] and not phase["actual_assertion_and_owned_helper_released_after_transfer"]
+                  assert phase["actual_explicit_disable_normal_stop_cleared_request"]
+                  assert phase["actual_persisted_restart_after_explicit_stop"]
+              else:
+                  assert phase["actual_assertion_and_owned_helper_released_after_transfer"]
+          assert "actual_three_transfers_and_source_receiver_bytes_retained=true" in text
+          assert "actual_both_normal_owned_tree_and_state_exit=true" in text
+          assert "host_power_settings_changed=false host_suspend_attempted=false" in text
+          PY
+      - name: Require actual fixed URL and official-provider CLI upgrade effects
+        if: matrix.target == 'upgrade_engine'
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --test-filter "${{ matrix.filter }}"
+          --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-focused-official-provider"
+      - name: Require real native disk-full effects and verified volume cleanup
+        if: matrix.target == 'disk_full_engine'
+        run: >-
+          python scripts/run-bounded-disk-full-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --evidence-dir "${{ runner.temp }}/vs-focused-disk-full"
+      - name: Remove only the exact prepared private LDAP certificate fixture
+        if: always() && (matrix.target == 'ldap_trusted_ca_engine' || matrix.label == 'trusted-https-identity')
+        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "${{ runner.temp }}"
+      - name: Require exact owned-executable cleanup after the original result
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+
+      - name: Require exact older owned-executable cleanup
+        if: always() && matrix.target == 'upgrade_engine'
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+
+  windows-native-browser-acceptance:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.head_ref != 'ci/native-boundary-diagnostics-20261117-01a1ca9b' && github.head_ref != 'test/ftp-anonymous-native-20261117-01a1ca9b' && github.head_ref != 'test/native-sftp-server-identity-20261118-01a1ca9b' && github.head_ref != 'test/native-backend-outage-20261118-01a1ca9b' && github.head_ref != 'test/native-local-announcement-20261118-01a1ca9b' && github.head_ref != 'test/macos-local-announcement-address-20261118-01a1ca9b' && github.head_ref != 'test/native-explicit-tunnel-20261118-01a1ca9b' && github.head_ref != 'test/native-folder-concurrency-current-20261118-01a1ca9b' && github.head_ref != 'test/native-progress-interval-20261118-01a1ca9b' && github.head_ref != 'test/native-incoming-admission-cap-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-timeout-stage-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-prepared-index-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-staged-deadlines-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-linux-cleanup-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-readonly-exit-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-reconciled-caller-20261118-01a1ca9b' && github.head_ref != 'test/native-official-tracker-20261118-01a1ca9b' && github.head_ref != 'test/native-missing-policy-evidence-20261118-01a1ca9b' && github.head_ref != 'test/native-core-preferences-current-20261118-01a1ca9b' && (github.head_ref != 'test/native-xattr-filter-20261118-01a1ca9b' && github.head_ref != 'test/native-pending-announcement-20261118-01a1ca9b' && github.head_ref != 'test/native-parent-group-control-20261118-01a1ca9b' && github.head_ref != 'test/native-receiver-permissions-20261118-01a1ca9b' && github.head_ref != 'test/native-copy-range-syscalls-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/windows-packet-observer-feasibility-20261118-01a1ca9b' && github.head_ref != 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b' && github.head_ref != 'test/controlled-acceptance-node-20261118-01a1ca9b' && github.head_ref != 'ci/api-compatibility-tooling-20261118-01a1ca9b' && github.head_ref != 'test/native-storage-backend-acceptance-20261118-01a1ca9b' && github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b' && github.head_ref != 'ci/darwin-owned-process-read-20261118-01a1ca9b' && github.head_ref != 'ci/win7-default-abi-20261118-01a1ca9b') && github.head_ref != 'test/native-lan-bandwidth-20261118-01a1ca9b' && github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b' && github.head_ref != 'test/native-remote-advertisement-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/strict-storage-tls-defaults-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/trusted-https-webdav-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository))
+    # Both native Windows SDK cases are required on ordinary PR and manual runs.
+    name: Windows native browser acceptance (${{ matrix.rust }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
             rust: x86_64-pc-windows-msvc
-          - package: windows-arm64-standard
-            runner: windows-11-arm
+            package: windows-amd64-standard
+          - runner: windows-11-arm
             rust: aarch64-pc-windows-msvc
+            package: windows-arm64-standard
     defaults:
       run:
         shell: bash
@@ -369,36 +802,199 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
-      - name: Select separate x64 peer interpreter on Windows ARM
-        if: matrix.package == 'windows-arm64-standard'
-        id: storage_tools_python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-          architecture: x64
-          update-environment: false
-      - name: Prepare explicit private protocol peers
-        env:
-          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
-        run: python scripts/prepare-storage-test-environment.py --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Install the native Rust toolchain
-        run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
-      - name: Fetch fixed dependencies explicitly
-        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
-      - name: Prepare the fixed isolated core explicitly
+      - name: Install Rust and fetch locked fixture dependencies
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Require controlled protocol dispatch and original association restoration
+        run: >-
+          python scripts/probe-windows-browser-associations.py --toolchain "$TEST_TOOLCHAIN"
+          --evidence-dir "${{ runner.temp }}/vs-browser-association-pilot"
+          --use-effective-progid
+
+      - name: Prepare the exact fixed private core for the SDK browser case
+        id: browser_fixed_core
         run: >-
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
-      - name: Diagnose only the actual SMB case; this is not full acceptance
+      - name: Require actual Windows SDK browser effects and native-root cancellation
+        run: |
+          python - <<'PYINNER'
+          import os, shutil, subprocess, sys
+          from pathlib import Path
+          cargo = shutil.which('cargo')
+          if cargo is None:
+              raise ValueError('explicit Cargo executable unavailable')
+          subprocess.run([sys.executable, 'scripts/run-windows-browser-tests.py', '--cargo', cargo,
+                          '--toolchain', os.environ['TEST_TOOLCHAIN'], '--evidence-dir',
+                          str(Path(os.environ['RUNNER_TEMP']) / 'vs-windows-sdk-browser')], check=True)
+          PYINNER
+      - name: Require exact fixed-core cleanup after the Windows browser result
+        if: always() && steps.browser_fixed_core.outcome == 'success'
+        run: python scripts/prepare-test-engine.py check-cleanup
+
+  host-watch-limit-positive:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.head_ref != 'ci/native-boundary-diagnostics-20261117-01a1ca9b' && github.head_ref != 'test/ftp-anonymous-native-20261117-01a1ca9b' && github.head_ref != 'test/native-sftp-server-identity-20261118-01a1ca9b' && github.head_ref != 'test/native-backend-outage-20261118-01a1ca9b' && github.head_ref != 'test/native-local-announcement-20261118-01a1ca9b' && github.head_ref != 'test/macos-local-announcement-address-20261118-01a1ca9b' && github.head_ref != 'test/native-explicit-tunnel-20261118-01a1ca9b' && github.head_ref != 'test/native-folder-concurrency-current-20261118-01a1ca9b' && github.head_ref != 'test/native-progress-interval-20261118-01a1ca9b' && github.head_ref != 'test/native-incoming-admission-cap-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-timeout-stage-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-prepared-index-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-staged-deadlines-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-linux-cleanup-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-readonly-exit-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-reconciled-caller-20261118-01a1ca9b' && github.head_ref != 'test/native-official-tracker-20261118-01a1ca9b' && github.head_ref != 'test/native-missing-policy-evidence-20261118-01a1ca9b' && github.head_ref != 'test/native-core-preferences-current-20261118-01a1ca9b' && (github.head_ref != 'test/native-xattr-filter-20261118-01a1ca9b' && github.head_ref != 'test/native-pending-announcement-20261118-01a1ca9b' && github.head_ref != 'test/native-parent-group-control-20261118-01a1ca9b' && github.head_ref != 'test/native-receiver-permissions-20261118-01a1ca9b' && github.head_ref != 'test/native-copy-range-syscalls-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/windows-packet-observer-feasibility-20261118-01a1ca9b' && github.head_ref != 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b' && github.head_ref != 'test/controlled-acceptance-node-20261118-01a1ca9b' && github.head_ref != 'ci/api-compatibility-tooling-20261118-01a1ca9b' && github.head_ref != 'test/native-storage-backend-acceptance-20261118-01a1ca9b' && github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b' && github.head_ref != 'ci/darwin-owned-process-read-20261118-01a1ca9b' && github.head_ref != 'ci/win7-default-abi-20261118-01a1ca9b') && github.head_ref != 'test/native-lan-bandwidth-20261118-01a1ca9b' && github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b' && github.head_ref != 'test/native-remote-advertisement-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/strict-storage-tls-defaults-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/trusted-https-webdav-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository))
+    name: Explicit Linux host watch-limit effects (${{ matrix.package }}; isolated VM only)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            package: linux-amd64-standard
+          - runner: ubuntu-24.04-arm
+            package: linux-arm64-standard
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+      VERYSYNC_TEST_ALLOW_HOST_CONFIGURATION: github-actions-isolated-linux-vm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install native Rust and fetch locked dependencies without elevation
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare fixed private Linux core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Compile and identify the exact host test as the normal runner
+        run: >-
+          python scripts/host-test-cargo.py prepare --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Run only the prebuilt pinned privileged case and restore the VM setting
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target local_sync_protocol_engine --test-filter public_smb_
-          --evidence-dir "${{ runner.temp }}/vs-smb-diagnostic-proxy"
-      - name: Diagnose actual SMB reverse, two-way conflicts and selected effects only
-        run: >-
-          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target local_sync_protocol_advanced_engine --test-filter public_smb_
-          --evidence-dir "${{ runner.temp }}/vs-smb-advanced-diagnostic-proxy"
-      - name: Verify exact owned-core cleanup
+          --cargo "$VERYSYNC_HOST_TEST_CARGO_SHIM" --test-target host_control_engine
+          --test-filter privileged_native_watch_limit_is_raised_then_independently_restored
+          --evidence-dir "${{ runner.temp }}/vs-host-watch-limit-positive"
+      - name: Require exact owned-core cleanup
         if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+
+  linux-sleep-inhibitor-positive:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.head_ref != 'ci/native-boundary-diagnostics-20261117-01a1ca9b' && github.head_ref != 'test/ftp-anonymous-native-20261117-01a1ca9b' && github.head_ref != 'test/native-sftp-server-identity-20261118-01a1ca9b' && github.head_ref != 'test/native-backend-outage-20261118-01a1ca9b' && github.head_ref != 'test/native-local-announcement-20261118-01a1ca9b' && github.head_ref != 'test/macos-local-announcement-address-20261118-01a1ca9b' && github.head_ref != 'test/native-explicit-tunnel-20261118-01a1ca9b' && github.head_ref != 'test/native-folder-concurrency-current-20261118-01a1ca9b' && github.head_ref != 'test/native-progress-interval-20261118-01a1ca9b' && github.head_ref != 'test/native-incoming-admission-cap-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-timeout-stage-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-prepared-index-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-staged-deadlines-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-linux-cleanup-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-readonly-exit-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-reconciled-caller-20261118-01a1ca9b' && github.head_ref != 'test/native-official-tracker-20261118-01a1ca9b' && github.head_ref != 'test/native-missing-policy-evidence-20261118-01a1ca9b' && github.head_ref != 'test/native-core-preferences-current-20261118-01a1ca9b' && (github.head_ref != 'test/native-xattr-filter-20261118-01a1ca9b' && github.head_ref != 'test/native-pending-announcement-20261118-01a1ca9b' && github.head_ref != 'test/native-parent-group-control-20261118-01a1ca9b' && github.head_ref != 'test/native-receiver-permissions-20261118-01a1ca9b' && github.head_ref != 'test/native-copy-range-syscalls-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/windows-packet-observer-feasibility-20261118-01a1ca9b' && github.head_ref != 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b' && github.head_ref != 'test/controlled-acceptance-node-20261118-01a1ca9b' && github.head_ref != 'ci/api-compatibility-tooling-20261118-01a1ca9b' && github.head_ref != 'test/native-storage-backend-acceptance-20261118-01a1ca9b' && github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b' && github.head_ref != 'ci/darwin-owned-process-read-20261118-01a1ca9b' && github.head_ref != 'ci/win7-default-abi-20261118-01a1ca9b') && github.head_ref != 'test/native-lan-bandwidth-20261118-01a1ca9b' && github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b' && github.head_ref != 'test/native-remote-advertisement-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/strict-storage-tls-defaults-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/trusted-https-webdav-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository))
+    name: Explicit Linux native sleep-inhibitor effects (${{ matrix.package }}; isolated VM only)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            package: linux-amd64-standard
+          - runner: ubuntu-24.04-arm
+            package: linux-arm64-standard
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+      VERYSYNC_TEST_ALLOW_HOST_CONFIGURATION: github-actions-isolated-linux-vm
+      VERYSYNC_TEST_ALLOW_SLEEP_INHIBITOR: github-actions-isolated-linux-vm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install native Rust and fetch locked dependencies without elevation
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare fixed private Linux core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Compile and identify the exact host test as the normal runner
+        run: >-
+          python scripts/host-test-cargo.py prepare --case linux_sleep_inhibitor_cases::native::privileged_native_linux_sleep_inhibitor_tracks_transfer_and_releases --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe actual owned logind locks during real transfer and release
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --cargo "$VERYSYNC_HOST_TEST_CARGO_SHIM" --test-target host_control_engine
+          --test-filter linux_sleep_inhibitor_cases::native::privileged_native_linux_sleep_inhibitor_tracks_transfer_and_releases
+          --evidence-dir "${{ runner.temp }}/vs-linux-sleep-inhibitor-positive"
+      - name: Require one actual native case and all original policy phases
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          text = (Path(os.environ["RUNNER_TEMP"]) / "vs-linux-sleep-inhibitor-positive" / "host-control-engine.log").read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in text
+          marker = "native Linux idle-sleep policy evidence: "
+          phases = [json.loads(line.split(marker, 1)[1]) for line in text.splitlines() if marker in line]
+          assert [phase["enabled"] for phase in phases] == [False, True, False]
+          for phase in phases:
+              assert phase["actual_syncing_observed"] and phase["actual_file_bytes_transferred"]
+              assert phase["actual_system_idle_sleep_assertion_observed"] == phase["enabled"]
+              assert phase["actual_owned_system_inhibit_helper_observed"] == phase["enabled"]
+              assert phase["actual_assertion_and_owned_helper_released_after_transfer"]
+          assert "native Linux idle-sleep policy cleanup evidence:" in text
+          assert "actual_both_normal_owned_tree_and_state_exit=true" in text
+          PY
+      - name: Require exact owned-core cleanup
+        if: always()
+        run: python scripts/prepare-test-engine.py check-cleanup
+
+  native-browser-fallback:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || (github.head_ref != 'ci/exact-native-retirement-control-20261117-01a1ca9b' && github.head_ref != 'ci/native-observer-diagnosis-20261117-01a1ca9b' && (github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/intel-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/native-stop-diagnostics-20261117-01a1ca9b' && github.head_ref != 'ci/native-boundary-diagnostics-20261117-01a1ca9b' && github.head_ref != 'test/ftp-anonymous-native-20261117-01a1ca9b' && github.head_ref != 'test/native-sftp-server-identity-20261118-01a1ca9b' && github.head_ref != 'test/native-backend-outage-20261118-01a1ca9b' && github.head_ref != 'test/native-local-announcement-20261118-01a1ca9b' && github.head_ref != 'test/macos-local-announcement-address-20261118-01a1ca9b' && github.head_ref != 'test/native-explicit-tunnel-20261118-01a1ca9b' && github.head_ref != 'test/native-folder-concurrency-current-20261118-01a1ca9b' && github.head_ref != 'test/native-progress-interval-20261118-01a1ca9b' && github.head_ref != 'test/native-incoming-admission-cap-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-timeout-stage-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-prepared-index-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-staged-deadlines-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-linux-cleanup-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-readonly-exit-20261118-01a1ca9b' && github.head_ref != 'test/native-admission-reconciled-caller-20261118-01a1ca9b' && github.head_ref != 'test/native-official-tracker-20261118-01a1ca9b' && github.head_ref != 'test/native-missing-policy-evidence-20261118-01a1ca9b' && github.head_ref != 'test/native-core-preferences-current-20261118-01a1ca9b' && (github.head_ref != 'test/native-xattr-filter-20261118-01a1ca9b' && github.head_ref != 'test/native-pending-announcement-20261118-01a1ca9b' && github.head_ref != 'test/native-parent-group-control-20261118-01a1ca9b' && github.head_ref != 'test/native-receiver-permissions-20261118-01a1ca9b' && github.head_ref != 'test/native-copy-range-syscalls-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/windows-packet-observer-feasibility-20261118-01a1ca9b' && github.head_ref != 'ci/windows-loopback-header-feasibility-20261118-01a1ca9b' && github.head_ref != 'test/controlled-acceptance-node-20261118-01a1ca9b' && github.head_ref != 'ci/api-compatibility-tooling-20261118-01a1ca9b' && github.head_ref != 'test/native-storage-backend-acceptance-20261118-01a1ca9b' && github.head_ref != 'fix/storage-backend-receipt-checker-20261118-01a1ca9b' && github.head_ref != 'ci/darwin-owned-process-read-20261118-01a1ca9b' && github.head_ref != 'ci/win7-default-abi-20261118-01a1ca9b') && github.head_ref != 'test/native-lan-bandwidth-20261118-01a1ca9b' && github.head_ref != 'ci/native-temp-advertisement-20261117-01a1ca9b' && github.head_ref != 'test/native-remote-advertisement-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/strict-storage-tls-defaults-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && github.head_ref != 'ci/macos-intel-v23-environment-20261117-01a1ca9b' && (github.head_ref != 'ci/macos-observer-activity-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.head_ref != 'test/trusted-https-webdav-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository))
+    name: Native browser fallback (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+          - package: linux-amd64-standard
+            runner: ubuntu-24.04
+            rust: x86_64-unknown-linux-gnu
+          - package: linux-arm64-standard
+            runner: ubuntu-24.04-arm
+            rust: aarch64-unknown-linux-gnu
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Require browser wrapper and native outcome-gate contracts
+        run: |
+          python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+          python -m unittest discover -s scripts/tests -p test_native_step_results.py
+      - name: Install native Rust and fetch dependencies before runtime isolation
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare only the matching fixed private program
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify native root exit, exact URL, separate state and continuing actor
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target browser_engine
+          --evidence-dir "${{ runner.temp }}/vs-native-browser-focused"
+      - name: Require exact owned-program cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup

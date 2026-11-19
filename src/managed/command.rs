@@ -61,11 +61,16 @@ impl ManagedInstance {
                 let result = (|| {
                     let state = state::existing(&state)?;
                     let mut lease = state::StateLease::acquire(&state)?;
-                    if plan.arguments.first().is_some_and(|s| s == "debug") {
+                    if plan.arguments.first().is_some_and(|s| {
+                        matches!(
+                            s.as_str(),
+                            "debug" | "install-completions" | "configure-host"
+                        )
+                    }) {
                         let management_socket = management_socket
                             .as_deref()
                             .and_then(|path| std::fs::canonicalize(path).ok());
-                        verify_database_state(
+                        verify_stopped_state(
                             lease.path(),
                             management_socket.as_deref(),
                             &cancelled,
@@ -186,7 +191,7 @@ impl ManagedInstance {
 
 // Inspect only the stopped private state, never registered synchronization
 // roots. No alias is followed; the lease is held through native cleanup.
-fn verify_database_state(
+fn verify_stopped_state(
     root: &std::path::Path,
     management_socket: Option<&std::path::Path>,
     cancelled: &mpsc::Receiver<()>,

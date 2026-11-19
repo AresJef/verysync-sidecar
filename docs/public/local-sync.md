@@ -149,6 +149,71 @@ will persist. Observe the exact run, `cancelled` and actual destination effects.
 Native progress counters are optional observations and may include cancelled
 work; they are separate from durable destination-byte proof.
 
+A complete `LocalSyncRun` can have a nonempty `error` together with its actual
+finish time, failure counts and cancellation flag. This describes native
+execution, rather than an API-error envelope or successful work. The SDK retains
+that private text and still rejects malformed records, native API errors and
+mismatched job identities. Ordinary Debug omits the text.
+
+Run-result pages use native current-run storage. After another run replaces it,
+the old exact run ID can return HTTP 409. Read and retain needed results before
+starting the next run; the SDK does not synthesize historical results, substitute
+another run or retry a stale identity. A newly created job's configuration
+readback is also not a durable-storage acknowledgement; verify persisted state
+when interruption recovery depends on it.
+
+### Disconnected peers and explicit owned recovery
+
+A broken peer can leave native work running or `canceling` beyond a bounded
+observation. A stop acknowledgement does not prove I/O ended. Isolated SFTP and
+SMB runs remained in that state after a twenty-second stop observation. The
+internal wait's cause is not established. The SDK does not extend deadlines,
+retry work, roll back files or force an existing instance automatically.
+
+For a library-owned core, callers can separately choose `force_stop()`, await
+confirmed exact-tree exit, then explicitly restart retained state. This can
+interrupt writes; it is not normal shutdown or proof of the old run's completion.
+Reconcile actual partial files/status, explicitly update a changed endpoint,
+review a fresh preview, then choose a separate run. An ordinary Client does not
+acquire process ownership over an existing instance.
+
+An endpoint can also disappear after a run has completed and the job is idle.
+Failed probes or browsing do not roll back that run or remove its files. The
+controlled backend case preserves the saved run and exact destination snapshot
+across completed native refusals, then explicitly updates the endpoint and
+reviews a new preview before copying additional bytes. This is separate from
+interrupting active work. Native retries can outlast the default request timeout;
+choose a request bound explicitly when observing their final response. A deadline
+still leaves an uncertain outcome and never counts as a completed refusal.
+The independent idle-outage case passed for FTP, SFTP, SMB and WebDAV on all six
+standard native profiles in
+[the backend request run](https://github.com/AresJef/verysync-sidecar/actions/runs/44147287980).
+Both probe and browse returned completed native HTTP 500 errors. Source bytes,
+old run identity, the destination snapshot and destination-only data survived;
+reviewing the new preview did not copy, and separate explicit execution copied
+the additional complete payload. This does not claim that an interrupted old
+run finished, replace the in-flight recovery cases, or establish licensed
+watch/schedule behavior or complete final-source acceptance.
+
+Private recovery cases distinguish FTP's failed run and saved action errors from
+deliberately chosen owned termination for the other protocols. A peer failure can
+finish before a separate stop request arrives, so the optional native `cancelled`
+flag is preserved as observed; an acknowledged stop never fabricates cancellation.
+The last operation ID can remain in status after its failed run has finished.
+For the fixed native FTP case, a later Stop then returns HTTP 404 with
+`job not found`, although the registered job still exists. The SDK retains its
+mutation-uncertainty error and performs no retry or automatic recovery. A caller
+must separately reconcile the exact existing job, operation, finished failed run
+and actual partial files before deciding to update an endpoint, review a new
+preview and start a different run. A generic 404, timeout or unrelated error is
+not a successful Stop or evidence that recovery is safe. The controlled terminal
+case checks this specific refusal and all data effects separately from successful
+in-flight pause/resume/stop controls.
+Each still requires unchanged source/sentinel, retained partial files, a fresh
+preview without copying, separate execution and sixteen exact completed payloads.
+An interrupted old run is never relabelled successful. Local effects and the
+complete final-source platform gate remain separate.
+
 `local_sync_events(after, wait_seconds)` returns the native Local Sync event log,
 which uses `sequence`, `cursor`, `reset` and `missed`. These positions are distinct
 from P2P event IDs. Events identify a job and sequence, not an exact run or
@@ -291,18 +356,77 @@ Missing baseline files alone do not necessarily produce a native failure; the
 comparison mismatch is the tested recovery trigger. Per-backend recovery and
 fault conditions remain independently required.
 
+## Explicit anonymous FTP
+
+An FTP endpoint can explicitly select `.credentials("anonymous", "contact@example.invalid")`.
+The server must already allow that identity; the SDK does not configure server
+accounts or permissions. The test peer registers only an anonymous identity,
+refuses an ordinary named user and records the actual accepted anonymous login
+without printing credentials.
+
+All six standard macOS/Linux/Windows AMD64/ARM64 v2.33.2 cases verified native
+probe/browse, two distinct
+explicit preview/run cycles across a same-identity restart, exact 131072-byte and
+65536-byte payloads, retained source and target-only data, unregister without
+deletion, and normal owned core/state/peer cleanup in
+[run 44118836327](https://github.com/AresJef/verysync-sidecar/actions/runs/44118836327).
+The Mac ARM job's original cancellation had no runner or executed steps; its
+single scheduling retry supplied that profile's actual native result. Other
+profiles retain their original results. Independent password-authentication
+cases also verify actual incorrect-credential refusal and real native data
+effects. These are authentication subcases; the complete release candidate and
+remaining backend, fault and authorization gates are separate. This is plain FTP
+authentication and data evidence;
+it does not establish FTPS or a verified server identity.
+
 ## SFTP key validation boundary
 
-`private_key_file(TargetPath)` requests the bundled GUI's native `privateKey`
-path field. It opens no controller key file. This selection is not evidence of
-successful native key authentication. The fixed v2.33.2 macOS ARM core rejected
-an existing, synthetically generated unencrypted RSA PEM path with a key-parser
-error before authentication. Literal and escaped inline PEM research also failed;
-an escaped-key registration was not accepted. Those attempts are failed protocol
-research, not successful key refusal, transfer or host-identity acceptance.
-Password data effects remain separate. Positive key and verified host identity
-conditions remain pending, with no implicit agent/password fallback or key-file
-upload added by the SDK.
+`private_key_pem(pem)` explicitly supplies private-key text for the fixed native
+Local Sync backend. The SDK encodes it for that consumer and opens no key file on
+the controller. Explicit serialization exposes this credential; ordinary Debug
+omits it. Supply a username and an empty password to select key authentication
+without password fallback. Empty-password omission in native readback is accepted
+only for an SFTP endpoint with an explicitly supplied nonempty private key;
+changed keys, nonempty passwords and explicit nulls remain mismatches.
+
+```rust,no_run
+use verysync_sidecar::{StorageEndpoint, StorageProtocol};
+# fn example(pem: String) -> verysync_sidecar::Result<()> {
+let endpoint = StorageEndpoint::remote(StorageProtocol::Sftp, "sftp://127.0.0.1:12345/")?
+    .credentials("explicit-user", "")?
+    .private_key_pem(pem)?;
+# let _ = endpoint;
+# Ok(())
+# }
+```
+
+A fixed v2.33.2 public-API case observed actual wrong-key rejection,
+key-authenticated browsing, exact preview/run identities, complete transferred
+bytes, source/destination-only retention, unregister-without-deletion and normal
+owned-tree exit on all six standard macOS, Windows and Linux AMD64/ARM64 profiles
+in [native run 44082376849](https://github.com/AresJef/verysync-sidecar/actions/runs/44082376849).
+The producer was `329e6680abd7dc5424e263ad2f41642112700642`, tree
+`5ab134ee957f7208391c2d99e8930c317049e5ac`. These selected cases passed inside a
+full run with other failures; they do not establish a complete final-source pass.
+Earlier escaped-key creation attempts were unknown outcomes because the SDK
+misclassified native omission of the empty password; those failed records remain
+historical evidence and are not rewritten as successful earlier tests.
+
+On those same six profiles, the native limits probe rejects this valid backend encoding with HTTP500
+and its `SSH private key: ssh: no key found` error. The SDK preserves that actual
+failure; it does not invent capability flags, substitute a password probe or
+claim that a successful listing validates the limits interface. Static inspection
+shows that the backend applies Go string unquoting before key parsing, whereas
+the limits probe parses the same field directly. No encoding accepted by both
+consumers has been verified. This limitation is separate from actual key-based
+backend operations and verified host identity.
+
+`private_key_file(TargetPath)` retains the bundled GUI's native path-field
+selection. It opens no controller key file. The fixed macOS ARM64 Local Sync
+backend rejected a valid synthetic RSA key-file path before authentication; this
+path selection has no positive key-file acceptance. Inline private-key support
+adds neither implicit key-file upload nor SSH-agent/password fallback. Other
+platforms and later native versions require their own evidence.
 
 ## Per-protocol directional and selection evidence
 
@@ -312,9 +436,17 @@ directions, simultaneous newer/larger/manual conflicts, manual replacement
 preview without immediate file changes, and a separately explicit selected-only
 run with native predicted counts/bytes. The unselected target file remains
 absent and its source bytes remain intact. Registration removal retains files.
-These effects remain separate from licensed scheduling, in-flight control,
-additional authentication/identity modes and per-backend fault recovery. Final
-six-profile source acceptance is still required.
+These effects remain separate from licensed scheduling, in-flight control and
+additional authentication/identity modes. Separate source-bound native recovery
+cases on all six standard profiles verified each protocol after an actual peer
+disconnection: partial files and source/sentinel bytes remained intact, an
+explicit new endpoint/preview/run completed all sixteen payloads, stale result
+identities were refused, and owned teardown completed normally. Some backends
+required an explicitly chosen owned force-stop/restart; this is not a normal
+Stop acknowledgement or proof that the old native operation was cancelled.
+The [recorded run](https://github.com/AresJef/verysync-sidecar/actions/runs/43999174938)
+retains unrelated whole-fixture failures. Final current-candidate six-profile
+acceptance is still required.
 
 The Impacket 0.13.1 synthetic SMB peer also needs a correctly structured EOF
 error response for actual remote reads. Its stock READ handler returns a READ
@@ -368,4 +500,110 @@ accepted a probe despite a conflicting synthetic host key in its private-profile
 `known_hosts`. That attempted profile trust mechanism is unverified. The test
 failed before positive identity/copy acceptance, and no system or controller SSH
 configuration was changed. Do not infer verified host identity from a successful
-probe or this flag alone; the native trust mechanism still needs separate proof.
+probe or this flag alone. Static inspection of the same fixed core confirms that
+its SFTP limits probe installs an unconditional accept host-key callback. The
+Local Sync backend does not supply a `known_hosts_file` setting to its SFTP
+constructor. These observations do not establish a supported way to configure
+verified SSH host identity through this API. Verified identity remains pending;
+the SDK adds no trust-policy bypass, SSH tunnel or controller trust-store edits. A
+separate actual native test selected `RCLONE_SFTP_KNOWN_HOSTS_FILE` only in fresh
+test-process environments and supplied explicit wrong and matching synthetic
+public keys. Both new core generations accepted browsing and limits probes with
+`insecureTls: false`. This environment candidate therefore does not establish
+verified host identity in the inspected build, even though upstream rclone
+supports a known-hosts configuration. No system SSH files or trust stores changed.
+
+The portable native server-policy case also checks actual data effects in two
+fresh core generations. It writes conflicting and matching synthetic public
+keys to both owned trust candidates, records probe and browse outcomes, and
+copies an entire Unicode-named payload whenever browsing succeeds. The matching
+policy must allow the real copy. Each completed copy must preserve the source,
+destination-only sentinel and files after registration removal, and both cores
+must exit normally. On the inspected macOS ARM build, both policies allowed
+the probe, browse and copy. This confirms the native identity limitation for
+that build; it does not verify the server's identity. All six standard native
+macOS, Windows and Linux AMD64/ARM64 profiles in
+[the native SFTP policy run](https://github.com/AresJef/verysync-sidecar/actions/runs/44144810067)
+accepted both policies, including complete file copies and normal cleanup in
+two distinct core identities on each profile. These observations cover the
+explicit environment and private-profile trust candidates; they establish no
+supported server-identity verification mechanism. Password/private-key
+authentication and data integrity are separate requirements. Additional
+architectures, minimum systems and complete final-source platform acceptance
+remain separate and must not be inferred from these cases.
+
+The native job serializer can omit `insecureTls` when it is false. For SFTP and
+WebDAV, creation and endpoint-update verification recognize that known false
+default while preserving the omitted field in returned snapshots. An explicit
+true, null, malformed value or unrelated missing option still fails matching.
+This reconciliation neither enables a verification bypass nor establishes SSH
+server identity. The native strict HTTPS case separately requires a trusted
+chain and hostname, rejection of a wrong hostname and credentials, actual
+payloads across restart, and normal owned cleanup. These effects passed on the
+six standard macOS, Windows and Linux AMD64/ARM64 native profiles described below.
+
+
+## HTTPS WebDAV certificate boundary
+
+A separate private HTTPS case has observed the fixed core reject an untrusted
+self-signed server certificate with verification selected. Explicitly selecting
+`insecure_tls(true)` then allowed the probe and exact file copy; wrong credentials
+still produced an actual native refusal. Source data, target-only data and copied
+bytes remained intact, and owned teardown completed normally.
+
+This deliberately insecure synthetic endpoint does not establish positive
+trusted-CA/server-identity acceptance. A separate strict HTTPS native case now
+uses the existing fingerprint-pinned public-CA loopback development fixture,
+with explicit private preparation and cleanup. It requires a correct hostname,
+rejects the same certificate through the loopback IP, retains credential
+validation, and verifies exact data before and after restart without TLS bypass.
+The dedicated case passed on all six standard macOS, Windows and Linux
+AMD64/ARM64 native profiles against v2.33.2 in
+[native run 44095566343](https://github.com/AresJef/verysync-sidecar/actions/runs/44095566343).
+The producer was `2097a64dc636c77ff215ee1e46f76574fbe9f258` (tree
+`10b859956ebe164c8af3fe9456c145c134854ae8`). Each profile verified the same
+fingerprint-pinned certificate, correct chain and hostname, native rejection of
+an incorrect hostname and credentials, and exact 262144-byte and 131072-byte
+payloads across restart. Registration removal retained the files and sentinel;
+owned processes, state locks and private peer files were released normally.
+
+Six separate cases also verified strict-flag creation, true-to-false updates,
+native false-default omission and same-identity restart for SFTP and WebDAV.
+WebDAV continued to reject an untrusted certificate after restart. These flag
+observations do not establish SFTP server identity.
+
+The SDK installs no CA, changes no system trust store and makes no universal
+trust-configuration promise for the target kernel. These observations apply to
+the pinned test endpoint and the selected modern hosted runners. Other platform,
+minimum-system and full final-source acceptance retain their separate gates;
+configuration flags alone are not certificate verification proof.
+
+
+## SMB domain and guest boundary
+
+The independent Impacket 0.13.1 test peer coordinates directory enumeration with
+CREATE, SET_INFO and CLOSE metadata requests. Its stock enumeration can otherwise
+stat a temporary filename after another request removes it, raise an unhandled
+`FileNotFoundError` and close the connection. Payload READ/WRITE handlers retain
+their actual concurrency and test-only delays. Native data hashes, zero failed
+actions, operation identities and process-exit requirements are checked in full.
+
+The dedicated native cases observe the selected domain in the actual NTLM
+exchange at a private standalone peer. A different domain is rejected; a wrong
+password with the correct domain is also rejected by the peer's real NTLMv2
+verification. The correct combination probes and copies exact file contents.
+
+A separately selected credential-free guest endpoint produces an actual guest
+session flag and copies real bytes. The peer refuses a non-guest authentication
+attempt under that explicit policy. Source and target-only files remain intact
+and owned processes exit normally. The observations contain only policy match,
+username-presence, status and session flags, never NTLM hashes or passwords.
+These cases establish the selected native parameters and standalone protocol
+behavior. They do not claim Active Directory, Kerberos or arbitrary server guest
+permissions. The domain and guest arms passed on all six standard macOS, Windows
+and Linux AMD64/ARM64 profiles in
+[native run 44082376849](https://github.com/AresJef/verysync-sidecar/actions/runs/44082376849),
+producer `329e6680abd7dc5424e263ad2f41642112700642`, tree
+`5ab134ee957f7208391c2d99e8930c317049e5ac`. Other cases in that full run failed;
+these selected authentication effects retain their original producer and do not
+establish full final-source or minimum-system acceptance.

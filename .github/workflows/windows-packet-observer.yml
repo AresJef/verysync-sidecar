@@ -1,0 +1,39 @@
+name: Windows owned packet observer feasibility
+
+on:
+  # Both original native jobs produced no loopback packets. Preserve this
+  # diagnostic as an explicit reproduction tool, not an unchanged PR retry.
+  # The required Windows VerySync 16/32/0 wire-class gate remains open.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-owned-packet-observer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  loopback:
+    name: Owned loopback header feasibility (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            package: windows-amd64-standard
+          - runner: windows-11-arm
+            package: windows-arm64-standard
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Verify strict header parsing and existing-state refusals
+        run: python -B -m unittest discover -s scripts/tests -p test_windows_loopback_packets.py
+      - name: Require actual owned IPv4 and IPv6 TCP data headers and exact cleanup
+        run: python -B scripts/probe-windows-loopback-packets.py --github-actions-owned-loopback

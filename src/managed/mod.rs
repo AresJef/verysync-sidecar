@@ -5,11 +5,17 @@ mod archive;
 mod backup;
 mod bootstrap;
 mod command;
+mod host;
+pub use host::{NativeWatchLimitExit, NativeWatchLimitObservation, NativeWatchLimitOutcome};
+mod completions;
+pub use completions::{NativeCompletionAction, NativeCompletionExit, NativeCompletionOutcome};
 mod database;
+mod paths;
 pub use backup::{StateBackup, StateBackupInfo, StateBackupOptions};
 pub use database::{
     DatabaseCommand, DatabaseCommandExit, DatabaseCommandOutcome, DatabaseCountRow,
 };
+pub use paths::{NativeStoragePaths, NativeStoragePathsExit, NativeStoragePathsOutcome};
 #[cfg(feature = "download")]
 mod cache;
 #[cfg(feature = "download")]
@@ -20,8 +26,11 @@ pub use cache::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
 pub use download::{DownloadOptions, PreparedProgram};
 mod instance;
 pub use instance::{ManagedExit, ManagedInstance};
+mod browser;
+mod launcher;
 mod native;
 mod process;
+pub use browser::{NativeBrowserExit, NativeBrowserOutcome};
 mod restart;
 pub use restart::ProgramTransition;
 mod shutdown;
@@ -62,7 +71,7 @@ pub enum ManagedLifetime {
 /// The state must be new/empty or already marked as owned by this library. The
 /// library refuses an ordinary existing application state. Its exclusive state
 /// lease is separate from any engine lock. Addresses are explicit: a socket must
-/// be `gui.sock` directly inside the state, or HTTP must use a literal loopback
+/// be `gui.sock` directly inside the state, or HTTP(S) must use a literal loopback
 /// IP, a fixed port and no proxy prefix. No address discovery occurs.
 #[derive(Clone, Debug)]
 pub struct ManagedOptions {
@@ -74,6 +83,8 @@ pub struct ManagedOptions {
     pub(crate) lifetime: ManagedLifetime,
     pub(crate) version_policy: VersionPolicy,
     pub(crate) upgrade_checks: ManagedUpgradeChecks,
+    pub(crate) transport: crate::ManagementTransport,
+    pub(crate) local_api_enabled: Option<bool>,
 }
 
 impl ManagedOptions {
@@ -116,12 +127,18 @@ impl ManagedOptions {
                 Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
                 _ => false,
             };
-            if url.scheme() != "http"
+            #[cfg(not(feature = "tls"))]
+            if url.scheme() == "https" {
+                return Err(Error::UnsupportedTransport {
+                    transport: "managed HTTPS requires the tls feature",
+                });
+            }
+            if !matches!(url.scheme(), "http" | "https")
                 || !literal_loopback
                 || url.path() != "/"
                 || url.port().is_none()
             {
-                return Err(Error::InvalidConfiguration { reason: "managed HTTP requires a literal loopback IP, explicit nondefault port and no prefix" });
+                return Err(Error::InvalidConfiguration { reason: "managed HTTP(S) requires a literal loopback IP, explicit nondefault port and no prefix" });
             }
         }
         // The fixed program's configuration protocol uses UTF-8 strings. Native
@@ -139,6 +156,8 @@ impl ManagedOptions {
             lifetime: ManagedLifetime::CallerOwned,
             version_policy: VersionPolicy::ValidatedOnly,
             upgrade_checks: ManagedUpgradeChecks::Disabled,
+            transport: crate::ManagementTransport::default(),
+            local_api_enabled: None,
         })
     }
 
@@ -171,6 +190,22 @@ impl ManagedOptions {
         self
     }
 
+    /// Explicitly set native Local-API availability before owned startup.
+    ///
+    /// This grants no commercial entitlement. The default preserves existing
+    /// Local-API settings. Only known library-generated app settings may be
+    /// replaced; arbitrary caller settings are rejected without modification.
+    /// Local-API requires an HTTP(S) management endpoint in the fixed core.
+    pub fn local_api_enabled(mut self, enabled: bool) -> Result<Self> {
+        if enabled && self.endpoint.http_url().is_none() {
+            return Err(Error::InvalidConfiguration {
+                reason: "enabled native Local-API requires an HTTP(S) endpoint",
+            });
+        }
+        self.local_api_enabled = Some(enabled);
+        Ok(self)
+    }
+
     /// Set the retained management Client's per-request deadline (default 10s).
     /// The total startup deadline remains independently enforced.
     pub fn management_request_timeout(mut self, timeout: Duration) -> Result<Self> {
@@ -181,6 +216,14 @@ impl ManagedOptions {
         }
         self.request_timeout = timeout;
         Ok(self)
+    }
+
+    /// Select per-connection management trust and an explicit proxy. This does
+    /// not install server certificates. Managed HTTPS requires matching native
+    /// certificate/key material and normal client trust/hostname validation.
+    pub fn management_transport(mut self, transport: crate::ManagementTransport) -> Self {
+        self.transport = transport;
+        self
     }
 
     /// Explicitly select core persistence before startup (default CallerOwned).
@@ -215,6 +258,7 @@ impl ManagedOptions {
                 })??;
         crate::Client::connect(
             crate::ConnectOptions::new(self.endpoint.clone(), key)
+                .transport(self.transport.clone())
                 .expected_device_id(identity)
                 .version_policy(self.version_policy)
                 .request_timeout(self.request_timeout)?,

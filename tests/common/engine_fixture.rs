@@ -18,9 +18,40 @@ use tempfile::TempDir;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+fn readiness_error_summary(error: &(dyn std::error::Error + 'static)) -> Json {
+    let mut cause = Some(error);
+    let mut reqwest = None;
+    let mut io_errors = Vec::new();
+    let mut json_error = false;
+    let mut depth = 0;
+    while let Some(error) = cause {
+        if depth == 8 {
+            break;
+        }
+        depth += 1;
+        if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            reqwest = Some(serde_json::json!({
+                "builder":error.is_builder(),"connect":error.is_connect(),
+                "timeout":error.is_timeout(),"request":error.is_request(),
+                "body":error.is_body(),"decode":error.is_decode(),
+                "status":error.status().map(|s|s.as_u16())
+            }));
+        }
+        if let Some(error) = error.downcast_ref::<io::Error>() {
+            io_errors.push(serde_json::json!({
+                "kind":format!("{:?}",error.kind()),"raw_os_error":error.raw_os_error()
+            }));
+        }
+        json_error |= error.is::<serde_json::Error>();
+        cause = error.source();
+    }
+    serde_json::json!({"reqwest":reqwest,"io_errors":io_errors,"json_error":json_error,
+        "chain_depth":depth,"chain_limit_reached":cause.is_some(),"messages_omitted":true})
+}
+
 #[cfg(windows)]
 #[path = "windows_fixture.rs"]
-mod windows_fixture;
+pub(crate) mod windows_fixture;
 
 pub struct TestBinary {
     path: PathBuf,
@@ -81,6 +112,8 @@ struct OwnedChild {
 
 impl OwnedChild {
     fn spawn(command: &mut Command) -> TestResult<Self> {
+        #[cfg(unix)]
+        configure_private_fixture_group(command);
         #[cfg(windows)]
         let job = {
             use std::os::windows::process::CommandExt;
@@ -107,6 +140,50 @@ impl OwnedChild {
     }
 }
 
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn configure_private_fixture_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: force the fork/pre-exec path so user-mode emulation cannot lose
+    // the posix_spawn group attribute. Only the new child calls the
+    // async-signal-safe setpgid; no allocation, locks or caller state changes.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn terminate_unreaped_fixture_group(child: &mut Child) -> io::Result<()> {
+    if child.try_wait()?.is_some() {
+        // A reaped root no longer reserves its PID. Do not signal a group that
+        // might have reused that numeric identity; exact cleanup remains a gate.
+        return Ok(());
+    }
+    let pid = i32::try_from(child.id()).map_err(io::Error::other)?;
+    // SAFETY: this uniquely retained, unreaped child reserves its PID even if it
+    // exits now. We created its private group before exec and verify ownership.
+    if unsafe { libc::getpgid(pid) } != pid {
+        return Err(io::Error::other(
+            "fixture no longer owns its private process group",
+        ));
+    }
+    // SAFETY: the unreaped group leader still reserves this private group ID.
+    // No caller, unrelated group or name-based process selection is involved.
+    if unsafe { libc::kill(-pid, libc::SIGKILL) } != 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         #[cfg(windows)]
@@ -114,6 +191,10 @@ impl Drop for OwnedChild {
             eprintln!("private fixture job cleanup failed: {error}");
         }
         if let Some(mut child) = self.child.take() {
+            #[cfg(unix)]
+            if let Err(error) = terminate_unreaped_fixture_group(&mut child) {
+                eprintln!("private fixture group cleanup failed: {error}");
+            }
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -141,7 +222,10 @@ impl EngineFixture {
         binary.verify()?;
         let state = tempfile::Builder::new().prefix("vs-test-").tempdir()?;
         protect_directory(state.path())?;
-        fs::write(state.path().join("appconf.yaml"), "auto_startup: false\n")?;
+        fs::write(
+            state.path().join("appconf.yaml"),
+            "verysync:\n  auto_startup: false\n",
+        )?;
         protect_file(&state.path().join("appconf.yaml"))?;
         for directory in ["roaming", "local", "profile", "tmp"] {
             fs::create_dir(state.path().join(directory))?;
@@ -206,6 +290,10 @@ impl EngineFixture {
         let log = File::create(state.path().join("engine.log"))?;
         protect_file(&state.path().join("engine.log"))?;
         let mut command = engine_command(&binary.path, state.path())?;
+        #[cfg(target_os = "linux")]
+        // Select the official direct-core mode. The Linux outer monitor can
+        // move its inner core outside the fixture's private process group.
+        command.env("VSMONITORED", "yes");
         command
             .arg("serve")
             .arg("--home")
@@ -242,16 +330,19 @@ impl EngineFixture {
                 )
                 .into());
             }
-            if let Ok(status) = fixture.read_json("/rest/system/status").await {
-                if status["myID"].as_str() != Some(fixture.device_id.as_str()) {
-                    return Err(
-                        "management endpoint identity does not belong to the fixture".into(),
-                    );
+            let error = match fixture.read_json("/rest/system/status").await {
+                Ok(status) => {
+                    if status["myID"].as_str() != Some(fixture.device_id.as_str()) {
+                        return Err(
+                            "management endpoint identity does not belong to the fixture".into(),
+                        );
+                    }
+                    break;
                 }
-                break;
-            }
+                Err(error) => error,
+            };
             if Instant::now() >= deadline {
-                return Err(format!("isolated engine did not become authenticated and ready before its deadline: {}", fixture.startup_diagnostic(&password)).into());
+                return Err(format!("isolated engine did not become authenticated and ready before its deadline; last_request_error={}: {}", readiness_error_summary(error.as_ref()), fixture.startup_diagnostic(&password)).into());
             }
             tokio::time::sleep(Duration::from_millis(40)).await;
         }
@@ -331,6 +422,9 @@ impl EngineFixture {
 
     pub async fn read_json(&self, route: &str) -> TestResult<Json> {
         let mut response = self.request(Method::GET, route)?.send().await?;
+        if let Err(error) = response.error_for_status_ref() {
+            return Err(error.without_url().into());
+        }
         if !response.status().is_success() {
             return Err("fixture management read rejected".into());
         }
@@ -696,6 +790,221 @@ fn device_id_output(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod fixture_unit_tests {
+    #[test]
+    fn readiness_summary_keeps_io_classification_without_private_messages() {
+        let secret = "synthetic-secret /private/state?token=private-value";
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, secret);
+        let summary = super::readiness_error_summary(&error);
+        assert_eq!(summary["io_errors"][0]["kind"], "PermissionDenied");
+        assert!(summary["io_errors"][0]["raw_os_error"].is_null());
+        assert_eq!(summary["messages_omitted"], true);
+        assert!(!summary.to_string().contains(secret));
+        let native = std::io::Error::from_raw_os_error(2);
+        assert_eq!(
+            super::readiness_error_summary(&native)["io_errors"][0]["raw_os_error"],
+            2
+        );
+    }
+
+    #[test]
+    fn readiness_summary_keeps_reqwest_classification_without_private_urls() {
+        let error = reqwest::Client::new()
+            .get("http://[synthetic-secret-invalid/?token=private-value")
+            .build()
+            .expect_err("the deliberately malformed private URL must be rejected");
+        let summary = super::readiness_error_summary(&error);
+        assert_eq!(summary["reqwest"]["builder"], true);
+        assert_eq!(summary["reqwest"]["connect"], false);
+        assert!(!summary.to_string().contains("synthetic-secret"));
+        assert!(!summary.to_string().contains("private-value"));
+    }
+
+    #[cfg(unix)]
+    fn exact_program_inventory() -> super::TestResult<Vec<u32>> {
+        let python = std::env::var_os("VERYSYNC_TEST_PYTHON").unwrap_or_else(|| "python3".into());
+        let output = std::process::Command::new(python)
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("scripts")
+                    .join("prepare-test-engine.py"),
+            )
+            .arg("list-owned-processes")
+            .output()?;
+        if !output.status.success() {
+            return Err("exact fixture-program inventory failed".into());
+        }
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        value["pids"]
+            .as_array()
+            .ok_or("exact program inventory has no PID list")?
+            .iter()
+            .map(|pid| {
+                pid.as_u64()
+                    .and_then(|pid| u32::try_from(pid).ok())
+                    .filter(|pid| *pid > 0)
+                    .ok_or_else(|| "exact program inventory has an invalid PID".into())
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[allow(unsafe_code)]
+    #[test]
+    fn unix_owned_child_starts_in_its_own_process_group() -> super::TestResult {
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg("1");
+        let owned = super::OwnedChild::spawn(&mut command)?;
+        let pid = i32::try_from(owned.child.as_ref().ok_or("missing child")?.id())?;
+        // SAFETY: read-only lookup of this still-retained, unreaped child.
+        let private_group = unsafe { libc::getpgid(pid) } == pid;
+        drop(owned);
+        assert!(
+            private_group,
+            "the private fixture inherited its caller's process group"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn group_live_members(group: u32) -> super::TestResult<Vec<u32>> {
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-axo", "pid=,pgid=,stat="])
+            .output()?;
+        if !output.status.success() {
+            return Err("cannot observe the synthetic fixture's private process group".into());
+        }
+        let text = String::from_utf8(output.stdout)?;
+        let mut members = Vec::new();
+        for line in text.lines() {
+            let columns: Vec<_> = line.split_whitespace().collect();
+            let [pid, pgid, state] = columns.as_slice() else {
+                return Err("private process-group observation has an invalid row".into());
+            };
+            let pid: u32 = pid.parse()?;
+            let pgid: u32 = pgid.parse()?;
+            if pgid == group && !state.starts_with('Z') {
+                members.push(pid);
+            }
+        }
+        Ok(members)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_panic_cleanup_stops_the_private_descendant_group() -> super::TestResult {
+        use std::io::BufRead;
+        use std::os::unix::process::CommandExt;
+        use std::time::{Duration, Instant};
+        // The finite synthetic descendant exits itself even during the RED run.
+        // No global name-based cleanup or signal to a reused PID is necessary.
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", "/bin/sleep 5 & printf '%s\\n' \"$!\"; wait"])
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let mut owned = super::OwnedChild::spawn(&mut command)?;
+        let child = owned
+            .child
+            .as_mut()
+            .ok_or("missing synthetic fixture child")?;
+        let group = child.id();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("missing private readiness pipe")?;
+        let mut marker = String::new();
+        std::io::BufReader::new(stdout).read_line(&mut marker)?;
+        let descendant: u32 = marker.trim().parse()?;
+        assert_ne!(descendant, group);
+        assert!(
+            group_live_members(group)?.contains(&descendant),
+            "positive exact descendant inventory is required"
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _owned = owned;
+            panic!("synthetic fixture panic exercises private descendant cleanup");
+        }));
+        assert!(result.is_err());
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !group_live_members(group)?.is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let stopped = group_live_members(group)?.is_empty();
+        // Preserve the failure while letting the bounded RED descendant finish.
+        let safety_deadline = Instant::now() + Duration::from_secs(6);
+        while !group_live_members(group)?.is_empty() && Instant::now() < safety_deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            group_live_members(group)?.is_empty(),
+            "bounded synthetic descendant did not finish"
+        );
+        assert!(
+            stopped,
+            "the private fixture left a live descendant after panic"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_native_fixture_panic_releases_its_owned_core() -> super::TestResult {
+        let before = exact_program_inventory()?;
+        println!(
+            "native fixture panic inventory: stage=before_start owned_count={}",
+            before.len()
+        );
+        assert!(
+            before.is_empty(),
+            "a previous case left an exact program alive before this fixture"
+        );
+        let fixture = super::EngineFixture::start().await?;
+        let group = fixture.pid();
+        let during = exact_program_inventory()?;
+        assert!(
+            during.contains(&group),
+            "positive exact native-image inventory is required"
+        );
+        println!(
+            "native fixture panic inventory: stage=before_panic owned_count={}",
+            during.len()
+        );
+        assert!(
+            group_live_members(group)?.contains(&group),
+            "positive owned-root inventory is required"
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _owned = fixture;
+            panic!("synthetic fixture panic exercises actual private core cleanup");
+        }));
+        assert!(result.is_err());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !group_live_members(group)?.is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            group_live_members(group)?.is_empty(),
+            "owned native group survived fixture panic"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut remaining = exact_program_inventory()?;
+        while !remaining.is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            remaining = exact_program_inventory()?;
+        }
+        println!(
+            "native fixture panic inventory: stage=after_panic owned_count={}",
+            remaining.len()
+        );
+        assert!(
+            remaining.is_empty(),
+            "an exact native image survived outside the original group"
+        );
+        Ok(())
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_acl_check_rejects_an_extra_reader() -> super::TestResult {

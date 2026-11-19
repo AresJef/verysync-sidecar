@@ -107,9 +107,9 @@
       "controller_target_candidates": [
         "armv5te-unknown-linux-gnueabi"
       ],
-      "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
-      "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
-      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "runtime_abi_note": "Unknown minimum native ISA. The static ARM ELF reports CPU architecture v6 and arm1136j-s alongside GOARM=5. ARM926 execution fails with SIGILL.",
+      "mapping_note": "Selected ARMEL Rust tests used the fixed package on ARM1176 user-mode QEMU. The ARM1176 and Cortex-A9 version controls passed. See the platform validation guide for the exact tested conditions.",
+      "minimum_os_note": "The fixed core returns SIGILL on ARM926 in Debian 3.2.0-4-versatile QEMU. The SDK passed its exact management, file, restart and exit gate in Debian 4.9.0-13-armmp QEMU with Cortex-A9, ARMEL glibc 2.24 and matching Debian trust. Minimum native ISA and kernel/libc remain unverified.",
       "minimum_os_runtime_verified": false
     },
     {
@@ -152,7 +152,7 @@
       ],
       "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
       "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
-      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_note": "The fixed core reaches UDIV and returns SIGILL on Cortex-A9 and Debian 3.2.0-4-vexpress. The same package passed the Rust default-TLS gate on Cortex-A15 QEMU with Debian 4.9.0-13-armmp and ARM hard-float glibc 2.24. Physical minimum OS/ISA remains unverified.",
       "minimum_os_runtime_verified": false
     },
     {
@@ -174,7 +174,7 @@
       ],
       "runtime_abi_note": "Unknown until per-package inspection/runtime probe",
       "mapping_note": "Candidate only; inspect upstream executable and validate dependencies",
-      "minimum_os_note": "Unknown upstream minimum kernel/libc; inspect binary and vendor material",
+      "minimum_os_note": "The Rust and official core passed the default-TLS old-kernel gate on offline Cortex-A9 QEMU with Debian 3.2.0-4-vexpress and ARMEL glibc 2.24. Physical minimum OS/ISA remains unverified.",
       "minimum_os_runtime_verified": false
     },
     {

@@ -66,11 +66,93 @@ can retry independently; a configuration readback is not a callback-completion
 or cancellation receipt.
 
 `set_version_archive_location(folder, &VersionArchiveLocation)` selects either
-`FolderDefault` or `BasicDirectory(TargetPath)`. Basic selects the native basic
+`FolderDefault`, `BasicDirectory(TargetPath)`, or an explicit `RemoteUri(Url)`.
+`VersionArchiveLocation::remote_uri(text)` parses a bounded native FTP/SFTP URI
+without performing I/O. It rejects other schemes, missing hosts, fragments and
+control-containing text. The selected URI supplies the native backend and is
+independent of the management target's Windows/Unix path style. Basic selects the native basic
 filesystem backend. Native relative paths and tilde expansion are interpreted on
 the target; remote syntax must match that target. The SDK opens no controller
 path and never joins target paths with host strings. Logical path text is bounded
-to 32 KiB. Other storage backends retain separate verification gates.
+to 32 KiB.
+
+Remote URIs can contain credentials and native query selectors. They are sent
+explicitly to the core and omitted from ordinary Debug; protect serialized
+configuration and private diagnostics. Local Sync endpoint options are a
+different interface and are not translated here. URI configuration does not
+establish authentication, server identity or successful archival.
+
+For this fixed version's archive SFTP backend, the native `privateKey` query
+value is a **key-file path on the target machine**, not inline PEM text. Encode
+it as a URI query value; the SDK neither reads the key nor copies it to the
+target. This differs from the Local Sync endpoint's inline-key interface.
+Native tests on all six standard macOS/Linux/Windows AMD64/ARM64 profiles reject
+a different valid private key at a dedicated key-only peer, then authenticate the
+selected key without password fallback and verify real archival, browsing,
+restoration, restart and retained remote archives. They also use a target key
+path containing Unicode, spaces and a literal percent. These results belong to
+[run 44082376849](https://github.com/AresJef/verysync-sidecar/actions/runs/44082376849),
+whose unrelated failures remain recorded; they do not establish a passing full
+release candidate.
+
+The fixed native parser accepts `parallelConnections` (default 1, maximum 32)
+and `sftpChannels` (default 5, maximum 256). Missing, invalid or nonpositive
+values use the native defaults; larger values are capped. Despite its name,
+`sftpChannels` is passed to the SFTP client's per-file concurrent-request limit.
+`connectTimeout` is parsed as positive integer seconds, with a native default
+of 30 seconds. These details come from the selected executable's parser and
+consumer; they are independent of management-request timeouts. The isolated
+key-only test observes one and then two actual authenticated SSH connections
+when changing `parallelConnections` from 1 to 2, and performs the data effects
+with `sftpChannels=2` and `connectTimeout=6`. It does not measure a concurrency
+or network-timeout bound, throughput improvement or verified server identity.
+
+Separate password and key-file SFTP cases in the six standard profiles verify
+real remote old bytes, native version browsing, restoration of a Unicode/percent
+filename, unchanged source data, normal restart with the remote location retained,
+resetting to the default location without deleting remote archives, and normal
+owned-tree/state release. Each profile's complete file-history target passed all
+11 tests in the linked run. These archive results do not establish verified
+server host identity or a concurrency or network-timeout bound.
+
+FTP URI readback succeeds. The first remote generation fails with the exact
+native `simple versioner: archive: file does not exist` error on all six standard
+macOS/Linux/Windows AMD64/ARM64 profiles using the dedicated pyftpdlib2.2.0
+peer. Original positive-case failures retain old receiver bytes, new source bytes
+and an empty remote archive. The initial Mac protocol trace confirms authentication,
+existing-directory listing and deletion of an absent destination without upload.
+The regression for these reproduced targets now requires accepted peer
+authentication, observed USER/PASS commands, no upload command in that observation
+window, the exact native error and a nonzero pull-error counter, retained files,
+an empty archive, and normal owned-tree/state release. The observer is opt-in,
+records command names without arguments or credentials, and preserves the original
+server command handler. All six standard profiles passed this strict observed
+refusal case in the linked run, independently of their positive SFTP archive cases.
+
+The original FTP positive case reached the same first-generation error on
+fifteen additional fixed-package profiles. This includes two x86 compatibility
+profiles, eleven Linux user-mode QEMU profiles, and both Windows legacy ABIs
+on Server 2022. All fifteen recorded accepted peer authentication, USER/PASS,
+zero upload commands in the observation window, retained source and receiver
+files, an empty remote archive, and normal exit and cleanup. Password and
+key-file SFTP archive and restore were verified on each profile. The first
+generic ARM password run archived and listed actual data before the sender
+reached its original shutdown deadline. A separate run with the same deadline
+verified restoration and normal shutdown. The cause of the first timeout
+remains unknown.
+[Additional FTP and SFTP results](https://github.com/AresJef/verysync-sidecar/actions/runs/44408051901)
+· [Generic ARM shutdown and restoration](https://github.com/AresJef/verysync-sidecar/actions/runs/44409737075/job/135174354222)
+
+The first-generation refusal check covers the six standard profiles and the
+fifteen additional profiles on the measured x64 GitHub-hosted runner images
+with the dedicated FTP peer. It matches both owned cores to their verified
+preparation receipts, catalog archive SHA-256 and known official executable
+fingerprints. The additional profiles also require the observed runner image
+and target OS and architecture. Tests with missing or mismatched proof retain
+the positive archival requirement. The underlying cause of the native refusal
+remains unresolved. Minimum operating-system execution and other FTP servers,
+authentication methods and native URI query selections have independent gates.
+[Strict hosted FTP and SFTP regression](https://github.com/AresJef/verysync-sidecar/actions/runs/44413217678)
 
 Changing location preserves policy parameters and unknown fields. The SDK does
 not migrate existing archives; native retention can clean the selected location.
@@ -119,6 +201,9 @@ Typed restore calls now refuse a request with `ArchiveRestorePrecondition`
 unless the selected archive timestamps precede a fresh `nowTime` reported by
 the target. RFC3339 offsets are compared as instants; the original native token
 is sent unchanged. The controller's wall clock and timezone are not consulted.
+Leap-second values and precision finer than nanoseconds are rejected rather than
+normalized or truncated. Whole-second archive comparisons use floor seconds,
+including native timestamps before the Unix epoch.
 Same-second/future timestamps, missing or unrecognized target clocks, and
 unrecognized archive timestamps produce no restoring POST. After inspecting the
 target, callers can make another explicit request once the precondition holds.
@@ -160,8 +245,11 @@ Directory restoration can affect multiple historical files, including nested
 descendants. Coordinate other writers, inspect the per-path report and verify
 actual content. Local isolated tests check nested oldest/newest restoration,
 an unselected root file, a deeper descendant, and explicit root restoration
-against actual bytes/SHA-256. Same-source multi-platform acceptance remains
-pending. The SDK performs the bounded read-only preflight described above;
+against actual bytes/SHA-256. Native Windows AMD64 and ARM64 tests also verified
+all of those directory effects, including the Unicode/percent path and both
+normal owned-process exits. Their complete six-case history suites passed;
+the relevant runtime, fixture and case sources are unchanged. Full regression
+for the final delivery candidate remains required. The SDK performs the bounded read-only preflight described above;
 the native planner still selects and restores content. No controller filesystem
 path is opened.
 
@@ -189,3 +277,42 @@ mutation. It checks fresh identity, serializes with other writes, requires the
 native error-free response, and never retries. It clears the global audit log,
 independently from version archives. Follow-up totals are a separate observation;
 an empty free-instance reset is not evidence of removing real recorded history.
+
+## Whole-folder version inventory
+
+`folder_version_inventory(folder)` reads the distinct `/rest/folder/versions`
+endpoint once. It returns the existing `FolderVersionHistory` and
+`ArchivedFileVersion` types for the versioner's whole-folder map, without a
+prefix parameter, SDK recursive traversal, automatic paging or restore.
+`folder_versions(folder, prefix)` keeps its separate `/versions/browse`
+semantics, including descendant-prefix behavior. Neither method substitutes a
+file-manager resource listing or global audit records for archived versions.
+
+The whole-folder read checks fresh identity and configured scope before one GET,
+requires configuration-read permission and retains normal response/deadline
+bounds. A native empty object is valid. Null or malformed root maps remain
+errors on this route; prefix browsing's older native-null normalization is
+unchanged. Paused/unavailable versioners and other native failures remain errors,
+not empty histories. Preflight and inventory are separate observations.
+
+Untrusted native relative names, exact version/modification timestamps, byte
+sizes and unknown record fields are retained without path traversal or clock
+conversion. Debug omits names, timestamps and unknown values. The read performs
+no controller filesystem access, scan, restore or additional archive requests.
+Large native inventories can exceed configured response bounds; the SDK does
+not silently return a partial map or select an archive version automatically.
+
+```no_run
+# async fn versions(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+let inventory = client.folder_version_inventory(folder).await?;
+// Explicitly inspect inventory.0 and redact private names/timestamps before logging.
+# let _ = inventory;
+# Ok(()) }
+```
+
+The existing real remote-archive/restore case additionally observes the paused
+error, an empty active inventory and two actual retained archives after three
+remote updates. Whole and prefix routes retain the same known archived records,
+and current bytes remain unchanged by the read. Archive creation, retention,
+explicit restore and normal owned exits stay independently asserted. Full
+same-source platform acceptance remains pending.

@@ -4,9 +4,11 @@ import io
 import json
 from pathlib import Path
 import socket
+import struct
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 from http.server import BaseHTTPRequestHandler
@@ -34,16 +36,33 @@ class ProxyContracts(unittest.TestCase):
             binary.write_bytes(b"synthetic helper input; never executed")
             argv = [str(SOURCE), "--toolchain", "synthetic", "--cargo",
                     str(Path(sys.executable).resolve()), "--test-target",
-                    "engine_control", "--evidence-dir", str(evidence)]
+                    "engine_control", "--release", "--evidence-dir", str(evidence)]
+            def prepare_opener(*args):
+                directory = evidence / "owned-native-opener"
+                (directory / "captured").mkdir(parents=True)
+                (directory / "synthetic-executable").write_bytes(b"synthetic fixture, not executed")
+                (directory / "captured" / "1.argv").write_bytes(b"private-argv-value\0")
+                return {"fixture_only": True, "name": "synthetic-executable", "sha256": "f" * 64, "private_argv": "private-argv-value"}
             with patch.object(HELPER.sys, "argv", argv), \
                     patch.object(HELPER.sys, "stdout", console), \
                     patch.dict(HELPER.os.environ, {"VERYSYNC_TEST_BINARY": str(binary),
                                                    "VERYSYNC_TEST_BINARY_SHA256": "0" * 64}), \
-                    patch.object(HELPER.subprocess, "Popen", return_value=process):
+                    patch.object(HELPER.subprocess, "Popen", return_value=process), \
+                    patch.object(HELPER, "prepare_native_opener", side_effect=prepare_opener):
                 self.assertEqual(HELPER.main(), 7)
+                launched = HELPER.subprocess.Popen.call_args.args[0]
+                self.assertIn("--release", launched)
+                self.assertIn("engine_control", launched)
                 console.flush()
                 self.assertEqual(console_bytes.getvalue().decode("utf-8").splitlines()[0],
                                  output.rstrip("\n"))
+                forwarded = console_bytes.getvalue().decode("utf-8")
+                summary_line = next(line for line in forwarded.splitlines() if line.startswith("Isolated native opener observations: "))
+                summary = json.loads(summary_line.split(": ", 1)[1])
+                self.assertEqual(summary["captured_calls"], 1)
+                self.assertTrue(summary["owned_capture_and_executable_removed"])
+                self.assertNotIn("private-argv-value", forwarded)
+                self.assertFalse((evidence / "owned-native-opener").exists())
             self.assertEqual((evidence / "engine-control.log").read_text(encoding="utf-8"), output)
             report = json.loads((evidence / "proxy-observations.json").read_text())
             self.assertEqual(report["test_exit_code"], 7)
@@ -135,6 +154,84 @@ class ProxyContracts(unittest.TestCase):
                     server.join(timeout=2)
                     self.assertFalse(server.is_alive())
 
+    def test_official_metadata_tunnel_records_only_bounded_timing_and_byte_counts(self):
+        real_connect = socket.create_connection
+        with socket.socket() as upstream, HELPER.BlockedProxy(upgrade_metadata=True) as proxy:
+            upstream.bind(("127.0.0.1", 0))
+            upstream.listen()
+            upstream.settimeout(2)
+            def connect(target, **kwargs):
+                self.assertEqual(target, ("upgrades.verysync.cn", 443))
+                self.assertEqual(kwargs, {"timeout": 10})
+                return real_connect(upstream.getsockname(), timeout=2)
+            server = threading.Thread(target=proxy.serve_forever,
+                                      kwargs={"poll_interval": 0.01}, daemon=True)
+            server.start()
+            try:
+                with patch.object(HELPER.socket, "create_connection", side_effect=connect):
+                    with real_connect(proxy.server_address, timeout=2) as client:
+                        client.sendall(b"CONNECT upgrades.verysync.cn:443 HTTP/1.1\r\n\r\n")
+                        self.assertTrue(client.recv(4096).startswith(b"HTTP/1.1 200"))
+                        peer, _ = upstream.accept()
+                        with peer:
+                            peer.settimeout(2)
+                            sent = b"synthetic-private-client-record"
+                            received = b"synthetic-private-provider-record"
+                            client.sendall(sent)
+                            self.assertEqual(peer.recv(4096), sent)
+                            peer.sendall(received)
+                            self.assertEqual(client.recv(4096), received)
+                            client.shutdown(socket.SHUT_WR)
+                            deadline = time.monotonic() + 2
+                            while time.monotonic() < deadline:
+                                with proxy.guard:
+                                    records = [dict(r) for r in proxy.upgrade_tunnels]
+                                if records and records[0]["completed"]:
+                                    break
+                                time.sleep(0.005)
+                            self.assertEqual(len(records), 1)
+                            record = records[0]
+                            self.assertTrue(record["completed"])
+                            self.assertTrue(record["connected"])
+                            self.assertEqual(record["outcome"], "client_eof")
+                            self.assertEqual(record["client_bytes"], len(sent))
+                            self.assertEqual(record["provider_bytes"], len(received))
+                            self.assertGreaterEqual(record["elapsed_s"], record["connect_s"])
+                            serialized = json.dumps(record)
+                            self.assertNotIn(sent.decode(), serialized)
+                            self.assertNotIn(received.decode(), serialized)
+                            self.assertEqual(proxy.errors, 0)
+            finally:
+                proxy.shutdown()
+                server.join(timeout=2)
+                self.assertFalse(server.is_alive())
+
+    def test_official_metadata_connect_timeout_is_visible_without_headers_or_payload(self):
+        real_connect = socket.create_connection
+        with HELPER.BlockedProxy(upgrade_metadata=True) as proxy:
+            server = threading.Thread(target=proxy.serve_forever,
+                                      kwargs={"poll_interval": 0.01}, daemon=True)
+            server.start()
+            try:
+                with patch.object(HELPER.socket, "create_connection", side_effect=TimeoutError):
+                    with real_connect(proxy.server_address, timeout=2) as client:
+                        client.sendall(b"CONNECT upgrades.verysync.cn:443 HTTP/1.1\r\nProxy-Authorization: synthetic-private-header\r\n\r\n")
+                        self.assertEqual(client.recv(4096), b"")
+                with proxy.guard:
+                    records = [dict(r) for r in proxy.upgrade_tunnels]
+                self.assertEqual(len(records), 1)
+                self.assertTrue(records[0]["completed"])
+                self.assertFalse(records[0]["connected"])
+                self.assertEqual(records[0]["outcome"], "socket_timeout")
+                self.assertEqual(records[0]["client_bytes"], 0)
+                self.assertEqual(records[0]["provider_bytes"], 0)
+                self.assertNotIn("synthetic-private-header", json.dumps(records))
+                self.assertEqual(proxy.errors, 0)
+            finally:
+                proxy.shutdown()
+                server.join(timeout=2)
+                self.assertFalse(server.is_alive())
+
     def test_http_and_connect_are_blocked_without_forwarding_or_recording_credentials(self):
         with socket.socket() as canary, HELPER.BlockedProxy() as proxy:
             canary.bind(("127.0.0.1", 0))
@@ -162,6 +259,337 @@ class ProxyContracts(unittest.TestCase):
                 proxy.shutdown()
                 server.join(timeout=2)
                 self.assertFalse(server.is_alive())
+
+
+
+
+
+class NativeOpenerContracts(unittest.TestCase):
+    def test_wow64_directory_query_requires_actual_populated_native_output(self):
+        import ctypes
+        value = str(Path("C:/Windows/SysWOW64"))
+        calls = []
+        def native(buffer, size):
+            calls.append(size)
+            # Reproduce a positive required length with no copied characters.
+            if size == 32768 or size <= len(value):
+                return len(value)+1
+            buffer.value = value
+            return len(value)
+        library = MagicMock(); library.GetSystemWow64DirectoryW.side_effect = native
+        with patch.object(ctypes, "WinDLL", return_value=library, create=True):
+            self.assertEqual(HELPER.windows_wow64_directory(), Path(value))
+            self.assertNotIn(32768, calls)
+
+    def test_wow64_empty_output_is_not_a_current_directory_fallback(self):
+        import ctypes
+        library = MagicMock(); library.GetSystemWow64DirectoryW.return_value = 17
+        with patch.object(ctypes, "WinDLL", return_value=library, create=True):
+            with self.assertRaisesRegex(OSError, "output"):
+                HELPER.windows_wow64_directory()
+
+    def test_wow64_query_grows_once_and_counts_native_utf16_units(self):
+        import ctypes
+        value = "C:/"+"x"*260+"/\U0001f4c1/SysWOW64"
+        units = len(value.encode("utf-16-le"))//2
+        calls = []
+        def native(buffer, size):
+            calls.append(size)
+            if size <= units:
+                return units+1
+            buffer.value = value
+            return units
+        library = MagicMock(); library.GetSystemWow64DirectoryW.side_effect = native
+        with patch.object(ctypes, "WinDLL", return_value=library, create=True):
+            self.assertEqual(HELPER.windows_wow64_directory(), Path(value))
+            self.assertEqual(len(calls), 2)
+            self.assertGreater(calls[1], units)
+
+
+    @staticmethod
+    def pe_fixture(path, machine):
+        data = bytearray(134)
+        data[:2] = b"MZ"
+        struct.pack_into("<I", data, 0x3c, 128)
+        data[128:132] = b"PE\0\0"
+        struct.pack_into("<H", data, 132, machine)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def test_x86_opener_selects_and_verifies_actual_32_bit_socket_provider(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "owned-x86.exe"
+            self.pe_fixture(source, 0x014c)
+            self.pe_fixture(root / "System32" / "mswsock.dll", 0x8664)
+            wow64 = root / "queried-x86-system-directory"
+            self.pe_fixture(wow64 / "mswsock.dll", 0x014c)
+            with patch.dict(HELPER.os.environ, {"SYSTEMROOT": str(root)}), \
+                 patch.object(HELPER, "windows_wow64_directory", return_value=wow64) as query:
+                runtime, machine = HELPER.windows_socket_provider(source)
+                self.assertEqual(runtime, wow64 / "mswsock.dll")
+                self.assertEqual(machine, 0x014c)
+                query.assert_called_once_with()
+                self.pe_fixture(wow64 / "mswsock.dll", 0x8664)
+                with self.assertRaises(ValueError):
+                    HELPER.windows_socket_provider(source)
+
+    def test_target_runtime_probe_executes_owned_artifact_and_requires_matching_receipt(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            executable = Path(temporary) / "rundll32.exe"
+            self.pe_fixture(executable, 0x014c)
+            env = {"SYSTEMROOT": "synthetic-owned-root"}
+            valid = {"owned_opener_runtime_probe": True, "target_arch": "x86",
+                     "pointer_bits": 32, "loopback_bind": True}
+            with patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=json.dumps(valid).encode(), stderr=b"")) as probe:
+                HELPER.probe_windows_opener_runtime(executable, env, 0x014c)
+            self.assertEqual(probe.call_args.args[0], [str(executable), "--verysync-test-loopback-runtime"])
+            self.assertEqual(probe.call_args.kwargs["env"]["VERYSYNC_TEST_OPENER_RUNTIME_PROBE"], "1")
+            self.assertNotIn("VERYSYNC_TEST_OPENER_RUNTIME_PROBE", env)
+            for receipt in [dict(valid, pointer_bits=64), dict(valid, target_arch="x86_64"),
+                            dict(valid, loopback_bind=False)]:
+                with patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=0, stdout=json.dumps(receipt).encode(), stderr=b"")):
+                    with self.assertRaises(ValueError):
+                        HELPER.probe_windows_opener_runtime(executable, env, 0x014c)
+
+    def test_pe_reader_refuses_non_pe_and_unbounded_header_offsets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "not-executed.exe"
+            for content in [b"not a PE image", b"MZ" + bytes(58) + b"\xff\xff\xff\xff"]:
+                path.write_bytes(content)
+                with self.assertRaises(ValueError):
+                    HELPER.windows_pe_machine(path)
+    def test_linux_browser_plan_requires_owned_vm_and_excludes_credentials(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            evidence = root / "evidence"
+            (evidence / "owned-native-opener").mkdir(parents=True)
+            env = {"GITHUB_ACTIONS": "true", "RUNNER_OS": "Linux", "RUNNER_TEMP": str(root),
+                   "PATH": "explicit-tools", "CARGO_REGISTRY_TOKEN": "must-not-copy", "AWS_SECRET_ACCESS_KEY": "must-not-copy"}
+            with patch.object(HELPER.sys, "platform", "linux"), \
+                 patch.object(HELPER.os, "getuid", return_value=1001, create=True), \
+                 patch.object(HELPER.os, "getgid", return_value=1001, create=True), \
+                 patch.object(HELPER.os, "getgroups", return_value=[1001], create=True), \
+                 patch.object(HELPER, "mount_namespace_identity", return_value="mnt:[12345]"):
+                command = HELPER.isolate_browser_command(["explicit-cargo", "test"], evidence, env)
+            self.assertEqual(command[:7], ["sudo", "--non-interactive", "/usr/bin/unshare", "--mount", "--propagation", "private", "--fork"])
+            plan_path = Path(command[-1])
+            plan = json.loads(plan_path.read_text())
+            self.assertEqual(plan["command"], ["explicit-cargo", "test"])
+            self.assertEqual(plan["uid"], 1001)
+            if HELPER.os.name != "nt":
+                self.assertEqual(plan_path.stat().st_mode & 0o077, 0)
+            self.assertNotIn("CARGO_REGISTRY_TOKEN", plan["env"])
+            self.assertNotIn("AWS_SECRET_ACCESS_KEY", plan["env"])
+            self.assertEqual(plan["env"]["VERYSYNC_TEST_BROWSER_ISOLATION"], "linux-private-mount-fallback-v1")
+            with patch.object(HELPER.sys, "platform", "linux"):
+                with self.assertRaises(ValueError):
+                    HELPER.isolate_browser_command(["must-not-run"], evidence, {})
+
+    def test_browser_command_requires_verified_native_selector_isolation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary)
+            env = {"PATH": "owned-fixture-first"}
+            original = HELPER.os.environ.copy()
+            with patch.object(HELPER.sys, "platform", "darwin"):
+                command = HELPER.isolate_browser_command(["explicit-cargo", "test"], evidence, env)
+            self.assertEqual(command[:2], ["/usr/bin/sandbox-exec", "-f"])
+            self.assertEqual(command[3:], ["explicit-cargo", "test"])
+            self.assertEqual(env["VERYSYNC_TEST_BROWSER_ISOLATION"], "macos-seatbelt-fallback-v1")
+            policy = Path(command[2]).read_text()
+            self.assertNotIn('(subpath "/Applications")', policy)
+            for bundle in ["Google Chrome", "Google Chrome Canary", "Chromium", "Microsoft Edge"]:
+                self.assertIn(f'(subpath "/Applications/{bundle}.app")', policy)
+            for candidate in ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"]:
+                self.assertIn(f'(literal "/usr/bin/{candidate}")', policy)
+            self.assertEqual(HELPER.os.environ.copy(), original)
+            for platform in ["win32"]:
+                with patch.object(HELPER.sys, "platform", platform):
+                    with self.assertRaises(ValueError):
+                        HELPER.isolate_browser_command(["must-not-run"], evidence, {})
+
+    def test_browser_actor_exit_is_observed_before_owned_capture_cleanup(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            captured = directory / "captured"
+            captured.mkdir()
+            call = captured / "12345.argv"
+            call.write_bytes(b"synthetic-owned-url\0")
+            call.with_suffix(".owned").write_bytes(b"synthetic exact spawn PID journal")
+            unpublished = captured / "67890.owned"
+            unpublished.write_bytes(b"synthetic actor not yet publishing argv")
+            with patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="")) as observe:
+                receipt = HELPER.finish_browser_actors(directory)
+            self.assertEqual(sorted(c.args[0] for c in observe.call_args_list),
+                             [["/bin/ps", "-p", "12345", "-o", "stat="],
+                              ["/bin/ps", "-p", "67890", "-o", "stat="]])
+            self.assertTrue(call.with_suffix(".stop").is_file())
+            self.assertTrue(unpublished.with_suffix(".stop").is_file())
+            self.assertTrue(call.is_file())
+            self.assertTrue(receipt["every_actor_native_exit_observed"])
+            self.assertEqual(receipt["captured_actor_count"], 1)
+            self.assertEqual(receipt["journaled_actor_count"], 2)
+            self.assertIsNone(receipt["cancellation_native_exit_before_outer_cleanup"])
+            self.assertIsNone(receipt["cancellation_native_root_exit_before_outer_cleanup"])
+
+    def test_detached_linux_cancellation_is_observed_before_explicit_fixture_cleanup(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            captured = directory / "captured"
+            captured.mkdir()
+            for name in ["12345.owned", "12345.argv", "12345.detached", "67890.native-root",
+                         "23456.detached-opener"]:
+                (captured / name).write_bytes(b"synthetic exact owned cancellation journal")
+            observations = []
+            def observe(command, **kwargs):
+                pid = command[2]
+                cleanup = (captured / "release-native-root").exists()
+                observations.append((pid, cleanup))
+                if pid == "67890" or cleanup:
+                    return SimpleNamespace(returncode=1, stdout="")
+                self.assertFalse((captured / "12345.stop").exists())
+                return SimpleNamespace(returncode=0, stdout="S")
+            with patch.object(HELPER.subprocess, "run", side_effect=observe):
+                receipt = HELPER.finish_browser_actors(directory)
+            self.assertTrue(receipt["cancellation_native_root_exit_before_outer_cleanup"])
+            self.assertFalse(receipt["cancellation_native_exit_before_outer_cleanup"])
+            self.assertTrue(receipt["cancellation_desktop_outlived_native_root"])
+            self.assertEqual(receipt["cancellation_detached_actor_count"], 1)
+            self.assertEqual(receipt["cancellation_detached_opener_count"], 1)
+            self.assertEqual(observations[0], ("67890", False))
+            self.assertIn(("12345", False), observations)
+            self.assertIn(("23456", False), observations)
+            self.assertTrue((captured / "12345.stop").exists())
+
+    def test_cancelled_native_root_and_actor_must_exit_before_outer_cleanup(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            captured = directory / "captured"
+            captured.mkdir()
+            for name in ["12345.owned", "12345.argv", "12345.must-exit", "67890.native-root"]:
+                (captured / name).write_bytes(b"synthetic owned cancellation journal")
+            def ended(command, **kwargs):
+                self.assertEqual(list(captured.glob("*.stop")), [])
+                return SimpleNamespace(returncode=1, stdout="")
+            with patch.object(HELPER.subprocess, "run", side_effect=ended):
+                receipt = HELPER.finish_browser_actors(directory)
+            self.assertTrue(receipt["cancellation_native_exit_before_outer_cleanup"])
+            self.assertEqual(receipt["native_cancelled_root_count"], 1)
+            self.assertEqual(receipt["cancellation_actor_count"], 1)
+            self.assertEqual(list(captured.glob("*.stop")), [])
+
+    def test_live_cancelled_actor_cannot_be_fixed_by_outer_stop_and_counted_passed(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            captured = directory / "captured"
+            captured.mkdir()
+            for name in ["12345.owned", "12345.argv", "12345.must-exit", "67890.native-root"]:
+                (captured / name).write_bytes(b"synthetic live actor journal")
+            with patch.object(HELPER.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="S")), \
+                 patch.object(HELPER.time, "monotonic", side_effect=[0, 0, 4]), \
+                 patch.object(HELPER.time, "sleep"):
+                with self.assertRaises(RuntimeError):
+                    HELPER.finish_browser_actors(directory)
+            self.assertEqual(list(captured.glob("*.stop")), [])
+            self.assertTrue((captured / "12345.argv").is_file())
+
+    def test_exact_artifact_is_copied_into_owned_child_path_without_parent_environment_changes(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            source=root/"compiled opener fixture"
+            self.pe_fixture(source, 0x8664)
+            evidence=root/"evidence"
+            evidence.mkdir()
+            env={"PATH":"original-child-path","CARGO_TARGET_DIR":"explicit-target"}
+            original=HELPER.os.environ.copy()
+            messages={"reason":"compiler-artifact","target":{"kind":["example"],"name":"native_folder_opener"},"executable":str(source)}
+            result=SimpleNamespace(returncode=0,stdout=json.dumps(messages),stderr="")
+            def run(command, **kwargs):
+                if command[:2] == ["explicit-cargo", "+1.85.0"]:
+                    return result
+                return SimpleNamespace(returncode=0, stdout=json.dumps({
+                    "owned_opener_runtime_probe": True, "target_arch": "x86_64",
+                    "pointer_bits": 64, "loopback_bind": True}).encode(), stderr=b"")
+            with patch.object(HELPER.subprocess,"run",side_effect=run) as build:
+                receipt=HELPER.prepare_native_opener("explicit-cargo","1.85.0",evidence,env)
+            executable=Path(env["VERYSYNC_TEST_OPENER_EXECUTABLE"])
+            self.assertEqual(executable.read_bytes(),source.read_bytes())
+            owned=Path(env["VERYSYNC_TEST_OPENER_CAPTURE_DIR"]).parent
+            self.assertTrue(executable.is_relative_to(owned))
+            if HELPER.os.name == "nt":
+                self.assertEqual(executable,Path(env["VERYSYNC_TEST_OPENER_SYSTEM_ROOT"])/"System32"/"rundll32.exe")
+                self.assertNotIn("SYSTEMROOT",env)
+            self.assertEqual(env["PATH"],str(executable.parent)+HELPER.os.pathsep+"original-child-path")
+            self.assertEqual(HELPER.os.environ.copy(),original)
+            self.assertTrue(receipt["fixture_only"])
+            cargo_calls = [call for call in build.call_args_list
+                           if call.args[0][:2] == ["explicit-cargo", "+1.85.0"]]
+            self.assertEqual(len(cargo_calls), 1)
+            self.assertIn("--manifest-path", cargo_calls[0].args[0])
+            self.assertIn("--offline", cargo_calls[0].args[0])
+            self.assertIs(cargo_calls[0].kwargs["env"], env)
+            if HELPER.os.name == "nt":
+                probes = [call for call in build.call_args_list
+                          if call.args[0] == [str(executable), "--verysync-test-loopback-runtime"]]
+                self.assertEqual(len(probes), 1)
+                self.assertEqual(probes[0].kwargs["env"]["SYSTEMROOT"],
+                                 env["VERYSYNC_TEST_OPENER_SYSTEM_ROOT"])
+                self.assertNotIn("SYSTEMROOT", env)
+
+    def test_missing_compiled_helper_is_refused_before_capture_or_environment_changes(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence=Path(temporary)/"evidence"
+            evidence.mkdir()
+            env={"PATH":"kept"}
+            result=SimpleNamespace(returncode=0,stdout="",stderr="")
+            with patch.object(HELPER.subprocess,"run",return_value=result):
+                with self.assertRaises(ValueError):
+                    HELPER.prepare_native_opener("explicit-cargo","1.85.0",evidence,env)
+            self.assertEqual(env,{"PATH":"kept"})
+            self.assertEqual(list(evidence.iterdir()),[])
+
+
+
+class WallpaperSourceContracts(unittest.TestCase):
+    def test_source_permission_is_refused_outside_the_explicit_wallpaper_suite(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence=Path(temporary)/"not-created"
+            argv=[str(SOURCE),"--toolchain","synthetic","--cargo",str(Path(sys.executable).resolve()),"--test-target","engine_control","--allow-wallpaper-source","--evidence-dir",str(evidence)]
+            with patch.object(HELPER.sys,"argv",argv):
+                with self.assertRaises(ValueError):
+                    HELPER.main()
+            self.assertFalse(evidence.exists())
+
+    def test_wallpaper_bypass_and_permission_flag_only_reach_the_owned_child(self):
+        process=MagicMock()
+        process.__enter__.return_value=process
+        process.stdout=iter([])
+        process.wait.return_value=7
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            binary=root/"not-executed"
+            binary.write_bytes(b"synthetic never-run core")
+            evidence=root/"evidence"
+            argv=[str(SOURCE),"--toolchain","synthetic","--cargo",str(Path(sys.executable).resolve()),"--test-target","wallpaper_engine","--allow-wallpaper-source","--evidence-dir",str(evidence)]
+            with patch.object(HELPER.sys,"argv",argv), patch.dict(HELPER.os.environ,{"VERYSYNC_TEST_BINARY":str(binary),"VERYSYNC_TEST_BINARY_SHA256":"0"*64,"VERYSYNC_TEST_WALLPAPER_SOURCE_ALLOWED":"untrusted-parent"}), patch.object(HELPER.subprocess,"Popen",return_value=process) as run, patch.object(HELPER.sys,"stdout",io.StringIO()):
+                self.assertEqual(HELPER.main(),7)
+                child=run.call_args.kwargs["env"]
+                self.assertEqual(child["NO_PROXY"],"127.0.0.1,localhost,::1,bing.com")
+                self.assertEqual(child["VERYSYNC_TEST_WALLPAPER_SOURCE_ALLOWED"],"1")
+                self.assertEqual(HELPER.os.environ["VERYSYNC_TEST_WALLPAPER_SOURCE_ALLOWED"],"untrusted-parent")
+            report=json.loads((evidence/"proxy-observations.json").read_text())
+            self.assertEqual(report["wallpaper_source_proxy_bypass_suffix"],"bing.com")
+            self.assertFalse(report["external_forwarding_implemented"])
+            self.assertEqual(report["test_exit_code"],7)
 
 
 if __name__ == "__main__":

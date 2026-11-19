@@ -7,7 +7,7 @@ mod managed_fixture;
 use managed_fixture::options;
 use std::time::Duration;
 use verysync_sidecar::{
-    Client, CreateFolderOptions, EventCursor, EventGapReason, EventKind, EventOptions,
+    Client, CreateFolderOptions, EventCursor, EventGapReason, EventKind, EventOptions, EventSource,
     EventStreamItem, EventSubscription, FolderId, FolderPatch, ManagedInstance, TargetPath,
 };
 
@@ -64,6 +64,7 @@ async fn actual_changes_unknown_events_and_backpressure_preserve_the_engine_and_
     let identity = client.instance().device_id.clone();
     let current = client.system_status().await?;
     let resume = EventCursor {
+        source: EventSource::Standard,
         device_id: identity.clone(),
         engine_started_at: current.start_time,
         last_id: 0,
@@ -214,6 +215,7 @@ async fn real_tail_loss_future_cursor_and_restart_report_gaps_and_resume_explici
     assert!(gap.resume_from.last_id > gap.previous.last_id);
     tail.close().await?;
     let future = EventCursor {
+        source: EventSource::Standard,
         device_id: identity.clone(),
         engine_started_at: client.system_status().await?.start_time,
         last_id: 1_000_000,
@@ -279,5 +281,302 @@ async fn real_tail_loss_future_cursor_and_restart_report_gaps_and_resume_explici
         "actual_restart_generation_gap":true,"new_generation_config_event_observed":true,"identity_files_retained":true,
         "subscription_close_leaves_engine_running":true,"actual_final_tree_exit":true})
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_disk_changes_keep_source_cursors_private_bounded_and_owned() -> TestResult {
+    use verysync_sidecar::{Error, FolderScanPatch, FolderState};
+    let root = tempfile::Builder::new().prefix("vsd-").tempdir()?.keep();
+    let state = root.join("state");
+    let mut owner = ManagedInstance::start(options(&state)?).await?;
+    let client = owner.client().clone();
+    let identity = client.instance().device_id.clone();
+    let identity_before = identity_hashes(&state)?;
+    let first_interrupted = match client
+        .subscribe_disk_events(fast()?.reconnect_attempts(0)?)
+        .await
+    {
+        Ok(empty) => {
+            assert_eq!(empty.cursor().source, EventSource::Disk);
+            assert_eq!(empty.cursor().last_id, 0);
+            empty.close().await?;
+            false
+        }
+        Err(Error::Transport { .. }) => true,
+        Err(error) => return Err(error.into()),
+    };
+    authenticated(&client, &identity).await?;
+    let path = root.join("synthetic disk changes");
+    std::fs::create_dir(&path)?;
+    let id = FolderId::parse("typed-native-disk-changes")?;
+    client
+        .create_folder(&CreateFolderOptions::new(id.clone(), TargetPath::local(&path)).paused(true))
+        .await?;
+    client
+        .update_folder_scan_configuration(
+            &id,
+            &FolderScanPatch::default()
+                .watcher(false)
+                .rescan_interval_seconds(0),
+        )
+        .await?;
+    client.resume_folder(&id).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if client.folder_status(&id).await?.state == Some(FolderState::Idle) {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    let config = std::fs::read(state.join("setting.dat"))?;
+    let relative = "synthetic disk event % +.txt";
+    std::fs::write(path.join(relative), b"first actual disk event bytes")?;
+    client.request_scan(&id).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let status = client.folder_status(&id).await?;
+            if status.state == Some(FolderState::Idle) && status.local_files == Some(1) {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    let cursor = EventCursor {
+        source: EventSource::Disk,
+        device_id: identity.clone(),
+        engine_started_at: client.system_status().await?.start_time,
+        last_id: 0,
+    };
+    let mut stream = client
+        .subscribe_disk_events(fast()?.resume_from(cursor)?)
+        .await?;
+    assert!(
+        matches!(next(&mut stream).await?,EventStreamItem::Gap(g) if g.reason==EventGapReason::ResumedContinuityUnverified&&g.resume_from.source==EventSource::Disk)
+    );
+    let EventStreamItem::Event(event) = next(&mut stream).await? else {
+        return Err("actual disk event missing".into());
+    };
+    assert_eq!(event.kind, EventKind::LocalChangeDetected);
+    assert_eq!(event.cursor.source, EventSource::Disk);
+    assert_eq!(event.data()["folderID"], id.as_str());
+    assert_eq!(event.data()["folder"], id.as_str());
+    assert_eq!(event.data()["path"], relative);
+    assert_eq!(event.data()["action"], "modified");
+    assert_eq!(event.data()["type"], "file");
+    assert!(event.data()["modifiedBy"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty()));
+    assert!(event.data()["modifiedTime"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty()));
+    assert!(!format!("{event:?} {stream:?}").contains(relative));
+    stream.close().await?;
+    let mut stream = client
+        .subscribe_disk_events(fast()?.queue_capacity(2)?)
+        .await?;
+    let before = stream.cursor().clone();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), stream.next())
+            .await
+            .is_err()
+    );
+    assert_eq!(stream.cursor(), &before);
+    for name in ["second.txt", "third.txt"] {
+        std::fs::write(path.join(name), name.as_bytes())?;
+    }
+    client.request_scan(&id).await?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while stream.buffered_items() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?;
+    assert_eq!(stream.buffered_items(), 2);
+    assert_eq!(stream.cursor(), &before);
+    let mut observed = std::collections::BTreeSet::new();
+    let mut last = before.last_id;
+    for _ in 0..2 {
+        let EventStreamItem::Event(e) = next(&mut stream).await? else {
+            return Err("actual queued disk change missing".into());
+        };
+        assert_eq!(e.kind, EventKind::LocalChangeDetected);
+        assert_eq!(e.cursor.source, EventSource::Disk);
+        assert!(e.cursor.last_id > last);
+        last = e.cursor.last_id;
+        observed.insert(
+            e.data()["path"]
+                .as_str()
+                .ok_or("disk path missing")?
+                .to_owned(),
+        );
+    }
+    assert_eq!(
+        observed,
+        std::collections::BTreeSet::from(["second.txt".to_owned(), "third.txt".to_owned()])
+    );
+    stream.close().await?;
+    authenticated(&client, &identity).await?;
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, config);
+    assert_eq!(identity_hashes(&state)?, identity_before);
+    assert_eq!(
+        std::fs::read(path.join(relative))?,
+        b"first actual disk event bytes"
+    );
+    for name in ["second.txt", "third.txt"] {
+        assert_eq!(std::fs::read(path.join(name))?, name.as_bytes());
+    }
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("actual_disk_events=3 initial_empty_native_response_interrupted={first_interrupted} distinct_disk_cursor=true actual_local_change_payload=true source_bound_resume=true initial_error_not_retried=true bounded_queue_observed=true unconsumed_cursor_not_advanced=true cancelled_next_preserves_stream=true close_leaves_core_authenticated=true identity_configuration_and_three_files_preserved=true normal_owned_exit=true");
+    Ok(())
+}
+
+#[tokio::test]
+async fn actual_event_name_filters_select_native_types_and_independent_buffers() -> TestResult {
+    use verysync_sidecar::{Error, EventFilter};
+    async fn prime(client: &Client, filter: EventFilter) -> TestResult<bool> {
+        match client.subscribe_filtered_events(filter, fast()?).await {
+            Ok(stream) => {
+                assert_eq!(stream.cursor().last_id, 0);
+                stream.close().await?;
+                Ok(false)
+            }
+            Err(Error::Transport { .. }) => Ok(true),
+            Err(error) => Err(error.into()),
+        }
+    }
+    async fn from_start(client: &Client, filter: EventFilter) -> TestResult<EventSubscription> {
+        let cursor = EventCursor {
+            source: EventSource::Filtered(filter.clone()),
+            device_id: client.instance().device_id.clone(),
+            engine_started_at: client.system_status().await?.start_time,
+            last_id: 0,
+        };
+        Ok(client
+            .subscribe_filtered_events(filter, fast()?.resume_from(cursor)?)
+            .await?)
+    }
+    let root = tempfile::Builder::new().prefix("vsf-").tempdir()?.keep();
+    let state = root.join("core");
+    let mut owner = ManagedInstance::start(options(&state)?).await?;
+    let client = owner.client().clone();
+    let identity = client.instance().device_id.clone();
+    let hashes = identity_hashes(&state)?;
+    let key = credential(&state)?;
+    let saved = EventFilter::new([EventKind::ConfigurationSaved])?;
+    let paused = EventFilter::new([EventKind::FolderPaused])?;
+    let union = EventFilter::new([EventKind::StateChanged, EventKind::ConfigurationSaved])?;
+    let mut interrupted = 0;
+    for filter in [&saved, &paused, &union] {
+        interrupted += usize::from(prime(&client, filter.clone()).await?);
+    }
+    let path = root.join("synthetic filtered events");
+    std::fs::create_dir(&path)?;
+    std::fs::write(path.join("sentinel.txt"), b"retained filtered event bytes")?;
+    let id = FolderId::parse("typed-native-event-name-filter")?;
+    client
+        .create_folder(&CreateFolderOptions::new(id.clone(), TargetPath::local(&path)).paused(true))
+        .await?;
+    client.resume_folder(&id).await?;
+    client.pause_folder(&id).await?;
+    let mut saved_stream = from_start(&client, saved.clone()).await?;
+    let mut paused_stream = from_start(&client, paused.clone()).await?;
+    let mut union_stream = from_start(&client, union.clone()).await?;
+    for stream in [&mut saved_stream, &mut paused_stream, &mut union_stream] {
+        assert!(
+            matches!(next(stream).await?,EventStreamItem::Gap(g) if g.reason==EventGapReason::ResumedContinuityUnverified)
+        );
+    }
+    let mut selected = 0;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while selected < 3 {
+            match next(&mut saved_stream).await? {
+                EventStreamItem::Event(e) => {
+                    assert_eq!(e.kind, EventKind::ConfigurationSaved);
+                    assert_eq!(e.cursor.source, EventSource::Filtered(saved.clone()));
+                    assert!(!format!("{e:?}").contains(&key));
+                    selected += 1;
+                }
+                other => return Err(format!("unexpected native filtered item: {other:?}").into()),
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await??;
+    let mut paused_seen = false;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while !paused_seen {
+            if let EventStreamItem::Event(e) = next(&mut paused_stream).await? {
+                assert_eq!(e.kind, EventKind::FolderPaused);
+                assert_eq!(e.data()["id"], id.as_str());
+                assert_eq!(e.cursor.source, EventSource::Filtered(paused.clone()));
+                paused_seen = true;
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await??;
+    let mut union_seen = [false; 2];
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while !union_seen.iter().all(|v| *v) {
+            if let EventStreamItem::Event(e) = next(&mut union_stream).await? {
+                assert_eq!(e.cursor.source, EventSource::Filtered(union.clone()));
+                match e.kind {
+                    EventKind::ConfigurationSaved => union_seen[0] = true,
+                    EventKind::StateChanged => union_seen[1] = true,
+                    _ => return Err("native union filter admitted an unselected type".into()),
+                }
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await??;
+    let saved_cursor = saved_stream.cursor().clone();
+    let paused_cursor = paused_stream.cursor().clone();
+    let union_cursor = union_stream.cursor().clone();
+    assert_ne!(saved_cursor.source, paused_cursor.source);
+    assert_ne!(saved_cursor.source, union_cursor.source);
+    saved_stream.close().await?;
+    paused_stream.close().await?;
+    union_stream.close().await?;
+    let equivalent = EventFilter::new([
+        EventKind::ConfigurationSaved,
+        EventKind::StateChanged,
+        EventKind::ConfigurationSaved,
+    ])?;
+    assert_eq!(equivalent, union);
+    let mut resumed = client
+        .subscribe_filtered_events(equivalent, fast()?.resume_from(union_cursor)?)
+        .await?;
+    assert!(
+        matches!(next(&mut resumed).await?,EventStreamItem::Gap(g) if g.reason==EventGapReason::ResumedContinuityUnverified)
+    );
+    resumed.close().await?;
+    assert!(matches!(
+        client
+            .subscribe_filtered_events(paused, fast()?.resume_from(saved_cursor)?)
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    authenticated(&client, &identity).await?;
+    assert!(client.folder(&id).await?.paused);
+    assert_eq!(
+        std::fs::read(path.join("sentinel.txt"))?,
+        b"retained filtered event bytes"
+    );
+    assert_eq!(identity_hashes(&state)?, hashes);
+    let configuration = std::fs::read(state.join("setting.dat"))?;
+    let closed = client.subscribe_filtered_events(saved, fast()?).await?;
+    closed.close().await?;
+    assert_eq!(std::fs::read(state.join("setting.dat"))?, configuration);
+    let exit = owner.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    std::fs::remove_dir_all(root)?;
+    println!("actual_native_event_filters=3 actual_config_saved_only_events={selected} actual_folder_paused_only=true actual_union_saved_and_state=true independent_source_bound_cursors=true canonical_reordered_duplicate_resume=true cross_filter_resume_rejected=true initial_empty_response_interruptions={interrupted} explicit_initial_errors_no_retry=true secret_payload_debug_hidden=true identity_configuration_and_sentinel_preserved=true normal_owned_exit=true");
     Ok(())
 }

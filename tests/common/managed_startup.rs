@@ -262,7 +262,18 @@ async fn cancelled_start_by_sdk_deadline_cleans_an_observed_process() -> TestRes
         .startup_timeout(Duration::from_secs(12))?;
     let mut pending = Box::pin(ManagedInstance::start(settings));
     let seen = tokio::select! {
-        result = &mut pending => return Err(format!("startup ended before its observed deadline boundary: {result:?}").into()),
+        result = &mut pending => {
+            println!("SDK deadline preparation observation: {}", serde_json::json!({
+                "core_capture_created":case.state.join(".verysync-sidecar-core.log").try_exists()?,
+                "identity_record_created":case.state.join(".verysync-sidecar-identity").try_exists()?,
+                "private_key_created":case.state.join("key.pem").try_exists()?,
+                "certificate_created":case.state.join("cert.pem").try_exists()?,
+                "configuration_created":case.state.join("setting.dat").try_exists()?,
+                "observed_serve_process":false,
+                "startup_deadline_seconds":12,
+            }));
+            return Err(format!("startup ended before its observed deadline boundary: {result:?}").into());
+        },
         pids = core_created(&case.binary, &case.state) => pids?,
     };
     let root = super::managed_pause::startup_root(&seen)?;
@@ -286,6 +297,38 @@ async fn cancelled_start_by_sdk_deadline_cleans_an_observed_process() -> TestRes
     retried.shutdown(Duration::from_secs(10)).await?;
     case.cleanup().await?;
     println!("public SDK startup deadline evidence: {{\"actual_core_observed\":true,\"actual_retained_root_frozen\":true,\"typed_sdk_timeout\":true,\"independent_process_exit_confirmed\":true,\"lease_released_separately\":true,\"explicit_retry_same_identity\":true}}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn unwinding_a_ready_owner_cleans_the_exact_core_and_reuses_state() -> TestResult {
+    let binary = source()?.path().to_owned();
+    assert!(
+        inventory(&binary).await?.is_empty(),
+        "a previous case left an exact program alive"
+    );
+    let root = lifecycle_root()?;
+    let state = root.path().join("state");
+    let settings = options(source()?, &state)?;
+    let owner = start_checked(settings.clone()).await?;
+    let identity = owner.client().instance().device_id.clone();
+    let files = private_identity(&state)?;
+    assert!(inventory(&binary).await?.contains(&owner.process_id()));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _owner = owner;
+        panic!("synthetic caller panic exercises ready managed-owner cleanup");
+    }));
+    assert!(result.is_err());
+    wait_no_processes(&binary).await?;
+    wait_state_available(&state).await?;
+    assert_eq!(private_identity(&state)?, files);
+    let mut retried = start_checked(settings).await?;
+    assert_eq!(retried.client().instance().device_id, identity);
+    assert_eq!(private_identity(&state)?, files);
+    let exit = retried.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    wait_no_processes(&binary).await?;
+    println!("public ready-owner panic evidence: actual_core_observed=true unwind_caught=true exact_image_exit=true lease_released=true identity_files_retained=true explicit_retry_same_identity=true normal_retry_exit=true");
     Ok(())
 }
 

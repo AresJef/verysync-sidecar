@@ -57,9 +57,9 @@ impl ManagedInstance {
         timeout: Duration,
     ) -> Result<KernelUpgradeExit> {
         if !self.state_ready_for_backup
-            || !self
-                .exit_snapshot()
-                .is_some_and(|e| e.tree_stopped && !e.forced && e.code == Some(0))
+            || !self.exit_snapshot().is_some_and(|e| {
+                e.tree_stopped && e.state_released && !e.forced && e.code == Some(0)
+            })
         {
             return Err(Error::ManagedFailure {
                 reason: "CLI upgrade requires a known normally stopped owner",

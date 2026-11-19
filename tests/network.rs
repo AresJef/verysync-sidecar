@@ -1,8 +1,18 @@
 //! Actual private listener, connection, transport and discovery observations.
+#[path = "../examples/acceptance_pair/observe.rs"]
+mod acceptance_pair;
 #[path = "common/discovery_fixture.rs"]
 mod discovery_fixture;
+#[path = "common/local_announcement_cases.rs"]
+mod local_announcement_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/network_limit_effects.rs"]
+mod network_limit_effects;
+#[path = "common/resource_fixture.rs"]
+mod resource_fixture;
+#[path = "common/tracker_observation_cases.rs"]
+mod tracker_observation_cases;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 use std::time::Duration;
@@ -10,6 +20,169 @@ use verysync_sidecar::{
     Client, CreateDeviceOptions, DeviceId, DevicePatch, DeviceTransport, Error, ManagedInstance,
     NetworkPatch, PeerConnectionType,
 };
+
+async fn pair_node(
+    core: &ManagedInstance,
+    private_receipt: &std::path::Path,
+) -> TestResult<(serde_json::Value, std::path::PathBuf)> {
+    let program = core.program_info();
+    let configuration = core.client().configuration().await?;
+    let key = configuration
+        .native_document()
+        .pointer("/gui/apiKey")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("dedicated node key missing")?;
+    let data = json!({
+        "schema": 1,
+        "api_key": key,
+        "device_id": core.client().instance().device_id.as_str(),
+        "program_version": program.version,
+        "program_sha256": std::env::var("VERYSYNC_TEST_BINARY_SHA256")?,
+    });
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    serde_json::to_writer(options.open(private_receipt)?, &data)?;
+    let volumes = core.client().resource_volumes().await?;
+    let (profile, base, relative) = resource_fixture::owned_base(core, &volumes)?;
+    let folder = profile.join("pair-data");
+    std::fs::create_dir(&folder)?;
+    let endpoint = core.client().endpoint();
+    let management = if let Some(path) = endpoint.socket_path() {
+        json!({"kind":"unix_socket", "path":path})
+    } else {
+        let port = endpoint
+            .http_url()
+            .and_then(|url| url.port())
+            .ok_or("test port missing")?;
+        json!({"kind":"loopback", "port":port})
+    };
+    Ok((
+        json!({
+            "receipt": private_receipt, "management": management,
+            "volume": base.volume().as_str(),
+            "resource": relative.join("pair-data").join("synthetic.bin"),
+            "path_style": if cfg!(windows) { "windows" } else { "unix" },
+        }),
+        folder,
+    ))
+}
+
+async fn wait_for_pair_file(path: &std::path::Path, expected: &[u8]) -> TestResult<()> {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        loop {
+            if path.try_exists()? && std::fs::read(path)? == expected {
+                return Ok::<_, std::io::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(75)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn acceptance_pair_observes_real_files_and_disconnect_recovery() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{JoinFolderOptions, TargetPath};
+
+    let root = tempfile::Builder::new().prefix("vsp-").tempdir()?.keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let result = async {
+        let (a_plan, source) = pair_node(&a, &root.join("a-receipt.json")).await?;
+        let (b_plan, target) = pair_node(&b, &root.join("b-receipt.json")).await?;
+        let target_file = target.join("synthetic.bin");
+        assert!(!target_file.try_exists()?);
+        let original: Vec<u8> = (0..262_181_u32).map(|i| (i ^ (i >> 7)) as u8).collect();
+        let source_file = source.join("synthetic.bin");
+        std::fs::write(&source_file, &original)?;
+        for (client, other, peer) in [(a.client(), b.client(), &b_id), (b.client(), a.client(), &a_id)] {
+            let address = listener(other, None).await?;
+            assert!(client.create_device(
+                &CreateDeviceOptions::new(peer.clone()).settings(
+                    DevicePatch::default().addresses(vec![address])
+                        .allowed_transports(vec![DeviceTransport::Tcp]).paused(false),
+                ),
+            ).await?.requested_fields_match);
+        }
+        let keys = a.client().generate_share().await?;
+        let rw = a.client().validate_share_key(&keys.read_write_key).await?;
+        let ro = b.client().validate_share_key(&keys.read_only_key).await?;
+        let af = a.client().join_folder(&JoinFolderOptions::new(rw, TargetPath::local(source))).await?;
+        let bf = b.client().join_folder(&JoinFolderOptions::new(ro, TargetPath::local(target))).await?;
+        a.client().share_folder_with(&af.configuration.id, &b_id).await?;
+        b.client().share_folder_with(&bf.configuration.id, &a_id).await?;
+        connection(a.client(), &b_id, true).await?;
+        connection(b.client(), &a_id, true).await?;
+        wait_for_pair_file(&target_file, &original).await?;
+
+        let plan_path = root.join("observe.json");
+        let mut plan = json!({"sender":a_plan,"receiver":b_plan,"transport":"tcp",
+            "expected_bytes":original.len(),"expected_sha256":format!("{:x}", Sha256::digest(&original))});
+        let write_plan = |value: &serde_json::Value| -> TestResult {
+            std::fs::write(&plan_path, serde_json::to_vec(value)?)?;
+            Ok(())
+        };
+        write_plan(&plan)?;
+        let first = acceptance_pair::run(&plan_path).await?;
+        assert_eq!(first.bytes, original.len() as u64);
+        assert_eq!(first.sender.device_id, a_id.as_str());
+        assert_eq!(first.receiver.device_id, b_id.as_str());
+        plan["transport"] = json!("relay");
+        write_plan(&plan)?;
+        assert_eq!(
+            acceptance_pair::run(&plan_path).await.err().ok_or("wrong transport accepted")?.to_string(),
+            "a peer did not report the expected transport",
+        );
+        plan["transport"] = json!("tcp");
+        plan["expected_sha256"] = json!("0".repeat(64));
+        write_plan(&plan)?;
+        assert_eq!(
+            acceptance_pair::run(&plan_path).await.err().ok_or("wrong hash accepted")?.to_string(),
+            "a retrieved synthetic file differs from its declared size or digest",
+        );
+        plan["expected_sha256"] = json!(first.file_sha256);
+        write_plan(&plan)?;
+        a.client().pause_device(&b_id).await?;
+        b.client().pause_device(&a_id).await?;
+        connection(a.client(), &b_id, false).await?;
+        connection(b.client(), &a_id, false).await?;
+        assert!(acceptance_pair::run(&plan_path).await.is_err());
+
+        let next: Vec<_> = original.iter().map(|v| v ^ 0x5a).collect();
+        std::fs::write(&source_file, &next)?;
+        a.client().request_scan(&af.configuration.id).await?;
+        assert_eq!(std::fs::read(&target_file)?, original);
+        a.client().resume_device(&b_id).await?;
+        b.client().resume_device(&a_id).await?;
+        connection(a.client(), &b_id, true).await?;
+        connection(b.client(), &a_id, true).await?;
+        wait_for_pair_file(&target_file, &next).await?;
+        plan["expected_sha256"] = json!(format!("{:x}", Sha256::digest(&next)));
+        write_plan(&plan)?;
+        let recovered = acceptance_pair::run(&plan_path).await?;
+        assert_ne!(recovered.file_sha256, first.file_sha256);
+        assert_eq!(recovered.bytes, first.bytes);
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    }
+    .await;
+    let a_exit = a.shutdown(Duration::from_secs(15)).await;
+    let b_exit = b.shutdown(Duration::from_secs(15)).await;
+    for exit in [a_exit?, b_exit?] {
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    }
+    result?;
+    std::fs::remove_dir_all(root)?;
+    println!("Acceptance pair effects: two real TCP peers, 262181 bytes before and after recovery, wrong route/hash/disconnect rejected, exact normal cleanup");
+    Ok(())
+}
 
 async fn listener(client: &Client, expected: Option<&str>) -> TestResult<String> {
     Ok(tokio::time::timeout(Duration::from_secs(10), async {

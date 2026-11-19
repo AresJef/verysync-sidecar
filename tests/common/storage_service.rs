@@ -15,14 +15,132 @@ pub struct Service {
     pub endpoint: StorageEndpoint,
     pub bad_endpoint: StorageEndpoint,
     pub share: PathBuf,
+    #[allow(dead_code)] // Only the opt-in archive target reads peer observations.
+    pub observation_log: PathBuf,
     pub python_platform: String,
 }
+#[derive(Clone, Copy)]
+enum ServerTls<'a> {
+    Off,
+    SelfSigned,
+    PublicCa(&'a Path),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum FtpPeerMode {
+    Password,
+    ObservedPassword,
+    Anonymous,
+}
+
 impl Service {
     pub fn start(
         protocol: StorageProtocol,
         root: &Path,
         write_delay: Duration,
     ) -> TestResult<Self> {
+        Self::configured(
+            protocol,
+            root,
+            write_delay,
+            ServerTls::Off,
+            None,
+            FtpPeerMode::Password,
+            false,
+        )
+    }
+    #[allow(dead_code)] // Shared fixture modules are compiled by separate targets.
+    pub fn start_https(root: &Path) -> TestResult<Self> {
+        Self::configured(
+            StorageProtocol::WebDav,
+            root,
+            Duration::ZERO,
+            ServerTls::SelfSigned,
+            None,
+            FtpPeerMode::Password,
+            false,
+        )
+    }
+    #[allow(dead_code)] // Only the strict HTTPS native case selects this fixture.
+    pub fn start_public_https(root: &Path, manifest: &Path) -> TestResult<Self> {
+        Self::configured(
+            StorageProtocol::WebDav,
+            root,
+            Duration::ZERO,
+            ServerTls::PublicCa(manifest),
+            None,
+            FtpPeerMode::Password,
+            false,
+        )
+    }
+    #[allow(dead_code)] // Shared fixture module, separate native test targets.
+    pub fn start_smb_auth(root: &Path, mode: &str) -> TestResult<Self> {
+        if !matches!(mode, "domain" | "guest") {
+            return Err("unknown explicit SMB test policy".into());
+        }
+        Self::configured(
+            StorageProtocol::Smb,
+            root,
+            Duration::ZERO,
+            ServerTls::Off,
+            Some(mode),
+            FtpPeerMode::Password,
+            false,
+        )
+    }
+    #[allow(dead_code)] // Only the archive target requests FTP observations.
+    pub fn start_observed_ftp(root: &Path) -> TestResult<Self> {
+        Self::configured(
+            StorageProtocol::Ftp,
+            root,
+            Duration::ZERO,
+            ServerTls::Off,
+            None,
+            FtpPeerMode::ObservedPassword,
+            false,
+        )
+    }
+    #[allow(dead_code)] // Only the explicit anonymous FTP native case selects it.
+    pub fn start_anonymous_ftp(root: &Path) -> TestResult<Self> {
+        Self::configured(
+            StorageProtocol::Ftp,
+            root,
+            Duration::ZERO,
+            ServerTls::Off,
+            None,
+            FtpPeerMode::Anonymous,
+            false,
+        )
+    }
+    #[allow(dead_code)] // Only the archive target requests this strict peer.
+    pub fn start_key_only_sftp(root: &Path) -> TestResult<Self> {
+        Self::configured(
+            StorageProtocol::Sftp,
+            root,
+            Duration::ZERO,
+            ServerTls::Off,
+            None,
+            FtpPeerMode::Password,
+            true,
+        )
+    }
+    fn configured(
+        protocol: StorageProtocol,
+        root: &Path,
+        write_delay: Duration,
+        tls: ServerTls<'_>,
+        smb_auth: Option<&str>,
+        ftp_mode: FtpPeerMode,
+        sftp_key_only: bool,
+    ) -> TestResult<Self> {
+        if ftp_mode != FtpPeerMode::Password && protocol != StorageProtocol::Ftp {
+            return Err("FTP peer policy requires the explicit FTP protocol".into());
+        }
+        let public_manifest = match tls {
+            ServerTls::PublicCa(path) => Some(path),
+            _ => None,
+        };
+        let tls = !matches!(tls, ServerTls::Off);
         if write_delay.as_millis() > 100 {
             return Err("bounded write delay is test-only".into());
         }
@@ -51,18 +169,20 @@ impl Service {
                 }
             ),
         )?;
+        let observation_log = root.join("private-service.log");
         let child = Command::new(python)
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/storage-test-services.py"))
             .args(["--protocol", name])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(File::create(root.join("private-service.log"))?)
+            .stderr(File::create(&observation_log)?)
             .spawn()?;
         let mut service = Self {
             child: Some(child),
             endpoint: placeholder.clone(),
             bad_endpoint: placeholder,
             share,
+            observation_log,
             python_platform: String::new(),
         };
         let child = service
@@ -70,10 +190,20 @@ impl Service {
             .as_mut()
             .ok_or("private service owner absent")?;
         let mut input = child.stdin.take().ok_or("private service stdin absent")?;
-        serde_json::to_writer(
-            &mut input,
-            &serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis()}),
-        )?;
+        let mut configuration = serde_json::json!({"root":service.share,"user":user,"password":password,"write_delay_ms":write_delay.as_millis(),"tls":tls,"smb_auth":smb_auth});
+        if let Some(manifest) = public_manifest {
+            configuration["public_tls_manifest"] = serde_json::to_value(manifest)?;
+        }
+        if ftp_mode != FtpPeerMode::Password {
+            configuration["record_ftp_events"] = true.into();
+        }
+        if ftp_mode == FtpPeerMode::Anonymous {
+            configuration["ftp_anonymous"] = true.into();
+        }
+        if sftp_key_only {
+            configuration["sftp_key_only"] = true.into();
+        }
+        serde_json::to_writer(&mut input, &configuration)?;
         input.write_all(b"\n")?;
         drop(input);
         let output = child.stdout.take().ok_or("private service stdout absent")?;
@@ -104,15 +234,22 @@ impl Service {
             .as_u64()
             .filter(|p| *p > 0 && *p <= 65535 && *p != 18886)
             .ok_or("invalid private service port")?;
-        if ready["ready"] != true || ready["loopback_only"] != true {
+        if ready["ready"] != true || ready["loopback_only"] != true || ready["tls"] != tls {
             return Err("service has no explicit private readiness".into());
+        }
+        if public_manifest.is_some() && ready["public_ca"] != true {
+            return Err("public-CA peer did not confirm its explicit fixture".into());
         }
         service.python_platform = ready["python_platform"]
             .as_str()
             .ok_or("helper platform classification absent")?
             .to_owned();
         let scheme = if protocol == StorageProtocol::WebDav {
-            "http"
+            if tls {
+                "https"
+            } else {
+                "http"
+            }
         } else {
             name
         };
@@ -121,15 +258,33 @@ impl Service {
         } else {
             "/"
         };
+        let host = if public_manifest.is_some() {
+            "ldap.localhost.direct"
+        } else {
+            "127.0.0.1"
+        };
         let endpoint =
-            StorageEndpoint::remote(protocol, &format!("{scheme}://127.0.0.1:{port}{path}"))?
+            StorageEndpoint::remote(protocol, &format!("{scheme}://{host}:{port}{path}"))?
                 .connection_timeout_seconds(6);
         let endpoint = if protocol == StorageProtocol::Sftp {
             endpoint.insecure_tls(true)?
         } else {
             endpoint
         };
-        service.endpoint = endpoint.clone().credentials(user.clone(), password)?;
+        service.endpoint = if ftp_mode == FtpPeerMode::Anonymous {
+            endpoint
+                .clone()
+                .credentials("anonymous", "anonymous@synthetic.invalid")?
+        } else if smb_auth == Some("guest") {
+            endpoint.clone().smb_guest(true)?
+        } else {
+            let endpoint = endpoint.clone().credentials(user.clone(), password)?;
+            if smb_auth == Some("domain") {
+                endpoint.smb_domain("VS-SYNTHETIC")?
+            } else {
+                endpoint
+            }
+        };
         service.bad_endpoint =
             endpoint.credentials(user, "deliberately-incorrect-synthetic-password")?;
         Ok(service)

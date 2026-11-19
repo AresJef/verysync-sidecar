@@ -36,8 +36,12 @@ pub enum Capability {
     PeerSharing,
     /// Remote device configuration, distinct from live connection or transfer state.
     DeviceConfiguration,
+    /// Trust a configured introducer and observe native device and folder associations.
+    DeviceIntroduction,
     /// Pending folder offers, per-peer ignores and explicit local folder associations.
     FolderInvitations,
+    /// Per-association encryption password selection and credential-free readback.
+    FolderPeerEncryption,
     /// Pending-device records; nonempty native validation remains pending.
     PendingDeviceRecords,
     /// Persistent ignored identities; live rejection remains a separate observation.
@@ -85,14 +89,45 @@ pub enum Capability {
     OfflineDatabaseMaintenance,
     /// Remaining advanced folder settings.
     AdvancedFolderSettings,
+    /// Creation templates for future folders and devices.
+    CreationDefaults,
+    /// Identity-bound complete saves and scoped general option changes.
+    FullConfiguration,
+    /// Native configuration application flag, separate from persistence.
+    ConfigurationApplication,
+    /// Diagnostic preferences, separate from actual report transmission.
+    DiagnosticPreferences,
+    /// Native engine-event audit, thumbnail and proxy configuration selections.
+    SystemPreferences,
+    /// Explicit API-key rotation and read-only reauthentication of the same instance.
+    ManagementKeyRotation,
+    /// Local GUI credential configuration and explicit native cookie sessions.
+    GuiAuthentication,
+    /// Native GUI preferences and same-endpoint reload reconciliation.
+    GuiPreferences,
+    /// Explicit native GUI listener/TLS and Unix socket permission controls.
+    GuiListener,
+    /// Native directory configuration and GUI LDAP-mode selection.
+    LdapAuthentication,
     /// Account, configuration and commercial authorization.
     AccountLicense,
+    /// Separate native Local-API version/status connection and bounded raw scope;
+    /// licensed Local-API operations retain independent acceptance gates.
+    LocalApiConnection,
+    /// Explicit official-account status, login and logout, separate from GUI auth.
+    OfficialAccount,
+    /// Native license metadata and explicitly selected refresh/trial requests.
+    LicenseControl,
     /// Storage protocol integrations.
     StorageProtocols,
     /// LocalSync controls.
     LocalSync,
     /// Enterprise and official remote management.
     EnterpriseRemoteManagement,
+    /// Explicit native peer tunnel probes and target-identity gateway connections.
+    RemoteManagement,
+    /// Per-connection trusted certificates and explicit HTTP(S) proxy routing.
+    ManagementTransport,
     /// Other explicit system and resource operations.
     AuxiliaryControls,
 }
@@ -139,14 +174,30 @@ pub struct LibraryCapability {
 
 const NATIVE_SCOPE: &str = "Default TLS-feature build; matched controller/engine macOS, Windows or Linux on amd64/arm64; Unix sockets on macOS/Linux and loopback HTTP on Windows; selected modern hosted runners, not minimum-OS or cross-network acceptance";
 const CORE_EVIDENCE: &str = "https://github.com/AresJef/verysync-sidecar/actions/runs/43212477622";
+const PEER_EVIDENCE: &str = "https://github.com/AresJef/verysync-sidecar/actions/runs/44292513846";
+
 const fn typed(capability: Capability) -> LibraryCapability {
+    typed_native(
+        capability,
+        BASELINE_ENGINE_VERSION,
+        CORE_EVIDENCE,
+        NATIVE_SCOPE,
+    )
+}
+
+const fn typed_native(
+    capability: Capability,
+    engine_version: &'static str,
+    evidence_url: &'static str,
+    scope: &'static str,
+) -> LibraryCapability {
     LibraryCapability {
         capability,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::NativeEvidence {
-            engine_version: BASELINE_ENGINE_VERSION,
-            evidence_url: CORE_EVIDENCE,
-            scope: NATIVE_SCOPE,
+            engine_version,
+            evidence_url,
+            scope,
         },
     }
 }
@@ -201,11 +252,23 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
+    typed_native(
+        Capability::DeviceIntroduction,
+        "v2.33.2",
+        PEER_EVIDENCE,
+        "Isolated loopback on standard macOS, Windows and Linux AMD64/ARM64: native introduction, withdrawal, retained association across a fresh session, direct TCP transfer, and normal fixture shutdown after explicit disconnection in the withdrawal case",
+    ),
     LibraryCapability {
         capability: Capability::FolderInvitations,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
+    typed_native(
+        Capability::FolderPeerEncryption,
+        "v2.33.2",
+        PEER_EVIDENCE,
+        "Isolated loopback on standard macOS, Windows and Linux AMD64/ARM64: set and clear on an existing association, wrong-password rejection, and exact recovery from an encrypted replica after the source exits",
+    ),
     LibraryCapability {
         capability: Capability::PendingDeviceRecords,
         implementation: ImplementationStatus::Typed,
@@ -276,13 +339,77 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
-    planned(Capability::AdvancedFolderSettings),
+    LibraryCapability {
+        capability: Capability::AdvancedFolderSettings,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::SyncObservation,
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
+    LibraryCapability {
+        capability: Capability::CreationDefaults,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::ConfigurationApplication,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::AccountLicense),
+    LibraryCapability {
+        capability: Capability::LocalApiConnection,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::LicenseControl,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::OfficialAccount,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::SystemPreferences,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::GuiPreferences,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::DiagnosticPreferences,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::LdapAuthentication,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::GuiAuthentication,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::ManagementKeyRotation,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::FullConfiguration,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::ScanControl,
         implementation: ImplementationStatus::Typed,
@@ -308,7 +435,22 @@ static CATALOG: &[LibraryCapability] = &[
         implementation: ImplementationStatus::Typed,
         verification: VerificationStatus::Pending,
     },
+    LibraryCapability {
+        capability: Capability::GuiListener,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     planned(Capability::EnterpriseRemoteManagement),
+    LibraryCapability {
+        capability: Capability::ManagementTransport,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
+    LibraryCapability {
+        capability: Capability::RemoteManagement,
+        implementation: ImplementationStatus::Typed,
+        verification: VerificationStatus::Pending,
+    },
     LibraryCapability {
         capability: Capability::SelectiveBrowse,
         implementation: ImplementationStatus::Typed,

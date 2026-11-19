@@ -95,6 +95,22 @@ impl fmt::Debug for CoreErrorLog {
             .finish_non_exhaustive()
     }
 }
+/// One exact native UTF-8 text log snapshot. Empty filtered output is valid.
+/// No line parsing, timestamp conversion, polling or controller logging occurs.
+#[derive(Clone)]
+pub struct CoreLogText {
+    /// Exact private native text, including line endings and native prefixes.
+    /// Inspect explicitly and redact before copying it into application logs.
+    pub text: String,
+}
+impl fmt::Debug for CoreLogText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreLogText")
+            .field("byte_length", &self.text.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// One bounded log snapshot. The SDK does not automatically poll or paginate it.
 #[derive(Clone, Deserialize)]
 pub struct CoreLogSnapshot {
@@ -238,6 +254,32 @@ impl fmt::Debug for CoreProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CoreProfile")
             .field("request", &self.request)
+            .field("compressed_bytes", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Bounded, unchanged native support ZIP bytes. This can contain private target
+/// configuration, logs, metrics and profiles. Ordinary Debug exposes only size.
+#[derive(Clone)]
+pub struct CoreSupportBundle {
+    pub(crate) bytes: Vec<u8>,
+}
+impl CoreSupportBundle {
+    /// Inspect the exact private native ZIP bytes explicitly. The SDK checks
+    /// only a nonempty ZIP signature/minimum length; it does not decompress,
+    /// validate CRCs, sanitize entries or promise complete native redaction.
+    pub fn body_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    /// Take the unchanged bytes for caller-selected private storage or tooling.
+    pub fn into_body_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+impl fmt::Debug for CoreSupportBundle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoreSupportBundle")
             .field("compressed_bytes", &self.bytes.len())
             .finish_non_exhaustive()
     }

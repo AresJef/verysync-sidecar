@@ -125,7 +125,7 @@ impl Client {
     }
 }
 
-fn classify_release_unavailable(error: Error) -> Error {
+pub(super) fn classify_release_unavailable(error: Error) -> Error {
     match error {
         Error::Http { response } if crate::upgrades::is_missing_release(&response) => {
             Error::UpgradeReleaseUnavailable { response }

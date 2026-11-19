@@ -45,12 +45,43 @@ identity is protected from these remote-peer mutations. Registering a key and
 associating a peer are separate operations, with separate outcomes; they do not
 form a transaction or silently roll back each other.
 
+`set_folder_peer_encryption_password()` sets the native folder encryption
+password on one existing association. Pass `Some(password)` to set the exact
+string or `None` to send the native empty value. The client verifies the target
+identity, writes the peer list with only that password changed and reads the
+result back. `folder_peer_encryption_password_is_set()` observes the current
+setting without returning the password. Both methods preserve an omitted
+native field as `None`. The update receipt also reports an exact match.
+
+When preparing a receive-encrypted replica, establish the association and
+set the password with the peer and folder paused before marking the encrypted
+peer untrusted. Use explicit, matching folder IDs for the tested v2.33.2
+configuration described in [Configuration](configuration.md).
+
 `pending_devices()` and `dismiss_pending_device()` provide a typed surface for
 the fixed engine's pending-device route. Native validation currently observes
 empty device maps and missing-record rejection. **Nonempty device records and
 their dismissal remain unverified on VerySync.** Their candidate record fields
 are retained with unknown values available explicitly. Do not infer device
 approval, commercial authorization, or permanent device blocking from them.
+
+An empty pending list also does not prove that an unconfigured peer was refused.
+An isolated macOS ARM64 v2.33.2 case established an actual one-sided connection
+from another official core while the receiver still had no configuration entry
+for that peer. All 48 pending-device snapshots in the bounded observation stayed
+empty; dismissing the absent record returned `PendingOfferNotFound`. Receiver
+configuration, caller bytes and normal owned-tree/state release were preserved.
+The original positive nonempty-record requirement failed and remains unverified;
+this observation does not validate candidate record fields or every connection
+path, platform or authorization mode. Inspect live connections and persistent
+ignore rules independently when controlling peer access.
+
+The historical `trust-devices` argument was also checked against both startup
+command forms on the fixed v2.33.2 Linux AMD64 and Windows AMD64 programs.
+Native help completed normally. Both parsers rejected the historical
+argument, and the isolated state remained empty throughout. This bounds
+that specific command-line route on the tested images.
+[Native argument check](https://github.com/AresJef/verysync-sidecar/actions/runs/44473889991).
 
 `ignored_devices()`, `ignore_device()` and `unignore_device()` separately expose
 persistent ignored identities. Ignoring requires an unconfigured remote ID;

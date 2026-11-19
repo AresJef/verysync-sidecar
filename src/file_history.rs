@@ -72,7 +72,7 @@ impl fmt::Debug for ExternalVersioningCommand {
     }
 }
 
-/// Explicit archive-location selection for the native basic filesystem backend.
+/// Explicit archive-location selection for native basic or remote filesystems.
 /// Changing location does not migrate, copy or delete existing archived data.
 #[derive(Clone)]
 pub enum VersionArchiveLocation {
@@ -81,14 +81,80 @@ pub enum VersionArchiveLocation {
     /// Select a directory in the target's syntax using the native basic backend.
     /// Relative paths and tilde expansion are interpreted by that target.
     BasicDirectory(TargetPath),
+    /// Native FTP/SFTP URI, including any explicitly supplied credentials and
+    /// selectors. Configuration readback is not proof of successful archival.
+    /// This is separate from Local Sync endpoint options. Debug redacts it.
+    RemoteUri(url::Url),
 }
 impl fmt::Debug for VersionArchiveLocation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::FolderDefault => "VersionArchiveLocation::FolderDefault",
             Self::BasicDirectory(_) => "VersionArchiveLocation::BasicDirectory([REDACTED])",
+            Self::RemoteUri(_) => "VersionArchiveLocation::RemoteUri([REDACTED])",
         })
     }
+}
+impl VersionArchiveLocation {
+    /// Parse an explicit native FTP/SFTP archive URI. This performs no I/O.
+    /// Userinfo and native query selectors are private and passed to the core;
+    /// their authentication, host verification and effects require independent
+    /// native validation. Fragments, missing hosts and other schemes are refused.
+    pub fn remote_uri(uri: impl AsRef<str>) -> Result<Self> {
+        let text = uri.as_ref();
+        if text.len() > 32768 || text.chars().any(char::is_control) {
+            return Err(Error::InvalidConfiguration {
+                reason: "archive URI exceeds its bound or contains controls",
+            });
+        }
+        let uri = url::Url::parse(text).map_err(|_| Error::InvalidConfiguration {
+            reason: "archive URI is invalid",
+        })?;
+        validate_archive_uri(&uri)?;
+        Ok(Self::RemoteUri(uri))
+    }
+
+    pub(crate) fn filesystem_type(&self) -> &str {
+        match self {
+            Self::RemoteUri(uri) => uri.scheme(),
+            _ => "basic",
+        }
+    }
+
+    pub(crate) fn protocol(&self, style: crate::PathStyle) -> Result<&str> {
+        match self {
+            Self::FolderDefault => Ok(""),
+            Self::RemoteUri(uri) => validate_archive_uri(uri),
+            Self::BasicDirectory(path) => {
+                if path.style() != style {
+                    return Err(Error::InvalidPath {
+                        reason: "archive path syntax differs from the target",
+                    });
+                }
+                let value = path.to_protocol()?;
+                if value.len() > 32768 {
+                    return Err(Error::InvalidPath {
+                        reason: "archive path exceeds its text bound",
+                    });
+                }
+                Ok(value)
+            }
+        }
+    }
+}
+
+fn validate_archive_uri(uri: &url::Url) -> Result<&str> {
+    if !matches!(uri.scheme(), "ftp" | "sftp")
+        || uri.host_str().is_none()
+        || uri.port() == Some(0)
+        || uri.fragment().is_some()
+        || uri.as_str().len() > 32768
+    {
+        return Err(Error::InvalidConfiguration {
+            reason: "archive URI requires a bounded FTP/SFTP authority without fragment",
+        });
+    }
+    Ok(uri.as_str())
 }
 impl FolderVersioningPolicy {
     pub(crate) fn apply(&self, config: &mut FolderVersioningConfiguration) -> Result<()> {

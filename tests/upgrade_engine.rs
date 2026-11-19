@@ -1,6 +1,14 @@
 //! Real different-version transitions, not same-version reinstall evidence.
+#[path = "common/full_index_upgrade_cases.rs"]
+mod full_index_upgrade_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[cfg(windows)]
+#[path = "common/windows_cleanup_diagnostic.rs"]
+mod windows_cleanup_diagnostic;
+#[cfg(windows)]
+use windows_cleanup_diagnostic::delete_admission;
+
 use managed_fixture::{options, TestResult};
 use std::{path::PathBuf, time::Duration};
 use verysync_sidecar::{
@@ -47,6 +55,109 @@ fn baseline_asset() -> TestResult<verysync_sidecar::OfficialProgram> {
         .ok_or_else(|| "fixed native archive missing".into())
 }
 
+fn report_cli_io_failure(stage: &'static str, root: &std::path::Path, error: &std::io::Error) {
+    eprintln!(
+        "owned CLI IO failure: {}",
+        serde_json::json!({
+            "stage":stage,"kind":format!("{:?}",error.kind()),"os_code":error.raw_os_error()
+        })
+    );
+    #[cfg(not(windows))]
+    let _ = root;
+    #[cfg(windows)]
+    {
+        let mut pending = vec![(root.to_owned(), 0usize)];
+        let mut checked = 0usize;
+        let mut failures = Vec::new();
+        while let Some((path, depth)) = pending.pop() {
+            if checked == 256 {
+                break;
+            }
+            checked += 1;
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes()
+                & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+                != 0
+            {
+                continue;
+            }
+            if let Err(error) = delete_admission(&path) {
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
+                let role = if path == root {
+                    "fixture-root"
+                } else if name.ends_with(".exe") {
+                    "executable"
+                } else if name.starts_with(".verysync-sidecar-cli-") {
+                    "cli-capture"
+                } else if name == ".verysync-sidecar-core.log" {
+                    "core-log"
+                } else if name == ".verysync-sidecar-lease" || name == "verysync.lock" {
+                    "state-lock"
+                } else if name.ends_with(".db")
+                    || name.ends_with(".db-wal")
+                    || name.ends_with(".db-shm")
+                {
+                    "database"
+                } else if metadata.is_dir() {
+                    "native-directory"
+                } else {
+                    "other-native-file"
+                };
+                failures.push(serde_json::json!({"role":role,"directory":metadata.is_dir(),"os_code":error.raw_os_error(),"readonly":metadata.permissions().readonly()}));
+            }
+            if metadata.is_dir() && depth < 8 {
+                if let Ok(entries) = std::fs::read_dir(&path) {
+                    pending.extend(
+                        entries
+                            .take(256 - checked)
+                            .filter_map(Result::ok)
+                            .map(|entry| (entry.path(), depth + 1)),
+                    );
+                }
+            }
+        }
+        eprintln!(
+            "owned Windows delete-admission snapshot: {}",
+            serde_json::json!({
+                "checked":checked,"bounded":256,"remaining":pending.len(),"failures":failures,
+                "scope":"read-only handle admission on exact owned fixture; no deletion or retry; no holder identity inferred"
+            })
+        );
+        eprintln!(
+            "owned Windows resource-holder snapshot: {}",
+            windows_cleanup_diagnostic::snapshot(root)
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_delete_admission_distinguishes_a_real_held_handle_without_removing_data() -> TestResult {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("synthetic.txt");
+    std::fs::write(&file, b"retained delete-admission sample")?;
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(&file)?;
+    assert_eq!(
+        delete_admission(&file).err().and_then(|e| e.raw_os_error()),
+        Some(32)
+    );
+    drop(held);
+    delete_admission(&file)?;
+    assert_eq!(std::fs::read(&file)?, b"retained delete-admission sample");
+    Ok(())
+}
+
 #[tokio::test]
 async fn kernel_provider_upgrade_replaces_only_the_owned_old_copy() -> TestResult {
     kernel_upgrade(false).await
@@ -61,8 +172,13 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     let root = tempfile::Builder::new().prefix("vku-").tempdir()?.keep();
     let source = upgrade_source()?;
     let program = root.join(source.path().file_name().ok_or("program name missing")?);
-    std::fs::copy(source.path(), &program)?;
-    let old_sha: [u8; 32] = Sha256::digest(std::fs::read(&program)?).into();
+    std::fs::copy(source.path(), &program)
+        .inspect_err(|e| report_cli_io_failure("kernel-copy-private-old-program", &root, e))?;
+    let old_sha: [u8; 32] = Sha256::digest(
+        std::fs::read(&program)
+            .inspect_err(|e| report_cli_io_failure("kernel-read-owned-program", &root, e))?,
+    )
+    .into();
     let base = options(&root.join("c"))?;
     let settings = ManagedOptions::new(
         LocalProgram::new(&program)?.expected_sha256(old_sha),
@@ -113,7 +229,9 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     .await??;
     let before = core.client().folder(&id).await?;
     if !upload {
-        match core
+        let provider_started = std::time::Instant::now();
+        eprintln!("provider-check-begin management_request_deadline_s=10 initial_retry_count=0");
+        let provider_result = core
             .client()
             .check_kernel_upgrade()
             .await
@@ -123,7 +241,19 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                 {
                     report_upgrade_diagnostic("provider-check", response.body_bytes());
                 }
-            }) {
+            });
+        let outcome = match &provider_result {
+            Ok(_) => "response",
+            Err(Error::Timeout { .. }) => "management_deadline",
+            Err(Error::UpgradeReleaseUnavailable { .. }) => "no_matching_release",
+            Err(Error::Http { .. }) => "native_http_error",
+            Err(_) => "other_error",
+        };
+        eprintln!(
+            "provider-check-end elapsed_ms={} outcome={outcome}",
+            provider_started.elapsed().as_millis()
+        );
+        match provider_result {
             Ok(checked) => {
                 assert_eq!(checked.running, "v2.33.1");
                 assert_eq!(
@@ -142,7 +272,13 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                     core.client().request_server_selected_upgrade().await,
                     Err(Error::UpgradeReleaseUnavailable { .. })
                 ));
-                assert_eq!(Sha256::digest(std::fs::read(&program)?).as_slice(), old_sha);
+                assert_eq!(
+                    Sha256::digest(std::fs::read(&program).inspect_err(|e| {
+                        report_cli_io_failure("kernel-read-owned-program", &root, e)
+                    })?)
+                    .as_slice(),
+                    old_sha
+                );
                 assert_eq!(
                     std::fs::read(base.state_directory().join("setting.dat"))?,
                     config
@@ -156,7 +292,9 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                 );
                 let exit = core.shutdown(Duration::from_secs(10)).await?;
                 assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
-                std::fs::remove_dir_all(root)?;
+                std::fs::remove_dir_all(&root).inspect_err(|e| {
+                    report_cli_io_failure("kernel-remove-fixture-after-normal-exit", &root, e)
+                })?;
                 println!(
                     "public provider release absence evidence: {}",
                     serde_json::json!({
@@ -180,7 +318,17 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                 .await,
             Err(Error::ProgramRejected { .. })
         ));
-        assert_eq!(Sha256::digest(std::fs::read(&program)?).as_slice(), old_sha);
+        assert_eq!(
+            Sha256::digest(
+                std::fs::read(&program).inspect_err(|e| report_cli_io_failure(
+                    "kernel-read-owned-program",
+                    &root,
+                    e
+                ))?,
+            )
+            .as_slice(),
+            old_sha
+        );
         core.client()
             .upload_kernel_upgrade(
                 PathBuf::from(
@@ -211,11 +359,18 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     }
     let exit = tokio::time::timeout(Duration::from_secs(20), core.wait_for_exit()).await??;
     assert!(exit.tree_stopped && !exit.forced);
-    let new_sha: [u8; 32] = Sha256::digest(std::fs::read(&program)?).into();
+    let new_sha: [u8; 32] = Sha256::digest(
+        std::fs::read(&program)
+            .inspect_err(|e| report_cli_io_failure("kernel-read-owned-program", &root, e))?,
+    )
+    .into();
     assert_ne!(new_sha, old_sha);
     assert_eq!(
         new_sha,
-        Sha256::digest(std::fs::read(base.program().path())?).as_slice()
+        Sha256::digest(std::fs::read(base.program().path()).inspect_err(|e| {
+            report_cli_io_failure("kernel-read-fixed-baseline-program", &root, e)
+        })?)
+        .as_slice()
     );
     core.restart_with_program(
         LocalProgram::new(&program)?.expected_sha256(new_sha),
@@ -237,7 +392,9 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     result?;
-    std::fs::remove_dir_all(root)?;
+    std::fs::remove_dir_all(&root).inspect_err(|e| {
+        report_cli_io_failure("kernel-remove-fixture-after-normal-exit", &root, e)
+    })?;
     println!(
         "public native kernel upgrade evidence: {}",
         serde_json::json!({"mode":if upload { "streamed_archive" } else { "provider" },
@@ -803,11 +960,22 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
         assert!(!upgraded.release_unavailable);
         assert!(upgraded.tree_stopped);
         assert_eq!(upgraded.code, Some(if provider { 4 } else { 0 }));
-        let actual: [u8; 32] = Sha256::digest(std::fs::read(&program)?).into();
+        let actual: [u8; 32] = Sha256::digest(
+            std::fs::read(&program)
+                .inspect_err(|e| report_cli_io_failure("read-replaced-program", &root, e))?,
+        )
+        .into();
         assert_ne!(actual, old_sha);
         assert_eq!(
             actual,
-            Sha256::digest(std::fs::read(base.program().path())?).as_slice()
+            Sha256::digest(
+                std::fs::read(base.program().path()).inspect_err(|e| report_cli_io_failure(
+                    "read-fixed-baseline-program",
+                    &root,
+                    e
+                ))?
+            )
+            .as_slice()
         );
         core.restart_with_program(
             LocalProgram::new(&program)?.expected_sha256(actual),
@@ -817,8 +985,10 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
         assert_eq!(core.program_info().version, "v2.33.2");
         assert_eq!(core.client().system_status().await?.device_id, identity);
         let exit = core.shutdown(Duration::from_secs(10)).await?;
-        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
-        std::fs::remove_dir_all(root)?;
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+        std::fs::remove_dir_all(&root).inspect_err(|e| {
+            report_cli_io_failure("remove-fixture-after-upgraded-normal-exit", &root, e)
+        })?;
         println!(
             "public CLI upgrade evidence: {}",
             serde_json::json!({"mode":if provider { "provider" } else { "archive_url" },
@@ -1341,7 +1511,7 @@ fn report_upgrade_diagnostic(stage: &str, bytes: &[u8]) {
         ("http_forbidden", &["403", "forbidden"]),
         ("timeout", &["timeout", "deadline exceeded"]),
         (
-            "missing_matching_release",
+            "release_selection",
             &[
                 "couldn't find a release to download",
                 "no version",
@@ -1369,6 +1539,16 @@ fn report_upgrade_diagnostic(stage: &str, bytes: &[u8]) {
         .collect::<String>();
     eprintln!(
         "Native upgrade private diagnostic classification: {}",
-        serde_json::json!({"stage":stage,"bytes":bytes.len(),"sha256":sha,"categories":tags})
+        serde_json::json!({"stage":stage,"bytes":bytes.len(),"sha256":sha,"categories":tags,
+            "known_no_matching_archive":text.contains("couldn't find a release to download"),
+            "empty_release_selection":text.contains("no version to select"),
+            "metadata_fetch_failed":text.contains("failed to fetch latest release information")
+                || text.contains("couldn't fetch release information"),
+            "metadata_decode_failed":text.contains("failed to decode latest release information"),
+            "unexpected_eof":text.contains("eof"),
+            "http_rate_limited":text.contains("429 too many requests"),
+            "http_gateway_failure":text.contains("502 bad gateway")
+                || text.contains("503 service unavailable") || text.contains("504 gateway timeout")
+        })
     );
 }

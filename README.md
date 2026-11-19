@@ -1,5 +1,30 @@
 # verysync-sidecar
 
+Unreleased [native GUI listener controls](docs/public/gui-listener.md) separate
+explicit address/TLS/server-enable/socket-mode writes from caller reconnection,
+certificate trust and process ownership. Live GUI/API hot-disable is unsupported
+on fixed v2.33.2; a stored false enable flag does not prove endpoint closure.
+Full platform acceptance is pending.
+
+Unreleased [management transport policy](docs/public/management-transport.md)
+accepts per-connection trusted certificates and explicit authenticated HTTP(S)
+proxies. Certificate/hostname verification and reconnect policy remain explicit;
+full same-source platform acceptance is pending.
+
+The unreleased [remote-management API](docs/public/remote-management.md) keeps
+native permissions, explicit tunnel probes and target-identity gateway
+connections separate. Licensed native sessions and cross-network acceptance
+remain pending.
+
+The unreleased [license API](docs/public/licenses.md) preserves native license
+metadata and separates explicit refresh/trial acknowledgements from actual
+licensed effects. Authorized positive acceptance remains pending.
+
+The unreleased [official-account API](docs/public/official-accounts.md) separates
+explicit cloud-account login/logout from GUI sessions and licensed entitlements.
+Native acknowledgements, actual account state and upstream rejection codes have
+separate results; authenticated cloud-session acceptance remains pending.
+
 Unreleased [file transfers](docs/public/file-transfers.md) stream explicit local
 inputs/outputs with finite bounds, inclusive ranges, all seven native archive
 formats and post-upload digest verification. Complete native acceptance is pending.
@@ -46,6 +71,22 @@ The unreleased [device configuration API](docs/public/devices.md) reads actual
 defaults, guards creation and partial updates, controls a remote device's pause
 layer, and observes removal and remaining folder associations. Configuration
 readback remains separate from connection and file-transfer evidence.
+
+The unreleased [creation-default and application-state APIs](docs/public/configuration.md)
+change explicit fields inherited by future folders and devices, retain other
+template values, and separately expose the engine's configuration application flag.
+They share typed scan, file-order, selective and advanced selections with existing
+folders. Template inheritance, field matching and actual platform/data effects
+are separate observations.
+Identity-bound complete saves retain native sections and reject a known stale
+snapshot before writing; independent writers still need coordination.
+
+The unreleased [management credential API](docs/public/management-authentication.md)
+rotates an explicit API key once, verifies readback and old-key refusal, and
+provides fresh identity-checked connections for normal operation and recovery.
+Explicit local GUI credential changes and in-memory GUI sessions additionally
+verify native password login, CSRF handling and server-side logout independently
+of API-key management.
 
 The unreleased [invitation and folder-peer APIs](docs/public/invitations.md)
 distinguish remote offers, persistent ignores, local key registration and explicit
@@ -111,7 +152,7 @@ The development plan runs through full delivery. Alpha releases are intermediate
 
 The library remains independent of application frameworks and business workflows. Callers choose when to run instances, what roles devices take, and how to combine operations.
 
-The [capability inventory](docs/capabilities.csv) separates behavior candidates, aliases, resources and unresolved entries. The [platform inventory](docs/platforms.csv) records the official package mapping and planned execution paths. An inventory entry is not a support claim. The fixed baseline is VerySync **v2.33.2**; there is no implicit update to the latest engine.
+The [capability inventory](docs/capabilities.csv) separates behavior candidates, aliases, resources and unresolved entries. The [platform inventory](docs/platforms.csv) records the official package mapping and planned execution paths. The [platform validation guide](docs/public/platform-validation.md) distinguishes native, 32-bit compatibility, emulated and minimum-OS evidence. An inventory entry is not a support claim. The fixed baseline is VerySync **v2.33.2**; there is no implicit update to the latest engine.
 
 ## Development
 
@@ -334,3 +375,8 @@ Unreleased [core maintenance](docs/public/core-maintenance.md) exposes native er
 Unreleased [resource mutations](docs/public/file-mutations.md) provide explicit native directory creation, file copy/move, text replacement and scoped deletion. Copy/move are confined to one logical volume; native directory failures on Windows retain separate pending positive acceptance and explicit partial-data diagnostics.
 
 Unreleased [Local Sync controls](docs/public/local-sync.md) expose explicit basic storage endpoints, native job registrations, analysis and separate all-action execution, actual state/result/history observations and scoped updates that preserve unselected settings. Per-protocol data effects and the remaining native task controls retain separate pending acceptance.
+
+Unreleased [native Local-API connections](docs/public/local-api.md) provide separate
+typed version/status reads, bounded scoped raw requests and explicit owned startup
+configuration. Basic reads do not establish commercial entitlement; licensed
+operations and final cross-platform runtime acceptance remain separate gates.

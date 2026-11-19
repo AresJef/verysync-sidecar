@@ -16,6 +16,7 @@ pub struct CreateFolderOptions {
     pub(crate) label: Option<String>,
     pub(crate) paused: Option<bool>,
     pub(crate) allow_shared_path: bool,
+    pub(crate) advanced: Option<crate::FolderAdvancedPatch>,
 }
 impl CreateFolderOptions {
     /// Choose an explicit new ID and target path, retaining other engine defaults.
@@ -26,6 +27,7 @@ impl CreateFolderOptions {
             label: None,
             paused: None,
             allow_shared_path: false,
+            advanced: None,
         }
     }
     /// Override the upstream default label.
@@ -37,6 +39,14 @@ impl CreateFolderOptions {
     pub fn paused(mut self, value: bool) -> Self {
         self.paused = Some(value);
         self
+    }
+    /// Select explicit advanced initial settings while preserving all other
+    /// instance defaults. This can choose receive-encrypted on a new folder;
+    /// it never changes the shared creation template or an existing registration.
+    pub fn advanced_configuration(mut self, patch: crate::FolderAdvancedPatch) -> Result<Self> {
+        patch.validate()?;
+        self.advanced = Some(patch);
+        Ok(self)
     }
     /// Explicitly permit another configured ID with the identical path string.
     ///
@@ -135,6 +145,21 @@ impl fmt::Debug for FolderConfig {
             .field("paused", &self.paused)
             .field("extra_field_count", &self.extra.len())
             .finish_non_exhaustive()
+    }
+}
+
+impl FolderConfig {
+    /// Decode actual advanced selections, retaining absence and hiding private
+    /// upstream fields from Debug. This does not perform another request.
+    pub fn advanced_configuration(&self) -> Result<crate::FolderAdvancedConfig> {
+        serde_json::from_value(serde_json::to_value(&self.extra).map_err(|_| {
+            crate::Error::InvalidConfiguration {
+                reason: "advanced folder configuration cannot be encoded",
+            }
+        })?)
+        .map_err(|_| crate::Error::InvalidConfiguration {
+            reason: "advanced folder configuration does not match its native schema",
+        })
     }
 }
 

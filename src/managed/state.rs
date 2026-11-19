@@ -3,6 +3,7 @@
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 
@@ -49,6 +50,21 @@ pub(super) struct StateLease {
     path: PathBuf,
     _file: File,
     engine_lock: Option<File>,
+    owner_process: u32,
+}
+
+impl Drop for StateLease {
+    fn drop(&mut self) {
+        // flock belongs to an open-file description: an incidental dup/fork can
+        // keep it alive after close. Release at the creating owner's lifetime
+        // boundary, while an inherited copy must never unlock its parent's lease.
+        if self.owner_process == std::process::id() {
+            if let Some(lock) = &self.engine_lock {
+                let _ = FileExt::unlock(lock);
+            }
+            let _ = FileExt::unlock(&self._file);
+        }
+    }
 }
 
 impl StateLease {
@@ -80,7 +96,9 @@ impl StateLease {
             .map_err(|e| io_error("open state lease", e))?;
         file.try_lock_exclusive().map_err(|error| {
             if error.kind() == io::ErrorKind::WouldBlock || error.raw_os_error() == Some(33) {
-                Error::ManagedStateInUse
+                Error::ManagedStateInUse {
+                    lock: crate::ManagedStateLock::LibraryLease,
+                }
             } else {
                 io_error("lock private state", error)
             }
@@ -127,7 +145,9 @@ impl StateLease {
                 .map_err(|e| io_error("open upstream state lock", e))?;
             lock.try_lock_exclusive().map_err(|error| {
                 if error.kind() == io::ErrorKind::WouldBlock || error.raw_os_error() == Some(33) {
-                    Error::ManagedStateInUse
+                    Error::ManagedStateInUse {
+                        lock: crate::ManagedStateLock::EngineLock,
+                    }
                 } else {
                     io_error("check upstream state lock", error)
                 }
@@ -140,6 +160,7 @@ impl StateLease {
             path,
             _file: file,
             engine_lock,
+            owner_process: std::process::id(),
         })
     }
 
@@ -148,7 +169,39 @@ impl StateLease {
     }
 
     pub(super) fn release_engine_lock_for_spawn(&mut self) {
-        self.engine_lock.take();
+        if let Some(lock) = self.engine_lock.take() {
+            if self.owner_process == std::process::id() {
+                let _ = FileExt::unlock(&lock);
+            }
+        }
+    }
+
+    /// Confirm the exact owned state's upstream lock is available after native
+    /// containment exit, while retaining our separate library lease. This is a
+    /// bounded observation of resource release, never a startup/write retry.
+    pub(super) fn confirm_engine_released(&self, deadline: Instant) -> Result<()> {
+        loop {
+            let lock = match native::open_owned_lock(&self.path.join("verysync.lock")) {
+                Ok(lock) => lock,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(io_error("observe owned engine state release", error)),
+            };
+            match lock.try_lock_exclusive() {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == Some(33) => {}
+                Err(error) => return Err(io_error("observe owned engine lock release", error)),
+            }
+            drop(lock);
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::Timeout {
+                    operation: "confirm owned engine state release",
+                });
+            }
+            std::thread::sleep(remaining.min(Duration::from_millis(10)));
+        }
     }
 }
 
@@ -167,6 +220,110 @@ fn canonical(path: &Path) -> std::io::Result<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn owner_release_does_not_wait_for_an_inherited_duplicate_descriptor() -> Result<()> {
+        let root = tempfile::tempdir().map_err(|e| io_error("make duplicate lease root", e))?;
+        let path = root.path().join("state");
+        let owner = StateLease::acquire(&path)?;
+        // dup and fork retain the same flock open-file description. A process
+        // being created by another thread must not extend this owner's lease.
+        let inherited = owner
+            ._file
+            .try_clone()
+            .map_err(|e| io_error("duplicate lease descriptor", e))?;
+        drop(owner);
+        let next = StateLease::acquire(&path)?;
+        assert!(
+            inherited.try_lock_exclusive().is_err(),
+            "old duplicate must not bypass the next owner"
+        );
+        drop(next);
+        drop(inherited);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_inherited_owner_copy_must_not_unlock_the_creating_process() -> Result<()> {
+        let root = tempfile::tempdir().map_err(|e| io_error("make foreign lease root", e))?;
+        let path = root.path().join("state");
+        let mut owner = StateLease::acquire(&path)?;
+        let inherited = owner
+            ._file
+            .try_clone()
+            .map_err(|e| io_error("duplicate foreign lease", e))?;
+        // The stored creator differs from the process dropping the copied value,
+        // as it does in a fork child. The real duplicated OS lock must stay held.
+        owner.owner_process = std::process::id().wrapping_add(1);
+        drop(owner);
+        assert!(matches!(
+            StateLease::acquire(&path),
+            Err(Error::ManagedStateInUse { .. })
+        ));
+        FileExt::unlock(&inherited).map_err(|e| io_error("release test duplicate", e))?;
+        let _next = StateLease::acquire(&path)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_release_does_not_leave_an_upstream_probe_lock_on_a_duplicate() -> Result<()> {
+        let root = tempfile::tempdir().map_err(|e| io_error("make upstream duplicate root", e))?;
+        let path = root.path().join("state");
+        drop(StateLease::acquire(&path)?);
+        drop(
+            native::create_private(&path.join("verysync.lock"))
+                .map_err(|e| io_error("create test upstream lock", e))?,
+        );
+        let mut owner = StateLease::acquire(&path)?;
+        let inherited = owner
+            .engine_lock
+            .as_ref()
+            .expect("existing upstream lock")
+            .try_clone()
+            .map_err(|e| io_error("duplicate upstream probe", e))?;
+        owner.release_engine_lock_for_spawn();
+        let probe = native::open_owned_lock(&path.join("verysync.lock"))
+            .map_err(|e| io_error("reopen upstream probe", e))?;
+        probe
+            .try_lock_exclusive()
+            .map_err(|e| io_error("check upstream release", e))?;
+        drop(inherited);
+        Ok(())
+    }
+
+    #[test]
+    fn exit_state_confirmation_observes_real_lock_release_and_remains_bounded() -> Result<()> {
+        let base = tempfile::tempdir().map_err(|e| io_error("make release test root", e))?;
+        let path = base.path().join("state");
+        let lease = StateLease::acquire(&path)?;
+        lease.confirm_engine_released(Instant::now())?;
+        assert!(
+            !path.join("verysync.lock").exists(),
+            "release observation created an upstream lock"
+        );
+        let held = native::create_private(&path.join("verysync.lock"))
+            .map_err(|e| io_error("create release test lock", e))?;
+        held.try_lock_exclusive()
+            .map_err(|e| io_error("hold release test lock", e))?;
+        assert!(matches!(
+            lease.confirm_engine_released(Instant::now() + Duration::from_millis(20)),
+            Err(Error::Timeout {
+                operation: "confirm owned engine state release"
+            })
+        ));
+        assert!(matches!(
+            StateLease::acquire(&path),
+            Err(Error::ManagedStateInUse {
+                lock: crate::ManagedStateLock::LibraryLease
+            })
+        ));
+        drop(held);
+        lease.confirm_engine_released(Instant::now() + Duration::from_secs(1))?;
+        Ok(())
+    }
+
     #[test]
     fn private_state_is_exclusive_and_reusable_without_changing_data() -> Result<()> {
         let base = tempfile::tempdir().map_err(|e| io_error("make test root", e))?;
@@ -179,7 +336,9 @@ mod tests {
         fs::write(path.join("synthetic"), b"retained").map_err(|e| io_error("write sample", e))?;
         assert!(matches!(
             StateLease::acquire(&path),
-            Err(Error::ManagedStateInUse)
+            Err(Error::ManagedStateInUse {
+                lock: crate::ManagedStateLock::LibraryLease
+            })
         ));
         drop(lease);
         let _second = StateLease::acquire(&path)?;
@@ -209,6 +368,26 @@ mod tests {
             b"unrelated private application data"
         );
         assert!(!path.join(LEASE).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn upstream_lock_contention_is_distinct_from_the_library_lease() -> Result<()> {
+        let base = tempfile::tempdir().map_err(|e| io_error("make lock test root", e))?;
+        let path = base.path().join("state");
+        drop(StateLease::acquire(&path)?);
+        let held = native::create_private(&path.join("verysync.lock"))
+            .map_err(|e| io_error("create test engine lock", e))?;
+        held.try_lock_exclusive()
+            .map_err(|e| io_error("hold test engine lock", e))?;
+        assert!(matches!(
+            StateLease::acquire(&path),
+            Err(Error::ManagedStateInUse {
+                lock: crate::ManagedStateLock::EngineLock
+            })
+        ));
+        drop(held);
+        let _lease = StateLease::acquire(&path)?;
         Ok(())
     }
 

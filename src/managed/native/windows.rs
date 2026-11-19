@@ -37,6 +37,41 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken,
 
 pub(in crate::managed) struct ProcessGuard(OwnedHandle);
 
+// Observe the held descendant process, not a duplicated Job handle. Keeping a
+// Job open in a test would conceal an erroneous kill-on-last-close policy.
+#[cfg(test)]
+pub(in crate::managed) struct TestChildObservation(OwnedHandle);
+#[cfg(test)]
+pub(in crate::managed) fn observe_test_descendant(
+    _group: u32,
+    pid: u32,
+) -> io::Result<TestChildObservation> {
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+    // SAFETY: Read-only synchronization access to a task-owned descendant PID.
+    // The returned noninheritable handle retains its identity across root exit.
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: Successful OpenProcess returns one uniquely owned live handle.
+    Ok(TestChildObservation(unsafe {
+        OwnedHandle::from_raw_handle(handle)
+    }))
+}
+#[cfg(test)]
+impl TestChildObservation {
+    pub(in crate::managed) fn stopped(&self) -> io::Result<bool> {
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+        // SAFETY: Zero-time read-only observation on the retained process handle.
+        match unsafe { WaitForSingleObject(self.0.as_raw_handle(), 0) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+}
+
 pub(in crate::managed) fn spawn(
     mut command: Command,
     helper: bool,
@@ -345,6 +380,10 @@ pub(in crate::managed) fn open_private(path: &Path, read_only: bool) -> io::Resu
         options.write(true).create(true);
     }
     let file = options.open(path)?;
+    validate_control_file(path, file)
+}
+
+fn validate_control_file(path: &Path, file: File) -> io::Result<File> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(io::Error::other(
@@ -364,7 +403,10 @@ pub(in crate::managed) fn protect_generated(path: &Path) -> io::Result<()> {
 }
 
 pub(in crate::managed) fn open_owned_lock(path: &Path) -> io::Result<File> {
-    open_private(path, false)
+    // This is an observation of an existing upstream resource, not admission
+    // that may create the library's own private control files.
+    let file = options().read(true).write(true).open(path)?;
+    validate_control_file(path, file)
 }
 
 pub(in crate::managed) fn open_snapshot_input(path: &Path) -> io::Result<File> {

@@ -1,18 +1,34 @@
 //! Authenticated management connections, separate from process ownership.
 
+mod auxiliary_control;
+mod auxiliary_maintenance;
+mod configuration_control;
+mod default_versioning;
 mod device_control;
 mod device_ignore;
 mod file_control;
 mod file_mutation;
 mod file_transfer;
+mod folder_options;
+mod gui_listener;
+mod gui_preferences;
+mod gui_resources;
+mod hardware_control;
 mod history_control;
 mod ignore_control;
 mod invitation_control;
+mod ldap_control;
+mod license_control;
+mod local_api;
 mod local_sync_control;
 mod maintenance_control;
+mod management_auth;
+mod native_helpers;
 mod network_control;
+mod official_account_control;
 mod recovery;
 mod relay_control;
+mod remote_management;
 mod scan_control;
 mod scheduling;
 mod selective;
@@ -35,6 +51,12 @@ use crate::{
     Result, SystemStatus, BASELINE_ENGINE_VERSION,
 };
 use crate::{RawRequest, RawResponse, RequestEffect};
+pub use local_api::{
+    LocalApiClient, LocalApiConnectOptions, LocalApiExitAcknowledgement, LocalApiExitAction,
+    LocalApiFolder, LocalApiFolderCollectionUpdate, LocalApiHardware, LocalApiHistoryFilter,
+    LocalApiHistoryPage, LocalApiHistoryRecord, LocalApiPeer, LocalApiScanAcknowledgement,
+    LocalApiUpgradeAcknowledgement,
+};
 
 /// The policy applied to an engine version during connection.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -78,14 +100,14 @@ pub struct EngineVersion {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Identity and version observed during the authenticated connection handshake.
+/// Identity and version observed during a connection handshake.
 ///
 /// This is a snapshot, not a live status or evidence that any transfer finished.
 #[derive(Clone, Debug)]
 pub struct InstanceInfo {
-    /// The identity read from the authenticated status endpoint.
+    /// The identity read from the selected channel's status endpoint.
     pub device_id: DeviceId,
-    /// The version read from the authenticated version endpoint.
+    /// The version read from the selected channel's version endpoint.
     pub version: EngineVersion,
     /// The version policy outcome, independent of feature/platform acceptance.
     pub compatibility: VersionCompatibility,
@@ -97,12 +119,13 @@ pub struct InstanceInfo {
 /// settings, discovers another endpoint, or takes process ownership.
 #[derive(Clone, Debug)]
 pub struct ConnectOptions {
-    endpoint: ManagementEndpoint,
+    pub(crate) endpoint: ManagementEndpoint,
     api_key: ApiKey,
-    expected_device_id: Option<DeviceId>,
+    pub(crate) expected_device_id: Option<DeviceId>,
     version_policy: VersionPolicy,
     timeout: Duration,
     response_limit: usize,
+    pub(crate) transport: crate::ManagementTransport,
 }
 
 impl ConnectOptions {
@@ -116,6 +139,7 @@ impl ConnectOptions {
             version_policy: VersionPolicy::default(),
             timeout: Duration::from_secs(10),
             response_limit: 1024 * 1024,
+            transport: crate::ManagementTransport::default(),
         }
     }
 
@@ -125,6 +149,14 @@ impl ConnectOptions {
     /// caller to inspect, but it has not been compared to an out-of-band ID.
     pub fn expected_device_id(mut self, identity: DeviceId) -> Self {
         self.expected_device_id = Some(identity);
+        self
+    }
+
+    /// Select per-connection trust and an explicit HTTP(S) proxy. Default policy
+    /// uses normal TLS verification and no ambient proxy. Credential reconnection
+    /// and GUI reload reconciliation retain the selection.
+    pub fn transport(mut self, transport: crate::ManagementTransport) -> Self {
+        self.transport = transport;
         self
     }
 
@@ -157,14 +189,28 @@ impl ConnectOptions {
     }
 }
 
+trait RequestAuthorization: Clone {
+    fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder;
+}
+
+impl RequestAuthorization for ApiKey {
+    fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        request.header("X-API-Key", self.header())
+    }
+}
+
 #[derive(Clone)]
-struct Connection {
+struct Connection<Authorization = ApiKey> {
     http: reqwest::Client,
     base: Url,
-    key: ApiKey,
+    key: Authorization,
     response_limit: usize,
     mutation_lock: Arc<tokio::sync::Mutex<()>>,
     endpoint_kind: crate::EndpointKind,
+    endpoint: ManagementEndpoint,
+    timeout: Duration,
+    version_policy: VersionPolicy,
+    transport: crate::ManagementTransport,
 }
 
 /// An authenticated connection that does not own the engine process.
@@ -179,6 +225,10 @@ pub struct Client {
 }
 
 impl Client {
+    /// Borrow the exact selected management endpoint; this performs no discovery.
+    pub fn endpoint(&self) -> &ManagementEndpoint {
+        &self.connection.endpoint
+    }
     /// Explicitly ask this engine to generate a fresh read/write and read-only pair.
     /// Generation registers no folder; these credentials are not management keys.
     pub async fn generate_share(&self) -> Result<crate::GeneratedShare> {
@@ -372,14 +422,31 @@ impl Client {
     }
     pub(crate) async fn event_wire(
         &self,
+        source: &crate::EventSource,
         since: u64,
         limit: usize,
     ) -> Result<Vec<crate::events::WireEvent>> {
         let since = since.to_string();
         let limit_text = limit.to_string();
+        let mut query = vec![
+            ("since", since.as_str()),
+            ("limit", limit_text.as_str()),
+            ("timeout", "0"),
+        ];
+        if let crate::EventSource::Filtered(filter) = source {
+            query.push(("events", filter.query_value()));
+        }
         let url = self.connection.management_url(
-            "rest/events",
-            &[("since", &since), ("limit", &limit_text), ("timeout", "0")],
+            match source {
+                crate::EventSource::Standard | crate::EventSource::Filtered(_) => "rest/events",
+                crate::EventSource::Disk => "rest/events/disk",
+                crate::EventSource::LocalIndex(_) => {
+                    return Err(Error::InvalidConfiguration {
+                        reason: "Local-API event cursors require a LocalApiClient",
+                    })
+                }
+            },
+            &query,
         )?;
         let (status, bytes) = self
             .connection
@@ -417,6 +484,46 @@ impl Client {
             .map(|_| ())
     }
 
+    /// Request the native restart action once after checking the current identity.
+    ///
+    /// Success acknowledges the command, without waiting for another program
+    /// generation. A monitor may relaunch an externally managed program. The
+    /// library's owned inner program instead exits with the native restart code;
+    /// use [`crate::ManagedInstance::restart`] for explicit owned stop/start.
+    /// An uncertain write or invalid acknowledgement is never retried. Observe
+    /// a fresh identity and changed start time separately when reconciling it.
+    pub async fn request_restart(&self) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Acknowledgement {
+            ok: String,
+        }
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                "request native restart",
+                reqwest::Method::POST,
+                self.connection.management_url("rest/system/restart", &[])?,
+                None,
+                true,
+            )
+            .await?;
+        let uncertain = || Error::MutationOutcomeUnknown {
+            operation: "validate native restart acknowledgement",
+            source: Box::new(Error::InvalidResponse {
+                operation: "request native restart",
+                response: ResponseDiagnostic::new(status, bytes.clone()),
+            }),
+        };
+        let acknowledgement: Acknowledgement =
+            serde_json::from_slice(&bytes).map_err(|_| uncertain())?;
+        if acknowledgement.ok != "restarting" {
+            return Err(uncertain());
+        }
+        Ok(())
+    }
+
     /// Authenticate, apply the version policy, and read/optionally compare ID.
     ///
     /// Success means these management reads succeeded. It does not mean peers
@@ -428,49 +535,7 @@ impl Client {
         tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
             reason: "a Tokio runtime with I/O and timers enabled is required",
         })?;
-        let builder = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(options.timeout.min(Duration::from_secs(5)))
-            .timeout(options.timeout)
-            .user_agent(concat!("verysync-sidecar/", env!("CARGO_PKG_VERSION")));
-        let (builder, base) = if let Some(socket) = options.endpoint.socket_path() {
-            #[cfg(unix)]
-            {
-                (
-                    builder.unix_socket(socket),
-                    Url::parse("http://localhost/").map_err(|_| Error::InvalidEndpoint {
-                        reason: "internal socket base URL",
-                    })?,
-                )
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = socket;
-                return Err(Error::UnsupportedTransport {
-                    transport: "Unix-domain sockets on this platform",
-                });
-            }
-        } else {
-            let url = options
-                .endpoint
-                .http_url()
-                .ok_or(Error::InvalidEndpoint {
-                    reason: "missing HTTP base URL",
-                })?
-                .clone();
-            #[cfg(not(feature = "tls"))]
-            if url.scheme() == "https" {
-                return Err(Error::UnsupportedTransport {
-                    transport: "HTTPS requires the tls feature",
-                });
-            }
-            (builder, url)
-        };
-        let http = builder
-            .build()
-            .map_err(|e| transport_error("build management client", e))?;
+        let (http, base) = management_http(&options.endpoint, options.timeout, &options.transport)?;
         let connection = Connection {
             http,
             base,
@@ -478,6 +543,10 @@ impl Client {
             response_limit: options.response_limit,
             mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             endpoint_kind,
+            endpoint: options.endpoint,
+            timeout: options.timeout,
+            version_policy: options.version_policy,
+            transport: options.transport,
         };
         let version: EngineVersion = connection
             .get_json("read version", "rest/system/version")
@@ -488,7 +557,9 @@ impl Client {
             VersionCompatibility::Unverified
         } else {
             return Err(Error::IncompatibleVersion {
-                actual: connection.key.redact(&version.version),
+                actual: connection
+                    .transport
+                    .version_diagnostic(&connection.key.redact(&version.version)),
             });
         };
         #[derive(Deserialize)]
@@ -607,6 +678,11 @@ impl Client {
     /// scanning and synchronization can continue afterward; inspect folder status.
     /// After cancellation or MutationOutcomeUnknown, read the ID before retrying.
     pub async fn create_folder(&self, options: &CreateFolderOptions) -> Result<FolderConfig> {
+        let advanced = options
+            .advanced
+            .as_ref()
+            .map(crate::FolderAdvancedPatch::body)
+            .transpose()?;
         let style = self.folder_path_style()?;
         if options.path.style() != style {
             return Err(Error::InvalidPath {
@@ -640,6 +716,15 @@ impl Client {
             .await?;
         defaults.insert("id".to_owned(), serde_json::json!(options.id.as_str()));
         defaults.insert("path".to_owned(), serde_json::json!(path));
+        if let Some(body) = advanced {
+            defaults.extend(
+                body.as_object()
+                    .ok_or(Error::InvalidConfiguration {
+                        reason: "initial folder settings must be an object",
+                    })?
+                    .clone(),
+            );
+        }
         if let Some(label) = &options.label {
             defaults.insert("label".to_owned(), serde_json::json!(label));
         }
@@ -653,12 +738,22 @@ impl Client {
                 &serde_json::Value::Object(defaults),
             )
             .await?;
-        self.folder(&options.id)
-            .await
-            .map_err(|source| Error::MutationOutcomeUnknown {
-                operation: "read back created folder",
-                source: Box::new(source),
-            })
+        let configuration =
+            self.folder(&options.id)
+                .await
+                .map_err(|source| Error::MutationOutcomeUnknown {
+                    operation: "read back created folder",
+                    source: Box::new(source),
+                })?;
+        if options.advanced.is_some() {
+            configuration.advanced_configuration().map_err(|source| {
+                Error::MutationOutcomeUnknown {
+                    operation: "read back created folder",
+                    source: Box::new(source),
+                }
+            })?;
+        }
+        Ok(configuration)
     }
 
     /// Change only the requested fields, then return actual configuration readback.
@@ -846,13 +941,66 @@ impl fmt::Debug for Client {
             )
             .field(
                 "version",
-                &self.connection.key.redact(&self.instance.version.version),
+                &self.connection.transport.version_diagnostic(
+                    &self.connection.key.redact(&self.instance.version.version),
+                ),
             )
             .finish_non_exhaustive()
     }
 }
 
-impl Connection {
+pub(crate) fn management_http(
+    endpoint: &ManagementEndpoint,
+    timeout: Duration,
+    transport: &crate::ManagementTransport,
+) -> Result<(reqwest::Client, Url)> {
+    let builder = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(timeout.min(Duration::from_secs(5)))
+        .timeout(timeout)
+        .user_agent(concat!("verysync-sidecar/", env!("CARGO_PKG_VERSION")));
+    let builder = transport.apply(builder, endpoint)?;
+    let (builder, base) = if let Some(socket) = endpoint.socket_path() {
+        #[cfg(unix)]
+        {
+            (
+                builder.unix_socket(socket),
+                Url::parse("http://localhost/").map_err(|_| Error::InvalidEndpoint {
+                    reason: "internal socket base URL",
+                })?,
+            )
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = socket;
+            return Err(Error::UnsupportedTransport {
+                transport: "Unix-domain sockets on this platform",
+            });
+        }
+    } else {
+        let url = endpoint
+            .http_url()
+            .ok_or(Error::InvalidEndpoint {
+                reason: "missing HTTP base URL",
+            })?
+            .clone();
+        #[cfg(not(feature = "tls"))]
+        if url.scheme() == "https" {
+            return Err(Error::UnsupportedTransport {
+                transport: "HTTPS requires the tls feature",
+            });
+        }
+        (builder, url)
+    };
+    let http = builder
+        .build()
+        .map_err(|e| transport_error("build management client", e))?;
+    Ok((http, base))
+}
+
+impl<Authorization: RequestAuthorization> Connection<Authorization> {
     async fn get_json<T: DeserializeOwned>(
         &self,
         operation: &'static str,
@@ -926,10 +1074,7 @@ impl Connection {
         body: Option<&serde_json::Value>,
         mutation: bool,
     ) -> Result<(u16, Vec<u8>)> {
-        let mut request = self
-            .http
-            .request(method, url)
-            .header("X-API-Key", self.key.header());
+        let mut request = self.key.authorize(self.http.request(method, url));
         if let Some(body) = body {
             request = request.json(body);
         }
@@ -954,32 +1099,106 @@ impl Connection {
         request: reqwest::RequestBuilder,
         mutation: bool,
     ) -> Result<RawResponse> {
-        let RawResponse {
-            status,
-            body: bytes,
-            headers,
-        } = self.receive_response(operation, request, mutation).await?;
-        if status == 401 {
-            return Err(Error::Authentication { status });
-        }
-        let uncertain = |source| mutation_error(operation, mutation, source);
-        if status == 403 {
-            return Err(Error::AccessDenied {
-                response: ResponseDiagnostic::new(status, bytes),
-            });
-        }
-        if !(200..300).contains(&status) {
-            return Err(uncertain(Error::Http {
-                response: ResponseDiagnostic::new(status, bytes),
+        send_checked(operation, request, mutation, self.response_limit).await
+    }
+
+    async fn receive_response(
+        &self,
+        operation: &'static str,
+        request: reqwest::RequestBuilder,
+        mutation: bool,
+    ) -> Result<RawResponse> {
+        send_bounded(operation, request, mutation, self.response_limit).await
+    }
+}
+
+pub(crate) async fn send_bounded(
+    operation: &'static str,
+    request: reqwest::RequestBuilder,
+    mutation: bool,
+    response_limit: usize,
+) -> Result<RawResponse> {
+    let uncertain = |source| mutation_error(operation, mutation, source);
+    let mut response = request
+        .send()
+        .await
+        .map_err(|e| uncertain(transport_error(operation, e)))?;
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.as_str().to_owned(), value.as_bytes().to_vec()))
+        .collect();
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| uncertain(transport_error(operation, e)))?
+    {
+        if chunk.len() > response_limit.saturating_sub(body.len()) {
+            return Err(uncertain(Error::ResponseTooLarge {
+                limit: response_limit,
             }));
         }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ErrorEnvelope {
-            error: String,
-            #[serde(default)]
-            code: Option<i64>,
-        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(RawResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+pub(crate) async fn send_checked(
+    operation: &'static str,
+    request: reqwest::RequestBuilder,
+    mutation: bool,
+    response_limit: usize,
+) -> Result<RawResponse> {
+    let response = send_bounded(operation, request, mutation, response_limit).await?;
+    checked_response(operation, response, mutation)
+}
+
+pub(crate) fn checked_response(
+    operation: &'static str,
+    response: RawResponse,
+    mutation: bool,
+) -> Result<RawResponse> {
+    let RawResponse {
+        status,
+        body: bytes,
+        headers,
+    } = response;
+    if status == 401 {
+        return Err(Error::Authentication { status });
+    }
+    let uncertain = |source| mutation_error(operation, mutation, source);
+    if status == 403 {
+        return Err(Error::AccessDenied {
+            response: ResponseDiagnostic::new(status, bytes),
+        });
+    }
+    if !(200..300).contains(&status) {
+        return Err(uncertain(Error::Http {
+            response: ResponseDiagnostic::new(status, bytes),
+        }));
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ErrorEnvelope {
+        error: String,
+        #[serde(default)]
+        code: Option<i64>,
+    }
+    // Serde can deserialize structs from JSON sequences. Only an actual JSON
+    // object can be a native error envelope; a one/two-element data array must
+    // never become Api or LicenseRequired because it fits those struct fields.
+    if bytes
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        == Some(b'{')
+    {
         if let Ok(envelope) = serde_json::from_slice::<ErrorEnvelope>(&bytes) {
             if !envelope.error.is_empty() {
                 if envelope.code == Some(3000) {
@@ -994,49 +1213,12 @@ impl Connection {
                 }));
             }
         }
-        Ok(RawResponse {
-            status,
-            headers,
-            body: bytes,
-        })
     }
-
-    async fn receive_response(
-        &self,
-        operation: &'static str,
-        request: reqwest::RequestBuilder,
-        mutation: bool,
-    ) -> Result<RawResponse> {
-        let uncertain = |source| mutation_error(operation, mutation, source);
-        let mut response = request
-            .send()
-            .await
-            .map_err(|e| uncertain(transport_error(operation, e)))?;
-        let status = response.status().as_u16();
-        let headers = response
-            .headers()
-            .iter()
-            .map(|(name, value)| (name.as_str().to_owned(), value.as_bytes().to_vec()))
-            .collect();
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| uncertain(transport_error(operation, e)))?
-        {
-            if chunk.len() > self.response_limit.saturating_sub(body.len()) {
-                return Err(uncertain(Error::ResponseTooLarge {
-                    limit: self.response_limit,
-                }));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        Ok(RawResponse {
-            status,
-            headers,
-            body,
-        })
-    }
+    Ok(RawResponse {
+        status,
+        headers,
+        body: bytes,
+    })
 }
 
 fn mutation_error(operation: &'static str, mutation: bool, source: Error) -> Error {

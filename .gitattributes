@@ -1,0 +1,9 @@
+# Keep the measured source bytes identical on every native checkout.
+*.rs text eol=lf
+Cargo.toml text eol=lf
+Cargo.lock text eol=lf
+scripts/*.py text eol=lf
+scripts/darwin-owned-sample.c text eol=lf
+tests/fixtures/resource-protocol.json text eol=lf
+docs/public/*.md text eol=lf
+releases/*.json text eol=lf

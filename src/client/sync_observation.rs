@@ -6,6 +6,118 @@ use crate::{
 };
 use std::collections::BTreeMap;
 impl Client {
+    /// Read the independent native per-file download-progress map once.
+    /// Fresh identity and configured-folder checks precede a single GET.
+    /// No scan, transfer, retry, polling, filesystem read or completion inference
+    /// occurs. Native missing progress state and paused folders can return HTTP
+    /// 500 even while the folder remains configured; these remain errors.
+    /// An empty map means no records in this snapshot, not completed work.
+    /// Byte estimates are retained and need not equal the source file length.
+    pub async fn folder_download_progress(
+        &self,
+        folder: &FolderId,
+    ) -> Result<crate::FolderDownloadProgress> {
+        self.system_status().await?;
+        self.folder(folder).await?;
+        self.connection
+            .get_json_with_query(
+                "read native folder download progress",
+                "rest/folder/downloadprogress",
+                &[("folder", folder.as_str())],
+            )
+            .await
+    }
+
+    /// Read one full native index FileInfo observation for a strictly relative
+    /// target path. Fresh identity and configured-folder checks precede one GET.
+    /// Missing index objects remain native HTTP errors, not zero-file successes.
+    /// Native zero local records and advertised availability do not establish
+    /// filesystem existence, peer reachability or a completed transfer. No scan,
+    /// retry, filesystem I/O or peer contact is performed by this method.
+    pub async fn index_file_info(
+        &self,
+        folder: &FolderId,
+        path: &crate::TargetPath,
+    ) -> Result<crate::IndexFileInfo> {
+        let file = crate::scans::validate_subpath(path, self.folder_path_style()?)?;
+        self.system_status().await?;
+        self.folder(folder).await?;
+        self.connection
+            .get_json_with_query(
+                "read native indexed file metadata",
+                "rest/db/file",
+                &[("folder", folder.as_str()), ("file", file)],
+            )
+            .await
+    }
+    /// Read the independent native debug-file index observation once.
+    ///
+    /// Reuses the complete native [`crate::IndexFileInfo`] schema, but the
+    /// endpoint differs from [`Self::index_file_info`]: an absent file can return
+    /// HTTP success with both global/local zero records (empty names and version
+    /// vectors). These are not existing empty files or completed downloads.
+    /// Identity, configured folder and strict target-relative path checks apply.
+    /// No scan, filesystem read, transfer, normalization or retry is implicit.
+    ///
+    /// ```rust,no_run
+    /// # async fn example(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
+    /// let path = verysync_sidecar::TargetPath::local("sample.bin");
+    /// let native = client.index_file_diagnostics(folder, &path).await?;
+    /// // Inspect records explicitly; an empty name is a native zero placeholder.
+    /// let _local_name = native.local.name;
+    /// # Ok(()) }
+    /// ```
+    pub async fn index_file_diagnostics(
+        &self,
+        folder: &FolderId,
+        path: &crate::TargetPath,
+    ) -> Result<crate::IndexFileInfo> {
+        let file = crate::scans::validate_subpath(path, self.folder_path_style()?)?;
+        self.system_status().await?;
+        self.folder(folder).await?;
+        self.connection
+            .get_json_with_query(
+                "read native index file diagnostics",
+                "rest/debug/file",
+                &[("folder", folder.as_str()), ("file", file)],
+            )
+            .await
+    }
+
+    /// Read the selected folder's native index tree once. This differs from
+    /// selective-mode browsing and file-manager resources. The default returns
+    /// root entries at level zero; explicit None depth retains native unlimited
+    /// depth subject to response/deadline/JSON bounds. Paths use target syntax.
+    /// Fresh identity and folder checks precede the read. No scan, transfer,
+    /// retry, cursor traversal, local filesystem access or mutation occurs.
+    pub async fn browse_index(
+        &self,
+        folder: &FolderId,
+        options: &crate::IndexBrowseOptions,
+    ) -> Result<crate::IndexTree> {
+        let style = self.folder_path_style()?;
+        let prefix = options
+            .prefix
+            .as_ref()
+            .map(|path| crate::scans::validate_subpath(path, style))
+            .transpose()?;
+        self.system_status().await?;
+        self.folder(folder).await?;
+        let levels = options.levels.map(|value| value.to_string());
+        let mut query = vec![("folder", folder.as_str())];
+        if let Some(prefix) = prefix {
+            query.push(("prefix", prefix));
+        }
+        if let Some(levels) = levels.as_deref() {
+            query.push(("levels", levels));
+        }
+        if options.directories_only {
+            query.push(("dirsonly", "true"));
+        }
+        self.connection
+            .get_json_with_query("browse native index", "rest/db/browse", &query)
+            .await
+    }
     /// Read one reported folder/peer completion value. Even 100 with unknown
     /// remote state does not certify peer presence or a caller's file batch.
     pub async fn folder_completion(

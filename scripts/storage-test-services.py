@@ -7,6 +7,7 @@ ready-output values. No system service, user account or SSH configuration change
 """
 import argparse
 import errno
+import itertools
 import json
 import logging
 import os
@@ -18,22 +19,45 @@ import threading
 import time
 
 
-def ready(protocol, port):
+def ready(protocol, port, tls=False, *, public_ca=False):
     if not 0 < port <= 65535 or port == 18886:
         raise ValueError("invalid owned test endpoint")
-    print(json.dumps({"ready": True, "protocol": protocol, "port": port,
-                      "loopback_only": True,
+    print(json.dumps({"ready": True, "protocol": protocol, "port": port, "tls": tls,
+                      "loopback_only": True, "public_ca": public_ca,
                       "python_platform": sysconfig.get_platform()}), flush=True)
 
 
+FTP_OBSERVED_COMMANDS = {
+    "USER", "PASS", "EPSV", "EPRT", "PASV", "PORT", "TYPE", "OPTS", "SYST",
+    "FEAT", "PWD", "CWD", "CDUP", "SIZE", "MDTM", "MLSD", "MLST", "LIST",
+    "NLST", "DELE", "RMD", "MKD", "STOR", "APPE", "RETR", "RNFR", "RNTO",
+    "QUIT", "NOOP", "ABOR", "SITE",
+}
+
+
+def ftp_observation(event, command=None):
+    value = {"owned_ftp_event": event}
+    if event == "command":
+        value["command"] = command if command in FTP_OBSERVED_COMMANDS else "OTHER"
+    elif event != "authenticated":
+        raise ValueError("unknown owned FTP observation")
+    print(json.dumps(value), file=sys.stderr, flush=True)
+
+
 def ftp(config, root):
+    anonymous = config.get("ftp_anonymous", False)
+    if type(anonymous) is not bool:
+        raise ValueError("explicit boolean anonymous FTP policy required")
     from pyftpdlib.authorizers import DummyAuthorizer
     from pyftpdlib.handlers import FTPHandler, DTPHandler
     from pyftpdlib.servers import FTPServer
 
     authorizer = DummyAuthorizer()
-    authorizer.add_user(config["user"], config["password"], str(root),
-                        perm="elradfmwMT")
+    if anonymous:
+        authorizer.add_anonymous(str(root), perm="elradfmwMT")
+    else:
+        authorizer.add_user(config["user"], config["password"], str(root),
+                            perm="elradfmwMT")
     class OwnedDataHandler(DTPHandler):
         def recv(self, buffer_size):
             data = super().recv(buffer_size)
@@ -43,6 +67,22 @@ def ftp(config, root):
 
     handler = type("OwnedFTPHandler", (FTPHandler,),
                    {"authorizer": authorizer, "dtp_handler": OwnedDataHandler})
+    if config.get("record_ftp_events", False):
+        class ObservedFTPHandler(handler):
+            def pre_process_command(self, line, cmd, arg):
+                # Observe command names only; preserve the exact original call.
+                ftp_observation("command", cmd)
+                return super().pre_process_command(line, cmd, arg)
+
+            def on_login(self, _username):
+                # pyftpdlib invokes this only after230 and accepted credentials.
+                ftp_observation("authenticated")
+                if anonymous:
+                    print(json.dumps({"owned_ftp_event": "anonymous_authentication",
+                                      "anonymous_user": _username == "anonymous"}),
+                          file=sys.stderr, flush=True)
+
+        handler = ObservedFTPHandler
     server = FTPServer(("127.0.0.1", 0), handler)
     server.max_cons = 32
     server.max_cons_per_ip = 32
@@ -51,6 +91,8 @@ def ftp(config, root):
 
 
 def webdav(config, root):
+    if config.get("public_tls_manifest") is not None and config.get("tls") is not True:
+        raise ValueError("public-CA WebDAV fixture requires explicit TLS")
     from cheroot.wsgi import Server
     from wsgidav.wsgidav_app import WsgiDAVApp
     from wsgidav.fs_dav_provider import FileResource
@@ -94,9 +136,54 @@ def webdav(config, root):
         "dir_browser": {"enable": False},
     })
     server = Server(("127.0.0.1", 0), app, numthreads=8)
+    if config.get("tls", False):
+        from datetime import datetime, timedelta, timezone
+        import ipaddress
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
+        from cheroot.ssl.builtin import BuiltinSSLAdapter
+
+        cert_path = root.parent / "synthetic-webdav-cert.pem"
+        key_path = root.parent / "synthetic-webdav-key.pem"
+        public_manifest = config.get("public_tls_manifest")
+        if public_manifest is not None:
+            import ldap_tls_fixture
+            ldap_tls_fixture.check_dns()
+            _, certificate, private_key = ldap_tls_fixture.load_manifest(public_manifest)
+            ldap_tls_fixture.write_private(cert_path, certificate)
+            ldap_tls_fixture.write_private(key_path, private_key)
+        else:
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "synthetic loopback peer")])
+            now = datetime.now(timezone.utc)
+            cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                    .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                    .not_valid_before(now - timedelta(minutes=1))
+                    .not_valid_after(now + timedelta(days=1))
+                    .add_extension(x509.SubjectAlternativeName([
+                        x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+                    .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+                    .sign(key, hashes.SHA256()))
+            cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+            key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                 serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+            os.chmod(key_path, 0o600)
+        server.ssl_adapter = BuiltinSSLAdapter(str(cert_path), str(key_path), None)
     server.prepare()
-    ready("webdav", server.socket.getsockname()[1])
+    ready("webdav", server.socket.getsockname()[1], config.get("tls", False),
+          public_ca=config.get("public_tls_manifest") is not None)
     server.serve()
+
+
+def sftp_authentication_allowed(config, username, credential, client_key, method):
+    if username != config["user"]:
+        return False
+    if method == "publickey":
+        return credential == client_key
+    return (method == "password" and not config.get("sftp_key_only", False)
+            and credential == config["password"])
 
 
 def sftp(config, root):
@@ -115,18 +202,32 @@ def sftp(config, root):
     client_key = retained_key("synthetic-client-key.pem")
 
     class Auth(paramiko.ServerInterface):
+        def __init__(self, connection_id):
+            super().__init__()
+            self.connection_id = connection_id
+
+        def observed(self, method, accepted):
+            if config.get("sftp_key_only", False):
+                print(json.dumps({"owned_sftp_auth": method, "accepted": accepted}),
+                      file=sys.stderr, flush=True)
+            return paramiko.AUTH_SUCCESSFUL if accepted else paramiko.AUTH_FAILED
+
         def check_auth_password(self, username, password):
-            return (paramiko.AUTH_SUCCESSFUL if username == config["user"]
-                    and password == config["password"] else paramiko.AUTH_FAILED)
+            return self.observed("password", sftp_authentication_allowed(
+                config, username, password, client_key, "password"))
 
         def check_auth_publickey(self, username, key):
-            return (paramiko.AUTH_SUCCESSFUL if username == config["user"]
-                    and key == client_key else paramiko.AUTH_FAILED)
+            return self.observed("publickey", sftp_authentication_allowed(
+                config, username, key, client_key, "publickey"))
 
         def get_allowed_auths(self, username):
-            return "password,publickey"
+            return "publickey" if config.get("sftp_key_only", False) else "password,publickey"
 
         def check_channel_request(self, kind, channel_id):
+            if kind == "session" and config.get("sftp_key_only", False):
+                print(json.dumps({"owned_sftp_session": True,
+                                  "connection_id": self.connection_id,
+                                  "channel_id": channel_id}), file=sys.stderr, flush=True)
             return (paramiko.OPEN_SUCCEEDED if kind == "session"
                     else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED)
 
@@ -239,7 +340,7 @@ def sftp(config, root):
             except OSError:
                 return "/"
 
-    def connection(sock):
+    def connection(sock, connection_id):
         transport = paramiko.Transport(sock)
         transport.banner_timeout = 5
         transport.auth_timeout = 5
@@ -247,7 +348,7 @@ def sftp(config, root):
         try:
             transport.add_server_key(host_key)
             transport.set_subsystem_handler("sftp", paramiko.SFTPServer, Files)
-            transport.start_server(server=Auth())
+            transport.start_server(server=Auth(connection_id))
             channels = []
             while transport.is_active():
                 channel = transport.accept(timeout=0.2)
@@ -263,9 +364,10 @@ def sftp(config, root):
     listener.bind(("127.0.0.1", 0))
     listener.listen(16)
     ready("sftp", listener.getsockname()[1])
+    connection_ids = itertools.count(1)
     while True:
         sock, _ = listener.accept()
-        threading.Thread(target=connection, args=(sock,), daemon=True).start()
+        threading.Thread(target=connection, args=(sock, next(connection_ids)), daemon=True).start()
 
 
 def windows_smb_open_sharing(root):
@@ -347,6 +449,47 @@ def smb(config, root):
     windows_smb_open_sharing(root)
     server = SimpleSMBServer(listenAddress="127.0.0.1", listenPort=0)
     server.setSMB2Support(True)
+    policy = config.get("smb_auth")
+    if policy not in (None, "domain", "guest"):
+        raise ValueError("unknown explicit SMB authentication policy")
+    if policy:
+        from impacket import ntlm
+        from impacket.spnego import SPNEGO_NegTokenResp
+        original_auth = SMB2Commands._ntlm_auth
+        observation_lock = threading.Lock()
+
+        def policy_auth(token, conn_data, smb_server, raw_ntlm):
+            authenticate = token.startswith(b"NTLMSSP\x00") and int.from_bytes(token[8:12], "little") == 3
+            matched = True
+            user_present = False
+            if authenticate:
+                message = ntlm.NTLMAuthChallengeResponse()
+                message.fromString(token)
+                domain = message["domain_name"].decode("utf-16le")
+                user_present = bool(message["user_name"])
+                matched = domain == "VS-SYNTHETIC" if policy == "domain" else not user_present
+            if authenticate and not matched:
+                response = smb2.SMB2SessionSetup_Response()
+                reject = SPNEGO_NegTokenResp()
+                reject["NegState"] = b"\x02"
+                response["SecurityBufferOffset"] = 0x48
+                response["Buffer"] = reject.getData()
+                response["SecurityBufferLength"] = len(response["Buffer"])
+                status = 0xC000006D  # STATUS_LOGON_FAILURE, never success.
+            else:
+                response, status = original_auth(token, conn_data, smb_server, raw_ntlm)
+            if authenticate:
+                # No NTLM hashes, challenge responses, names or passwords.
+                record = {"policy": policy, "policy_matched": matched,
+                          "user_present": user_present, "status": status,
+                          "session_flags": smb2.SMB2SessionSetup_Response(
+                              response.getData())["SessionFlags"]}
+                with observation_lock:
+                    with (root.parent / "smb-auth-observations.jsonl").open("a", encoding="utf-8") as log:
+                        log.write(json.dumps(record) + "\n")
+            return response, status
+
+        SMB2Commands._ntlm_auth = staticmethod(policy_auth)
 
     def logoff_with_session_identity(conn_id, smb_server, request):
         # MS-SMB2 3.2.5.4 requires locating the session by response SessionId:
@@ -390,6 +533,22 @@ def smb(config, root):
         return commands, packets, status
 
     server.getServer().hookSmb2Command(smb2.SMB2_READ, read_with_eof_error_body)
+    # Impacket's findFirst2 enumerates names and then stats each path without
+    # tolerating a name removed by another request in that interval. Native
+    # temporary-file finalization can otherwise raise FileNotFoundError and
+    # close a valid QUERY_DIRECTORY connection. Coordinate only metadata RPCs;
+    # payload READ/WRITE handlers keep their actual concurrency and delays.
+    metadata_lock = threading.RLock()
+    metadata_handlers = {}
+    for command in (smb2.SMB2_QUERY_DIRECTORY, smb2.SMB2_CREATE,
+                    smb2.SMB2_SET_INFO, smb2.SMB2_CLOSE):
+        def coordinated_metadata(conn_id, smb_server, request, command=command):
+            with metadata_lock:
+                return metadata_handlers[command](conn_id, smb_server, request)
+
+        metadata_handlers[command] = server.getServer().hookSmb2Command(
+            command, coordinated_metadata)
+
     if config.get("write_delay_ms", 0):
         def delayed_write(conn_id, smb_server, request):
             time.sleep(config["write_delay_ms"] / 1000)
@@ -397,8 +556,9 @@ def smb(config, root):
 
         server.getServer().hookSmb2Command(smb2.SMB2_WRITE, delayed_write)
     server.addShare("synthetic", str(root))
-    server.addCredential(config["user"], 0, compute_lmhash(config["password"]),
-                         compute_nthash(config["password"]))
+    if policy != "guest":
+        server.addCredential(config["user"], 0, compute_lmhash(config["password"]),
+                             compute_nthash(config["password"]))
     # Impacket's two private named-pipe RPC listeners are also loopback-only.
     # Retain these exact in-process threads until the owned fixture process exits.
     ready("smb", server.getServer().server_address[1])
@@ -419,6 +579,12 @@ def main():
     delay = config.get("write_delay_ms", 0)
     if not isinstance(delay, int) or not 0 <= delay <= 100:
         raise ValueError("invalid explicit test-only write delay")
+    if (type(config.get("record_ftp_events", False)) is not bool
+            or (config.get("record_ftp_events", False) and args.protocol != "ftp")):
+        raise ValueError("explicit FTP-only observation flag required")
+    if (type(config.get("sftp_key_only", False)) is not bool
+            or (config.get("sftp_key_only", False) and args.protocol != "sftp")):
+        raise ValueError("explicit SFTP-only key authentication flag required")
     logging.basicConfig(level=logging.ERROR)
     {"ftp": ftp, "sftp": sftp, "webdav": webdav, "smb": smb}[args.protocol](config, root)
 

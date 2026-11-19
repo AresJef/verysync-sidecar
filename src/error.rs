@@ -4,6 +4,15 @@ use std::fmt;
 
 use crate::{DeviceId, FolderId};
 
+/// The independent state-admission lock that refused an owned operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManagedStateLock {
+    /// Another operation holds the sidecar's private state lease.
+    LibraryLease,
+    /// The native `verysync.lock` is held independently of the sidecar lease.
+    EngineLock,
+}
+
 /// Bounded private program output, available only through explicit inspection.
 ///
 /// Upstream output may contain sensitive state. Ordinary Debug/Display never
@@ -101,6 +110,15 @@ pub enum Error {
         /// Bounded original rejection payload, omitted from ordinary formatting.
         response: ResponseDiagnostic,
     },
+    /// The native official-account endpoint explicitly returned a nested error.
+    /// Code 5000 also describes upstream service/network failures; it is not
+    /// automatically an incorrect-password or management-authentication error.
+    OfficialAccountRejected {
+        /// Exact native signed error code, including future codes.
+        code: i64,
+        /// Bounded private native envelope, excluded from ordinary formatting.
+        response: ResponseDiagnostic,
+    },
     /// This sharing group is already registered locally; no POST was sent.
     ShareAlreadyConfigured {
         /// Actual existing local registration ID.
@@ -142,8 +160,12 @@ pub enum Error {
         /// A description without private paths, credentials or manifest data.
         reason: &'static str,
     },
-    /// The dedicated state already has an exclusive library owner.
-    ManagedStateInUse,
+    /// A dedicated-state admission lock is busy. This does not authorize killing
+    /// its owner or deleting the lock file; inspect the specific lock scope.
+    ManagedStateInUse {
+        /// Which independently checked lock refused admission.
+        lock: ManagedStateLock,
+    },
     /// The supplied directory is not an admissible library-owned state.
     UnmanagedState,
     /// A native filesystem or process operation failed without echoing arguments.
@@ -158,6 +180,10 @@ pub enum Error {
         /// A credential-free description of the setting.
         reason: &'static str,
     },
+    /// A full-save preflight observed a change since the snapshot was read.
+    /// No PUT was sent. Independent writers must still coordinate: this check
+    /// is not an atomic server-side compare-and-swap.
+    ConfigurationChanged,
     /// An explicitly owned event task failed while being joined.
     EventSubscriptionFailure,
     /// The engine's reported generation changed across an event snapshot read.
@@ -210,7 +236,7 @@ pub enum Error {
     /// The fixed engine rejected a typed operation with its known commercial
     /// feature-license envelope, even if HTTP status was successful.
     LicenseRequired {
-        /// Actual engine rejection code; currently verified as 3000 for Pro.
+        /// Actual engine rejection code: 3000 for Pro or 3001 for Local-API.
         code: i64,
         /// Original bounded response, hidden from ordinary formatting.
         response: ResponseDiagnostic,
@@ -287,6 +313,8 @@ pub enum Error {
     LocalDeviceProtected,
     /// The exact remote offer is absent; no modifying request was sent.
     PendingOfferNotFound,
+    /// The requested remote peer has no association with this folder.
+    FolderPeerNotAssociated,
     /// This peer has no persistent ignored-folder entry for the requested ID.
     FolderNotIgnored,
     /// The requested identity has no persistent ignore record.
@@ -380,6 +408,7 @@ impl fmt::Display for Error {
             Self::UnlistedProgramVersion => formatter.write_str("requested program version is not in the fixed catalog"),
             Self::UnsupportedProgramTarget { .. } => formatter.write_str("requested program target is not in the fixed catalog"),
             Self::ShareKeyRejected { .. } => formatter.write_str("engine rejected the sharing key"),
+            Self::OfficialAccountRejected { code, .. } => write!(formatter, "native official account request rejected (code {code})"),
             Self::LicenseRequired { code, .. } => write!(formatter, "engine requires a feature license (code {code})"),
             Self::IgnorePatternsRejected { .. } => formatter.write_str("engine reported invalid stored ignore patterns; inspect or explicitly restore the rules"),
             Self::ShareAlreadyConfigured { .. } => formatter.write_str("sharing group is already configured locally"),
@@ -389,12 +418,16 @@ impl fmt::Display for Error {
             Self::ManagedProcessExited { operation, code, .. } => write!(formatter, "owned program exited while attempting to {operation} (code {code:?})"),
             Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),
             Self::StateBackupRejected { reason } => write!(formatter, "private state copy rejected: {reason}"),
-            Self::ManagedStateInUse => formatter.write_str("managed state already has an exclusive owner"),
+            Self::ManagedStateInUse { lock } => formatter.write_str(match lock {
+                ManagedStateLock::LibraryLease => "managed state library lease is busy",
+                ManagedStateLock::EngineLock => "managed state upstream engine lock is busy",
+            }),
             Self::UnmanagedState => formatter.write_str("state is not an admissible private library-owned directory"),
             Self::LocalIo { operation, .. } => write!(formatter, "native operation failed while attempting to {operation}"),
             Self::InvalidConfiguration { reason } => {
                 write!(formatter, "invalid configuration: {reason}")
             }
+            Self::ConfigurationChanged => formatter.write_str("configuration changed since the reviewed snapshot; no replacement was sent"),
             Self::InvalidCredential { reason } => {
                 write!(formatter, "invalid management credential: {reason}")
             }
@@ -447,6 +480,7 @@ impl fmt::Display for Error {
             Self::DeviceAlreadyExists {..}=>formatter.write_str("device ID is already configured; creation did not start"),
             Self::LocalDeviceProtected=>formatter.write_str("remote-device mutation cannot target the local identity"),
             Self::PendingOfferNotFound=>formatter.write_str("pending offer is not present"),
+            Self::FolderPeerNotAssociated=>formatter.write_str("peer is not associated with this folder"),
             Self::FolderNotIgnored=>formatter.write_str("folder is not ignored for this device"),
             Self::DeviceNotIgnored=>formatter.write_str("device is not ignored"),
             Self::ConfiguredDeviceCannotBeIgnored {..}=>formatter.write_str("configured device must be explicitly removed before it is ignored"),

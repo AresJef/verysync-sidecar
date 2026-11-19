@@ -2,11 +2,20 @@
 use super::{mutation_error, Client};
 use crate::{
     CoreDiagnostics, CoreErrorLog, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
-    CoreLogSnapshot, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest, Error,
+    CoreLogSnapshot, CoreLogText, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest, Error,
     ResponseDiagnostic, Result, TargetPath,
 };
 use crate::{IndexResetAcknowledgement, IndexResetScope};
 use std::collections::BTreeMap;
+
+fn validate_log_since(since: Option<&str>) -> Result<()> {
+    if since.is_some_and(|s| s.is_empty() || s.len() > 128 || s.chars().any(char::is_control)) {
+        return Err(invalid(
+            "native log timestamp must be nonempty, bounded and control-free",
+        ));
+    }
+    Ok(())
+}
 
 impl Client {
     /// Explicitly request a native synchronization-index reset for one configured
@@ -137,6 +146,49 @@ impl Client {
         Ok(CoreProfile { request, bytes })
     }
 
+    /// Explicitly collect the native support archive once.
+    ///
+    /// The fixed handler collects target configuration/logs/metrics and native
+    /// heap, CPU and goroutine profiles. Its CPU collection runs for four seconds
+    /// when available. This GET serializes with mutations because native GC and
+    /// profiler state can change. It does not change the GUI debugging setting,
+    /// install a controller profiler, save a file, unpack data or retry.
+    ///
+    /// The connection's response bound and deadline apply without extension.
+    /// Cancellation or a failed response can leave native collection running;
+    /// it does not prove target cancellation. Native entries can be unavailable,
+    /// and native redaction is not a guarantee that the ZIP is safe to publish.
+    /// ZIP signature validation is not CRC or archive-content validation.
+    ///
+    /// ```rust,no_run
+    /// # async fn example(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+    /// let bundle = client.collect_core_support_bundle().await?;
+    /// // Inspect or store privately only when explicitly selected by your caller.
+    /// assert!(!bundle.body_bytes().is_empty());
+    /// # Ok(()) }
+    /// ```
+    pub async fn collect_core_support_bundle(&self) -> Result<crate::CoreSupportBundle> {
+        let operation = "collect native support bundle";
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        let url = self.connection.management_url("rest/debug/support", &[])?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(operation, reqwest::Method::GET, url, None, true)
+            .await?;
+        if bytes.len() < 52 || !bytes.starts_with(b"PK\x03\x04") {
+            return Err(mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes),
+                },
+            ));
+        }
+        Ok(crate::CoreSupportBundle { bytes })
+    }
+
     /// Read one bounded native metrics exposition from `metrics` under the
     /// selected management base path. The API key is attached normally. This
     /// does not enable unauthenticated metrics, open another listener, parse
@@ -221,16 +273,40 @@ impl Client {
     /// timestamp from an earlier entry. No timezone conversion, retry, polling,
     /// deduplication or controller logging is performed.
     pub async fn core_log(&self, since: Option<&str>) -> Result<CoreLogSnapshot> {
-        if since.is_some_and(|s| s.is_empty() || s.len() > 128 || s.chars().any(char::is_control)) {
-            return Err(invalid(
-                "native log timestamp must be nonempty, bounded and control-free",
-            ));
-        }
+        validate_log_since(since)?;
         self.system_status().await?;
         let query = since.map(|s| vec![("since", s)]).unwrap_or_default();
         self.connection
             .get_json_with_query("read core log", "rest/system/log", &query)
             .await
+    }
+    /// Read the native plain-text log once, optionally preserving an exact
+    /// native timestamp's offset and precision. Text and line endings remain
+    /// unchanged; an empty filtered snapshot is valid. Identity checks,
+    /// response bounds and deadlines apply. Invalid UTF-8 retains bounded
+    /// diagnostics as an error; no lossy replacement or automatic retry occurs.
+    /// The SDK does not drain logs, parse lines or install a controller logger.
+    pub async fn core_log_text(&self, since: Option<&str>) -> Result<CoreLogText> {
+        validate_log_since(since)?;
+        self.system_status().await?;
+        let operation = "read native text log";
+        let query = since.map(|s| vec![("since", s)]).unwrap_or_default();
+        let (status, bytes) = self
+            .connection
+            .request_bytes(
+                operation,
+                reqwest::Method::GET,
+                self.connection
+                    .management_url("rest/system/log.txt", &query)?,
+                None,
+                false,
+            )
+            .await?;
+        let text = String::from_utf8(bytes).map_err(|error| Error::InvalidResponse {
+            operation,
+            response: ResponseDiagnostic::new(status, error.into_bytes()),
+        })?;
+        Ok(CoreLogText { text })
     }
     /// Read active core-side package levels. This neither installs a logger nor
     /// changes the calling application's logging configuration.

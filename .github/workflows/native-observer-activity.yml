@@ -1,0 +1,115 @@
+name: Intel scoped observer activity comparison
+
+on:
+  pull_request:
+    paths:
+      - scripts/macos-observer-activity.py
+      - scripts/diagnose-native-observer.py
+      - scripts/tests/test_macos_observer_activity.py
+      - scripts/tests/test_native_observer_diagnosis.py
+      - .github/workflows/native-observer-activity.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: intel-native-activity-diagnosis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/scoped-observer-resource-v24-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/macos-native-timers-20261117-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/arm-native-wait-diagnosis-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository) && (github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/intel-v27-preparation-window-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository)
+    name: Diagnosis only, four fresh many-small activity ABBA pilots
+    runs-on: macos-26-intel
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Prepare fixed diagnostic dependencies and native MSRV
+        run: |
+          python -m pip install -r scripts/resource-test-requirements.txt
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 fetch --locked
+          python -B -m unittest discover -s scripts/tests -p test_native_observer_diagnosis.py
+          python -B -m unittest discover -s scripts/tests -p test_macos_observer_activity.py
+      - name: Explicitly prepare the owned fixed Intel core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package macos-amd64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Build the unchanged real release workload before diagnosis
+        run: cargo +1.85.0 test --release --no-run --features engine-tests,download --test resource_usage_engine --locked
+      - name: Retain wall and thread CPU waits plus all GC events under real work
+        run: >-
+          python -B scripts/diagnose-native-observer.py --activity-abba --toolchain 1.85.0
+          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
+          --evidence-dir "${{ runner.temp }}/vs-intel-activity-diagnosis"
+      - name: Verify all four native pilots and refuse their frozen membership
+        run: |
+          python - <<'PY'
+          import importlib.util, json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "vs-intel-activity-diagnosis"
+          result = json.loads((root / "diagnosis-result.json").read_text())
+          assert result["status"] == "DIAGNOSIS_COMPLETE_ONLY" and not result["formal_sample"]
+          assert [x["scenario"] for x in result["cases"]] == ["many-small"]*4
+          assert [x["activity_mode"] for x in result["cases"]] == ["off", "on", "on", "off"]
+          spec = importlib.util.spec_from_file_location("validator", "scripts/report-native-resources.py")
+          validator = importlib.util.module_from_spec(spec); spec.loader.exec_module(validator)
+          metrics = validator.module("metrics", "measure-native-resources.py")
+          protocol = validator.read(Path("tests/fixtures/resource-protocol.json"))
+          for case in result["cases"]:
+              folder = root / case["directory"]
+              raw = json.loads((folder / "preparation-result.json").read_text())
+              trace = json.loads((folder / "wait-diagnostics.json").read_text())
+              assert raw["stage"] == "pilot" and not raw["formal_sample"] and raw["exit_code"] == 0
+              assert raw["source"]["diagnostic_only"] and not raw["source"]["eligible_for_frozen_preparation_or_formal"]
+              assert raw["source"]["sampler_sha256"] != protocol["source_inputs"]["sampler_sha256"]
+              assert not trace["gc_overflow"] and trace["diagnostic_error_type"] is None
+              assert trace["activity_mode"] == case["activity_mode"]
+              assert trace["activity_cleanup_error_type"] is None
+              if case["activity_mode"] == "on":
+                  activity = trace["process_activity"]
+                  assert activity["started"] and activity["ended"] and activity["worker_started_before_begin"]
+                  assert not activity["idle_sleep_disabled"] and not activity["display_sleep_disabled"]
+                  assert activity["scope"] == "observer-process-only"
+              else:
+                  assert trace["process_activity"] is None
+              assert trace["waits"] and all(w["thread_cpu_ns"] >= 0 for w in trace["waits"])
+              assert all(raw["events"][-1][k] is True for k in ["all_actual_bytes_verified", "source_config_identity_unchanged", "normal_owned_tree_exit"])
+              try:
+                  validator.check_attempt(folder, protocol, "pilot", metrics)
+              except ValueError as error:
+                  assert "frozen source dependency differs" in str(error)
+              else:
+                  raise AssertionError("diagnostic pilot admitted as frozen preparation")
+              slow = sorted(trace["waits"], key=lambda w: w["end_ns"]-w["start_ns"], reverse=True)
+              print(json.dumps({"role": "diagnosis only", "scenario": case["scenario"], "activity_mode": case["activity_mode"], "waits": len(slow),
+                  "gc_events": len(trace["gc_events"]), "largest_three_waits": slow[:3],
+                  "waits_over_50ms": sum(w["end_ns"]-w["start_ns"] > 50000000 for w in slow)}))
+          PY
+      - name: Require exact owned-core cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Retain diagnostic raw records separately from formal collections
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: intel-native-activity-diagnosis-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/vs-intel-activity-diagnosis/**/diagnosis-result.json
+            ${{ runner.temp }}/vs-intel-activity-diagnosis/**/wait-diagnostics.json
+            ${{ runner.temp }}/vs-intel-activity-diagnosis/**/preparation-result.json
+            ${{ runner.temp }}/vs-intel-activity-diagnosis/**/quality-result.json
+            ${{ runner.temp }}/vs-intel-activity-diagnosis/**/events.jsonl
+            ${{ runner.temp }}/vs-intel-activity-diagnosis/**/samples.jsonl
+            ${{ runner.temp }}/vs-intel-activity-diagnosis/**/safe-error.json
+            ${{ runner.temp }}/vs-intel-activity-diagnosis/**/*.console.log

@@ -10,8 +10,1703 @@ use verysync_sidecar::{
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+#[path = "common/local_api_action_contracts.rs"]
+mod local_api_action_contracts;
+#[path = "common/local_api_common_contracts.rs"]
+mod local_api_common_contracts;
+#[path = "common/local_api_contracts.rs"]
+mod local_api_contracts;
+#[path = "common/local_api_event_contracts.rs"]
+mod local_api_event_contracts;
+#[path = "common/local_api_write_contracts.rs"]
+mod local_api_write_contracts;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
+
+#[path = "common/default_ignore_contracts.rs"]
+mod default_ignore_contracts;
+#[path = "common/default_versioning_contracts.rs"]
+mod default_versioning_contracts;
+#[path = "common/device_options_contracts.rs"]
+mod device_options_contracts;
+#[path = "common/device_removal_contracts.rs"]
+mod device_removal_contracts;
+#[path = "common/folder_options_contracts.rs"]
+mod folder_options_contracts;
+#[path = "common/folder_peer_encryption_contracts.rs"]
+mod folder_peer_encryption_contracts;
+#[path = "common/folder_policy_contracts.rs"]
+mod folder_policy_contracts;
+
+#[path = "common/auxiliary_maintenance_contracts.rs"]
+mod auxiliary_maintenance_contracts;
+#[path = "common/download_progress_contracts.rs"]
+mod download_progress_contracts;
+#[path = "common/gui_listener_contracts.rs"]
+mod gui_listener_contracts;
+#[path = "common/gui_resource_contracts.rs"]
+mod gui_resource_contracts;
+#[path = "common/hardware_contracts.rs"]
+mod hardware_contracts;
+#[path = "common/index_browse_contracts.rs"]
+mod index_browse_contracts;
+#[path = "common/index_file_contracts.rs"]
+mod index_file_contracts;
+#[path = "common/management_transport_contracts.rs"]
+mod management_transport_contracts;
+#[path = "common/narrow_configuration_contracts.rs"]
+mod narrow_configuration_contracts;
+#[path = "common/native_helper_contracts.rs"]
+mod native_helper_contracts;
+#[path = "common/network_limits_contracts.rs"]
+mod network_limits_contracts;
+#[path = "common/system_actions_contracts.rs"]
+mod system_actions_contracts;
+#[path = "common/target_directory_contracts.rs"]
+mod target_directory_contracts;
+#[path = "common/whole_section_configuration_contracts.rs"]
+mod whole_section_configuration_contracts;
+
+#[path = "common/incoming_request_budget_contracts.rs"]
+mod incoming_request_budget_contracts;
+
+#[path = "common/general_integer_domain_contracts.rs"]
+mod general_integer_domain_contracts;
+
+#[tokio::test]
+async fn remote_tunnel_connection_preserves_prefix_and_requires_target_identity() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let target = DeviceId::parse(ID)?;
+    for wrong_identity in [false, true] {
+        let actual = if wrong_identity {
+            ID.replacen('A', "B", 1)
+        } else {
+            ID.into()
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":actual})),
+        ])
+        .await?;
+        let gateway = ManagementEndpoint::http(&server.base)?;
+        let options = ConnectOptions::remote_tunnel(gateway, target.clone(), ApiKey::new(KEY)?)?;
+        let result = Client::connect(options).await;
+        if wrong_identity {
+            assert!(matches!(result, Err(Error::IdentityMismatch { .. })));
+        } else {
+            assert_eq!(result?.instance().device_id, target);
+        }
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with(&format!("GET /prefix/{ID}/rest/system/version ")));
+        assert!(requests[1].starts_with(&format!("GET /prefix/{ID}/rest/system/status ")));
+        assert!(requests.iter().all(|r| r
+            .to_ascii_lowercase()
+            .contains(&format!("x-api-key: {KEY}"))));
+    }
+    assert!(ConnectOptions::remote_tunnel(
+        ManagementEndpoint::unix_socket(std::env::temp_dir().join("synthetic.sock"))?,
+        target,
+        ApiKey::new(KEY)?
+    )
+    .is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn tunnel_probe_uses_canonical_route_and_keeps_negative_native_data_private() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let peer = DeviceId::parse(&ID.replacen('A', "B", 1))?;
+    for shape in ["denied", "available", "missing", "wrong-peer"] {
+        let mut body = serde_json::json!({"device":peer.as_str(),"tunnel":shape=="available","error":if shape=="available" {""} else {KEY},"futurePrivate":KEY});
+        if shape == "missing" {
+            body.as_object_mut().unwrap().remove("tunnel");
+        }
+        if shape == "available" {
+            body.as_object_mut().unwrap().remove("error");
+        }
+        if shape == "wrong-peer" {
+            body["device"] = ID.into();
+        }
+        let configured = serde_json::json!({"deviceID":peer.as_str(),"name":"peer","addresses":[],"compression":"metadata","paused":false});
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"devices":[configured]})),
+            Reply::json(body),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let result = client.probe_device_tunnel(&peer).await;
+        if matches!(shape, "missing" | "wrong-peer") {
+            assert!(matches!(result, Err(Error::MutationOutcomeUnknown { .. })));
+        } else {
+            let probe = result?;
+            assert_eq!(probe.device_id(), &peer);
+            assert_eq!(probe.tunnel_available(), shape == "available");
+            assert_eq!(
+                probe.native_error(),
+                if shape == "available" {
+                    None
+                } else {
+                    Some(KEY)
+                }
+            );
+            assert_eq!(probe.extra()["futurePrivate"], KEY);
+            assert!(!format!("{probe:?}").contains(KEY));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 5);
+        assert!(
+            requests[4].starts_with(&format!("GET /prefix/rest/tunnel/test/{}/ ", peer.as_str()))
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tunnel_probe_refuses_changed_local_identity_and_absent_or_self_peers() -> TestResult {
+    use verysync_sidecar::DeviceId;
+    let peer = DeviceId::parse(&ID.replacen('A', "B", 1))?;
+    for changed in [false, true] {
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":if changed {peer.as_str()} else {ID}})),
+        ];
+        if !changed {
+            replies.push(Reply::json(serde_json::json!({"devices":[]})));
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(client
+            .probe_device_tunnel(&DeviceId::parse(ID)?)
+            .await
+            .is_err());
+        let failure = client
+            .probe_device_tunnel(&peer)
+            .await
+            .err()
+            .ok_or("probe rejection expected")?;
+        if changed {
+            assert!(matches!(failure, Error::IdentityMismatch { .. }));
+        } else {
+            assert!(matches!(failure, Error::DeviceNotFound { .. }));
+        }
+        let requests = server.finish().await?;
+        assert!(!requests.iter().any(|r| r.contains("/tunnel/")));
+    }
+    Ok(())
+}
+
+#[test]
+fn tunnel_device_settings_are_explicit_and_missing_readback_stays_missing() -> TestResult {
+    use verysync_sidecar::{DeviceConfig, DevicePatch};
+    let patch = DevicePatch::default()
+        .allow_tunnel(false)
+        .remote_gui_port(42391)?;
+    assert_eq!(
+        serde_json::to_value(patch)?,
+        serde_json::json!({"allowTunnel":false,"remoteGUIPort":42391})
+    );
+    assert!(DevicePatch::default().remote_gui_port(0).is_err());
+    let device: DeviceConfig = serde_json::from_value(
+        serde_json::json!({"deviceID":ID,"name":"peer","addresses":[],"compression":"metadata","paused":true}),
+    )?;
+    assert_eq!(device.allow_tunnel, None);
+    assert_eq!(device.remote_gui_port, None);
+    let body = serde_json::to_value(device)?;
+    assert!(body.get("allowTunnel").is_none() && body.get("remoteGUIPort").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn license_expiry_absence_zero_null_container_and_identity_changes_remain_distinct(
+) -> TestResult {
+    use verysync_sidecar::{LicenseEntries, LicenseExpiry, LicenseStatus};
+    let null: LicenseStatus = serde_json::from_value(serde_json::json!({"licenses":null}))?;
+    assert!(matches!(null.licenses(), Some(LicenseEntries::Null)));
+    let status: LicenseStatus = serde_json::from_value(
+        serde_json::json!({"licenses":[{"subject":"Pro","expire":0},{"subject":"future-subject"}]}),
+    )?;
+    let Some(LicenseEntries::List(records)) = status.licenses() else {
+        return Err("license list absent".into());
+    };
+    assert_eq!(
+        records[0].expiry_at(i64::MAX),
+        Some(LicenseExpiry::Perpetual)
+    );
+    assert_eq!(records[1].expiry_at(0), None);
+    assert_eq!(records[1].trial(), None);
+    let changed = ID.replacen('A', "B", 1);
+    for after_write in [false, true] {
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":if after_write {ID} else {&changed}})),
+        ];
+        if after_write {
+            replies.extend([
+                Reply::json(serde_json::json!({})),
+                Reply::json(serde_json::json!({"myID":changed,"myLicense":{}})),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .fetch_licenses()
+            .await
+            .err()
+            .ok_or("license identity failure expected")?;
+        if after_write {
+            assert!(
+                matches!(error,Error::MutationOutcomeUnknown{source,..} if matches!(*source,Error::IdentityMismatch{..}))
+            );
+        } else {
+            assert!(matches!(error, Error::IdentityMismatch { .. }));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.contains("/rest/license/fetch"))
+                .count(),
+            usize::from(after_write)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn license_metadata_preserves_native_collection_shapes_and_explicit_expiry_reference(
+) -> TestResult {
+    use verysync_sidecar::{LicenseEntries, LicenseExpiry};
+    for collection in [
+        serde_json::json!([{ "subject":"Pro","expire":10,"issued_at":1,"trial":true,"futurePrivate":KEY}]),
+        serde_json::json!({KEY:{"subject":"Pro","expire":10,"issued_at":1,"trial":true,"futurePrivate":KEY}}),
+    ] {
+        let server=ScriptedServer::start(vec![Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),Reply::json(serde_json::json!({"myID":ID})),Reply::json(serde_json::json!({"myID":ID,"myLicense":{"licenses":collection,"futurePrivate":KEY}}))]).await?;
+        let client = Client::connect(server.options()?).await?;
+        let status = client.license_status().await?;
+        assert_eq!(status.extra()["futurePrivate"], KEY);
+        let record = match status.licenses().ok_or("license collection absent")? {
+            LicenseEntries::List(v) => &v[0],
+            LicenseEntries::Map(v) => v.values().next().ok_or("map license absent")?,
+            LicenseEntries::Null => return Err("unexpected null licenses".into()),
+        };
+        assert!(record.is_pro());
+        assert_eq!(record.subject(), "Pro");
+        assert_eq!(record.trial(), Some(true));
+        assert_eq!(record.issued_unix_seconds(), Some(1));
+        assert_eq!(record.expiry_at(9), Some(LicenseExpiry::NotExpired));
+        assert_eq!(record.expiry_at(10), Some(LicenseExpiry::Expired));
+        assert_eq!(record.extra()["futurePrivate"], KEY);
+        assert!(!format!("{status:?} {record:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 3);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn license_refresh_and_trial_are_separate_single_changing_get_requests() -> TestResult {
+    use verysync_sidecar::LicenseRequestKind;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let status = || Reply::json(serde_json::json!({"myID":ID,"myLicense":{}}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({"privateAck":KEY})),
+        status(),
+        identity(),
+        Reply::json(serde_json::json!({})),
+        status(),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let refresh = client.fetch_licenses().await?;
+    assert_eq!(refresh.request, LicenseRequestKind::Refresh);
+    assert!(refresh.status.licenses().is_none());
+    assert!(!format!("{refresh:?}").contains(KEY));
+    let trial = client.request_pro_trial().await?;
+    assert_eq!(trial.request, LicenseRequestKind::ProTrial);
+    assert!(trial.status.licenses().is_none());
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 8);
+    assert!(requests[3].starts_with("GET /prefix/rest/license/fetch "));
+    assert!(requests[6].starts_with("GET /prefix/rest/license/trial "));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.contains("/rest/license/"))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn license_missing_metadata_bad_ack_and_explicit_nested_errors_never_become_success(
+) -> TestResult {
+    for native in [
+        serde_json::json!({"myID":ID}),
+        serde_json::json!({"myID":ID,"myLicense":null}),
+        serde_json::json!({"myID":ID,"myLicense":[]}),
+        serde_json::json!({"myID":ID,"myLicense":{"licenses":false}}),
+    ] {
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(native),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.license_status().await,
+            Err(Error::InvalidResponse { .. })
+        ));
+        assert_eq!(server.finish().await?.len(), 3);
+    }
+    for ack in [
+        serde_json::json!([]),
+        serde_json::json!({"error":{"code":5000,"message":KEY}}),
+    ] {
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(ack),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let e = client
+            .fetch_licenses()
+            .await
+            .err()
+            .ok_or("license error expected")?;
+        assert!(matches!(e, Error::MutationOutcomeUnknown { .. }));
+        assert!(!format!("{e:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_account_acknowledgement_is_separate_from_matching_observed_state() -> TestResult {
+    use verysync_sidecar::{
+        OfficialAccountCredentials, OfficialAccountState, OfficialAccountStatus,
+    };
+    let unknown: OfficialAccountStatus = serde_json::from_value(serde_json::json!({"uid":null}))?;
+    assert_eq!(unknown.state(), OfficialAccountState::Unknown);
+    assert!(unknown.extra()["uid"].is_null());
+    for login in [false, true] {
+        let observed = if login {
+            serde_json::json!({})
+        } else {
+            serde_json::json!({"uid":99})
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({})),
+            Reply::json(serde_json::json!({"myID":ID,"account":observed})),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let receipt = if login {
+            client
+                .login_official_account(&OfficialAccountCredentials::new("synthetic-account", KEY)?)
+                .await?
+        } else {
+            client.logout_official_account().await?
+        };
+        assert!(!receipt.expected_state_matches);
+        assert_eq!(
+            receipt.status.state(),
+            if login {
+                OfficialAccountState::LoggedOut
+            } else {
+                OfficialAccountState::LoggedIn
+            }
+        );
+        assert_eq!(server.finish().await?.len(), 5);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_account_identity_changes_prevent_writes_or_make_post_readback_unknown(
+) -> TestResult {
+    use verysync_sidecar::OfficialAccountCredentials;
+    let changed = ID.replacen('A', "B", 1);
+    for after_write in [false, true] {
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":if after_write {ID} else {&changed}})),
+        ];
+        if after_write {
+            replies.extend([
+                Reply::json(serde_json::json!({})),
+                Reply::json(serde_json::json!({"myID":changed,"account":{}})),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .login_official_account(&OfficialAccountCredentials::new("synthetic-account", KEY)?)
+            .await
+            .err()
+            .ok_or("identity error expected")?;
+        if after_write {
+            assert!(
+                matches!(error,Error::MutationOutcomeUnknown{source,..} if matches!(*source,Error::IdentityMismatch{..}))
+            );
+        } else {
+            assert!(matches!(error, Error::IdentityMismatch { .. }));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests.iter().filter(|r| r.starts_with("POST ")).count(),
+            usize::from(after_write)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_accounts_preserve_unknown_state_and_separate_single_login_and_logout(
+) -> TestResult {
+    use verysync_sidecar::{OfficialAccountCredentials, OfficialAccountState};
+    let identity =
+        |account: serde_json::Value| Reply::json(serde_json::json!({"myID":ID,"account":account}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(serde_json::json!({})),
+        identity(serde_json::json!({"futurePrivate":KEY})),
+        identity(serde_json::json!({})),
+        Reply::json(serde_json::json!({"nativeAcknowledgement":KEY})),
+        identity(serde_json::json!({"uid":42,"futurePrivate":KEY})),
+        identity(serde_json::json!({"uid":42})),
+        Reply::json(serde_json::json!({})),
+        identity(serde_json::json!({})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert_eq!(
+        client.official_account_status().await?.state(),
+        OfficialAccountState::Unknown
+    );
+    let credentials = OfficialAccountCredentials::new(" user@example.invalid ", KEY)?;
+    assert!(!format!("{credentials:?}").contains(KEY));
+    let login = client.login_official_account(&credentials).await?;
+    assert!(login.expected_state_matches);
+    assert_eq!(login.status.state(), OfficialAccountState::LoggedIn);
+    assert_eq!(login.status.user_id(), Some(42));
+    assert_eq!(login.status.extra()["futurePrivate"], KEY);
+    assert!(!format!("{login:?}").contains(KEY));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(login.acknowledgement.body_bytes())?
+            ["nativeAcknowledgement"],
+        KEY
+    );
+    let logout = client.logout_official_account().await?;
+    assert!(logout.expected_state_matches);
+    assert_eq!(logout.status.state(), OfficialAccountState::LoggedOut);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 9);
+    assert!(requests[4].starts_with("POST /prefix/rest/account/login "));
+    let body: serde_json::Value = serde_json::from_str(
+        requests[4]
+            .split_once("\r\n\r\n")
+            .ok_or("account body missing")?
+            .1,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"username":" user@example.invalid ","password":KEY})
+    );
+    assert!(requests[7].starts_with("GET /prefix/rest/account/logout "));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.contains("/rest/account/"))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_account_nested_rejection_is_typed_and_malformed_ack_is_unknown_once() -> TestResult
+{
+    use verysync_sidecar::OfficialAccountCredentials;
+    for malformed in [false, true] {
+        let ack = if malformed {
+            serde_json::json!({"error":{"code":"future-code","message":KEY}})
+        } else {
+            serde_json::json!({"error":{"code":5000,"message":KEY,"futurePrivate":KEY}})
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(ack),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let credentials = OfficialAccountCredentials::new("synthetic-account", KEY)?;
+        let error = client
+            .login_official_account(&credentials)
+            .await
+            .err()
+            .ok_or("account error expected")?;
+        assert!(!format!("{error:?} {error}").contains(KEY));
+        if malformed {
+            assert!(
+                matches!(error,Error::MutationOutcomeUnknown{source,..} if matches!(*source,Error::InvalidResponse{..}))
+            );
+        } else {
+            assert!(matches!(
+                error,
+                Error::OfficialAccountRejected { code: 5000, .. }
+            ));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 4);
+        assert_eq!(
+            requests.iter().filter(|r| r.starts_with("POST ")).count(),
+            1
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_account_missing_state_and_failed_post_readback_never_become_logout_success(
+) -> TestResult {
+    use verysync_sidecar::OfficialAccountCredentials;
+    assert!(OfficialAccountCredentials::new("", KEY).is_err());
+    assert!(OfficialAccountCredentials::new("   ", KEY).is_err());
+    assert!(OfficialAccountCredentials::new("user\n", KEY).is_err());
+    assert!(OfficialAccountCredentials::new("user", "").is_err());
+    assert!(OfficialAccountCredentials::new("user", "private\0password").is_err());
+    for state in [
+        serde_json::json!({"myID":ID}),
+        serde_json::json!({"myID":ID,"account":null}),
+        serde_json::json!({"myID":ID,"account":[]}),
+        serde_json::json!({"myID":ID,"account":{"uid":"42"}}),
+    ] {
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(state),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        assert!(matches!(
+            client.official_account_status().await,
+            Err(Error::InvalidResponse { .. })
+        ));
+        assert_eq!(server.finish().await?.len(), 3);
+    }
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    assert!(
+        matches!(client.logout_official_account().await,Err(Error::MutationOutcomeUnknown{source,..}) if matches!(*source,Error::InvalidResponse{..}))
+    );
+    assert_eq!(server.finish().await?.len(), 5);
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_preference_paths_keep_target_windows_syntax_and_explicit_native_defaults(
+) -> TestResult {
+    use verysync_sidecar::{NativePathSelection, PathStyle, SystemPreferencesPatch, TargetPath};
+    for clear in [false, true] {
+        let audit = if clear {
+            ""
+        } else {
+            r"D:\Audit With Space\events.json"
+        };
+        let cache = if clear { "" } else { r"C:\Native Cache" };
+        let wire = serde_json::json!({"auditEnabled":false,"auditFile":audit,"thumnailEnabled":false,"thumnailCacheDir":cache,"userProxyEnabled":false,"userProxyAddress":"","futureSecret":KEY});
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({})),
+            Reply::json(wire),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let selection = |path: &str| {
+            if path.is_empty() {
+                Ok::<_, verysync_sidecar::Error>(NativePathSelection::Default)
+            } else {
+                Ok(NativePathSelection::Path(TargetPath::remote(
+                    PathStyle::Windows,
+                    path,
+                )?))
+            }
+        };
+        let patch = SystemPreferencesPatch::default()
+            .event_audit_file(selection(audit)?)
+            .thumbnail_cache_directory(selection(cache)?);
+        let update = client.update_system_preferences(&patch).await?;
+        assert!(update.requested_fields_match);
+        match &update.configuration.event_audit_file {
+            NativePathSelection::Default => assert!(clear),
+            NativePathSelection::Path(path) => {
+                assert!(!clear);
+                assert_eq!(path.style(), PathStyle::Windows);
+                assert!(path.local_path().is_none());
+                assert_eq!(path.to_protocol()?, audit);
+            }
+        }
+        assert_eq!(update.configuration.extra["futureSecret"], KEY);
+        assert!(!format!("{update:?}").contains(KEY));
+        let requests = server.finish().await?;
+        let writes: Vec<_> = requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .collect();
+        assert_eq!(writes.len(), 1);
+        let body: serde_json::Value = serde_json::from_str(
+            writes[0]
+                .split_once("\r\n\r\n")
+                .ok_or("system preference patch absent")?
+                .1,
+        )?;
+        assert_eq!(
+            body,
+            serde_json::json!({"auditFile":audit,"thumnailCacheDir":cache})
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_proxy_authorities_preserve_socks5_credentials_and_write_only_selected_fields(
+) -> TestResult {
+    use verysync_sidecar::SystemPreferencesPatch;
+    for authority in [
+        "proxy.invalid:1080",
+        "[::1]:1080",
+        "private-user:p%40ss@proxy.invalid:1080",
+        "",
+    ] {
+        let enabled = !authority.is_empty();
+        let wire = serde_json::json!({"auditEnabled":false,"auditFile":"","thumnailEnabled":false,"thumnailCacheDir":"","userProxyEnabled":enabled,"userProxyAddress":authority,"futureSecret":KEY});
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({})),
+            Reply::json(wire),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let patch = SystemPreferencesPatch::default()
+            .proxy_enabled(enabled)
+            .proxy_address(authority);
+        let result = client.update_system_preferences(&patch).await?;
+        assert!(result.requested_fields_match);
+        assert_eq!(result.configuration.proxy_address(), authority);
+        assert_eq!(result.configuration.extra["futureSecret"], KEY);
+        for debug in [format!("{patch:?}"), format!("{result:?}")] {
+            assert!(
+                !debug.contains("private-user")
+                    && !debug.contains("p%40ss")
+                    && !debug.contains(KEY)
+            );
+        }
+        let requests = server.finish().await?;
+        let writes: Vec<_> = requests
+            .iter()
+            .filter(|v| v.starts_with("PATCH "))
+            .collect();
+        assert_eq!(writes.len(), 1);
+        let body: serde_json::Value = serde_json::from_str(
+            writes[0]
+                .split_once("\r\n\r\n")
+                .ok_or("native proxy body missing")?
+                .1,
+        )?;
+        assert_eq!(
+            body,
+            serde_json::json!({"userProxyEnabled":enabled,"userProxyAddress":authority})
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_preferences_reject_wrong_target_paths_and_invalid_proxy_before_requests(
+) -> TestResult {
+    use verysync_sidecar::{NativePathSelection, PathStyle, SystemPreferencesPatch, TargetPath};
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let wrong = SystemPreferencesPatch::default().event_audit_file(NativePathSelection::Path(
+        TargetPath::remote(PathStyle::Unix, "/private/audit")?,
+    ));
+    assert!(matches!(
+        client.update_system_preferences(&wrong).await,
+        Err(Error::InvalidPath { .. })
+    ));
+    for patch in [
+        SystemPreferencesPatch::default(),
+        SystemPreferencesPatch::default().proxy_address("file:///private/proxy"),
+        SystemPreferencesPatch::default().proxy_address("http://proxy.invalid:1080"),
+        SystemPreferencesPatch::default().proxy_address("socks5://proxy.invalid:1080"),
+        SystemPreferencesPatch::default().proxy_address("proxy.invalid"),
+        SystemPreferencesPatch::default().proxy_address("proxy.invalid:0"),
+        SystemPreferencesPatch::default().proxy_address("user:private token@proxy.invalid:1080"),
+        SystemPreferencesPatch::default().proxy_address("proxy.invalid:1080\n"),
+        SystemPreferencesPatch::default().proxy_address("socks5://proxy.invalid:0"),
+        SystemPreferencesPatch::default().proxy_address("http://proxy.invalid/path"),
+        SystemPreferencesPatch::default().proxy_address("http://proxy.invalid/?private=token"),
+    ] {
+        assert!(matches!(
+            client.update_system_preferences(&patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_preferences_share_single_write_reload_reconciliation_without_copying_credentials(
+) -> TestResult {
+    use verysync_sidecar::GuiPreferencesPatch;
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let gui = serde_json::json!({"enabled":true,"authMode":"static","user":KEY,"password":KEY,"apiKey":KEY,"metricsWithoutAuth":true,"theme":"private-theme","debugging":false,"insecureAdminAccess":false,"insecureSkipHostcheck":false,"insecureAllowFrameLoading":false,"sendBasicAuthPrompt":false,"sessionCookieDurationS":0,"sessionCookiePath":"/prefix","futureSecret":KEY});
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({})),
+        version(),
+        identity(),
+        Reply::json(gui),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let patch = GuiPreferencesPatch::default()
+        .metrics_without_auth(true)
+        .theme("private-theme")
+        .session_cookie_path("/prefix");
+    assert!(!format!("{patch:?}").contains("private-theme"));
+    let update = client
+        .update_gui_preferences(&patch, Duration::from_secs(2))
+        .await?;
+    assert!(update.requested_fields_match && update.write_acknowledged);
+    assert!(update.configuration.theme() == "private-theme");
+    assert!(
+        !update.configuration.extra.contains_key("apiKey")
+            && !update.configuration.extra.contains_key("password")
+            && !update.configuration.extra.contains_key("user")
+    );
+    assert!(!format!("{update:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with("PATCH /prefix/rest/config/gui "));
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split_once("\r\n\r\n")
+            .ok_or("GUI patch absent")?
+            .1,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"metricsWithoutAuth":true,"theme":"private-theme","sessionCookiePath":"/prefix"})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_preferences_invalid_text_empty_patch_and_deadline_never_write() -> TestResult {
+    use verysync_sidecar::GuiPreferencesPatch;
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for patch in [
+        GuiPreferencesPatch::default(),
+        GuiPreferencesPatch::default().theme("private\nname"),
+        GuiPreferencesPatch::default().theme("x".repeat(129)),
+        GuiPreferencesPatch::default().session_cookie_path("relative"),
+        GuiPreferencesPatch::default().session_cookie_path("/a; injected"),
+        GuiPreferencesPatch::default().session_cookie_path("/a?query"),
+    ] {
+        assert!(matches!(
+            client
+                .update_gui_preferences(&patch, Duration::from_secs(1))
+                .await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert!(matches!(
+        client
+            .update_gui_preferences(
+                &GuiPreferencesPatch::default().metrics_without_auth(true),
+                Duration::ZERO
+            )
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_preference_echoes_in_incompatible_version_are_redacted_after_the_single_write(
+) -> TestResult {
+    use verysync_sidecar::GuiPreferencesPatch;
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(
+            serde_json::json!({"version":"v9.9.9-private-theme","os":"linux","arch":"amd64"}),
+        ),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .update_gui_preferences(
+            &GuiPreferencesPatch::default().theme("private-theme"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect_err("changed version cannot be reconciled");
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?}").contains("private-theme"));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn crash_preferences_keep_private_legacy_values_and_only_write_explicit_fields() -> TestResult
+{
+    use verysync_sidecar::CrashReportingPatch;
+    let endpoint = format!("https://collector.invalid/newcrash?token={KEY}");
+    let options = serde_json::json!({"urAccepted":3,"urSeen":3,"urUniqueId":KEY,"urURL":KEY,"urPostInsecurely":true,"urInitialDelayS":900,"crashReportingEnabled":false,"crURL":endpoint,"futureSecret":KEY});
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({})),
+        Reply::json(options),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let patch = CrashReportingPatch::default()
+        .enabled(false)
+        .url(endpoint.clone());
+    assert!(!format!("{patch:?}").contains(KEY));
+    let updated = client.update_crash_reporting(&patch).await?;
+    assert!(updated.requested_fields_match);
+    assert_eq!(updated.configuration.usage_identifier(), KEY);
+    assert_eq!(updated.configuration.crash_report_url(), endpoint);
+    assert_eq!(updated.configuration.extra["futureSecret"], KEY);
+    assert!(!format!("{updated:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split_once("\r\n\r\n")
+            .ok_or("crash patch absent")?
+            .1,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"crashReportingEnabled":false,"crURL":endpoint})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_crash_destinations_and_empty_changes_make_no_request() -> TestResult {
+    use verysync_sidecar::CrashReportingPatch;
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for patch in [
+        CrashReportingPatch::default(),
+        CrashReportingPatch::default().url("file:///private/collector"),
+        CrashReportingPatch::default().url("https://user:private@collector.invalid/"),
+        CrashReportingPatch::default().url("http://127.0.0.1:0/"),
+        CrashReportingPatch::default().url("https://collector.invalid/#fragment"),
+        CrashReportingPatch::default().url("https://collector.invalid/\nprivate"),
+    ] {
+        assert!(matches!(
+            client.update_crash_reporting(&patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn general_options_preserve_native_integral_and_fractional_disk_values_and_disabled_progress(
+) -> TestResult {
+    use verysync_sidecar::{DiskFreeRequirement, DiskSpaceUnit, GeneralOptionsPatch};
+    for value in [1.0, 0.25] {
+        let expected = DiskFreeRequirement::new(value, DiskSpaceUnit::Megabytes)?;
+        let mut options = complete_configuration_fixture()["options"].clone();
+        options["minHomeDiskFree"] = if value == 1.0 {
+            serde_json::json!({"value":1,"unit":"MB"})
+        } else {
+            serde_json::json!({"value":0.25,"unit":"MB"})
+        };
+        options["progressUpdateIntervalS"] = (-1).into();
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({})),
+            Reply::json(options),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let updated = client
+            .update_general_options(
+                &GeneralOptionsPatch::default()
+                    .min_home_disk_free(expected.clone())
+                    .progress_update_interval_seconds(-1),
+            )
+            .await?;
+        assert!(updated.requested_fields_match);
+        assert_eq!(updated.configuration.min_home_disk_free, Some(expected));
+        assert_eq!(updated.configuration.progress_update_interval_seconds, -1);
+        assert_eq!(updated.configuration.extra["futureSecret"], KEY);
+        let serialized = serde_json::to_value(&updated.configuration)?;
+        assert!(serialized.get("trafficClass").is_none());
+        assert_eq!(serialized["futureSecret"], KEY);
+        assert!(!format!("{updated:?}").contains(KEY));
+        let requests = server.finish().await?;
+        let writes: Vec<_> = requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .collect();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].starts_with("PATCH /prefix/rest/config/options "));
+        let body: serde_json::Value = serde_json::from_str(
+            writes[0]
+                .split_once("\r\n\r\n")
+                .ok_or("general patch absent")?
+                .1,
+        )?;
+        assert_eq!(body.as_object().ok_or("general patch not object")?.len(), 2);
+        assert_eq!(body["progressUpdateIntervalS"], -1);
+        assert_eq!(body["minHomeDiskFree"]["value"].is_u64(), value == 1.0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_general_options_are_refused_for_partial_and_full_snapshot_edits_before_write(
+) -> TestResult {
+    use verysync_sidecar::{DiskFreeRequirement, DiskSpaceUnit, GeneralOptionsPatch};
+    for value in [f64::NAN, f64::INFINITY, -1.0, 101.0] {
+        assert!(DiskFreeRequirement::new(value, DiskSpaceUnit::Percent).is_err());
+    }
+    let unknown: DiskFreeRequirement =
+        serde_json::from_value(serde_json::json!({"value":1,"unit":KEY}))?;
+    assert!(matches!(unknown.unit(), DiskSpaceUnit::Unknown(_)));
+    assert!(!format!("{unknown:?}").contains(KEY));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(serde_json::json!({"myID":ID})),
+        Reply::json(complete_configuration_fixture()),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut snapshot = client.configuration().await?;
+    for patch in [
+        GeneralOptionsPatch::default().progress_update_interval_seconds(-2),
+        GeneralOptionsPatch::default().min_home_disk_free(unknown),
+    ] {
+        assert!(matches!(
+            snapshot.set_general_options(&patch),
+            Err(Error::InvalidConfiguration { .. })
+        ));
+        assert!(matches!(
+            client.update_general_options(&patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 4);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ldap_patch_preserves_other_settings_and_never_selects_gui_mode() -> TestResult {
+    use verysync_sidecar::LdapPatch;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server=ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),identity(),identity(),Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"address":"private-directory.invalid:389","bindDN":"uid=%s,dc=private","transport":"plain","insecureSkipVerify":false,"searchBaseDN":"","searchFilter":"(uid=%s)","futureSecret":KEY})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let updated = client
+        .update_ldap_configuration(&LdapPatch::default().search_filter("(uid=%s)"))
+        .await?;
+    assert!(updated.requested_fields_match);
+    assert_eq!(updated.configuration.extra["futureSecret"], KEY);
+    let debug = format!("{updated:?}");
+    assert!(!debug.contains(KEY) && !debug.contains("private-directory"));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with("PATCH /prefix/rest/config/ldap "));
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split_once("\r\n\r\n")
+            .ok_or("missing LDAP patch")?
+            .1,
+    )?;
+    assert_eq!(body, serde_json::json!({"searchFilter":"(uid=%s)"}));
+    assert!(!requests
+        .iter()
+        .any(|r| r.starts_with("PATCH /prefix/rest/config/gui ")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn ldap_and_gui_mode_invalid_changes_are_rejected_before_any_write() -> TestResult {
+    use verysync_sidecar::{GuiAuthMode, LdapPatch, LdapTransport};
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for patch in [
+        LdapPatch::default(),
+        LdapPatch::default().address("user:password@host:389"),
+        LdapPatch::default().address("host:0"),
+        LdapPatch::default().bind_dn("invalid\0value"),
+        LdapPatch::default().transport(LdapTransport::Unknown(KEY.to_owned())),
+    ] {
+        assert!(matches!(
+            client.update_ldap_configuration(&patch).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert!(matches!(
+        client
+            .set_gui_auth_mode(
+                &GuiAuthMode::Unknown(KEY.to_owned()),
+                Duration::from_secs(1)
+            )
+            .await,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_session_uses_scoped_csrf_cookies_without_api_keys_and_verifies_logout() -> TestResult {
+    use verysync_sidecar::{GuiCredentials, GuiLoginOptions, GuiSession};
+    let csrf = "synthetic-private-csrf";
+    let cookie = "synthetic-private-session";
+    let root = Reply {
+        headers: format!("Set-Cookie: CSRF-Token-AAAAAAA={csrf}; Path=/prefix/\r\n"),
+        ..Reply::json(serde_json::json!({}))
+    };
+    let login = Reply {
+        status: 204,
+        body: vec![],
+        headers: format!("Set-Cookie: sessionid-AAAAAAA={cookie}; Path=/prefix/\r\n"),
+        delay: Duration::ZERO,
+    };
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let denied = || Reply {
+        status: 403,
+        ..Reply::json(serde_json::json!({}))
+    };
+    let server = ScriptedServer::start(vec![
+        root,
+        login,
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        identity(),
+        Reply {
+            status: 204,
+            body: vec![],
+            ..Reply::json(serde_json::json!({}))
+        },
+        denied(),
+        denied(),
+    ])
+    .await?;
+    let options = GuiLoginOptions::new(
+        ManagementEndpoint::http(&server.base)?,
+        GuiCredentials::new("hidden-gui-user", "hidden-gui-password")?,
+    )
+    .expected_device_id(verysync_sidecar::DeviceId::parse(ID)?)
+    .stay_logged_in(true);
+    let session = GuiSession::login(options).await?;
+    assert_eq!(session.system_status().await?.device_id.as_str(), ID);
+    let debug = format!("{session:?}");
+    for value in [csrf, cookie, "hidden-gui-user", "hidden-gui-password"] {
+        assert!(!debug.contains(value));
+    }
+    let stale = session.clone();
+    let logout = session.logout().await?;
+    assert!(logout.write_acknowledged && logout.session_rejected);
+    assert!(matches!(
+        stale.system_status().await,
+        Err(Error::AccessDenied { .. })
+    ));
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 9);
+    assert!(requests[0].starts_with("GET /prefix/ "));
+    assert!(requests[1].starts_with("POST /prefix/rest/noauth/auth/password "));
+    let body: serde_json::Value = serde_json::from_str(
+        requests[1]
+            .split_once("\r\n\r\n")
+            .ok_or("missing GUI credentials")?
+            .1,
+    )?;
+    assert_eq!(
+        body,
+        serde_json::json!({"username":"hidden-gui-user","password":"hidden-gui-password","stayLoggedIn":true,"forumUser":false})
+    );
+    assert!(requests
+        .iter()
+        .all(|r| !r.to_ascii_lowercase().contains("x-api-key:")));
+    assert!(requests[1]
+        .to_ascii_lowercase()
+        .contains(&format!("x-csrf-token-aaaaaaa: {csrf}")));
+    assert!(!requests[1].contains(cookie));
+    assert!(requests[2].contains(cookie));
+    assert!(requests[8].contains(cookie));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("POST /prefix/rest/noauth/auth/password "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("POST /prefix/rest/noauth/auth/logout "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_session_rejects_wrong_cookie_scope_before_password_submission() -> TestResult {
+    use verysync_sidecar::{DeviceId, GuiCredentials, GuiLoginOptions, GuiSession};
+    for header in [
+        "CSRF-Token-BBBBBBB=private; Path=/prefix/",
+        "CSRF-Token-AAAAAAA=private; Domain=other.invalid",
+        "CSRF-Token-AAAAAAA=private; Path=/different/",
+        "CSRF-Token-AAAAAAA=private; Secure",
+        "CSRF-Token-AAAAAAA=; Path=/prefix/",
+    ] {
+        let server = ScriptedServer::start(vec![Reply {
+            headers: format!("Set-Cookie: {header}\r\n"),
+            ..Reply::json(serde_json::json!({}))
+        }])
+        .await?;
+        let options = GuiLoginOptions::new(
+            ManagementEndpoint::http(&server.base)?,
+            GuiCredentials::new("hidden-gui-user", "hidden-gui-password")?,
+        )
+        .expected_device_id(DeviceId::parse(ID)?);
+        assert!(matches!(
+            GuiSession::login(options).await,
+            Err(Error::InvalidResponse { .. })
+        ));
+        assert_eq!(server.finish().await?.len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn gui_session_redacts_cookie_and_password_echoes_from_version_errors() -> TestResult {
+    use verysync_sidecar::{DeviceId, GuiCredentials, GuiLoginOptions, GuiSession};
+    let server=ScriptedServer::start(vec![
+        Reply {headers:"Set-Cookie: CSRF-Token-AAAAAAA=private-csrf-token; Path=/prefix/\r\n".to_owned(),..Reply::json(serde_json::json!({}))},
+        Reply {status:204,body:vec![],headers:"Set-Cookie: sessionid-AAAAAAA=private-session-token; Path=/prefix/\r\n".to_owned(),delay:Duration::ZERO},
+        Reply::json(serde_json::json!({"version":"v-private-csrf-token-private-session-token-hidden-gui-user-hidden-gui-password","os":"linux","arch":"amd64"})),
+    ]).await?;
+    let options = GuiLoginOptions::new(
+        ManagementEndpoint::http(&server.base)?,
+        GuiCredentials::new("hidden-gui-user", "hidden-gui-password")?,
+    )
+    .expected_device_id(DeviceId::parse(ID)?);
+    let error = GuiSession::login(options).await.unwrap_err();
+    assert!(matches!(error, Error::IncompatibleVersion { .. }));
+    let debug = format!("{error:?} {error}");
+    for value in [
+        "private-csrf-token",
+        "private-session-token",
+        "hidden-gui-user",
+        "hidden-gui-password",
+    ] {
+        assert!(!debug.contains(value));
+    }
+    assert_eq!(server.finish().await?.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn key_rotation_cancel_after_write_releases_lock_and_allows_explicit_recovery() -> TestResult
+{
+    use verysync_sidecar::FolderDefaultsPatch;
+    const NEXT: &str = "synthetic-next-management-key";
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let server=ScriptedServer::with_signal(vec![
+        version(),identity(),identity(),Reply::json(serde_json::json!({})),
+        Reply {delay:Duration::from_millis(250),..version()},
+        version(),identity(),identity(),Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"label":"","paused":true,"rescanIntervalS":0,"fsWatcherEnabled":false})),
+    ],Some((5,sent))).await?;
+    let client = Client::connect(server.options()?).await?;
+    {
+        let operation = client.rotate_api_key(ApiKey::new(NEXT)?, Duration::from_secs(5));
+        tokio::pin!(operation);
+        tokio::select! {
+            event=received => event?,
+            _=&mut operation => return Err("credential operation finished before controlled pending read".into()),
+        }
+        let blocked = client
+            .rotate_api_key(
+                ApiKey::new("synthetic-other-management-key")?,
+                Duration::from_millis(50),
+            )
+            .await;
+        assert!(matches!(blocked, Err(Error::Timeout { .. })));
+        // Drop the operation after the server observed PATCH and the subsequent
+        // pending read. No timeout estimate decides whether the write happened.
+    }
+    let recovered = client.reconnect_with_api_key(ApiKey::new(NEXT)?).await?;
+    let update = tokio::time::timeout(
+        Duration::from_secs(2),
+        recovered.update_folder_defaults(&FolderDefaultsPatch::default().paused(true)),
+    )
+    .await??;
+    assert!(update.requested_fields_match);
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH /prefix/rest/config/gui "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH /prefix/rest/config/defaults/folder "))
+            .count(),
+        1
+    );
+    assert!(requests[5]
+        .to_ascii_lowercase()
+        .contains(&format!("x-api-key: {NEXT}")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn key_rotation_new_identity_mismatch_is_unknown_and_never_retried() -> TestResult {
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let other = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({})),
+        version(),
+        Reply::json(serde_json::json!({"myID":other})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .rotate_api_key(
+            ApiKey::new("synthetic-next-management-key")?,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::MutationOutcomeUnknown { source, .. } if matches!(*source, Error::IdentityMismatch { .. }))
+    );
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    assert_eq!(
+        requests.iter().filter(|r| r.starts_with("PATCH ")).count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn key_rotation_writes_once_reconciles_unknown_ack_and_preserves_version_policy() -> TestResult
+{
+    const NEXT: &str = "synthetic-next-management-key";
+    for (unverified, acknowledged, old_accepted, first_denied) in [
+        (false, true, false, false),
+        (true, false, false, true),
+        (false, true, true, false),
+    ] {
+        let version = || {
+            Reply::json(
+                serde_json::json!({"version":if unverified {"v99.0.0"} else {"v2.33.2"},"os":"linux","arch":"amd64"}),
+            )
+        };
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let denied = || Reply {
+            status: 403,
+            ..Reply::json(serde_json::json!({"private":KEY}))
+        };
+        let mut replies = vec![
+            version(),
+            identity(),
+            identity(),
+            Reply {
+                status: if acknowledged { 200 } else { 500 },
+                ..Reply::json(serde_json::json!({"private":NEXT}))
+            },
+        ];
+        if first_denied {
+            replies.push(denied());
+        }
+        replies.extend([version(),identity(),Reply::json(serde_json::json!({"enabled":true,"authMode":"static","user":"private-synthetic-user","password":KEY,"apiKey":NEXT,"futureSecret":KEY}))]);
+        if old_accepted {
+            replies.extend([version(), identity()]);
+        } else {
+            replies.push(denied());
+        }
+        replies.push(identity());
+        let server = ScriptedServer::start(replies).await?;
+        let options = server.options()?.version_policy(if unverified {
+            VersionPolicy::AllowUnverified
+        } else {
+            VersionPolicy::ValidatedOnly
+        });
+        let client = Client::connect(options).await?;
+        let rotation = client
+            .rotate_api_key(ApiKey::new(NEXT)?, Duration::from_secs(2))
+            .await?;
+        assert_eq!(rotation.write_acknowledged, acknowledged);
+        assert!(rotation.requested_key_matches);
+        assert_eq!(rotation.previous_key_rejected, !old_accepted);
+        assert_eq!(
+            rotation.client.system_status().await?.device_id.as_str(),
+            ID
+        );
+        let debug = format!("{rotation:?}");
+        assert!(
+            !debug.contains(KEY)
+                && !debug.contains(NEXT)
+                && !debug.contains("private-synthetic-user")
+        );
+        let requests = server.finish().await?;
+        let writes = requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].starts_with("PATCH /prefix/rest/config/gui "));
+        let body: serde_json::Value = serde_json::from_str(
+            writes[0]
+                .split_once("\r\n\r\n")
+                .ok_or("missing key patch")?
+                .1,
+        )?;
+        assert_eq!(body, serde_json::json!({"apiKey":NEXT}));
+        assert!(writes[0]
+            .to_ascii_lowercase()
+            .contains(&format!("x-api-key: {KEY}")));
+        assert!(requests
+            .last()
+            .ok_or("missing authenticated read")?
+            .to_ascii_lowercase()
+            .contains(&format!("x-api-key: {NEXT}")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_key_rotation_inputs_send_no_request() -> TestResult {
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        Reply::json(serde_json::json!({"myID":ID})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    for (key, timeout) in [
+        (KEY, Duration::from_secs(1)),
+        ("short", Duration::from_secs(1)),
+        ("synthetic-next-management-key", Duration::ZERO),
+    ] {
+        let result = client.rotate_api_key(ApiKey::new(key)?, timeout).await;
+        assert!(matches!(
+            result,
+            Err(Error::InvalidCredential { .. }) | Err(Error::InvalidConfiguration { .. })
+        ));
+    }
+    assert_eq!(server.finish().await?.len(), 2);
+    Ok(())
+}
+
+fn complete_configuration_fixture() -> serde_json::Value {
+    serde_json::json!({
+        "version":37,
+        "options":{"keepTemporariesH":24,"progressUpdateIntervalS":5,
+            "maxFolderConcurrency":0,"maxDialConcurrent":0,"maxConcurrentIncomingRequestKiB":0,
+            "setLowPriority":true,"disableSystemSleepOnSync":false,"futureSecret":KEY},
+        "defaults":{
+            "folder":{"label":"","paused":false,"rescanIntervalS":3600,"fsWatcherEnabled":true,"secretKey":KEY},
+            "device":{"name":"","addresses":["dynamic"],"compression":"metadata","paused":false,"futureSecret":KEY}
+        },
+        "folders":[{"id":"synthetic","label":KEY,"path":"C:\\Synthetic Data","paused":true}],
+        "devices":[{"deviceID":ID,"name":"","addresses":["dynamic"],"compression":"metadata","paused":false}],
+        "gui":{"apiKey":KEY},"ldap":{"address":KEY},"relayServer":{"private":KEY},
+        "remoteIgnoredDevices":[],"futureRoot":{"private":KEY}
+    })
+}
+
+#[tokio::test]
+async fn full_save_preserves_native_values_and_rejects_stale_or_unknown_outcomes() -> TestResult {
+    use verysync_sidecar::GeneralOptionsPatch;
+    for case in ["matching", "stale", "invalid-readback"] {
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let original = complete_configuration_fixture();
+        let mut observed = original.clone();
+        observed["options"]["keepTemporariesH"] = 25.into();
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+            identity(),
+            identity(),
+            Reply::json(original.clone()),
+            identity(),
+            Reply::json(if case == "stale" {
+                observed.clone()
+            } else {
+                original.clone()
+            }),
+        ];
+        if case != "stale" {
+            replies.extend([
+                Reply::json(serde_json::json!({})),
+                identity(),
+                Reply::json(if case == "matching" {
+                    observed.clone()
+                } else {
+                    serde_json::json!({"private":KEY})
+                }),
+            ]);
+            if case == "matching" {
+                replies.push(Reply::json(serde_json::json!({"configInSync":false})));
+            }
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let mut snapshot = client.configuration().await?;
+        assert_eq!(snapshot.version(), 37);
+        assert_eq!(snapshot.native_document(), &original);
+        assert_eq!(
+            snapshot.folders()?[0].path.style(),
+            verysync_sidecar::PathStyle::Windows
+        );
+        assert_eq!(
+            snapshot.folders()?[0].path.to_protocol()?,
+            r"C:\Synthetic Data"
+        );
+        assert!(!format!("{snapshot:?}").contains(KEY));
+        snapshot.set_general_options(&GeneralOptionsPatch::default().keep_temporaries_hours(25))?;
+        let result = client.replace_configuration(&snapshot).await;
+        match case {
+            "matching" => {
+                let update = result?;
+                assert!(update.requested_fields_match);
+                assert!(!update.application_state.config_in_sync);
+                assert_eq!(update.configuration.native_document(), &observed);
+                assert!(!format!("{update:?}").contains(KEY));
+            }
+            "stale" => assert!(matches!(result, Err(Error::ConfigurationChanged))),
+            _ => assert!(matches!(result, Err(Error::MutationOutcomeUnknown { .. }))),
+        }
+        let requests = server.finish().await?;
+        let writes = requests
+            .iter()
+            .filter(|r| r.starts_with("PUT "))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), usize::from(case != "stale"));
+        if let Some(write) = writes.first() {
+            assert!(write.starts_with("PUT /prefix/rest/config "));
+            let body: serde_json::Value = serde_json::from_str(
+                write
+                    .split_once("\r\n\r\n")
+                    .ok_or("missing full configuration")?
+                    .1,
+            )?;
+            assert_eq!(body, observed);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_configuration_cannot_be_saved_to_another_identity() -> TestResult {
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let first = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        identity(),
+        Reply::json(complete_configuration_fixture()),
+    ])
+    .await?;
+    let client = Client::connect(first.options()?).await?;
+    let snapshot = client.configuration().await?;
+    assert_eq!(first.finish().await?.len(), 4);
+    let other_id = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let other = ScriptedServer::start(vec![
+        version(),
+        Reply::json(serde_json::json!({"myID":other_id})),
+    ])
+    .await?;
+    let other_client = Client::connect(other.options()?).await?;
+    assert!(matches!(
+        other_client.replace_configuration(&snapshot).await,
+        Err(Error::IdentityMismatch { .. })
+    ));
+    assert_eq!(other.finish().await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_patch_readback_and_native_application_are_independent() -> TestResult {
+    use verysync_sidecar::FolderDefaultsPatch;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(), identity(), Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"label":"another writer","paused":false,"rescanIntervalS":0,"fsWatcherEnabled":true,"secretKey":KEY})),
+        Reply::json(serde_json::json!({"configInSync":false,"private":KEY})),
+    ]).await?;
+    let client = Client::connect(server.options()?).await?;
+    let update = client
+        .update_folder_defaults(&FolderDefaultsPatch::default().label("requested"))
+        .await?;
+    assert!(!update.requested_fields_match);
+    assert_eq!(update.configuration.extra["secretKey"], KEY);
+    assert!(!format!("{update:?}").contains(KEY));
+    let state = client.configuration_sync_state().await?;
+    assert!(!state.config_in_sync);
+    assert!(!format!("{state:?}").contains(KEY));
+    let requests = server.finish().await?;
+    let writes = requests
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].starts_with("PATCH /prefix/rest/config/defaults/folder "));
+    let body: serde_json::Value = serde_json::from_str(
+        writes[0]
+            .split("\r\n\r\n")
+            .nth(1)
+            .ok_or("missing request body")?,
+    )?;
+    assert_eq!(body, serde_json::json!({"label":"requested"}));
+    assert!(requests
+        .last()
+        .is_some_and(|r| r.starts_with("GET /prefix/rest/system/config/insync ")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepted_default_patch_with_invalid_readback_is_unknown_without_retry() -> TestResult {
+    use verysync_sidecar::FolderDefaultsPatch;
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        identity(),
+        identity(),
+        Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"private":KEY})),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .update_folder_defaults(&FolderDefaultsPatch::default().paused(true))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(!format!("{error:?} {error}").contains(KEY));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .count(),
+        1
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn index_reset_requires_explicit_scope_and_exact_native_ack_without_readback() -> TestResult {
@@ -205,6 +1900,54 @@ async fn directory_preflight_refuses_file_scope_and_oversized_inventory_without_
         assert_eq!(requests.len(), 7);
         assert!(!requests.iter().any(|r| r.starts_with("POST ")));
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cloned_profile_calls_wait_until_the_entire_previous_response_body_is_read() -> TestResult {
+    use verysync_sidecar::CoreProfileRequest;
+    let gzip = vec![
+        31, 139, 8, 0, 0, 0, 0, 0, 0, 255, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+    let identity = || Reply::json(serde_json::json!({"myID":ID}));
+    let profile = || Reply {
+        body: gzip.clone(),
+        ..Reply::json(serde_json::Value::Null)
+    };
+    let (body_started, body_ready) = tokio::sync::oneshot::channel();
+    let (competitor_started, competitor_ready) = tokio::sync::oneshot::channel();
+    let server = ScriptedServer::with_controls(
+        vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            profile(),
+            identity(),
+            profile(),
+        ],
+        None,
+        Some((4, body_started, competitor_ready)),
+    )
+    .await?;
+    let first_client = Client::connect(server.options()?).await?;
+    let second_client = first_client.clone();
+    let cpu = CoreProfileRequest::Cpu {
+        duration_seconds: 1,
+    };
+    let first = tokio::spawn(async move { first_client.collect_core_profile(cpu).await });
+    tokio::time::timeout(Duration::from_secs(5), body_ready).await??;
+    let second = tokio::spawn(async move {
+        let _ = competitor_started.send(());
+        second_client.collect_core_profile(cpu).await
+    });
+    let (one, two) = tokio::try_join!(first, second)?;
+    assert_eq!(one?.body_bytes(), gzip);
+    assert_eq!(two?.body_bytes(), gzip);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 6);
+    assert!(requests[3].starts_with("GET /prefix/rest/debug/cpuprof?duration=1s "));
+    assert!(requests[4].starts_with("GET /prefix/rest/system/status "));
+    assert!(requests[5].starts_with("GET /prefix/rest/debug/cpuprof?duration=1s "));
     Ok(())
 }
 
@@ -901,6 +2644,73 @@ async fn extended_versioners_and_remote_archive_location_keep_unknowns_and_unkno
             _ => unreachable!(),
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_version_archives_keep_native_uri_backend_and_private_policy() -> TestResult {
+    use verysync_sidecar::{FolderId, VersionArchiveLocation};
+    for scheme in ["ftp", "sftp"] {
+        let id = FolderId::parse("remote-archive")?;
+        let uri =
+            format!("{scheme}://reader:{KEY}@archive.invalid/versions%20two?connectTimeout=5");
+        let before = serde_json::json!({"type":"simple","params":{"keep":"3","native":KEY},
+            "cleanupIntervalS":3600,"fsType":"basic","fsPath":"C:\\old","unknown":KEY});
+        let mut after = before.clone();
+        after["fsType"] = scheme.into();
+        after["fsPath"] = uri.clone().into();
+        let identity = || Reply::json(serde_json::json!({"myID":ID}));
+        let folder = |v| {
+            Reply::json(serde_json::json!({"folders":[{"id":id.as_str(),
+            "label":"","path":"C:\\data","paused":false,"versioning":v}]}))
+        };
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"})),
+            identity(),
+            identity(),
+            folder(before),
+            Reply::json(serde_json::json!({})),
+            folder(after),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let location = VersionArchiveLocation::remote_uri(&uri)?;
+        assert!(!format!("{location:?}").contains(KEY));
+        let update = client.set_version_archive_location(&id, &location).await?;
+        assert!(update.requested_fields_match);
+        assert!(!format!("{update:?}").contains(KEY));
+        let invalid =
+            VersionArchiveLocation::RemoteUri(url::Url::parse("https://archive.invalid/")?);
+        assert!(matches!(
+            client.set_version_archive_location(&id, &invalid).await,
+            Err(Error::InvalidConfiguration { .. })
+        ));
+        let requests = server.finish().await?;
+        let writes = requests
+            .iter()
+            .filter(|r| r.starts_with("PATCH "))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 1);
+        let body: serde_json::Value =
+            serde_json::from_str(writes[0].split("\r\n\r\n").nth(1).ok_or("body")?)?;
+        assert_eq!(body["versioning"]["fsType"], scheme);
+        assert_eq!(body["versioning"]["fsPath"], uri);
+        assert_eq!(body["versioning"]["params"]["native"], KEY);
+        assert_eq!(body["versioning"]["unknown"], KEY);
+    }
+    for uri in [
+        "https://archive.invalid/",
+        "sftp:///",
+        "ftp://archive.invalid/#private",
+        "ftp://arc\nhive.invalid/",
+    ] {
+        assert!(VersionArchiveLocation::remote_uri(uri).is_err());
+    }
+    assert!(VersionArchiveLocation::remote_uri(format!(
+        "sftp://archive.invalid/{}",
+        "x".repeat(32769)
+    ))
+    .is_err());
     Ok(())
 }
 
@@ -2177,8 +3987,26 @@ struct ScriptedServer {
     base: String,
     task: Option<JoinHandle<TestResult<Vec<String>>>>,
 }
+type ResponseBodyGate = (
+    usize,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
 impl ScriptedServer {
     async fn start(replies: Vec<Reply>) -> TestResult<Self> {
+        Self::with_signal(replies, None).await
+    }
+    async fn with_signal(
+        replies: Vec<Reply>,
+        signal: Option<(usize, tokio::sync::oneshot::Sender<()>)>,
+    ) -> TestResult<Self> {
+        Self::with_controls(replies, signal, None).await
+    }
+    async fn with_controls(
+        replies: Vec<Reply>,
+        mut signal: Option<(usize, tokio::sync::oneshot::Sender<()>)>,
+        mut body_gate: Option<ResponseBodyGate>,
+    ) -> TestResult<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let base = format!("http://{}/prefix", listener.local_addr()?);
         let task = tokio::spawn(async move {
@@ -2224,6 +4052,14 @@ impl ScriptedServer {
                     bytes.extend_from_slice(&buffer[..count]);
                 }
                 requests.push(String::from_utf8(bytes)?);
+                if signal
+                    .as_ref()
+                    .is_some_and(|(index, _)| *index == requests.len())
+                {
+                    if let Some((_, sender)) = signal.take() {
+                        let _ = sender.send(());
+                    }
+                }
                 tokio::time::sleep(reply.delay).await;
                 let head = format!(
                     "HTTP/1.1 {} Test\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
@@ -2233,7 +4069,31 @@ impl ScriptedServer {
                 );
                 // A deliberate timeout may close the client before this write.
                 let _ = stream.write_all(head.as_bytes()).await;
-                let _ = stream.write_all(&reply.body).await;
+                if body_gate
+                    .as_ref()
+                    .is_some_and(|(index, _, _)| *index == requests.len())
+                {
+                    let (_, ready, competitor) = body_gate.take().ok_or("body gate absent")?;
+                    let split = reply.body.len() / 2;
+                    stream.write_all(&reply.body[..split]).await?;
+                    let _ = ready.send(());
+                    tokio::time::timeout(Duration::from_secs(5), competitor).await??;
+                    // This is a bounded transport ordering assertion, not a
+                    // profiler timing/performance threshold. The first body is
+                    // deliberately incomplete while a clone is polled.
+                    if tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                        .await
+                        .is_ok()
+                    {
+                        return Err(
+                            "clone sent another request before the prior profile body completed"
+                                .into(),
+                        );
+                    }
+                    stream.write_all(&reply.body[split..]).await?;
+                } else {
+                    let _ = stream.write_all(&reply.body).await;
+                }
             }
             Ok(requests)
         });
@@ -4518,5 +6378,79 @@ async fn local_sync_endpoint_replacement_keeps_other_secrets_and_known_cleared_i
     assert_eq!(body["sideB"], original["sideB"]);
     assert_eq!(body["futureSetting"], original["futureSetting"]);
     assert_eq!(body["ignoreLines"], serde_json::json!([]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_complete_failed_run_is_data_while_error_envelopes_still_fail() -> TestResult {
+    use verysync_sidecar::LocalSyncJobId;
+    for shape in ["complete", "error-only", "malformed", "wrong-job"] {
+        let mut body = serde_json::json!({"id":"native-run","jobId":"job","started":"native-start","finished":"native-finish","count":4,"summary":{"completed":2,"failed":2,"skipped":0},"cancelled":true,"error":format!("synthetic write failed {KEY}")});
+        match shape {
+            "error-only" => body = serde_json::json!({"error":"synthetic unavailable"}),
+            "malformed" => {
+                body.as_object_mut().unwrap().remove("summary");
+            }
+            "wrong-job" => body["jobId"] = serde_json::json!("another-job"),
+            _ => (),
+        }
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(body),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let result = client.local_sync_run(&LocalSyncJobId::parse("job")?).await;
+        match shape {
+            "complete" => {
+                let run = result?;
+                assert_eq!(run.summary.failed, 2);
+                assert_eq!(run.cancelled, Some(true));
+                assert!(run
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains(KEY)));
+                assert!(!format!("{run:?}").contains(KEY));
+            }
+            "wrong-job" => assert!(matches!(result, Err(Error::InvalidConfiguration { .. }))),
+            _ => assert!(matches!(result, Err(Error::Api { .. }))),
+        }
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 4);
+        assert!(
+            requests
+                .last()
+                .unwrap()
+                .starts_with("GET /prefix/rest/localsync/jobs/job/run "),
+            "request line {:?}",
+            requests.last().unwrap().lines().next()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_error_envelopes_require_objects_not_struct_shaped_arrays() -> TestResult {
+    for value in [
+        serde_json::json!([KEY]),
+        serde_json::json!([KEY, null]),
+        serde_json::json!([KEY, 3000]),
+    ] {
+        let expected = serde_json::to_string(&value)?;
+        let server = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(serde_json::json!({"myID":ID})),
+            Reply::json(value),
+        ])
+        .await?;
+        let client = Client::connect(server.options()?).await?;
+        let text = client.core_log_text(None).await?;
+        assert_eq!(text.text, expected);
+        assert!(!format!("{text:?}").contains(KEY));
+        assert_eq!(server.finish().await?.len(), 4);
+    }
     Ok(())
 }

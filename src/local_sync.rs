@@ -156,7 +156,12 @@ impl StorageEndpoint {
     /// trust stores. Its effects need separate per-protocol acceptance. False
     /// alone does not prove verified server identity. The fixed macOS ARM core
     /// accepted a probe despite a conflicting entry in its private-profile
-    /// known_hosts; that profile trust mechanism is not verified.
+    /// known_hosts. Static inspection of that exact core also finds an
+    /// unconditional accept callback in its SFTP limits probe. This option
+    /// must not be treated as a verified SSH host-key policy.
+    /// Native job snapshots can omit the false default. Creation/update
+    /// verification recognizes that omission only for these two endpoint types,
+    /// while returning the original snapshot without inserting a field.
     pub fn insecure_tls(mut self, allow: bool) -> Result<Self> {
         if !matches!(self.fs_type.as_str(), "sftp" | "webdav") {
             return Err(invalid(
@@ -170,7 +175,11 @@ impl StorageEndpoint {
     /// key file or SSH configuration on the controller. This selects the bundled
     /// GUI's native path field, not proof of key authentication. The fixed
     /// v2.33.2 macOS ARM core rejected a valid synthetic RSA path before
-    /// authentication; positive key/host-identity acceptance remains pending.
+    /// authentication. Its Local Sync backend passes this field to an inline
+    /// PEM consumer, while its limits probe parses the unescaped field directly.
+    /// Use [`Self::private_key_pem`] for backend key authentication. No common
+    /// encoding for that backend and the native limits probe is verified;
+    /// positive key-file and host-identity acceptance remain pending.
     pub fn private_key_file(mut self, path: TargetPath) -> Result<Self> {
         if self.fs_type != "sftp" {
             return Err(invalid("private key files require an SFTP endpoint"));
@@ -181,6 +190,27 @@ impl StorageEndpoint {
         }
         self.extra.insert("privateKey".to_owned(), value.into());
         self.input_style = Some(path.style());
+        Ok(self)
+    }
+    /// Supply explicit inline SFTP private-key PEM for native backend operations.
+    /// The SDK encodes the text for the fixed core's inline consumer; it opens
+    /// no controller key files. Explicit serialization exposes private material,
+    /// while ordinary Debug omits it. Native browsing and Local Sync operations
+    /// use this encoding, but the fixed core's limits probe rejects it after
+    /// successful backend authentication. This grants no host-key verification.
+    pub fn private_key_pem(mut self, pem: impl Into<String>) -> Result<Self> {
+        let pem = pem.into();
+        if self.fs_type != "sftp" || pem.is_empty() || pem.len() > 65536 || pem.contains('\0') {
+            return Err(invalid(
+                "inline SFTP private key must be bounded nonempty PEM text",
+            ));
+        }
+        let quoted =
+            serde_json::to_string(&pem).map_err(|_| invalid("cannot encode SFTP private key"))?;
+        self.extra.insert(
+            "privateKey".to_owned(),
+            quoted[1..quoted.len() - 1].to_owned().into(),
+        );
         Ok(self)
     }
     /// Explicit native SMB guest selection; actual server permissions and
@@ -1126,6 +1156,10 @@ pub struct LocalSyncRun {
     pub summary: LocalSyncSummary,
     /// Whether this native run was cancelled, when explicitly reported.
     pub cancelled: Option<bool>,
+    /// Native execution error, when reported in a complete run record. This is
+    /// data about failed work, not an API-request error or a success guarantee.
+    /// Debug omits this private text; inspect it alongside summary/cancelled.
+    pub error: Option<String>,
     /// Native error/stopped fields and future metadata.
     #[serde(flatten)]
     pub extra: Extra,
@@ -1339,6 +1373,34 @@ fn validate_ignore_lines(lines: &[String]) -> Result<()> {
 #[cfg(test)]
 mod contract_tests {
     use super::*;
+    #[test]
+    fn inline_sftp_key_encoding_is_explicit_bounded_and_private_in_debug() {
+        let endpoint =
+            StorageEndpoint::remote(StorageProtocol::Sftp, "sftp://example.invalid/").unwrap();
+        let pem =
+            "-----BEGIN PRIVATE KEY-----\nsynthetic-private-bytes\n-----END PRIVATE KEY-----\n";
+        let selected = endpoint.clone().private_key_pem(pem).unwrap();
+        let encoded = serde_json::to_value(&selected).unwrap();
+        assert!(!encoded["privateKey"].as_str().unwrap().contains('\n'));
+        assert_eq!(
+            serde_json::from_str::<String>(&format!(
+                "\"{}\"",
+                encoded["privateKey"].as_str().unwrap()
+            ))
+            .unwrap(),
+            pem
+        );
+        assert!(!format!("{selected:?}").contains("synthetic-private-bytes"));
+        for invalid in [String::new(), "key\0material".to_owned(), "x".repeat(65537)] {
+            assert!(endpoint.clone().private_key_pem(invalid).is_err());
+        }
+        assert!(
+            StorageEndpoint::remote(StorageProtocol::Ftp, "ftp://example.invalid/")
+                .unwrap()
+                .private_key_pem(pem)
+                .is_err()
+        );
+    }
     #[test]
     fn explicit_remote_protocol_rejects_ambiguous_secrets_and_selectors() {
         for (protocol, uri) in [

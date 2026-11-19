@@ -35,7 +35,6 @@ fn managed_inputs_reject_ambient_or_remote_addresses() -> verysync_sidecar::Resu
     for address in [
         "http://localhost:43219",
         "http://192.0.2.1:43219",
-        "https://127.0.0.1:43219",
         "http://127.0.0.1:43219/proxy",
     ] {
         assert!(matches!(
@@ -61,5 +60,19 @@ fn managed_socket_is_contained_in_the_dedicated_state() -> verysync_sidecar::Res
     ManagedOptions::new(program.clone(), &state, expected)?;
     let outside = ManagementEndpoint::unix_socket("/synthetic-other/gui.sock")?;
     assert!(ManagedOptions::new(program, state, outside).is_err());
+    Ok(())
+}
+
+#[test]
+fn managed_https_is_explicit_and_requires_the_tls_feature() -> verysync_sidecar::Result<()> {
+    let result = ManagedOptions::new(
+        LocalProgram::new(root().join("program"))?,
+        root(),
+        ManagementEndpoint::http("https://127.0.0.1:43219/")?,
+    );
+    #[cfg(feature = "tls")]
+    assert!(result.is_ok());
+    #[cfg(not(feature = "tls"))]
+    assert!(matches!(result, Err(Error::UnsupportedTransport { .. })));
     Ok(())
 }

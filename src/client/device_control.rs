@@ -84,6 +84,10 @@ impl Client {
             .device(&options.id)
             .await
             .map_err(|source| uncertain("read back created device", source))?;
+        options
+            .patch
+            .validate_advanced_readback(&configuration.extra)
+            .map_err(|source| uncertain("read back created device", source))?;
         Ok(DeviceUpdate {
             requested_fields_match: options.patch.matches(&configuration),
             configuration,
@@ -116,6 +120,9 @@ impl Client {
             .device(id)
             .await
             .map_err(|source| uncertain("read back updated device", source))?;
+        patch
+            .validate_advanced_readback(&configuration.extra)
+            .map_err(|source| uncertain("read back updated device", source))?;
         Ok(DeviceUpdate {
             requested_fields_match: patch.matches(&configuration),
             configuration,
@@ -138,13 +145,113 @@ impl Client {
     ///
     /// The engine owns association changes. The result observes absence and any
     /// remaining folder references; the library never visits local data paths.
-    /// Another writer can change these snapshots. No modifying request is retried.
+    /// Native key holders have been observed registering again after removal;
+    /// this does not revoke folder keys or establish a durable rejection policy.
+    /// Other writers can also change these snapshots. No modifying request is retried.
     pub async fn remove_device(&self, id: &DeviceId) -> Result<DeviceRemoval> {
         self.require_remote_device(id)?;
-        let url = self.device_url(id)?;
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
         let previous_configuration = self.device(id).await?;
+        self.delete_device_registration(id, previous_configuration)
+            .await
+    }
+
+    /// Explicitly pause a peer, observe it disconnected, then delete its record.
+    ///
+    /// The one total positive deadline includes lock acquisition, authenticated
+    /// observations and the single DELETE. A present native connection entry
+    /// must report `connected=false`; absence is not fabricated as disconnection.
+    /// Only this peer's pause field is patched. Local data is never accessed.
+    ///
+    /// The peer may register/connect again using still-valid shared keys after
+    /// deletion. This operation is not a durable rejection or key revocation.
+    /// Timeout, cancellation or failure can leave the peer paused or deleted;
+    /// no modification is retried or rolled back. The returned previous
+    /// configuration is the snapshot from before the explicit pause.
+    pub async fn disconnect_and_remove_device(
+        &self,
+        id: &DeviceId,
+        timeout: std::time::Duration,
+    ) -> Result<DeviceRemoval> {
+        self.require_remote_device(id)?;
+        tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
+            reason: "explicit device disconnect/removal requires Tokio",
+        })?;
+        let deadline = tokio::time::Instant::now()
+            .checked_add(timeout)
+            .filter(|_| !timeout.is_zero())
+            .ok_or(Error::InvalidConfiguration {
+                reason: "device disconnect/removal deadline must be positive and representable",
+            })?;
+        let mut modified = false;
+        let check_deadline = || {
+            if tokio::time::Instant::now() >= deadline {
+                Err(Error::Timeout {
+                    operation: "disconnect and remove device",
+                })
+            } else {
+                Ok(())
+            }
+        };
+        let result = tokio::time::timeout_at(deadline, async {
+            let _guard = self.connection.mutation_lock.lock().await;
+            check_deadline()?;
+            self.system_status().await?;
+            let previous = self.device(id).await?;
+            check_deadline()?;
+            if !previous.paused {
+                let url = self.device_url(id)?;
+                modified = true;
+                self.connection
+                    .request_bytes(
+                        "pause peer before explicit removal",
+                        reqwest::Method::PATCH,
+                        url,
+                        Some(&serde_json::json!({"paused":true})),
+                        true,
+                    )
+                    .await?;
+                if !self.device(id).await?.paused {
+                    return Err(Error::ManagedFailure {
+                        reason: "peer pause was not observed before removal",
+                    });
+                }
+            }
+            loop {
+                let snapshot = self.connections().await?;
+                if snapshot
+                    .connections
+                    .get(id)
+                    .is_some_and(|peer| !peer.connected)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            check_deadline()?;
+            modified = true;
+            self.delete_device_registration(id, previous).await
+        })
+        .await
+        .unwrap_or(Err(Error::Timeout {
+            operation: "disconnect and remove device",
+        }));
+        result.map_err(|error| {
+            if modified && !matches!(&error, Error::MutationOutcomeUnknown { .. }) {
+                uncertain("disconnect and remove device", error)
+            } else {
+                error
+            }
+        })
+    }
+
+    async fn delete_device_registration(
+        &self,
+        id: &DeviceId,
+        previous_configuration: DeviceConfig,
+    ) -> Result<DeviceRemoval> {
+        let url = self.device_url(id)?;
         self.connection
             .request_bytes("remove device", reqwest::Method::DELETE, url, None, true)
             .await?;

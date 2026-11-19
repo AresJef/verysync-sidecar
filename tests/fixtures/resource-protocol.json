@@ -1,0 +1,177 @@
+{
+  "protocol_id": "VS045-native-resources-v30",
+  "version": 30,
+  "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
+  "engine_version": "v2.33.2",
+  "rust_release": "1.85.0",
+  "interval_ms": 10,
+  "source_inputs": {
+    "rust_sources_sha256": "fecebcd98c5b600417697015644d6b6808b19a8d3d80df29df3409b4afd1e3e1",
+    "cargo_lock_sha256": "b8ba854b681e9ece06db946aa8bdbe6d7330c5d3fedaa36dac99d0d851ebd670",
+    "sampler_sha256": "7e5d83edfcf064ac57656089997fae5e8456dce8a47c2cb1992b20872deccd25",
+    "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a",
+    "observer_activity_sha256": "f8ca7901ddf906b7ae640c9489ab7a643c32cc5b107f1898ccffb45aec3ef172",
+    "darwin_reader_source_sha256": "8f2f1a90d91715941854558136bb26944c3f54c9843ec6613b8bae532fe0c51f",
+    "darwin_reader_binding_sha256": "fd3c339457be1f3dcef18a26c08e043eba573da9a0b2aec9e803cfc4e43bb1e0"
+  },
+  "collector_sha256": "e5ca89d38f629ad639f59374aff3647d025fe50024fccc70f1bdf1674af8841e",
+  "scenarios": {
+    "idle": {
+      "bytes_each": 8192,
+      "files": 1,
+      "repeats": 1
+    },
+    "stream-small": {
+      "bytes_each": 8388608,
+      "files": 1,
+      "repeats": 128
+    },
+    "stream-large": {
+      "bytes_each": 134217728,
+      "files": 1,
+      "repeats": 8
+    },
+    "many-small": {
+      "bytes_each": 8192,
+      "files": 256,
+      "repeats": 16
+    }
+  },
+  "quality": {
+    "minimum_elapsed_ns": 500000000,
+    "minimum_measured_snapshots": 25,
+    "maximum_sample_gap_ns": 50000000,
+    "maximum_boundary_overspan_fraction": 0.05,
+    "maximum_metric_read_fraction": 0.05
+  },
+  "formal_orders": [
+    [
+      "idle",
+      "stream-small",
+      "stream-large",
+      "many-small"
+    ],
+    [
+      "many-small",
+      "stream-large",
+      "stream-small",
+      "idle"
+    ],
+    [
+      "idle",
+      "stream-small",
+      "stream-large",
+      "many-small"
+    ],
+    [
+      "many-small",
+      "stream-large",
+      "stream-small",
+      "idle"
+    ]
+  ],
+  "independent_orders": [
+    [
+      "many-small",
+      "stream-large",
+      "stream-small",
+      "idle"
+    ],
+    [
+      "idle",
+      "stream-small",
+      "stream-large",
+      "many-small"
+    ]
+  ],
+  "maximum_group_attempts": 3,
+  "maximum_group_span_s": 180,
+  "acquisition_window_s": 900,
+  "estimated_complete_group_s": 120,
+  "save_reserve_s": 30,
+  "deadline_semantics": "Original per-profile acquisition stop boundary persists across stages and resume. Inflight bounded native work reaches safe cleanup; any overrun is retained, never excluded from project time. Setup/build and CI queues remain counted in the project ledger.",
+  "resource_contract": {
+    "controller_peak_large_minus_small_envelope_limit_bytes": 16777216,
+    "controller_rss_repeat_span_limit_bytes": 8388608,
+    "envelope": "max sampled large-file controller RSS across all accepted formal+independent cycles minus min sampled small-file controller RSS; no division by repetition count",
+    "required_stability": "controller sampled RSS range for each registered scenario <=8MiB across the four formal and two independent fresh-process cycles; operational repeatability screen, not a population confidence interval",
+    "target_scope": "Source-audited streamed path, observed8MiB..128MiB range; sampled RSS, no instantaneous peak or universal asymptotic claim",
+    "native_engine": "Report its independent RSS/CPU curve; no invented upstream efficiency threshold"
+  },
+  "latency": {
+    "relative_MAD_stability_screen": 0.2,
+    "role": "Descriptive absolute latency/CPU and operational variation, no baseline speedup or latency pass target"
+  },
+  "preparation": {
+    "correctness": "Four real workloads, complete bytes/state/normal tree exit",
+    "calibration": "1000 read-cost snapshots, monotonic clock,16MiB touched-memory units, CPU monotonicity,12 balanced short/long controls",
+    "pretrial": "Two opposite complete orders,8 fresh controllers+engines,8/8 VALID in49.166s; observed max full case6.9003s",
+    "project_resource_original_s": 10800,
+    "reuse_scope": "N4 adds role/config/source validation and complete-group recording outside measurement. Rust workload, timing boundaries, sampling loop, metric reads and quality thresholds remain unchanged. Confirm updated collector dependencies before formal.",
+    "v2": "Each actual CI profile completes two opposite full pretrial orders using exact frozen source inputs before formal acquisition; prep is not formal evidence.",
+    "v3": "Repeat calibration and two opposite full actual pretrial orders on each actual profile; v2 pretrial and accepted groups are not v3 samples.",
+    "v4": "New counter/timer calibration and8actualfresh pretrial cases per actual profile before complete new formal and independent acquisition.",
+    "v5": "Full actual8case opposite-order native pretrial on each profile validates diagnostic recording before new formal acquisition.",
+    "v13": "Repeat actual source-bound calibration and two opposite complete pretrial orders on each profile before v13 formal and independent acquisition; earlier source data remains historical.",
+    "v14": "Each actual profile repeats source-bound calibration and two complete opposite-order pretrials before v14 formal and independent acquisition. All earlier-source attempts remain historical.",
+    "v15": "Each actual profile repeats source-bound calibration and both complete opposite-order pretrials before v15 formal and independent acquisition. Diagnostic failure recording is verified separately; earlier attempts retain their original strict results.",
+    "v16": "Each actual profile repeats source-bound calibration and both complete opposite-order pretrials before v16 formal and independent acquisition. Previous-source attempts stay historical.",
+    "v17": "Each actual profile repeats source-bound clock/counter/native-wait calibration and both complete opposite-order pretrials before v17 formal and independent acquisition. Local prototype and prior-source attempts are not formal members.",
+    "v18": "All eight native-correct/source-bound/calibrated cases execute in the original two opposite orders. At least one entire VALID order establishes readiness; the other order may retain INSUFFICIENT cases but never native/source/counter/acquisition errors. No preparation data enters formal groups. Formal coverage, every quality/resource criterion, deadlines and attempt limits unchanged.",
+    "v23": "Each actual profile repeats exact source-bound counter/timer calibration and all eight native pretrial cases in both original orders before complete new formal and independent collection. Earlier observer-only diagnostics and v22 measurements cannot supply v23 members.",
+    "v24": "All6actual profiles repeat counter/timer calibration and both original complete opposite native orders before new4formal+2independent fresh-process cycles; preserve allv23strict data/Intelpartial/expired budgets and rejected attempts under original identities. Preparation members never formal.",
+    "v25": "Source-only implementation/lock revision plus explicit return to original standard Intel CI environment. All six actual profiles repeat fresh counter/timer calibration, both complete opposite native pretrial orders, and independently gated4formal+2independent fresh processes. No historical v24 calibration/pilot/formal member supplies v25 coverage. Native or identity errors stop; quality rejection stays retained."
+  },
+  "profiles": [
+    "macos-amd64-standard",
+    "macos-arm64-standard",
+    "linux-amd64-standard",
+    "linux-arm64-standard",
+    "windows-amd64-standard",
+    "windows-arm64-standard"
+  ],
+  "retention": "All attempts including insufficient/slow/error records retained. Only immutable complete original-order groups accepted. ERROR stops; insufficient retries original cycle without resetting deadline or counts.",
+  "revision": {
+    "previous_protocol_sha256": "cae69b1e559c3cf9d93522c98f32dc44f8084a5d0e47a311e864a522491e528d",
+    "retained": "Preserve the v29 protocol, preparation, formal and independent observations under their original source. Repeat exact calibration and full opposite-order preparation for the new source.",
+    "changes": "Bind the included configuration, file-history and invitation documentation and the fixed-release catalog notes in the candidate compilation input.",
+    "unchanged": "Workloads, order, repetitions, RSS and CPU semantics, snapshot and timer implementations, acquisition limits, quality and acceptance thresholds retain their original values."
+  },
+  "preflight_sha256": "3406a833f6ff011aadec0d8b40622609862f9e99b328c6aa3b1cc460eba4bc92",
+  "observer_policy": {
+    "darwin": "Request QOS_CLASS_USER_INTERACTIVE0x21 only on the short-lived observer thread after the real controller and engine are ready; retain exact requested/observed class and policy name. No worker or global priority changes.",
+    "other_systems": "unchanged",
+    "scope": "Measurement observer, not library runtime; no timing-quality relaxation or scheduling guarantee.",
+    "darwin_qos_class": 33
+  },
+  "raw_observation_recording": {
+    "mode": "bounded-in-memory-until-owned-worker-cleanup",
+    "maximum_rows": 32768,
+    "overflow": "ERROR; preserve existing raw prefix; never drop observations",
+    "previous_record_diagnostic": "previous_record_buffer_ns",
+    "persistence": "all retained rows encoded UTF-8 LF, flushed and fsynced after owned worker cleanup"
+  },
+  "timer_policy": {
+    "darwin": "One owned periodic kqueue timer in interval mode with NOTE_NSECONDS=4|NOTE_CRITICAL=32. Require one actual timer event with exact identity/filter, no error flag and positive expiration count. Retain coalesced counts without manufacturing rows; missing/invalid events or syscall failures are ERROR with actual wait span, never retried. Close the owned queue on construction failure and final cleanup.",
+    "other_platforms": "Existing monotonic-sleep wait unchanged.",
+    "calibration": "Two sleep controls and two critical-kqueue windows in original balanced order; retain every actual interval and native parameter. Separate explicit legacy Mach/critical-kqueue ABBA remains observer-only diagnosis.",
+    "limits": "No scheduling guarantee, jitter exclusion, changed timestamps, worker/global priority or power change, or relaxed quality limit."
+  },
+  "preparation_readiness": {
+    "mode": "one_complete_valid_order",
+    "orders": 2,
+    "minimum_valid_orders": 1,
+    "retain_quality_rejections": true,
+    "formal_samples_from_preparation": 0
+  },
+  "reporter_sha256": "bbaabebd5a7e2aceab3fbc75f3e3af7034eb01de9cce4d3bf1c2bb88dddec5a6",
+  "observer_process_activity": {
+    "darwin_options": 1095232389119,
+    "darwin": "Explicit measurement-role observer-process activity after actual native workers exist; end exact token before persisting final raw receipt. ThreadQOS33/critical-kqueue remain unchanged.",
+    "sleep_policy": "No system/display sleep inhibitor bits, no global setting or worker policy changes.",
+    "other_systems": "No activity requested; Foundation never loaded by this path.",
+    "required_receipts": "before started/notended and after ended, exactoptions/owner/scope/role; native creation/end failure isERROR, never absence or zero.",
+    "scope": "Observer eligibility setup, no claim about root cause or guaranteed scheduling/quality."
+  },
+  "darwin_metric_reader": "proc-taskallinfo"
+}

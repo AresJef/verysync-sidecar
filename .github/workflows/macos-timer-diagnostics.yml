@@ -1,0 +1,45 @@
+name: Mac observer timer diagnosis
+
+on:
+  pull_request:
+    paths:
+      - scripts/measure-native-resources.py
+      - scripts/probe-macos-timers.py
+      - scripts/tests/test_macos_timer_probe.py
+      - .github/workflows/macos-timer-diagnostics.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-timer-diagnosis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft || github.head_ref != 'ci/compiled-input-resources-v27-20261118-01a1ca9b' || github.event.pull_request.head.repo.full_name != github.repository
+    name: Observer clock only (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Verify timer interface failures remain errors
+        run: python -B -m unittest discover -s scripts/tests -p test_macos_timer_probe.py
+      - name: Complete observer-only ABBA waits without starting any engine
+        run: python -B scripts/probe-macos-timers.py --output "${{ runner.temp }}/observer-clock.json"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: observer-clock-${{ matrix.runner }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/observer-clock.json
+          if-no-files-found: warn

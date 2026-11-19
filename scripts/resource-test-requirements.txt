@@ -1,0 +1,2 @@
+# Explicit resource measurement only; never installed by Cargo or the library.
+psutil==7.2.2

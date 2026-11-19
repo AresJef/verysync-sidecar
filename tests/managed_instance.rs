@@ -156,7 +156,7 @@ async fn start_authenticate_reuse_identity_and_reject_state_conflict() -> TestRe
     let cert_hash = Sha256::digest(std::fs::read(path.join("cert.pem"))?);
     assert!(matches!(
         ManagedInstance::start(settings.clone()).await,
-        Err(Error::ManagedStateInUse)
+        Err(Error::ManagedStateInUse { .. })
     ));
     instance.client().system_status().await?;
     stop_via_explicit_management(&mut instance).await?;
@@ -178,7 +178,7 @@ async fn start_authenticate_reuse_identity_and_reject_state_conflict() -> TestRe
     let config_before_rejection = Sha256::digest(std::fs::read(path.join("setting.dat"))?);
     assert!(matches!(
         ManagedInstance::start(settings.clone()).await,
-        Err(Error::ManagedStateInUse)
+        Err(Error::ManagedStateInUse { .. })
     ));
     assert_eq!(
         Sha256::digest(std::fs::read(path.join("key.pem"))?),
@@ -336,7 +336,7 @@ async fn shutdown_timeout_retains_owner_until_the_real_root_resumes() -> TestRes
     assert!(paused.is_paused()?);
     assert!(matches!(
         ManagedInstance::start(settings).await,
-        Err(Error::ManagedStateInUse)
+        Err(Error::ManagedStateInUse { .. })
     ));
     drop(paused);
     // Direct Linux/Windows inner mode freezes the API itself. macOS freezes
@@ -433,7 +433,7 @@ async fn shutdown_management_failure_does_not_force_the_owned_instance() -> Test
     assert!(paused.is_paused()?);
     assert!(matches!(
         ManagedInstance::start(settings).await,
-        Err(Error::ManagedStateInUse)
+        Err(Error::ManagedStateInUse { .. })
     ));
     assert!(instance.force_stop(Duration::ZERO).await.is_err());
     assert!(paused.is_paused()?);
@@ -673,7 +673,7 @@ async fn restart_stop_timeout_retains_the_old_owner_without_a_second_start() -> 
     assert!(paused.is_paused()?);
     assert!(matches!(
         ManagedInstance::start(settings).await,
-        Err(Error::ManagedStateInUse)
+        Err(Error::ManagedStateInUse { .. })
     ));
     drop(paused);
     #[cfg(not(any(target_os = "linux", windows)))]

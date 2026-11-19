@@ -1,8 +1,12 @@
 //! Actual indexed data, bounded pages and a native file-access failure.
+#[path = "common/lan_bandwidth_cases.rs"]
+mod lan_bandwidth_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/private_redial.rs"]
 mod private_redial;
+#[path = "common/shutdown_diagnostic.rs"]
+mod shutdown_diagnostic;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 #[cfg(unix)]
@@ -559,6 +563,11 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     let root = tempfile::Builder::new().prefix("vssn-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    // Explicit owned-fixture scheduling: an initial dial can be closed while
+    // peer/folder configuration is being established. Keep retry opportunities
+    // inside the original observation window without changing SDK/core defaults.
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
     let a_id = a.client().instance().device_id.clone();
     let b_id = b.client().instance().device_id.clone();
     let a_address = private_tcp(a.client()).await?;
@@ -578,7 +587,8 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
             random as u8
         })
         .collect();
-    std::fs::write(a_path.join("payload.bin"), &sample)?;
+    let readiness = b"synthetic normal-rate readiness canary";
+    std::fs::write(a_path.join("readiness-canary.bin"), readiness)?;
     let af = a
         .client()
         .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(a_path.clone())).paused(true))
@@ -606,12 +616,12 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     );
     fixture_options(
         b.client(),
-        json!({"maxRecvKbps":1,"limitBandwidthInLan":true}),
+        json!({"maxRecvKbps":0,"limitBandwidthInLan":false}),
     )
     .await?;
     let limit = b.client().network_configuration().await?;
-    assert_eq!(limit.extra["maxRecvKbps"], 1);
-    assert_eq!(limit.extra["limitBandwidthInLan"], true);
+    assert_eq!(limit.extra["maxRecvKbps"], 0);
+    assert_eq!(limit.extra["limitBandwidthInLan"], false);
     for (client, folder, peer, address) in [
         (a.client(), &af.configuration.id, &b_id, b_address),
         (b.client(), &bf.configuration.id, &a_id, a_address),
@@ -628,11 +638,44 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
             .await?;
         client.share_folder_with(folder, peer).await?;
     }
-    a.client().resume_folder(&af.configuration.id).await?;
-    a.client().request_scan(&af.configuration.id).await?;
-    b.client().resume_folder(&bf.configuration.id).await?;
+    for client in [a.client(), b.client()] {
+        assert_eq!(
+            client
+                .network_configuration()
+                .await?
+                .reconnection_interval_seconds,
+            5
+        );
+    }
     let page = ListPage::new(1, 5)?;
+    let mut normal_rate_readiness_received = false;
+    let mut payload_created = false;
+    // Readiness, rate selection, payload creation and nonempty need observation
+    // share the original 20s preparation window. Do not throttle the first
+    // authentication/index exchange or add a second preparation deadline.
     let needed_observation = tokio::time::timeout(Duration::from_secs(20), async {
+        a.client().resume_folder(&af.configuration.id).await?;
+        a.client().request_scan(&af.configuration.id).await?;
+        b.client().resume_folder(&bf.configuration.id).await?;
+        while std::fs::read(b_path.join("readiness-canary.bin"))
+            .ok()
+            .as_deref()
+            != Some(readiness.as_slice())
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        normal_rate_readiness_received = true;
+        fixture_options(
+            b.client(),
+            json!({"maxRecvKbps":1,"limitBandwidthInLan":true}),
+        )
+        .await?;
+        let limit = b.client().network_configuration().await?;
+        assert_eq!(limit.extra["maxRecvKbps"], 1);
+        assert_eq!(limit.extra["limitBandwidthInLan"], true);
+        std::fs::write(a_path.join("payload.bin"), &sample)?;
+        payload_created = true;
+        a.client().request_scan(&af.configuration.id).await?;
         loop {
             let need = b.client().folder_need(&bf.configuration.id, page).await?;
             if need
@@ -642,7 +685,7 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
                 .chain(&need.rest)
                 .any(|f| f.name == "payload.bin" && f.size == Some(sample.len() as u64))
             {
-                break Ok::<_, Error>(need);
+                break TestResult::Ok(need);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -667,7 +710,10 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
                 "local_files":status.local_files,
                 "configured_paused":config.paused,
                 "fixture_rate":b.client().network_configuration().await?.extra.get("maxRecvKbps"),
-                "receiver_payload_exists":b_path.join("payload.bin").exists()
+                "receiver_payload_exists":b_path.join("payload.bin").exists(),
+                "normal_rate_readiness_received":normal_rate_readiness_received,
+                "source_payload_created":payload_created,
+                "single_preparation_deadline_seconds":20
             })
         );
     }
@@ -746,6 +792,14 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     })
     .await??;
     assert_eq!(std::fs::read(&target)?, sample);
+    assert_eq!(
+        std::fs::read(a_path.join("readiness-canary.bin"))?,
+        readiness
+    );
+    assert_eq!(
+        std::fs::read(b_path.join("readiness-canary.bin"))?,
+        readiness
+    );
     a.client().pause_device(&b_id).await?;
     b.client().pause_device(&a_id).await?;
     for instance in [&mut b, &mut a] {
@@ -755,7 +809,7 @@ async fn actual_active_need_and_receive_only_local_changes_then_restore() -> Tes
     std::fs::remove_dir_all(root)?;
     println!(
         "public active sync observation evidence: {}",
-        json!({"actual_distinct_key_registration_ids":true,"actual_private_peer_associations":true,"fixture_receiveonly_and_throttle_readback":true,"actual_nonempty_receiver_need":true,"actual_needed_filename_and_size":true,"actual_positive_need_bytes":true,"fixture_limit_restored":true,"actual_full_received_bytes_and_zero_need":true,"actual_receive_only_local_change":true,"actual_local_change_name_and_size":true,"source_data_not_modified_by_local_change":true,"actual_content_and_mtime_restored":true,"actual_local_changes_clear_after_restore":true,"both_actual_normal_tree_exits":true})
+        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"original_payload_created_after_throttle":payload_created,"actual_distinct_key_registration_ids":true,"actual_private_peer_associations":true,"explicit_owned_fixture_reconnection_seconds":5,"fixture_receiveonly_and_throttle_readback":true,"actual_nonempty_receiver_need":true,"actual_needed_filename_and_size":true,"actual_positive_need_bytes":true,"fixture_limit_restored":true,"actual_full_received_bytes_and_zero_need":true,"actual_receive_only_local_change":true,"actual_local_change_name_and_size":true,"source_data_not_modified_by_local_change":true,"actual_content_and_mtime_restored":true,"actual_local_changes_clear_after_restore":true,"both_actual_normal_tree_exits":true})
     );
     Ok(())
 }
@@ -766,19 +820,7 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
         BandwidthPatch, DeviceTransport, FolderPullOrder, JoinFolderOptions, RawMethod, RawRequest,
         RequestEffect,
     };
-    let root = tempfile::Builder::new().prefix("vssp-").tempdir()?.keep();
-    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
-    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
-    let a_id = a.client().instance().device_id.clone();
-    let b_id = b.client().instance().device_id.clone();
-    let a_address = private_tcp(a.client()).await?;
-    let b_address = private_tcp(b.client()).await?;
-    let keys = a.client().generate_share().await?;
-    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
-    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
-    let source = root.join("source");
-    std::fs::create_dir(&source)?;
-    for index in 0..512u64 {
+    fn write_sample(source: &std::path::Path, index: u64) -> std::io::Result<()> {
         let name = if index == 511 {
             "zz priority %.bin".to_owned()
         } else {
@@ -793,8 +835,23 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
                 random as u8
             })
             .collect();
-        std::fs::write(source.join(name), sample)?;
+        std::fs::write(source.join(name), sample)
     }
+    let root = tempfile::Builder::new().prefix("vssp-").tempdir()?.keep();
+    let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
+    private_redial::configure(a.client()).await?;
+    private_redial::configure(b.client()).await?;
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let a_address = private_tcp(a.client()).await?;
+    let b_address = private_tcp(b.client()).await?;
+    let keys = a.client().generate_share().await?;
+    let rw = a.client().validate_share_key(&keys.read_write_key).await?;
+    let ro = b.client().validate_share_key(&keys.read_only_key).await?;
+    let source = root.join("source");
+    std::fs::create_dir(&source)?;
+    write_sample(&source, 0)?;
     let af = a
         .client()
         .join_folder(&JoinFolderOptions::new(rw, TargetPath::local(&source)).paused(true))
@@ -853,8 +910,8 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
         b.client()
             .update_bandwidth_configuration(
                 &BandwidthPatch::default()
-                    .max_receive_kib_per_second(1)
-                    .limit_in_lan(true)
+                    .max_receive_kib_per_second(0)
+                    .limit_in_lan(false)
             )
             .await?
             .requested_fields_match
@@ -875,15 +932,53 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
             .await?;
         client.share_folder_with(folder, peer).await?;
     }
-    a.client().resume_folder(&af.configuration.id).await?;
-    a.client().request_scan(&af.configuration.id).await?;
-    b.client().resume_folder(folder).await?;
+    for client in [a.client(), b.client()] {
+        assert_eq!(
+            client
+                .network_configuration()
+                .await?
+                .reconnection_interval_seconds,
+            5
+        );
+    }
     let page = ListPage::new(1, 1000)?;
+    let mut normal_rate_readiness_received = false;
+    let mut backlog_created_after_throttle = false;
+    // The original preparation window includes the actual first transfer and
+    // queue creation. Do not throttle authentication/index exchange or wait an
+    // entire default redial period before the fixture can become connected.
     let need_result = tokio::time::timeout(Duration::from_secs(20), async {
+        a.client().resume_folder(&af.configuration.id).await?;
+        a.client().request_scan(&af.configuration.id).await?;
+        b.client().resume_folder(folder).await?;
+        let readiness = std::fs::read(source.join("file-0000.bin"))?;
+        while std::fs::read(root.join("receiver").join("file-0000.bin"))
+            .ok()
+            .as_deref()
+            != Some(readiness.as_slice())
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        normal_rate_readiness_received = true;
+        assert!(
+            b.client()
+                .update_bandwidth_configuration(
+                    &BandwidthPatch::default()
+                        .max_receive_kib_per_second(1)
+                        .limit_in_lan(true)
+                )
+                .await?
+                .requested_fields_match
+        );
+        for index in 1..512u64 {
+            write_sample(&source, index)?;
+        }
+        backlog_created_after_throttle = true;
+        a.client().request_scan(&af.configuration.id).await?;
         loop {
             let n = b.client().folder_need(folder, page).await?;
             if n.queued.len() >= 2 && n.queued.iter().any(|f| f.name == "zz priority %.bin") {
-                break Ok::<_, Error>(n);
+                break Ok::<_, Box<dyn std::error::Error + Send + Sync>>(n);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -965,12 +1060,12 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     b.client().pause_device(&a_id).await?;
     for instance in [&mut b, &mut a] {
         let exit = instance.shutdown(Duration::from_secs(10)).await?;
-        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
     std::fs::remove_dir_all(root)?;
     println!(
         "public folder priority evidence: {}",
-        json!({"all_six_actual_order_readbacks":true,"paused_scope_rejected":true,"legacy_queue_fixture_fields_read_back":true,"actual_alphabetic_backlog_has_nonfirst_target":true,"actual_target_promoted_while_other_work_still_queued":true,"actual_page_scope_preserved":true,"unrelated_folder_settings_retained":true,"unknown_order_and_invalid_relative_path_rejected":true,"explicit_rate_restoration_read_back":true,"actual_all_512_files_received":true,"all_source_and_destination_contents_match":true,"both_actual_normal_tree_exits":true})
+        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"actual_511_backlog_files_created_after_throttle":backlog_created_after_throttle,"explicit_owned_fixture_reconnection_seconds":5,"all_six_actual_order_readbacks":true,"paused_scope_rejected":true,"legacy_queue_fixture_fields_read_back":true,"actual_alphabetic_backlog_has_nonfirst_target":true,"actual_target_promoted_while_other_work_still_queued":true,"actual_page_scope_preserved":true,"unrelated_folder_settings_retained":true,"unknown_order_and_invalid_relative_path_rejected":true,"explicit_rate_restoration_read_back":true,"actual_all_512_files_received":true,"all_source_and_destination_contents_match":true,"both_actual_normal_tree_and_state_exits":true})
     );
     Ok(())
 }
@@ -1550,9 +1645,96 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
     }
     a.client().pause_device(&b_id).await?;
     b.client().pause_device(&a_id).await?;
-    for core in [&mut b, &mut a] {
-        let exit = core.shutdown(Duration::from_secs(10)).await?;
-        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    // A pause acknowledgement does not mean its asynchronous connection-close
+    // callbacks have completed. Observe the requested disconnection before
+    // ending this fixture. The fixed engine was observed waiting for a close
+    // callback's database write while its model shutdown waited for that callback.
+    let drain_began = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let sender = a.client().connections().await?;
+            let receiver = b.client().connections().await?;
+            if !sender
+                .connections
+                .get(&b_id)
+                .is_some_and(|peer| peer.connected)
+                && !receiver
+                    .connections
+                    .get(&a_id)
+                    .is_some_and(|peer| peer.connected)
+            {
+                break Ok::<_, Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| "explicit selective-fixture pause did not disconnect within twenty seconds")??;
+    eprintln!(
+        "selective actual paused-peer disconnection observed: elapsed_millis={}",
+        drain_began.elapsed().as_millis()
+    );
+    // End this fixture's sole active dialer first. Each owned core retains
+    // its original ten-second normal-exit requirement; no force fallback.
+    for (name, core) in [("sender", &mut a), ("receiver", &mut b)] {
+        eprintln!("selective owned normal shutdown: core={name} begin");
+        let native_snapshot = shutdown_diagnostic::Snapshot::capture(core.process_id());
+        eprintln!(
+            "selective owned pre-shutdown process observations: core={name} {}",
+            native_snapshot.observe()
+        );
+        let began = std::time::Instant::now();
+        let exit = match core.shutdown(Duration::from_secs(10)).await {
+            Ok(exit) => exit,
+            Err(error) => {
+                let observation_started = std::time::Instant::now();
+                let native_processes = native_snapshot.observe();
+                // One immediate observation after the original failure. This
+                // does not extend the normal-exit window or turn failure into
+                // success, retry shutdown, signal a PID or inspect other cores.
+                use std::{future::Future, task::Poll};
+                let observed = {
+                    let mut wait = Box::pin(core.wait_for_exit());
+                    std::future::poll_fn(|context| match wait.as_mut().poll(context) {
+                        Poll::Ready(report) => Poll::Ready(Some(report)),
+                        Poll::Pending => Poll::Ready(None),
+                    })
+                    .await
+                };
+                let owner = match observed {
+                    Some(Ok(report)) => {
+                        json!({"report_ready":true,"code":report.code,"signal":report.signal,"forced":report.forced,"tree_stopped":report.tree_stopped,"state_released":report.state_released})
+                    }
+                    Some(Err(_)) => json!({"report_ready":true,"report_validation_failed":true}),
+                    None => json!({"report_ready":false}),
+                };
+                use std::io::Read;
+                let capture =
+                    std::fs::File::open(core.state_directory().join(".verysync-sidecar-core.log"))
+                        .and_then(|file| {
+                            let mut bytes = Vec::new();
+                            file.take(65536).read_to_end(&mut bytes)?;
+                            Ok(bytes)
+                        });
+                let diagnostic = match capture {
+                    Ok(bytes) => {
+                        use sha2::{Digest, Sha256};
+                        let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
+                        json!({"read":true,"bounded_bytes":bytes.len(),"sha256":format!("{:x}",Sha256::digest(&bytes)),"has_panic_marker":text.contains("panic:"),"has_shutdown_marker":text.contains("shutting down")||text.contains("shutdown"),"has_exit_marker":text.contains("exiting")||text.contains("exit for")})
+                    }
+                    Err(error) => {
+                        json!({"read":false,"error_kind":format!("{:?}",error.kind()),"native_code":error.raw_os_error()})
+                    }
+                };
+                eprintln!(
+                    "selective failed normal shutdown evidence: {}",
+                    json!({"core":name,"elapsed_millis":began.elapsed().as_millis(),"owner":owner,"private_capture":diagnostic,"native_processes":native_processes,"failure_observation_millis":observation_started.elapsed().as_millis(),"original_failure_retained":true,"extra_exit_wait_millis":0})
+                );
+                return Err(error.into());
+            }
+        };
+        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+        eprintln!("selective owned normal shutdown: core={name} complete");
     }
     std::fs::remove_dir_all(root)?;
     println!(
