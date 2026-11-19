@@ -63,6 +63,31 @@ async fn same_sections(core: &ManagedInstance, before: &ConfigurationSnapshot) -
     assert!(old == current, "unrelated native options changed");
     Ok(())
 }
+async fn wait_for_complete_receiver_files(
+    receivers: &[Receiver],
+    name: &str,
+    bytes: &[u8],
+) -> TestResult {
+    loop {
+        let mut all_complete = true;
+        for receiver in receivers {
+            all_complete &= std::fs::read(receiver.path.join(name))
+                .is_ok_and(|data| data.as_slice() == bytes)
+                && receiver
+                    .core
+                    .client()
+                    .folder_status(&receiver.folder)
+                    .await?
+                    .state
+                    == Some(FolderState::Idle);
+        }
+        if all_complete {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 #[tokio::test]
 async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_files() -> TestResult
 {
@@ -337,16 +362,7 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
             for receiver in &receivers { super::name_policy_connection_pair(&a, &receiver.core, true).await?; }
             println!("native incoming admission unthrottled epoch: {}", serde_json::json!({"selected":selected,"actual_explicit_owned_restart":true,"same_identity_and_selected_cap":true,"saved_send_kib":0,"all_three_authenticated_peers_connected":true,"hot_unlimit_alone_claimed":false,"completion_deadline_seconds":30}));
             stage = "wait-exact-bytes-and-idle";
-            loop {
-                let mut all_complete = true;
-                for receiver in &receivers {
-                    all_complete &= std::fs::read(receiver.path.join(&name)).is_ok_and(|data| data == bytes)
-                        && receiver.core.client().folder_status(&receiver.folder).await?.state == Some(FolderState::Idle);
-                }
-                if all_complete { break; }
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-            TestResult::Ok(())
+            wait_for_complete_receiver_files(&receivers, &name, &bytes).await
         }).await;
         if !matches!(&completion_result, Ok(Ok(()))) {
             diagnose_failure(
@@ -358,6 +374,30 @@ async fn native_incoming_request_cap_bounds_saturated_admission_and_preserves_fi
                 completion_result.is_err(),
             )
             .await;
+        }
+        if cfg!(all(target_os = "macos", target_arch = "x86_64"))
+            && completion_result.is_err()
+            && stage == "wait-exact-bytes-and-idle"
+        {
+            let observed_at = tokio::time::Instant::now();
+            let observation = tokio::time::timeout(
+                Duration::from_secs(90),
+                wait_for_complete_receiver_files(&receivers, &name, &bytes),
+            )
+            .await;
+            println!(
+                "native incoming admission late readonly observation: {}",
+                serde_json::json!({
+                    "selected": selected,
+                    "original_completion_deadline_seconds": 30,
+                    "observation_bound_seconds": 90,
+                    "elapsed_ms": observed_at.elapsed().as_millis(),
+                    "actual_late_three_file_completion": matches!(&observation, Ok(Ok(()))),
+                    "readonly_management_error": matches!(&observation, Ok(Err(_))),
+                    "readonly_observation_timed_out": observation.is_err(),
+                    "original_failure_preserved": true
+                })
+            );
         }
         completion_result??;
         for receiver in &receivers {

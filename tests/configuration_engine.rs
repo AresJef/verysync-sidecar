@@ -1338,8 +1338,44 @@ async fn native_remote_device_name_policy_uses_global_selection_and_preserves_re
         );
     }
     assert_eq!(b.client().instance().device_id, bid);
-    for core in [&mut a, &mut b] {
-        let exit = core.shutdown(Duration::from_secs(10)).await?;
+    for (actor, core) in [("sender", &mut a), ("receiver", &mut b)] {
+        println!("native remote-name policy normal stop: actor={actor} deadline_seconds=10");
+        let exit = match core.shutdown(Duration::from_secs(10)).await {
+            Ok(exit) => exit,
+            Err(error) => {
+                if cfg!(all(target_os = "macos", target_arch = "x86_64"))
+                    && matches!(
+                        &error,
+                        Error::Timeout {
+                            operation: "gracefully stop owned program"
+                        }
+                    )
+                {
+                    let late = match tokio::time::timeout(
+                        Duration::from_secs(20),
+                        core.wait_for_exit(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(exit)) => serde_json::json!({
+                            "code": exit.code, "forced": exit.forced,
+                            "tree_stopped": exit.tree_stopped, "state_released": exit.state_released
+                        }),
+                        Ok(Err(_)) => serde_json::json!({"exit_observation_error": true}),
+                        Err(_) => serde_json::json!({"readonly_observation_timed_out": true}),
+                    };
+                    println!(
+                        "native remote-name policy late readonly exit: {}",
+                        serde_json::json!({
+                            "actor": actor, "original_deadline_seconds": 10,
+                            "observation_bound_seconds": 20, "exit": late,
+                            "new_shutdown_request_sent": false, "original_failure_preserved": true
+                        })
+                    );
+                }
+                return Err(error.into());
+            }
+        };
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
     std::fs::remove_dir_all(root)?;
