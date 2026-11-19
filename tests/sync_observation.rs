@@ -1514,6 +1514,28 @@ async fn actual_selective_tree_pages_and_license_rejection_preserve_files() -> T
             &SelectiveBrowseOptions::new(SelectiveScope::FolderRoot).directories_only(true),
         )
         .await?;
+    if dirs.entries.is_empty() {
+        eprintln!("SELECTIVE_DIRECTORIES_INITIAL_EMPTY");
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            let status = b.client().folder_status(folder).await.map(|status| {
+                (status.global_files, status.global_directories)
+            });
+            eprintln!("SELECTIVE_DIRECTORIES_INDEX files_and_directories={status:?}");
+            for (depth, directories_only) in [(1, false), (1, true), (2, true), (1, true)] {
+                let options = SelectiveBrowseOptions::new(SelectiveScope::FolderRoot)
+                    .levels(depth)
+                    .directories_only(directories_only);
+                let state = b.client().browse_selective(folder, &options).await.map(|tree| {
+                    (tree.entries.len(), tree.entries.contains_key("nested"))
+                });
+                eprintln!(
+                    "SELECTIVE_DIRECTORIES_READ_ONLY depth={depth} directories_only={directories_only} result={state:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(75)).await;
+            }
+        })
+        .await;
+    }
     assert_eq!(
         dirs.entries.keys().map(String::as_str).collect::<Vec<_>>(),
         vec!["nested"]
