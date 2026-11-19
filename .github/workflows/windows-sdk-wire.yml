@@ -1,0 +1,118 @@
+name: Verify the fixed Windows AMD64 packet boundary
+
+on:
+  push:
+    branches: ['verify/r24/windows-amd64-packet-boundary']
+    paths: ['.github/workflows/windows-sdk-wire.yml', '.github/diagnostics/hyperv-wire/**']
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    name: Build exact diskless Linux SDK peer and separate capture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    outputs:
+      iso_sha: ${{ steps.emit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Prepare the EFI and static Rust build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq --no-install-recommends grub-common grub-efi-amd64-bin xorriso mtools cpio musl-tools squashfs-tools kmod zstd
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup target add --toolchain 1.85.0 x86_64-unknown-linux-musl
+      - name: Build guest counterpart with Rust 1.85 and the locked SDK tree
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          cp .github/diagnostics/hyperv-wire/paired_wire.rs examples/paired_wire_diagnostic.rs
+          cargo +1.85.0 build --locked --no-default-features --target x86_64-unknown-linux-musl --example paired_wire_diagnostic
+      - name: Produce the private-test-application-only ISO and record its exact bytes
+        id: emit
+        run: |
+          bash .github/diagnostics/hyperv-wire/emit-fixture.sh "$RUNNER_TEMP/hv-sdk-build" \
+            "target/x86_64-unknown-linux-musl/debug/examples/paired_wire_diagnostic"
+          awk '{print "sha=" $1}' "$RUNNER_TEMP/hv-sdk-build/output/SHA256SUMS" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: windows-hyperv-sdk-peer-without-engine
+          path: ${{ runner.temp }}/hv-sdk-build/output/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+  sender:
+    name: Build the exact native Windows Rust sender
+    runs-on: windows-2022
+    timeout-minutes: 16
+    outputs:
+      exe_sha: ${{ steps.build.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Build the same SDK source on native Windows AMD64
+        shell: pwsh
+        id: build
+        run: |
+          rustup toolchain install 1.85.0-x86_64-pc-windows-msvc --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare the fixed Rust 1.85 toolchain' }
+          Copy-Item .github/diagnostics/hyperv-wire/paired_wire.rs examples/paired_wire_diagnostic.rs
+          cargo +1.85.0-x86_64-pc-windows-msvc build --locked --example paired_wire_diagnostic
+          if ($LASTEXITCODE -ne 0) { throw 'Native sender could not be compiled' }
+          $sha = (Get-FileHash target/debug/examples/paired_wire_diagnostic.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Output "WINDOWS_WIRE_EXE sha256=$sha"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: windows-hyperv-sdk-sender-without-engine
+          path: target/debug/examples/paired_wire_diagnostic.exe
+          if-no-files-found: error
+          retention-days: 1
+  wire:
+    name: Observe the socket control and SDK on one owned Windows link
+    runs-on: windows-2022
+    needs: [fixture, sender]
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: windows-hyperv-sdk-peer-without-engine
+          path: ${{ runner.temp }}/owned-sdk-peer
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: windows-hyperv-sdk-sender-without-engine
+          path: ${{ runner.temp }}/owned-sdk-sender
+      - name: Explicitly prepare both fixed official images without publishing either
+        shell: pwsh
+        run: |
+          python -B scripts/prepare-test-engine.py prepare --package windows-amd64-standard --parent $env:RUNNER_TEMP --github-env $env:GITHUB_ENV
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot produce the fixed Windows program' }
+          $receipt = (python -B scripts/prepare-test-engine.py prepare --package linux-amd64-standard --parent $env:RUNNER_TEMP)
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot produce the fixed private guest program' }
+          $image = $receipt | ConvertFrom-Json
+          if ($image.binary_sha256 -ne '770324d3411bf6ff7d18109ba5fa1e5057056b5e93441f29185b50895f55693a') { throw 'Fixed guest program mismatch' }
+          "VERYSYNC_GUEST_BINARY=$($image.binary)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Output "OWNED_GUEST_SOURCE version=$($image.version) sha256=$($image.binary_sha256)"
+      - name: Require the independent socket control and all six scoped AMD64 packet cases
+        shell: pwsh
+        env:
+          EXPECTED_OWNED_ISO_SHA: ${{ needs.fixture.outputs.iso_sha }}
+          EXPECTED_SENDER_SHA: ${{ needs.sender.outputs.exe_sha }}
+        run: |
+          $sender = Join-Path $env:RUNNER_TEMP 'owned-sdk-sender/paired_wire_diagnostic.exe'
+          if ((Get-FileHash -LiteralPath $sender -Algorithm SHA256).Hash.ToLowerInvariant() -ne $env:EXPECTED_SENDER_SHA) { throw 'Native harness artifact mismatch' }
+          ./.github/diagnostics/hyperv-wire/boot-and-check.ps1 -FixtureDirectory (Join-Path $env:RUNNER_TEMP 'owned-sdk-peer') -WindowsHarness $sender -GuestCore $env:VERYSYNC_GUEST_BINARY -UseApprovedAmd64PacketBoundary
+      - name: Confirm actual sender image has no live owned processes
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        shell: pwsh
+        run: |
+          python -B scripts/prepare-test-engine.py check-cleanup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

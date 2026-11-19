@@ -178,6 +178,33 @@ the observed Windows Server 2022 AMD64 direct TCP path. Windows ARM64 and
 remote paths require their own observations.
 [Same-host native comparison](https://github.com/AresJef/verysync-sidecar/actions/runs/44471010544).
 
+A subsequent three-phase test kept the Windows Server 2022 AMD64 host,
+Linux guest, internal switch and adapter fixed. The qWAVE control again put
+octets 16 and 32 on IPv4 and IPv6 data packets. The Winsock IPv4 `IP_TOS`
+control read back 16 and 32. The independent receiver observed octet 0
+in every data packet for those flows. All six VerySync v2.33.2 flows also
+carried octet 0. All 18 synthetic samples matched their expected hashes.
+The six VerySync transfers preserved the tested configuration and identity,
+both programs exited normally, and the owned VM, switch, routes and state
+were cleaned up. The VerySync nonzero cases still failed the strict
+packet-effect check.
+[Three-phase packet comparison](https://github.com/AresJef/verysync-sidecar/actions/runs/44549434611).
+
+The acceptance check for this fixed Windows AMD64 direct TCP path records
+an all-zero packet class as the observed v2.33.2 limitation when the
+selected nonzero value persists correctly. It requires independent packet
+headers, both zero-value controls, native configuration and restart,
+complete data, preserved identity and exact cleanup. The Windows ARM64
+effect continues to require independent IPv4 and IPv6 packet observation.
+
+A separate socket-API control used Go 1.23.10 and the fixed program's
+`golang.org/x/net` v0.43.0 on native Windows AMD64 and ARM64. On both
+runners, IPv4 read back each selected value, and IPv6 calls to set or
+read the traffic class returned `not implemented`. Both
+families transferred the expected loopback bytes. These controls establish
+socket-API behavior. Independent capture establishes the packet effect.
+[Two-architecture socket controls](https://github.com/AresJef/verysync-sidecar/actions/runs/44547498060).
+
 The `windows-11-vs2026-arm` runner (image `20261112.217.1`) accepted IPv4
 Winsock traffic-class values 16, 32 and 0. Each value read back exactly, and
 each one-byte synthetic TCP sample reached its loopback peer. A separate

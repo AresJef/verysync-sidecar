@@ -14,6 +14,40 @@ struct Pair {
     before_sender: ConfigurationSnapshot,
 }
 
+async fn resume_after_observing_startup_scan(client: &Client, folder: &FolderId) -> TestResult {
+    let mut events = client
+        .subscribe_events(
+            EventOptions::default()
+                .poll_interval(Duration::from_millis(20))?
+                .reconnect_attempts(0)?,
+        )
+        .await?;
+    assert!(client.resume_folder(folder).await?.requested_fields_match);
+    let ready = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let item = events.next().await.ok_or("startup scan stream ended")??;
+            let EventStreamItem::Event(event) = item else {
+                return Err("startup scan history lost continuity".into());
+            };
+            if event.kind == EventKind::StateChanged
+                && event.data()["folder"] == folder.as_str()
+                && event.data()["from"] == "scanning"
+                && event.data()["to"] == "idle"
+            {
+                return TestResult::Ok(());
+            }
+        }
+    })
+    .await;
+    events.close().await?;
+    ready??;
+    assert_eq!(
+        client.folder_status(folder).await?.state,
+        Some(FolderState::Idle)
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() -> TestResult {
     let started = std::time::Instant::now();
@@ -97,6 +131,23 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
             .client()
             .join_folder(&JoinFolderOptions::new(ro, TargetPath::local(&received)).paused(true))
             .await?;
+        for (client, folder) in [
+            (a.client(), &af.configuration.id),
+            (b.client(), &bf.configuration.id),
+        ] {
+            assert!(
+                client
+                    .update_folder_scan_configuration(
+                        folder,
+                        &FolderScanPatch::default()
+                            .watcher(false)
+                            .rescan_interval_seconds(0)
+                            .disable_initial_scan(false),
+                    )
+                    .await?
+                    .requested_fields_match
+            );
+        }
         a.client()
             .share_folder_with(&af.configuration.id, &bid)
             .await?;
@@ -163,9 +214,10 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
             b.client().general_options().await?.max_folder_concurrency,
             limit
         );
-        let mut pending = Vec::new();
-        let mut source_index_observations = Vec::new();
-        for (index, pair) in pairs.iter().enumerate() {
+        // Finish both initial scans with the previous data before publishing
+        // any new work. Otherwise the second folder can be in the scan queue
+        // during the first transfer and never overlap the native sync queue.
+        for pair in &pairs {
             assert!(b.client().folder(&pair.b).await?.paused);
             let baseline = b.client().folder_status(&pair.b).await?.state;
             assert!(
@@ -173,20 +225,20 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
                     || matches!(&baseline, Some(FolderState::Unknown(value)) if value.is_empty()),
                 "paused folder must preserve its exact inactive native snapshot"
             );
+            resume_after_observing_startup_scan(b.client(), &pair.b).await?;
+        }
+        let mut pending = Vec::new();
+        for (index, pair) in pairs.iter().enumerate() {
+            assert!(
+                b.client().folder_status(&pair.b).await?.state == Some(FolderState::Idle),
+                "both receiver startup scans must finish before publishing new source work"
+            );
             let name = format!("concurrency-二-{phase}-{index}.bin");
             let bytes: Vec<u8> = (0..8 * 1024 * 1024)
                 .map(|i| ((i * 73 + i / 251 + (phase * 2 + index) * 41) % 251) as u8)
                 .collect();
+            assert!(!pair.received.join(&name).try_exists()?);
             std::fs::write(pair.source.join(&name), &bytes)?;
-            pair.sender.client().request_scan(&pair.a).await?;
-            let indexed = pair.sender.client().folder_status(&pair.a).await?;
-            assert_eq!(indexed.local_files, Some(u64::try_from(phase + 1)?));
-            source_index_observations.push(serde_json::json!({
-                "folder_index":index,"expected_local_files":phase+1,
-                "actual_local_files":indexed.local_files,
-                "actual_local_bytes":indexed.local_bytes,
-                "actual_idle":indexed.state==Some(FolderState::Idle)
-            }));
             pending.push((name, bytes));
         }
         let mut events = b
@@ -199,30 +251,36 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
             )
             .await?;
         let mut last_id = events.cursor().last_id;
-        let mut states = ["inactive".to_owned(), "inactive".to_owned()];
+        let mut states = ["idle".to_owned(), "idle".to_owned()];
         let mut seen = [false; 2];
         let mut max_syncing = 0;
         let mut serial_waiting_seen = false;
         let mut state_events = 0;
-        let mut unpause_spans = Vec::new();
         let mut history = Vec::new();
         let mut history_truncated = false;
         let observation_started = std::time::Instant::now();
+        let [first, second] = pairs.as_slice() else {
+            return Err("the concurrency fixture requires exactly two independent senders".into());
+        };
         for (pair, (name, _)) in pairs.iter().zip(&pending) {
             assert!(
                 !pair.received.join(name).try_exists()?,
-                "work completed before the observed unpause"
+                "work completed before the explicit source indexes were published"
             );
-            let started = std::time::Instant::now();
-            assert!(
-                b.client()
-                    .resume_folder(&pair.b)
-                    .await?
-                    .requested_fields_match
-            );
-            unpause_spans.push(serde_json::json!({
-                "rpc_elapsed_ns":started.elapsed().as_nanos(),
-                "observed_end_ns":observation_started.elapsed().as_nanos()
+        }
+        tokio::try_join!(
+            first.sender.client().request_scan(&first.a),
+            second.sender.client().request_scan(&second.a),
+        )?;
+        let mut source_index_observations = Vec::new();
+        for (index, pair) in pairs.iter().enumerate() {
+            let indexed = pair.sender.client().folder_status(&pair.a).await?;
+            assert_eq!(indexed.local_files, Some(u64::try_from(phase + 1)?));
+            source_index_observations.push(serde_json::json!({
+                "folder_index":index,"expected_local_files":phase+1,
+                "actual_local_files":indexed.local_files,
+                "actual_local_bytes":indexed.local_bytes,
+                "actual_idle":indexed.state==Some(FolderState::Idle)
             }));
         }
         tokio::time::timeout(Duration::from_secs(45), async {
@@ -280,7 +338,7 @@ async fn native_folder_concurrency_has_ordered_single_and_double_sync_effects() 
             "native folder concurrency preparation diagnostic: {}",
             serde_json::json!({
                 "selected":limit,"source_index_observations":source_index_observations,
-                "unpause_rpc_spans":unpause_spans,"history":history,
+                "startup_scans_confirmed_before_source_publication":true,"history":history,
                 "history_truncated":history_truncated,
                 "delivery_clock_is_not_native_event_time":true,
                 "diagnostic_only_original_effect_assertions_unchanged":true
