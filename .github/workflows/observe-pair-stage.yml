@@ -1,0 +1,64 @@
+name: Stage the observed pair against two actual engines
+on:
+  push:
+    branches: [ci/observed-pair-direct-20261119-01a1ca9b]
+    paths: [.github/workflows/observe-pair-stage.yml]
+
+permissions:
+  contents: read
+
+env:
+  EXACT_SOURCE: 4b737f4eafbcad2528e71dfb4e01d3361364bd27
+  EXACT_TREE: d7f707d9887e38982bd7aba14e41c5ef894fbbfc
+
+jobs:
+  actual:
+    if: github.repository == 'AresJef/verysync-sidecar' && github.ref == 'refs/heads/ci/observed-pair-direct-20261119-01a1ca9b'
+    name: Native two-peer effects (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: linux-amd64-standard
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - package: windows-amd64-standard
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.target }}
+      EXACT_PACKAGE: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXACT_SOURCE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Verify candidate and locked native prerequisites
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_ARCH" = X64
+          test "$(git rev-parse HEAD)" = "$EXACT_SOURCE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXACT_TREE"
+          test -z "$(git status --porcelain)"
+          printf 'candidate source=%s tree=%s\n' "$EXACT_SOURCE" "$EXACT_TREE"
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          python -B scripts/prepare-test-engine.py prepare --package "$EXACT_PACKAGE" --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Observe actual test-peer TCP, transferred bytes, rejection and recovery
+        run: |
+          set -euo pipefail
+          python -B scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target network --test-filter acceptance_pair_observes_real_files_and_disconnect_recovery \
+            --evidence-dir "$RUNNER_TEMP/observe-pair"
+      - name: Require exact prepared program cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python -B scripts/prepare-test-engine.py check-cleanup
