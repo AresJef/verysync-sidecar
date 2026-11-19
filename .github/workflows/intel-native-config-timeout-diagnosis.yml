@@ -1,0 +1,87 @@
+name: Observe native Intel configuration deadlines
+
+on:
+  push:
+    branches: [verify/r24/intel-native-config-timeout-diagnosis]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native Intel configuration timeout diagnosis (${{ matrix.contract }})
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: macos-amd64-standard
+            runner: macos-15-intel
+            rust_host: x86_64-apple-darwin
+            filter: native_incoming_request_cap_bounds_saturated_admission_and_preserves_files
+            contract: recovery
+          - profile: macos-amd64-standard
+            runner: macos-15-intel
+            rust_host: x86_64-apple-darwin
+            filter: native_remote_device_name_policy_uses_global_selection_and_preserves_real_data
+            contract: normal-stop
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          path: candidate
+          ref: f9171fb196948dd378ff8e0d72fe8f5e36605d36
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Verify archived candidate and pinned native compiler
+        working-directory: candidate
+        env:
+          EXPECTED_RUST_HOST: ${{ matrix.rust_host }}
+        run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/mac-config-candidate-target"
+          printf 'CARGO_TARGET_DIR=%s\n' "$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          test "$(rustc +"$TEST_TOOLCHAIN" -vV | sed -n 's/^host: //p')" = "$EXPECTED_RUST_HOST"
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          cargo +"$TEST_TOOLCHAIN" package --no-verify --offline --locked
+          RUSTUP_TOOLCHAIN="$TEST_TOOLCHAIN" python3 -B scripts/publish-github-release.py \
+            --metadata ../.github/diagnostics/intel-native-config-timeout-candidate.json \
+            --check-package "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate"
+      - name: Prepare the matching pinned native fixture
+        working-directory: candidate
+        run: >-
+          python3 scripts/prepare-test-engine.py prepare --package "${{ matrix.profile }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require the original configuration and real file effects
+        shell: bash
+        env:
+          NATIVE_FILTER: ${{ matrix.filter }}
+          CASE_CONTRACT: ${{ matrix.contract }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/mac-config-crate"
+          tar -xzf "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate" -C "$RUNNER_TEMP/mac-config-crate"
+          cd "$RUNNER_TEMP/mac-config-crate/verysync-sidecar-0.1.0-alpha.2"
+          evidence="$RUNNER_TEMP/mac-config-native"
+          python3 scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target configuration_engine --test-filter "$NATIVE_FILTER" --evidence-dir "$evidence"
+          application_log="$evidence/configuration-engine.log"
+          if [ "$CASE_CONTRACT" = recovery ]; then
+            grep -F 'native incoming admission cleanup:' "$application_log"
+          else
+            grep -F 'native remote-name policy cleanup evidence:' "$application_log"
+          fi
+          grep -E '^test result: ok. 1 passed; 0 failed; 0 ignored;' "$application_log"
+      - name: Require final exact owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        working-directory: candidate
+        run: python3 scripts/prepare-test-engine.py check-cleanup
