@@ -47,6 +47,17 @@ families and their platform, authorization and recovery gates.
   to the candidate's Git blobs. It also checks the generated manifest's feature,
   license and registry settings. Use the same package checksum for subsequent
   registry verification. Review native and authorization evidence separately.
+- Once the archive and hosted run attempts are available, run the combined
+  read-only check from the clean candidate checkout with the same Cargo toolchain
+  and GitHub CLI access.
+
+  ```sh
+  python3 scripts/publish-github-release.py --metadata /absolute/private/release.json --check-candidate /absolute/package.crate
+  ```
+
+  A successful check reports one source, tree and archive digest together with
+  the verified hosted attempts and job counts. Complete the other applicable
+  release checks in this guide before authorizing upload.
 - Check declared dependency licenses and current RustSec advisories without
   silently changing dependency compatibility or suppressing warnings.
 - Run `cargo publish --dry-run --locked --registry crates-io` from a clean source.

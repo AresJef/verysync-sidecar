@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 import tarfile
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -233,6 +234,61 @@ class ReleaseIdentityTests(unittest.TestCase):
         with patch.object(HELPER, "github", side_effect=replies.__getitem__):
             with self.assertRaisesRegex(ValueError, "required step.*formal"):
                 HELPER.verify_candidate_actions(candidate)
+
+    def test_candidate_preflight_records_one_package_and_hosted_identity(self):
+        candidate = self.metadata | {
+            "version": "0.1.0",
+            "candidate_runs": {
+                lane: {"id": index, "attempt": 1}
+                for index, lane in enumerate(HELPER.ACTION_WORKFLOWS, 1)
+            },
+        }
+        with tempfile.TemporaryDirectory() as root:
+            package = Path(root) / "verysync-sidecar-0.1.0.crate"
+            metadata = Path(root) / "candidate.json"
+            metadata.write_text(json.dumps(candidate), encoding="utf-8")
+            output = io.StringIO()
+            with (
+                patch("sys.argv", ["release-helper", "--metadata", str(metadata), "--check-candidate", str(package)]),
+                patch("sys.stdout", output),
+                patch.object(HELPER, "verify_local_package", return_value=9) as local,
+                patch.object(HELPER, "verify_candidate_actions", return_value=candidate["candidate_runs"]) as hosted,
+                patch.object(HELPER, "verify") as registry,
+                patch.object(HELPER, "publish") as publish,
+            ):
+                HELPER.main()
+            local.assert_called_once_with(candidate, package)
+            hosted.assert_called_once_with(candidate)
+            registry.assert_not_called()
+            publish.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue()), {
+            "local_package_verified": True, "candidate_actions_verified": True,
+            "source": candidate["source"], "tree": candidate["tree"],
+            "package_sha256": candidate["package_sha256"], "packaged_files": 9,
+            "runs": candidate["candidate_runs"],
+        })
+
+    def test_candidate_preflight_rejects_either_side_of_the_binding(self):
+        candidate = self.metadata | {
+            "candidate_runs": {
+                lane: {"id": index, "attempt": 1}
+                for index, lane in enumerate(HELPER.ACTION_WORKFLOWS, 1)
+            },
+        }
+        package = Path("private-candidate.crate")
+        with (
+            patch.object(HELPER, "verify_local_package", side_effect=ValueError("checkout source or tree differs")),
+            patch.object(HELPER, "verify_candidate_actions") as hosted,
+        ):
+            with self.assertRaisesRegex(ValueError, "checkout source or tree differs"):
+                HELPER.verify_candidate_preflight(candidate, package)
+            hosted.assert_not_called()
+        with (
+            patch.object(HELPER, "verify_local_package", return_value=9),
+            patch.object(HELPER, "verify_candidate_actions", side_effect=ValueError("candidate run source differs")),
+        ):
+            with self.assertRaisesRegex(ValueError, "candidate run source differs"):
+                HELPER.verify_candidate_preflight(candidate, package)
 
     def test_publication_outside_trusted_main_context_cannot_call_github(self):
         with patch.dict(HELPER.os.environ, {"GITHUB_REPOSITORY": "AresJef/verysync-sidecar",

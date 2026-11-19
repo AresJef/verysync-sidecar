@@ -1,0 +1,97 @@
+name: Read-only paired candidate preflight probe
+
+on:
+  push:
+    branches: ['verify/paired-candidate-release-preflight-20261119']
+    paths: ['.github/workflows/candidate-preflight-probe.yml']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  probe:
+    name: Check a real candidate archive and reject a mismatched hosted attempt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: verifier
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 9d7dd22e0bd45d492d77709554c2f23a13eb148f
+          path: candidate
+          persist-credentials: false
+      - name: Verify the release contracts and historical alpha metadata
+        working-directory: verifier
+        run: |
+          python3 -B -m unittest discover -s scripts/tests -p test_publish_github_release.py
+          python3 -B scripts/publish-github-release.py --check-metadata
+      - name: Build the exact candidate archive with Rust 1.85
+        working-directory: candidate
+        run: |
+          test "$(git rev-parse HEAD)" = 9d7dd22e0bd45d492d77709554c2f23a13eb148f
+          test "$(git rev-parse 'HEAD^{tree}')" = 71aa0f4ba9a9a70178da337a9f7d75780770f449
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 fetch --locked
+          cargo +1.85.0 package --no-verify --offline --locked --target-dir "$RUNNER_TEMP/candidate"
+          test -z "$(git status --porcelain)"
+      - name: Require exact local bytes and fail closed on a mixed hosted identity
+        working-directory: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUSTUP_TOOLCHAIN: 1.85.0
+        run: |
+          verifier="$GITHUB_WORKSPACE/verifier/scripts/publish-github-release.py"
+          package="$RUNNER_TEMP/candidate/package/verysync-sidecar-0.1.0-alpha.2.crate"
+          python3 - "$package" "$RUNNER_TEMP" <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          package, temp = map(Path, sys.argv[1:])
+          data = {
+              "repository": "AresJef/verysync-sidecar",
+              "crate": "verysync-sidecar",
+              "version": "0.1.0-alpha.2",
+              "source": "9d7dd22e0bd45d492d77709554c2f23a13eb148f",
+              "tree": "71aa0f4ba9a9a70178da337a9f7d75780770f449",
+              "package_sha256": hashlib.sha256(package.read_bytes()).hexdigest(),
+              "candidate_runs": {
+                  "quality": {"id": 44450688443, "attempt": 1},
+                  "engine": {"id": 44337785613, "attempt": 1},
+                  "platforms": {"id": 44452125115, "attempt": 1},
+                  "resources": {"id": 44452124928, "attempt": 1},
+              },
+          }
+          (temp / "exact.json").write_text(json.dumps(data))
+          (temp / "bad-digest.json").write_text(json.dumps(data | {"package_sha256": "0" * 64}))
+          PY
+          mkdir "$RUNNER_TEMP/candidate-readonly-bin"
+          export VS_PREFLIGHT_GH_CMD="$(command -v gh)"
+          export VS_PREFLIGHT_GH_LOG="$RUNNER_TEMP/candidate-read-paths.log"
+          cat > "$RUNNER_TEMP/candidate-readonly-bin/gh" <<'SH'
+          #!/usr/bin/env bash
+          if [[ "$#" != 4 || "$1" != api || "$2" != --method || "$3" != GET || "$4" != repos/AresJef/verysync-sidecar/* ]]; then
+            exit 125
+          fi
+          printf '%s\n' "$4" >> "$VS_PREFLIGHT_GH_LOG"
+          exec "$VS_PREFLIGHT_GH_CMD" "$@"
+          SH
+          chmod 0700 "$RUNNER_TEMP/candidate-readonly-bin/gh"
+          export PATH="$RUNNER_TEMP/candidate-readonly-bin:$PATH"
+          python3 -B "$verifier" --metadata "$RUNNER_TEMP/exact.json" --check-package "$package"
+          if python3 -B "$verifier" --metadata "$RUNNER_TEMP/bad-digest.json" --check-candidate "$package" > "$RUNNER_TEMP/bad-digest.out" 2>&1; then
+            exit 1
+          fi
+          grep -F 'archive checksum differs' "$RUNNER_TEMP/bad-digest.out"
+          test ! -s "$VS_PREFLIGHT_GH_LOG"
+          if python3 -B "$verifier" --metadata "$RUNNER_TEMP/exact.json" --check-candidate "$package" > "$RUNNER_TEMP/mixed-attempt.out" 2>&1; then
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/mixed-attempt.out"
+          grep -F 'candidate run source, repository, event or attempt differs' "$RUNNER_TEMP/mixed-attempt.out"
+          grep -Fx 'repos/AresJef/verysync-sidecar/actions/runs/44450688443/attempts/1/jobs?per_page=100&page=1' "$VS_PREFLIGHT_GH_LOG"
+          grep -Fx 'repos/AresJef/verysync-sidecar/actions/runs/44337785613' "$VS_PREFLIGHT_GH_LOG"
+          cat "$VS_PREFLIGHT_GH_LOG"
+          printf '%s\n' 'CANDIDATE_PREFLIGHT_PROBE archive_verified=true quality_attempt_seen=true mixed_workflow_rejected=true invalid_digest_before_hosted=true read_only=true'

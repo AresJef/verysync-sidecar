@@ -309,6 +309,22 @@ def verify_candidate_actions(metadata):
     return counts
 
 
+def verify_candidate_preflight(metadata, package):
+    """Bind a local Cargo archive and hosted validation to one candidate."""
+    validate_candidate_runs(metadata)
+    count = verify_local_package(metadata, package)
+    checked = verify_candidate_actions(metadata)
+    return {
+        "local_package_verified": True,
+        "candidate_actions_verified": True,
+        "source": metadata["source"],
+        "tree": metadata["tree"],
+        "package_sha256": metadata["package_sha256"],
+        "packaged_files": count,
+        "runs": checked,
+    }
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, new_url):
         return None
@@ -405,6 +421,8 @@ def main():
     mode.add_argument("--check-metadata", action="store_true")
     mode.add_argument("--check-package", type=Path, metavar="LOCAL_CRATE")
     mode.add_argument("--check-actions", action="store_true")
+    mode.add_argument("--check-candidate", type=Path, metavar="LOCAL_CRATE",
+                      help="check the local package and hosted runs for one candidate")
     mode.add_argument("--verify", action="store_true")
     mode.add_argument("--publish", action="store_true")
     args = parser.parse_args()
@@ -420,6 +438,9 @@ def main():
         checked = verify_candidate_actions(metadata)
         print(json.dumps({"candidate_actions_verified": True, "source": metadata["source"],
                           "tree": metadata["tree"], "runs": checked}))
+        return
+    if args.check_candidate is not None:
+        print(json.dumps(verify_candidate_preflight(metadata, args.check_candidate)))
         return
     validate_metadata(metadata)
     if args.check_metadata:
