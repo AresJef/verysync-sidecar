@@ -116,10 +116,12 @@ class ReleaseIdentityTests(unittest.TestCase):
             for index, key in enumerate(HELPER.ACTION_WORKFLOWS, 1)
         }
         HELPER.validate_candidate_runs(candidate)
-        missing_packets = copy.deepcopy(candidate)
-        del missing_packets["candidate_runs"]["windows_amd64_packets"]
-        with self.assertRaisesRegex(ValueError, "Windows AMD64 packet runs"):
-            HELPER.validate_candidate_runs(missing_packets)
+        for lane in ("windows_amd64_packets", "windows_arm64_packets"):
+            with self.subTest(lane=lane):
+                missing_packets = copy.deepcopy(candidate)
+                del missing_packets["candidate_runs"][lane]
+                with self.assertRaisesRegex(ValueError, "Windows AMD64 and ARM64 packet runs"):
+                    HELPER.validate_candidate_runs(missing_packets)
         for correction in ({}, {"id": True, "attempt": 1}, {"id": 2, "attempt": 1},
                            {"id": 9, "attempt": 0}):
             with self.subTest(correction=correction):
@@ -263,6 +265,18 @@ class ReleaseIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "required step.*AMD64 packet cases"):
                 HELPER.verify_candidate_actions(candidate)
         packet_step["conclusion"] = "success"
+
+        arm64_run = references["windows_arm64_packets"]["id"]
+        arm64_attempt = f"{context}/actions/runs/{arm64_run}/attempts/2/jobs?per_page=100&page=1"
+        arm64_job = replies[arm64_attempt]["jobs"][0]
+        for step in arm64_job["steps"]:
+            with self.subTest(arm64_step=step["name"]):
+                step["conclusion"] = "skipped"
+                with patch.object(HELPER, "github", side_effect=replies.__getitem__):
+                    with self.assertRaisesRegex(ValueError, "required step.*owned Windows ARM64 link"):
+                        HELPER.verify_candidate_actions(candidate)
+                step["conclusion"] = "success"
+
         # A successful resource job without the formal measurement step is only preparation.
         resource_attempt = f'{context}/actions/runs/{references["resources"]["id"]}/attempts/2/jobs?per_page=100&page=1'
         job = replies[resource_attempt]["jobs"][0]

@@ -23,6 +23,7 @@ ACTION_WORKFLOWS = {
     "platforms": "platform-matrix.yml",
     "resources": "resource-collection.yml",
     "windows_amd64_packets": "windows-sdk-wire.yml",
+    "windows_arm64_packets": "windows-arm64-sdk-wire.yml",
 }
 PLATFORM_CLEANUP_STEP = "Require exact owned-executable cleanup"
 RESOURCE_PLAN = "Plan frozen resource profiles"
@@ -70,6 +71,14 @@ CANDIDATE_ACTION_JOBS = {
             "Explicitly prepare both fixed official images without publishing either",
             "Require the independent socket control and all six scoped AMD64 packet cases",
             "Confirm actual sender image has no live owned processes",
+        ),
+    },
+    "windows_arm64_packets": {
+        "Observe the socket control and SDK on one owned Windows ARM64 link": (
+            "Build the exact native Rust receiver and SDK harness",
+            "Explicitly prepare the pinned native ARM64 VerySync",
+            "Verify independent qWAVE controls and strict actual SDK file traffic",
+            "Confirm exact native program cleanup",
         ),
     },
 }
@@ -244,7 +253,7 @@ def validate_candidate_runs(metadata):
             "only the approved R23 Intel formal resource profile can be deferred")
     runs = metadata.get("candidate_runs")
     require(isinstance(runs, dict) and runs.keys() == ACTION_WORKFLOWS.keys(),
-            "candidate requires quality, engine, platform, formal resource and Windows AMD64 packet runs")
+            "candidate requires quality, engine, platform, formal resource and both Windows AMD64 and ARM64 packet runs")
     for reference in runs.values():
         require(isinstance(reference, dict) and reference.keys() == {"id", "attempt"}
                 and all(type(value) is int and value > 0 for value in reference.values()),
@@ -339,8 +348,8 @@ def verify_candidate_actions(metadata):
                 del required[f"Resource coverage ({deferred})"]
                 required[RESOURCE_PLAN] += (R23_RESOURCE_RECORD,)
             require(len(jobs) == len(required), "resource job roster differs from the declared scope")
-        if lane == "windows_amd64_packets":
-            require(len(jobs) == len(required), "Windows AMD64 packet job roster differs from the registered workflow")
+        if lane in ("windows_amd64_packets", "windows_arm64_packets"):
+            require(len(jobs) == len(required), f"{lane} job roster differs from the registered workflow")
         validate_candidate_jobs(metadata["source"], reference["id"], reference["attempt"], jobs, required)
         validate_candidate_run(metadata, workflow_path, workflow, reference, github(run_path))
         counts[lane] = {"id": reference["id"], "attempt": reference["attempt"],

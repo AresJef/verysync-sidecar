@@ -711,10 +711,17 @@ async fn sender(guest_core: &Path, approved_amd64_boundary: bool) -> Result {
     ensure(accepted, "one or more real Windows packet classes differed")
 }
 
+#[cfg(all(windows, target_arch = "aarch64"))]
+mod paired_wire_arm64;
+
 #[tokio::main]
 async fn main() -> Result {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
+        #[cfg(all(windows, target_arch = "aarch64"))]
+        [mode, relay, dll, adapter] if mode == "arm64-owned-wire" => {
+            paired_wire_arm64::exercise(Path::new(relay), Path::new(dll), adapter).await
+        }
         [mode] if mode == "guest" => guest().await,
         [mode, file] if mode == "send" => sender(Path::new(file), false).await,
         [mode, file, boundary] if mode == "send" && boundary == "approved-windows-amd64-v2.33.2-default" => {

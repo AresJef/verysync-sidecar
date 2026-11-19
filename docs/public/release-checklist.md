@@ -82,12 +82,12 @@ applicable required outcome remains open.
 - Run the complete required native controller/engine matrix on that candidate,
   including actual control effects, faults, compiled examples and exact cleanup.
 - Push the exact candidate to an owned `ci/formal-candidate/*` branch to run
-  quality, native engine, additional-platform, formal resource and Windows AMD64
-  packet validation on the same commit. You can also dispatch registered workflows on that ref.
+  quality, native engine, additional-platform, formal resource and both Windows
+  packet validations on the same commit. You can also dispatch registered workflows on that ref.
   The scoped Intel resource deferral requires the push described below.
   Record each workflow's numeric run ID and attempt in the private candidate
   metadata under `candidate_runs` with keys `quality`, `engine`,
-  `platforms`, `resources` and `windows_amd64_packets`. Each entry
+  `platforms`, `resources`, `windows_amd64_packets` and `windows_arm64_packets`. Each entry
   contains `id` and `attempt`. Run the read-only
   `python3 scripts/publish-github-release.py --metadata /absolute/private/release.json --check-actions`
   with GitHub CLI access to workflow metadata. This checks the candidate commit
