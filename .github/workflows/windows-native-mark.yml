@@ -1,0 +1,55 @@
+name: Independent Windows socket marking on the isolated dual-stack link
+
+on:
+  push:
+    branches: ['verify/windows-native-mark-20261119-*']
+    paths: ['.github/workflows/windows-native-mark.yml', '.github/diagnostics/hyperv-qos/**']
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    name: Verify official inputs and create the isolated boot fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    outputs:
+      iso_sha: ${{ steps.emit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Prepare only the standard EFI image producers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq --no-install-recommends grub-common grub-efi-amd64-bin xorriso mtools cpio squashfs-tools kmod zstd
+      - name: Build a diskless Linux receiver with the fixed Hyper-V driver
+        id: emit
+        run: |
+          bash .github/diagnostics/hyperv-qos/emit-fixture.sh "$RUNNER_TEMP/hv-build"
+          awk '{print "sha=" $1}' "$RUNNER_TEMP/hv-build/output/SHA256SUMS" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: windows-hyperv-disposable-mark-receiver
+          path: ${{ runner.temp }}/hv-build/output/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+  link:
+    name: Observe isolated TCP data and raw IPv4 and IPv6 fields
+    runs-on: windows-2022
+    needs: [fixture]
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: windows-hyperv-disposable-mark-receiver
+          path: ${{ runner.temp }}/owned-hyperv-fixture
+      - name: Exercise six explicit-source connections and verify independent receive evidence
+        shell: pwsh
+        env:
+          EXPECTED_OWNED_ISO_SHA: ${{ needs.fixture.outputs.iso_sha }}
+        run: ./.github/diagnostics/hyperv-qos/boot-and-check.ps1 -FixtureDirectory (Join-Path $env:RUNNER_TEMP 'owned-hyperv-fixture')
