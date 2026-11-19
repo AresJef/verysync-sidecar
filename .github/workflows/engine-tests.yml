@@ -3,6 +3,8 @@ name: Engine fixture
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: ['ci/formal-candidate/**']
   workflow_dispatch:
 
 permissions:

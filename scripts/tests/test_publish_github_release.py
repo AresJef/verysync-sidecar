@@ -166,7 +166,7 @@ class ReleaseIdentityTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 HELPER.validate_candidate_run(self.metadata, run_path, lookup, reference, run | {key: value})
 
-    def test_owned_candidate_push_is_valid_for_platforms_and_resources(self):
+    def test_owned_candidate_push_is_valid_for_all_required_workflows(self):
         repository = {"full_name": self.metadata["repository"]}
         reference = {"id": 30, "attempt": 1}
         branch = "ci/formal-candidate/rc1"
@@ -177,11 +177,8 @@ class ReleaseIdentityTests(unittest.TestCase):
                    "head_sha": self.metadata["source"], "run_attempt": 1, "head_branch": branch,
                    "status": "completed", "conclusion": "success",
                    "repository": repository, "head_repository": repository}
-            if lane in ("platform-matrix", "resource-collection"):
+            with self.subTest(workflow=lane):
                 HELPER.validate_candidate_run(self.metadata, path, workflow, reference, run)
-            else:
-                with self.assertRaises(ValueError):
-                    HELPER.validate_candidate_run(self.metadata, path, workflow, reference, run)
             for wrong in ("main", "ci/normal", "ci/formal-candidate/"):
                 with self.subTest(workflow=lane, branch=wrong), self.assertRaises(ValueError):
                     HELPER.validate_candidate_run(self.metadata, path, workflow, reference, run | {"head_branch": wrong})

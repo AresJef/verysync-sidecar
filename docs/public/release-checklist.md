@@ -79,10 +79,10 @@ applicable required outcome remains open.
   official fixed-engine archive/executable checksums.
 - Run the complete required native controller/engine matrix on that candidate,
   including actual control effects, faults, compiled examples and exact cleanup.
-- Dispatch the registered quality and engine workflows on the exact candidate ref.
-  An owned `ci/formal-candidate/*` branch at that same commit triggers
-  additional-platform and formal resource validation. Where both workflows are
-  registered for manual runs, you can also dispatch them on that ref.
+- Push the exact candidate to an owned `ci/formal-candidate/*` branch to run
+  quality, native engine, additional-platform and formal resource validation
+  on the same commit. You can also dispatch registered workflows on that ref.
+  The scoped Intel resource deferral requires the push described below.
   Record each workflow's numeric run ID and attempt in the private candidate
   metadata under `candidate_runs` with keys `quality`, `engine`,
   `platforms` and `resources`. Each entry
