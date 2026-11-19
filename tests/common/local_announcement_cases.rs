@@ -6,12 +6,38 @@ use std::{
 };
 use verysync_sidecar::{JoinFolderOptions, TargetPath};
 
+async fn stop_normal(core: &mut ManagedInstance, role: &str, stage: &str) -> TestResult {
+    let started = std::time::Instant::now();
+    let result = core.shutdown(Duration::from_secs(10)).await;
+    let timed_out = matches!(&result, Err(Error::Timeout { .. }));
+    println!(
+        "native announcement shutdown: {}",
+        json!({"role": role, "stage": stage, "deadline_ms": 10_000,
+               "elapsed_ms": started.elapsed().as_millis(), "timed_out": timed_out,
+               "success": result.is_ok()})
+    );
+    if timed_out {
+        let observation = tokio::time::timeout(Duration::from_secs(2), core.wait_for_exit()).await;
+        println!(
+            "native announcement shutdown after timeout: {}",
+            json!({"role": role, "stage": stage, "observed_tree_and_state_exit": matches!(&observation, Ok(Ok(_))),
+                   "observation_window_expired": observation.is_err()})
+        );
+    }
+    let exit = result?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    Ok(())
+}
+
 async fn restart_normal(core: &mut ManagedInstance, state: &Path, peer: &DeviceId) -> TestResult {
     core.client().pause_device(peer).await?;
     connection(core.client(), peer, false).await?;
     let identity = core.client().instance().device_id.clone();
-    let exit = core.shutdown(Duration::from_secs(10)).await?;
-    assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    let role = state
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("private-peer");
+    stop_normal(core, role, "before restart").await?;
     *core = ManagedInstance::start(options(state)?).await?;
     assert_eq!(core.client().instance().device_id, identity);
     core.client().resume_device(peer).await?;
@@ -398,9 +424,8 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
     }
     connection(a.client(), &b_id, false).await?;
     connection(b.client(), &a_id, false).await?;
-    for core in [&mut c, &mut b, &mut a] {
-        let exit = core.shutdown(Duration::from_secs(10)).await?;
-        assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
+    for (role, core) in [("c", &mut c), ("b", &mut b), ("a", &mut a)] {
+        stop_normal(core, role, "final cleanup").await?;
     }
     assert_eq!(std::fs::read(source.join("native-local.bin"))?, content);
     assert_eq!(std::fs::read(receiver.join("native-local.bin"))?, content);
