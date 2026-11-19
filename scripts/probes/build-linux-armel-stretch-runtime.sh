@@ -131,13 +131,22 @@ done
 for ((i = 0; i < ${#runtime_dependencies[@]}; i++)); do
   binary="${runtime_dependencies[i]}"
   while read -r name; do
-    [[ "$name" =~ ^(lib|ld-)[0-9a-zA-Z_.+-]+$ ]]
+    if [[ "$name" != "$loader" && ! "$name" =~ ^lib[0-9a-zA-Z_.+-]+$ ]]; then
+      printf 'Unexpected dependency %s in %s\n' "$name" "$binary" >&2
+      exit 1
+    fi
     if [[ -f "$fixture/$name" ]]; then continue; fi
     input="$sysroot/lib/$abi/$name"
     if [[ ! -f "$input" ]]; then input="$sysroot/usr/lib/$abi/$name"; fi
     mapped=$(realpath "$input")
-    case "$mapped" in "$sysroot/"*) ;; *) exit 1 ;; esac
-    test -f "$mapped"
+    case "$mapped" in
+      "$sysroot/"*) ;;
+      *) printf 'Dependency %s escaped the archived sysroot: %s\n' "$name" "$mapped" >&2; exit 1 ;;
+    esac
+    if [[ ! -f "$mapped" ]]; then
+      printf 'Dependency %s was absent from the archived sysroot: %s\n' "$name" "$mapped" >&2
+      exit 1
+    fi
     install -m 755 "$mapped" "$fixture/$name"
     runtime_dependencies+=("$fixture/$name")
   done < <(needed_libraries "$binary")
@@ -145,6 +154,9 @@ done
 
 "$abi-readelf" --version-info "$fixture/vs-sdk-probe" "$fixture/vs-entropy-control" > "$work/symbol-versions.txt"
 highest=$(grep -Eo 'GLIBC_[0-9]+(\.[0-9]+)+' "$work/symbol-versions.txt" | sort -Vu | tail -n 1)
-test "$(printf '%s\n' "$highest" "GLIBC_$libc_version" | sort -V | tail -n 1)" = "GLIBC_$libc_version"
+if [[ "$(printf '%s\n' "$highest" "GLIBC_$libc_version" | sort -V | tail -n 1)" != "GLIBC_$libc_version" ]]; then
+  printf '%s required %s with only archived GLIBC_%s available\n' "$target" "$highest" "$libc_version" >&2
+  exit 1
+fi
 printf '%s dynamic glibc max symbol ABI %s\n' "$abi_label" "$highest"
 sha256sum "$fixture"/* | tee "$work/guest-runtime-sha256.txt"
