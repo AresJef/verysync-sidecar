@@ -1,0 +1,62 @@
+name: Windows isolated receiver eligibility
+
+on:
+  push:
+    branches: ['verify/windows-receiver-20261119-a']
+    paths: ['.github/workflows/windows-receiver-eligibility.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: Unmodified receiver capability (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2022, windows-11-arm]
+    steps:
+      - name: Read Windows capabilities and existing virtual links
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $system = Get-CimInstance -ClassName Win32_OperatingSystem
+          $features = [ordered]@{}
+          foreach ($name in @('VirtualMachinePlatform','Microsoft-Windows-Subsystem-Linux','Microsoft-Hyper-V-All','Containers')) {
+            $entry = Get-CimInstance Win32_OptionalFeature -Filter "Name='$name'"
+            $features[$name] = @($entry | ForEach-Object { [int]$_.InstallState })
+          }
+          $registryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+          $distributions = @()
+          if (Test-Path -LiteralPath $registryPath) {
+            $distributions = @(Get-ChildItem -LiteralPath $registryPath | ForEach-Object {
+              $properties = Get-ItemProperty -LiteralPath $_.PSPath
+              if ($properties.PSObject.Properties.Name -contains 'Version') { [int]$properties.Version }
+            })
+          }
+          $adapters = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.Status -eq 'Up' })
+          $virtual = @($adapters | Where-Object { $_.InterfaceDescription -match 'Hyper-V|WSL|Virtual Ethernet' })
+          $switchTypes = @()
+          $canReadSwitches = $null -ne (Get-Command Get-VMSwitch -ErrorAction SilentlyContinue)
+          $switchError = $false
+          if ($canReadSwitches) {
+            try { $switchTypes = @(Get-VMSwitch | ForEach-Object { "$($_.SwitchType)" }) }
+            catch { $switchError = $true }
+          }
+          $docker = Get-Service -Name docker -ErrorAction SilentlyContinue
+          $receipt = [ordered]@{
+            build = $system.BuildNumber
+            architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+            feature_states = $features
+            wsl_command_exists = $null -ne (Get-Command wsl.exe -ErrorAction SilentlyContinue)
+            registered_wsl_versions = $distributions
+            up_hyperv_or_wsl_adapters = $virtual.Count
+            get_vmswitch_exists = $canReadSwitches
+            get_vmswitch_error = $switchError
+            switch_types = $switchTypes
+            docker_service_running = ($null -ne $docker -and $docker.Status -eq 'Running')
+            candidate_sha = $env:GITHUB_SHA
+          }
+          Write-Output ("ISOLATED_RECEIVER_ELIGIBILITY " + ($receipt | ConvertTo-Json -Compress -Depth 5))
