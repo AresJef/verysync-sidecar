@@ -1,0 +1,90 @@
+name: Native macOS configuration generation diagnosis
+
+on:
+  push:
+    branches: [verify/r24/macos-configuration-generation-check]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Packaged configuration diagnosis (${{ matrix.profile }})
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: macos-amd64-standard
+            runner: macos-15-intel
+            rust_host: x86_64-apple-darwin
+            filter: native_socks5_proxy_authentication_transfer_and_explicit_disable_preserve_data
+            contract: proxy
+          - profile: macos-arm64-standard
+            runner: macos-15
+            rust_host: aarch64-apple-darwin
+            filter: incoming_request
+            contract: budgets
+    env:
+      TEST_TOOLCHAIN: 1.85.0
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          path: candidate
+          ref: a710b636853993e31853d0a0d7f9f1ff2a75af0c
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Verify archived candidate and pinned native compiler
+        working-directory: candidate
+        env:
+          EXPECTED_RUST_HOST: ${{ matrix.rust_host }}
+        run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/mac-config-candidate-target"
+          printf 'CARGO_TARGET_DIR=%s\n' "$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          test "$(rustc +"$TEST_TOOLCHAIN" -vV | sed -n 's/^host: //p')" = "$EXPECTED_RUST_HOST"
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+          cargo +"$TEST_TOOLCHAIN" package --no-verify --offline --locked
+          RUSTUP_TOOLCHAIN="$TEST_TOOLCHAIN" python3 -B scripts/publish-github-release.py \
+            --metadata ../.github/diagnostics/macos-configuration-candidate.json \
+            --check-package "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate"
+      - name: Prepare the matching pinned native fixture
+        working-directory: candidate
+        run: >-
+          python3 scripts/prepare-test-engine.py prepare --package "${{ matrix.profile }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Require the original configuration and real file effects
+        shell: bash
+        env:
+          NATIVE_FILTER: ${{ matrix.filter }}
+          CASE_CONTRACT: ${{ matrix.contract }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/mac-config-crate"
+          tar -xzf "$CARGO_TARGET_DIR/package/verysync-sidecar-0.1.0-alpha.2.crate" -C "$RUNNER_TEMP/mac-config-crate"
+          cd "$RUNNER_TEMP/mac-config-crate/verysync-sidecar-0.1.0-alpha.2"
+          evidence="$RUNNER_TEMP/mac-config-native"
+          python3 scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target configuration_engine --test-filter "$NATIVE_FILTER" --evidence-dir "$evidence"
+          application_log="$evidence/configuration-engine.log"
+          if [ "$CASE_CONTRACT" = proxy ]; then
+            grep -F 'native SOCKS5 disabled generation: observer_started_before_restart=true accepted=0 reconnect_observed_seconds=6' "$application_log"
+            grep -F 'native SOCKS5 proxy evidence:' "$application_log"
+            grep -E '^test result: ok. 1 passed; 0 failed; 0 ignored;' "$application_log"
+          else
+            grep -F 'native incoming admission cleanup:' "$application_log"
+            grep -F 'native signed incoming budget cleanup evidence:' "$application_log"
+            grep -E '^test result: ok. 2 passed; 0 failed; 0 ignored;' "$application_log"
+          fi
+      - name: Require final exact owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        working-directory: candidate
+        run: python3 scripts/prepare-test-engine.py check-cleanup
