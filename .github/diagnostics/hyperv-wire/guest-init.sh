@@ -7,6 +7,10 @@ trap 'status=$?; echo "RECEIVER_GUEST_FINISH status=$status"; sync; poweroff -f'
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t tmpfs tmpfs /run
+mkdir -p /dev/pts
+mount -t devpts -o mode=620,ptmxmode=666 devpts /dev/pts
+python3 -B -c 'import os, pty; master, slave = pty.openpty(); assert os.isatty(slave); os.close(slave); os.close(master)'
+echo 'WIRE_GUEST_PTY_READY real_master_slave=true'
 echo "RECEIVER_GUEST_BOOT kernel=$(uname -r) architecture=$(uname -m)"
 set -- /sys/bus/vmbus/drivers/hv_netvsc/*/net/*
 test "$#" = 1
