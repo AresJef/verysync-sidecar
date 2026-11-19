@@ -1,7 +1,7 @@
 name: Verify actual file transfer and recovery through the private native relay
 on:
   push:
-    branches: [verify/r24/native-relay-file-recovery]
+    branches: [verify/r24/native-relay-macos26]
 permissions:
   contents: read
 jobs:
@@ -14,11 +14,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - package: linux-arm64-standard
-            runner: ubuntu-24.04-arm
-            rust_host: aarch64-unknown-linux-gnu
           - package: macos-arm64-standard
-            runner: macos-15
+            runner: macos-26
             rust_host: aarch64-apple-darwin
     env:
       TEST_TOOLCHAIN: 1.85.0
@@ -42,6 +39,8 @@ jobs:
           export CARGO_TARGET_DIR="$RUNNER_TEMP/relay-candidate-target"
           printf 'CARGO_TARGET_DIR=%s\n' "$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
           rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          sw_vers
+          uname -m
           rustc +"$TEST_TOOLCHAIN" -vV
           test "$(rustc +"$TEST_TOOLCHAIN" -vV | sed -n 's/^host: //p')" = "$EXPECTED_RUST_HOST"
           cargo +"$TEST_TOOLCHAIN" fetch --locked
