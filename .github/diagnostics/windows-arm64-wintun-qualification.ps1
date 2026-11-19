@@ -190,6 +190,24 @@ public static class OwnedTunQualification
         throw "WintunCreateAdapter failed with Win32 code $code"
     }
     $index = [OwnedTunQualification]::InterfaceIndex($adapter)
+    if ($dataCalibration) {
+        # A running Wintun session brings the interface media up before routes appear.
+        $peerStart = [Diagnostics.ProcessStartInfo]::new($TcpPeer)
+        $peerStart.UseShellExecute = $false
+        $peerStart.RedirectStandardOutput = $true
+        $peerStart.RedirectStandardError = $true
+        $peerStart.ArgumentList.Add($dll)
+        $peerStart.ArgumentList.Add($name)
+        $ownedPeer = [Diagnostics.Process]::Start($peerStart)
+        $peerErrors = $ownedPeer.StandardError.ReadToEndAsync()
+        $ready = $ownedPeer.StandardOutput.ReadLineAsync()
+        if (!$ready.Wait(8000) -or $ready.Result -cne 'ARM64_TUN_TCP_READY') {
+            if ($peerErrors.IsCompletedSuccessfully) { Write-Output $peerErrors.Result }
+            throw 'The independent receiver did not become ready on the owned adapter'
+        }
+        $peerOutput = $ownedPeer.StandardOutput.ReadToEndAsync()
+        Write-Output 'ARM64_TUN_TCP_READY'
+    }
     if (!$dataCalibration) {
         $session = [OwnedTunQualification]::WintunStartSession($adapter, 4194304)
         if ($session -eq [IntPtr]::Zero) {
@@ -210,8 +228,9 @@ public static class OwnedTunQualification
             if ($address.AddressState -eq 'Preferred') { break }
             Start-Sleep -Milliseconds 100
         } until ((Get-Date) -ge $limit)
-        if ($address.AddressState -ne 'Preferred' -or
-            !(Get-NetRoute -InterfaceIndex $index -DestinationPrefix $case.prefix -ErrorAction SilentlyContinue)) {
+        $onLink = [bool](Get-NetRoute -InterfaceIndex $index -DestinationPrefix $case.prefix -ErrorAction SilentlyContinue)
+        Write-Output ("ARM64_TUN_LINK family=$($case.family) address_state=$($address.AddressState) owned_on_link=$onLink")
+        if ($address.AddressState -ne 'Preferred' -or !$onLink) {
             throw 'The assigned test endpoint and its on-link route did not become active'
         }
         if (!$dataCalibration) {
@@ -220,20 +239,6 @@ public static class OwnedTunQualification
         }
     }
     if ($dataCalibration) {
-        $peerStart = [Diagnostics.ProcessStartInfo]::new($TcpPeer)
-        $peerStart.UseShellExecute = $false
-        $peerStart.RedirectStandardOutput = $true
-        $peerStart.RedirectStandardError = $true
-        $peerStart.ArgumentList.Add($dll)
-        $peerStart.ArgumentList.Add($name)
-        $ownedPeer = [Diagnostics.Process]::Start($peerStart)
-        $peerErrors = $ownedPeer.StandardError.ReadToEndAsync()
-        $ready = $ownedPeer.StandardOutput.ReadLineAsync()
-        if (!$ready.Wait(8000) -or $ready.Result -cne 'ARM64_TUN_TCP_READY') {
-            if ($peerErrors.IsCompletedSuccessfully) { Write-Output $peerErrors.Result }
-            throw 'The independent receiver did not become ready on the owned adapter'
-        }
-        $peerOutput = $ownedPeer.StandardOutput.ReadToEndAsync()
         $env:OWNED_HYPERV_QOS_CONTROL = 'true'
         $env:OWNED_HYPERV_QOS_MECHANISM = 'qwave'
         $senderOutput = @(& $Python -B (Join-Path $PSScriptRoot 'hyperv-wire/qos_send.py'))
