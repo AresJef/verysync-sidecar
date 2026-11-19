@@ -558,20 +558,34 @@ async fn sender(guest_core: &Path) -> Result {
         "guest source executable did not match its fixed SHA-256",
     )?;
     let dest: SocketAddr = CONTROL.parse()?;
+    let source = SocketAddr::new(HOST_IP.parse()?, 0);
     let deadline = Instant::now() + Duration::from_secs(55);
     let mut stream = loop {
-        match TcpStream::connect_timeout(&dest, Duration::from_secs(1)) {
-            Ok(stream) => break stream,
-            Err(err) if Instant::now() >= deadline => return Err(err.into()),
-            Err(_) => std::thread::sleep(Duration::from_millis(300)),
+        let socket = tokio::net::TcpSocket::new_v4()?;
+        socket.bind(source)?;
+        match tokio::time::timeout(Duration::from_secs(2), socket.connect(dest)).await {
+            Ok(Ok(stream)) => break stream.into_std()?,
+            Ok(Err(err)) if Instant::now() >= deadline => {
+                return Err(format!("owned control connect from {source} to {dest}: {err}").into());
+            }
+            Err(_) if Instant::now() >= deadline => {
+                return Err("owned source-bound control connection timed out".into());
+            }
+            _ => tokio::time::sleep(Duration::from_millis(250)).await,
         }
     };
+    stream.set_nonblocking(false)?;
     configure_stream(&stream)?;
     ensure(
-        stream.local_addr()?.ip() == HOST_IP.parse::<IpAddr>()?,
+        stream.local_addr()?.ip() == source.ip(),
         "control is not on the owned Hyper-V link",
     )?;
+    println!(
+        "WIRE_CONTROL_CONNECTED source={} target={dest}",
+        stream.local_addr()?
+    );
     put(&mut stream, &bytes)?;
+    println!("WIRE_GUEST_UPLOAD_COMPLETE bytes={}", bytes.len());
     drop(bytes);
     ensure(
         receive::<bool>(&mut stream)?,
