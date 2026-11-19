@@ -5,6 +5,7 @@ import json
 import os
 import select
 import socket
+import struct
 import sys
 import time
 
@@ -49,6 +50,24 @@ def tcp_data(layer3, family, source, target, port):
     return int.from_bytes(tcp[:2], "big"), class_octet, payload, remaining_hops
 
 
+def datagrams_until_stop(packet, stop, deadline):
+    while (remaining := deadline - time.monotonic()) > 0:
+        ready, _, _ = select.select([stop, packet], [], [], remaining)
+        if stop in ready:
+            # The engine can finish writing before this observer is scheduled.
+            # Drain ready datagrams without waiting for any additional traffic.
+            packet.setblocking(False)
+            while time.monotonic() < deadline:
+                try:
+                    yield packet.recvfrom(128)
+                except BlockingIOError:
+                    return
+            break
+        if packet in ready:
+            yield packet.recvfrom(128)
+    raise TimeoutError("the owned receive observer exceeded its 30-second bound")
+
+
 def main():
     if sys.platform != "linux" or os.geteuid() != 0 or os.environ.get("RUNNER_DISPOSABLE_RX") != "true":
         raise ValueError("run only inside the authorized disposable receiver fixture")
@@ -62,19 +81,23 @@ def main():
         raise ValueError("an explicit nonloopback test flow is required")
     eth_all = 3
     packet_host = 0
+    so_rcvbufforce = 33
+    sol_packet = 263
+    packet_statistics = 6
+    burst_bytes = 2 * 1024 * 1024
     counts = Counter()
     sizes = Counter()
     with socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(eth_all)) as packet:
+        # The isolated guest can size this socket for the whole burst despite
+        # the narrower system default. Linux accounts twice the requested size.
+        packet.setsockopt(socket.SOL_SOCKET, so_rcvbufforce, burst_bytes)
+        buffer_bytes = packet.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+        if buffer_bytes < 2 * burst_bytes:
+            raise RuntimeError("the isolated packet socket did not reserve the expected buffer")
         packet.bind(("peer", eth_all))
         print("RECEIVER_HEADERS_READY", flush=True)
         deadline = time.monotonic() + 30
-        while (remaining := deadline - time.monotonic()) > 0:
-            ready, _, _ = select.select([sys.stdin, packet], [], [], remaining)
-            if sys.stdin in ready:
-                break
-            if packet not in ready:
-                continue
-            data, address = packet.recvfrom(128)
+        for data, address in datagrams_until_stop(packet, sys.stdin, deadline):
             if address[0] != "peer" or address[2] != packet_host:
                 continue
             item = tcp_data(data, family, source.packed, target.packed, port)
@@ -85,8 +108,13 @@ def main():
                 sizes[key] += size
                 if len(counts) > 64:
                     raise RuntimeError("unexpected number of distinct test flow headers")
-        else:
-            raise TimeoutError("the owned receive observer exceeded its 30-second bound")
+        offered, drops = struct.unpack("=II", packet.getsockopt(sol_packet, packet_statistics, 8))
+        print("WIRE_GUEST_CAPTURE_ACCOUNTING " + json.dumps({
+            "family": family, "socket_buffer_bytes": buffer_bytes,
+            "offered_packets": offered, "kernel_drops": drops,
+        }), file=sys.stderr, flush=True)
+        if drops:
+            raise RuntimeError("the kernel dropped packets on the isolated capture socket")
     rows = [
         {"source_port": key[0], "class_octet": key[1], "remaining_hops": key[2],
          "tcp_payload_bytes": sizes[key], "packets": count}

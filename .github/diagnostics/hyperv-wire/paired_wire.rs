@@ -369,13 +369,34 @@ async fn inspect_guest(
         peer.ip() == source && peer.port() > 0,
         "authenticated sender does not match the isolated address",
     )?;
-    let headers = capture.finish()?;
-    let headers: Vec<_> = headers
+    let captured_headers = capture.finish()?;
+    let headers: Vec<_> = captured_headers
         .iter()
         .filter(|h| h.source_port == peer.port())
         .collect();
     let packet_count = headers.iter().map(|h| h.packets).sum();
     let payload_tcp_bytes = headers.iter().map(|h| h.tcp_payload_bytes).sum();
+    if packet_count == 0 || payload_tcp_bytes < SIZE {
+        let observed_flows: Vec<_> = captured_headers
+            .iter()
+            .map(|header| {
+                serde_json::json!({
+                    "source_port": header.source_port,
+                    "packets": header.packets,
+                    "tcp_payload_bytes": header.tcp_payload_bytes
+                })
+            })
+            .collect();
+        eprintln!(
+            "WIRE_GUEST_CAPTURE_INSUFFICIENT {}",
+            serde_json::json!({
+                "authenticated_source_port": peer.port(),
+                "matched_tcp_payload_bytes": payload_tcp_bytes,
+                "matched_packets": packet_count,
+                "observed_test_flows": observed_flows
+            })
+        );
+    }
     ensure(
         packet_count > 0 && payload_tcp_bytes >= SIZE,
         "authenticated flow lacks real TCP data headers",
