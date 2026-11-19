@@ -113,9 +113,13 @@ class ReleaseIdentityTests(unittest.TestCase):
         candidate = copy.deepcopy(self.metadata)
         candidate["candidate_runs"] = {
             key: {"id": index, "attempt": 1}
-            for index, key in enumerate(("quality", "engine", "platforms", "resources"), 1)
+            for index, key in enumerate(HELPER.ACTION_WORKFLOWS, 1)
         }
         HELPER.validate_candidate_runs(candidate)
+        missing_packets = copy.deepcopy(candidate)
+        del missing_packets["candidate_runs"]["windows_amd64_packets"]
+        with self.assertRaisesRegex(ValueError, "Windows AMD64 packet runs"):
+            HELPER.validate_candidate_runs(missing_packets)
         for correction in ({}, {"id": True, "attempt": 1}, {"id": 2, "attempt": 1},
                            {"id": 9, "attempt": 0}):
             with self.subTest(correction=correction):
@@ -170,8 +174,8 @@ class ReleaseIdentityTests(unittest.TestCase):
         repository = {"full_name": self.metadata["repository"]}
         reference = {"id": 30, "attempt": 1}
         branch = "ci/formal-candidate/rc1"
-        for lane in ("platform-matrix", "resource-collection", "quality", "engine-tests"):
-            path = f".github/workflows/{lane}.yml"
+        for lane in HELPER.ACTION_WORKFLOWS.values():
+            path = f".github/workflows/{lane}"
             workflow = {"id": 55, "path": path}
             run = {"id": 30, "workflow_id": 55, "path": path, "event": "push",
                    "head_sha": self.metadata["source"], "run_attempt": 1, "head_branch": branch,
@@ -179,7 +183,7 @@ class ReleaseIdentityTests(unittest.TestCase):
                    "repository": repository, "head_repository": repository}
             with self.subTest(workflow=lane):
                 HELPER.validate_candidate_run(self.metadata, path, workflow, reference, run)
-            for wrong in ("main", "ci/normal", "ci/formal-candidate/"):
+            for wrong in ("main", "ci/normal", "ci/formal-candidate/", "verify/r24/windows-amd64-packet-boundary"):
                 with self.subTest(workflow=lane, branch=wrong), self.assertRaises(ValueError):
                     HELPER.validate_candidate_run(self.metadata, path, workflow, reference, run | {"head_branch": wrong})
             with self.assertRaises(ValueError):
@@ -248,6 +252,17 @@ class ReleaseIdentityTests(unittest.TestCase):
         with patch.object(HELPER, "github", side_effect=replies.__getitem__) as github:
             self.assertEqual(HELPER.verify_candidate_actions(candidate), expected)
             self.assertNotIn("publish", [call.args[0] for call in github.call_args_list])
+        packet_run = references["windows_amd64_packets"]["id"]
+        packet_attempt = f"{context}/actions/runs/{packet_run}/attempts/2/jobs?per_page=100&page=1"
+        packet_step = next(
+            step for job in replies[packet_attempt]["jobs"] for step in job["steps"]
+            if "all six scoped AMD64 packet cases" in step["name"]
+        )
+        packet_step["conclusion"] = "skipped"
+        with patch.object(HELPER, "github", side_effect=replies.__getitem__):
+            with self.assertRaisesRegex(ValueError, "required step.*AMD64 packet cases"):
+                HELPER.verify_candidate_actions(candidate)
+        packet_step["conclusion"] = "success"
         # A successful resource job without the formal measurement step is only preparation.
         resource_attempt = f'{context}/actions/runs/{references["resources"]["id"]}/attempts/2/jobs?per_page=100&page=1'
         job = replies[resource_attempt]["jobs"][0]

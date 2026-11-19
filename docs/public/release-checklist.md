@@ -57,8 +57,10 @@ for this release. The following field network cases are deferred.
 The [controlled network evidence](controlled-network-acceptance.md) retains
 the observed IPv4 and IPv6 routed paths, file effects, recovery and node
 lifecycle checks. Revalidate the applicable controlled cases on the final
-candidate. The separate Windows IPv4 and IPv6 packet-class gate remains
-required.
+candidate. Run the separate [Windows packet validation](controlled-network-acceptance.md#windows-packet-traffic-class)
+for IPv4 and IPv6. The fixed Windows AMD64 direct TCP check includes the
+observed default-octet boundary. Windows ARM64 keeps its own packet-effect
+requirement.
 
 macOS Intel formal resource collection and its independent reruns are deferred.
 Both standard Intel labels produced zero qualifying formal samples. Resume
@@ -80,12 +82,12 @@ applicable required outcome remains open.
 - Run the complete required native controller/engine matrix on that candidate,
   including actual control effects, faults, compiled examples and exact cleanup.
 - Push the exact candidate to an owned `ci/formal-candidate/*` branch to run
-  quality, native engine, additional-platform and formal resource validation
-  on the same commit. You can also dispatch registered workflows on that ref.
+  quality, native engine, additional-platform, formal resource and Windows AMD64
+  packet validation on the same commit. You can also dispatch registered workflows on that ref.
   The scoped Intel resource deferral requires the push described below.
   Record each workflow's numeric run ID and attempt in the private candidate
   metadata under `candidate_runs` with keys `quality`, `engine`,
-  `platforms` and `resources`. Each entry
+  `platforms`, `resources` and `windows_amd64_packets`. Each entry
   contains `id` and `attempt`. Run the read-only
   `python3 scripts/publish-github-release.py --metadata /absolute/private/release.json --check-actions`
   with GitHub CLI access to workflow metadata. This checks the candidate commit

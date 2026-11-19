@@ -1,9 +1,9 @@
 name: Verify the fixed Windows AMD64 packet boundary
 
 on:
+  workflow_dispatch:
   push:
-    branches: ['verify/r24/windows-amd64-packet-boundary']
-    paths: ['.github/workflows/windows-sdk-wire.yml', '.github/diagnostics/hyperv-wire/**']
+    branches: ['ci/formal-candidate/**', 'verify/r24/windows-amd64-packet-boundary']
 
 permissions:
   contents: read

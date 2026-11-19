@@ -22,6 +22,7 @@ ACTION_WORKFLOWS = {
     "engine": "engine-tests.yml",
     "platforms": "platform-matrix.yml",
     "resources": "resource-collection.yml",
+    "windows_amd64_packets": "windows-sdk-wire.yml",
 }
 PLATFORM_CLEANUP_STEP = "Require exact owned-executable cleanup"
 RESOURCE_PLAN = "Plan frozen resource profiles"
@@ -58,6 +59,18 @@ CANDIDATE_ACTION_JOBS = {
             "Preserve sanitized raw measurements and immutable group records",
         ) for name in NATIVE_TARGETS},
         RESOURCE_PLAN: ("Select the frozen resource profiles",),
+    },
+    "windows_amd64_packets": {
+        "Build exact diskless Linux SDK peer and separate capture": (
+            "Build guest counterpart with Rust 1.85 and the locked SDK tree",
+            "Produce the private-test-application-only ISO and record its exact bytes",
+        ),
+        "Build the exact native Windows Rust sender": ("Build the same SDK source on native Windows AMD64",),
+        "Observe the socket control and SDK on one owned Windows link": (
+            "Explicitly prepare both fixed official images without publishing either",
+            "Require the independent socket control and all six scoped AMD64 packet cases",
+            "Confirm actual sender image has no live owned processes",
+        ),
     },
 }
 PACKAGE_LIMIT = 2 * 1024 * 1024
@@ -231,7 +244,7 @@ def validate_candidate_runs(metadata):
             "only the approved R23 Intel formal resource profile can be deferred")
     runs = metadata.get("candidate_runs")
     require(isinstance(runs, dict) and runs.keys() == ACTION_WORKFLOWS.keys(),
-            "candidate requires quality, engine, platform and formal resource runs")
+            "candidate requires quality, engine, platform, formal resource and Windows AMD64 packet runs")
     for reference in runs.values():
         require(isinstance(reference, dict) and reference.keys() == {"id", "attempt"}
                 and all(type(value) is int and value > 0 for value in reference.values()),
@@ -326,6 +339,8 @@ def verify_candidate_actions(metadata):
                 del required[f"Resource coverage ({deferred})"]
                 required[RESOURCE_PLAN] += (R23_RESOURCE_RECORD,)
             require(len(jobs) == len(required), "resource job roster differs from the declared scope")
+        if lane == "windows_amd64_packets":
+            require(len(jobs) == len(required), "Windows AMD64 packet job roster differs from the registered workflow")
         validate_candidate_jobs(metadata["source"], reference["id"], reference["attempt"], jobs, required)
         validate_candidate_run(metadata, workflow_path, workflow, reference, github(run_path))
         counts[lane] = {"id": reference["id"], "attempt": reference["attempt"],
