@@ -33,13 +33,30 @@ class NativeStepContracts(unittest.TestCase):
         self.assertEqual(HELPER.failures("linux-amd64-standard", steps), [])
 
     def test_other_platform_browser_scope_does_not_waive_existing_gates(self):
-        for family in ["windows"]:
-            steps = self.successful_steps(family)
-            steps["native_browser_engine"] = {"outcome": "skipped"}
-            self.assertEqual(HELPER.failures(family + "-amd64-standard", steps), [])
-            steps["native_mechanism_" + family] = {"outcome": "failure"}
-            self.assertIn("native_mechanism_" + family,
-                          HELPER.failures(family + "-amd64-standard", steps))
+        steps = self.successful_steps("windows")
+        steps["native_windows_gui_lost_reply"] = {"outcome": "success"}
+        steps["native_browser_engine"] = {"outcome": "skipped"}
+        self.assertEqual(HELPER.failures("windows-amd64-standard", steps), [])
+        steps["native_mechanism_windows"] = {"outcome": "failure"}
+        self.assertIn("native_mechanism_windows",
+                      HELPER.failures("windows-amd64-standard", steps))
+
+    def test_windows_amd64_requires_actual_lost_reply_check(self):
+        key = "native_windows_gui_lost_reply"
+        for outcome in (None, "skipped", "failure", "cancelled"):
+            with self.subTest(outcome=outcome):
+                steps = self.successful_steps("windows")
+                if outcome is not None:
+                    steps[key] = {"outcome": outcome}
+                self.assertEqual(HELPER.failures("windows-amd64-standard", steps), [key])
+        steps[key] = {"outcome": "success"}
+        self.assertEqual(HELPER.failures("windows-amd64-standard", steps), [])
+
+    def test_windows_arm64_excludes_amd64_lost_reply_check(self):
+        steps = self.successful_steps("windows")
+        self.assertEqual(HELPER.failures("windows-arm64-standard", steps), [])
+        steps["native_windows_gui_lost_reply"] = {"outcome": "skipped"}
+        self.assertEqual(HELPER.failures("windows-arm64-standard", steps), [])
 
     def test_unknown_new_native_failure_remains_required(self):
         steps = self.successful_steps("linux")
