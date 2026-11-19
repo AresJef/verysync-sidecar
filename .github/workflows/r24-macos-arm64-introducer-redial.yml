@@ -1,8 +1,8 @@
-name: Verify original macOS ARM64 introduction scopes with explicit private redial
+name: Verify the original macOS ARM64 suite with private redial scoped to direct transfer
 
 on:
   push:
-    branches: ['verify/r24/macos-arm64-introducer-redial']
+    branches: ['verify/r24/macos-arm64-introducer-direct-redial']
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ jobs:
         shell: bash
     env:
       TEST_TOOLCHAIN: 1.85.0-aarch64-apple-darwin
-      EXACT_PARENT: dfb7bc3c1fcaaf9532bd69337fc597e1b5f93e76
+      EXACT_PARENT: 6ae6fce493b73fe512b7bf92c98fd83d819ecd17
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -62,7 +62,7 @@ jobs:
               direct = [r for r in receipts if r["direct_data_from_introduced_peer_without_introducer_folder"]]
               assert len(direct) == 1 and direct[0]["real_converged_shared_data_and_three_normal_exits"]
               assert direct[0]["trusted_device_origin_folder_association"] == [True, True, True]
-              assert text.count("owned reconnect fixture redial seconds:") >= 3
+              assert text.count("owned reconnect fixture redial seconds:") == 3
               print(f"MAC_INTRODUCER_ORIGINAL_SCOPE {suffix} passed={required} exact_direct_effect_and_three_exits=true")
           PY
       - name: Require final exact owned engine cleanup
