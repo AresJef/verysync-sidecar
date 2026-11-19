@@ -760,6 +760,8 @@ jobs:
                   assert phase["actual_persisted_restart_after_explicit_stop"]
               else:
                   assert phase["actual_assertion_and_owned_helper_released_after_transfer"]
+          assert "native_sleep_role_cleanup_checked_after_case_outcome=2" in text
+          assert "native_sleep_distinct_images_gone=true" in text
           assert "actual_three_transfers_and_source_receiver_bytes_retained=true" in text
           assert "actual_both_normal_owned_tree_and_state_exit=true" in text
           assert "host_power_settings_changed=false host_suspend_attempted=false" in text

@@ -181,7 +181,7 @@ pub(super) async fn powercfg(selector: &'static str) -> TestResult<Vec<u8>> {
 
 #[cfg(windows)]
 #[allow(unsafe_code)]
-pub(super) fn owned_native_image(pid: u32) -> TestResult<String> {
+pub(super) fn owned_native_image(pid: u32, expected: &std::path::Path) -> TestResult<String> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -212,8 +212,6 @@ pub(super) fn owned_native_image(pid: u32) -> TestResult<String> {
         Ok(String::from_utf16(&buffer[..usize::try_from(length)?])?)
     };
     let win32 = query(0)?;
-    let expected =
-        std::env::var_os("VERYSYNC_TEST_BINARY").ok_or("private native program absent")?;
     if std::fs::canonicalize(win32)? != std::fs::canonicalize(expected)? {
         return Err("queried PID does not own the selected private native image".into());
     }
@@ -221,15 +219,14 @@ pub(super) fn owned_native_image(pid: u32) -> TestResult<String> {
 }
 
 #[cfg(windows)]
-pub(super) async fn observe(pid: u32) -> TestResult<(bool, String)> {
-    let image = owned_native_image(pid)?;
-    observe_image(&image).await
-}
-
-#[cfg(windows)]
-pub(super) async fn observe_image(image: &str) -> TestResult<(bool, String)> {
+pub(super) async fn observe_distinct_images(
+    images: &[String; 2],
+) -> TestResult<([bool; 2], String)> {
+    if images[0].eq_ignore_ascii_case(&images[1]) {
+        return Err("native sender and receiver must have distinct private images".into());
+    }
     let snapshot = decode_native_requests(&powercfg("/requests").await?)?;
-    let active = owned_system_request(&snapshot, image)
-        .map_err(|e| format!("{e}; powercfg snapshot: {snapshot}"))?;
-    Ok((active, snapshot))
+    let sender = owned_system_request(&snapshot, &images[0])?;
+    let receiver = owned_system_request(&snapshot, &images[1])?;
+    Ok(([sender, receiver], snapshot))
 }
