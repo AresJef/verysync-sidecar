@@ -1,4 +1,4 @@
-# Native folder concurrency validation (unreleased)
+# Native folder concurrency validation
 
 `GeneralOptionsPatch::max_folder_concurrency` has functional evidence for
 selecting one and two simultaneously synchronizing folders. The controlled

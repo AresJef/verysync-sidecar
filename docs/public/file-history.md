@@ -162,7 +162,7 @@ an empty default Archive directory even while using a selected location. Check
 actual archive files and hashes. An external versioner chooses its own storage;
 this setting does not rewrite its command. The public local case checks selected
 and restored-default archival, old-location data retention and actual native age
-cleanup. Complete same-source native acceptance remains pending for this slice.
+cleanup.
 
 Archive browsing returns one bounded native response. `None` selects the root;
 an explicit relative target path selects a prefix. Prefix browsing lists
@@ -253,10 +253,11 @@ for the final delivery candidate remains required. The SDK performs the bounded 
 the native planner still selects and restores content. No controller filesystem
 path is opened.
 
-These APIs are unreleased. Isolated macOS ARM64 tests have checked actual remote
+Isolated macOS ARM64 tests have checked actual remote
 overwrites, retention of two versions, trashcan retention after remote deletion,
 restored bytes/SHA-256, unchanged stopped-source data and owned process exits.
-Complete acceptance on the same candidate across six native targets is pending.
+See the release checks for the applicable archive operations and the separate
+Pro audit history cases.
 The separate global history setting is Pro-gated in the fixed GUI; the free
 isolated instance did not retain an attempted enable. Positive licensed history
 recording, pagination and reset are pending and are not implied by file-version

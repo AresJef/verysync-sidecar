@@ -1,4 +1,4 @@
-# Native progress-reporting interval validation (unreleased)
+# Native progress-reporting interval validation
 
 `GeneralOptionsPatch::progress_update_interval_seconds` selects the native
 progress-reporting interval. The update returns configuration readback; it does

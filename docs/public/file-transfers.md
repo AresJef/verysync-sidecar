@@ -128,10 +128,9 @@ Inspect the exact target before choosing recovery or retry. Failures after a
 possible write use `MutationOutcomeUnknown`; an upload deadline before POST
 remains a read/preparation timeout.
 
-These APIs are unreleased. Native effects are verified locally on macOS ARM64;
-the complete same-source multi-platform acceptance is pending. Archive decoding
-libraries used by the isolated tests are development dependencies and are not
-required by applications using these streaming methods.
+Archive decoding libraries used by the isolated tests are development
+dependencies. Applications using these streaming methods do not require them.
+See the release checks for the native platform and archive verification scope.
 
 ## Real disk-full boundary
 

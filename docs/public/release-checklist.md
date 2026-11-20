@@ -5,7 +5,7 @@ the exact candidate with the fixed VerySync v2.33.2 engine. The first alpha
 is an intermediate milestone. The first stable release requires every applicable
 gate below and actual consumption of the published package.
 
-## Planned first stable release coverage
+## First stable release coverage
 
 The following Pro behaviors await validation with an isolated, entitled core.
 Previously verified behavior and entitlement refusal checks keep their own

@@ -1,4 +1,4 @@
-# Official remote management (unreleased)
+# Official remote management
 
 The native remote-management permission, a tunnel probe, and an authenticated
 connection are separate operations. None acquires a license or proves another

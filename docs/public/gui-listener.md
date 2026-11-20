@@ -1,4 +1,4 @@
-# Native GUI listener control (unreleased)
+# Native GUI listener control
 
 `Client::gui_listener()` reads the stored server enable flag, native bind address,
 TLS selection and Unix socket mode after checking the current device identity.
@@ -93,10 +93,8 @@ eight-second observation does not reserve an address or probe a possibly reused
 endpoint. Continued listening is recorded as the fixed program's unsupported
 live effect; listener absence in one observation window is not a support promise.
 The earlier closure test and its false-positive bind-reservation cause remain
-historical evidence. Full same-source native platform acceptance remains pending.
-HTTP acknowledgement,
-stored readback, successful TLS authentication and process-tree exit are separate
-observations throughout.
+historical evidence. The tests verify HTTP acknowledgement, stored readback,
+TLS authentication and process-tree exit separately.
 
 Replacing a Unix socket can interrupt its own PATCH response. The native case
 retains a transport/timeout `MutationOutcomeUnknown` and then explicitly opens a

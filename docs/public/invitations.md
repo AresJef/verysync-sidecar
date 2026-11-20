@@ -1,4 +1,4 @@
-# Pending offers and folder sharing (unreleased)
+# Pending offers and folder sharing
 
 `pending_folders()` reads the actual remote folder IDs and their offering device
 identities. An optional device filter restricts this read. A remote offer ID,

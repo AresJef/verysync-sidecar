@@ -1,4 +1,4 @@
-# Managed instances (unreleased)
+# Managed instances
 
 Fresh library-owned instances also select an independent loopback auxiliary
 tunnel address. This avoids using the upstream shared loopback port alongside
@@ -381,7 +381,7 @@ from `ManagedStateLock::EngineLock`. These report which admission lock was busy,
 without exposing private paths or authorizing deletion, takeover or termination.
 The error does not imply that the native engine lock has a library owner.
 
-## Explicit owned HTTPS and endpoint adoption (unreleased)
+## Explicit owned HTTPS and endpoint adoption
 
 `ManagedOptions` accepts an explicit HTTP or HTTPS URL with a literal loopback
 IP, a nondefault port and no prefix. HTTPS requires the `tls` feature. Supply
@@ -414,4 +414,4 @@ independent configuration. `connect_existing()` also checks the stored native
 TLS selection and uses the selected transport. A plaintext selection does not
 match persisted HTTPS state. Native normal start, stop, same-state restart and
 read-only existing connection are tested separately from the earlier listener
-write and from complete same-source platform acceptance, which remains pending.
+write. The release checks describe the native platforms and exceptions.

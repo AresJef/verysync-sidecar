@@ -59,10 +59,10 @@ establish the underlying native cause, an account prerequisite or successful
 license refresh. Trial activation was not invoked in native validation.
 
 Nonempty licensed collection/record shapes and explicit trial acknowledgements
-currently have synthetic transport coverage only. Successful real license
-refresh, trial issuance, license persistence, licensed operation effects and
-complete same-source platform acceptance remain pending. Pro, Local-API,
-enterprise and official remote management retain separate gates.
+currently have synthetic transport coverage. Real license refresh, trial
+issuance, persistence and licensed operation effects require separate native
+validation with the corresponding entitlement. The release checks specify
+the deferred Pro, Local-API, enterprise and official remote-management cases.
 
 ## Enterprise control contract
 

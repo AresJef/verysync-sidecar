@@ -1,6 +1,6 @@
 # Explicit resource mutations
 
-These unreleased methods operate through the authenticated official core's file
+These methods operate through the authenticated official core's file
 manager. A `ResourcePath` selects one mounted volume and target-syntax components;
 it is independent of a synchronization folder ID. The SDK does not implement a
 local filesystem fallback. Volume-root mutations and source/self/descendant

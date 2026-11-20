@@ -1,6 +1,6 @@
 # Event subscriptions
 
-The unreleased API provides caller-owned event subscriptions for VerySync
+The SDK provides caller-owned event subscriptions for VerySync
 v2.33.2. The published `0.1.0-alpha.1` package predates this API. A subscription
 observes the engine; it never owns, restarts or stops that engine.
 

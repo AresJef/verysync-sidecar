@@ -1,6 +1,6 @@
 # Native Local Sync and storage endpoints
 
-The unreleased Local Sync API controls the official core's storage jobs. These
+The Local Sync API controls the official core's storage jobs. These
 registrations are distinct from P2P synchronization folders and file-manager
 volumes. Every method uses the selected authenticated connection. The SDK does
 not implement a copy engine, open target files on the controller or install a

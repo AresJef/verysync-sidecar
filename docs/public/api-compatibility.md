@@ -18,16 +18,16 @@ is invisible in the default feature set but must fail with all features enabled.
 Any unexpected exit, including an infrastructure/build error, fails the self-test.
 The fixtures have no dependencies and their checks run with Cargo offline.
 
-This is preparation only. The SDK's formal API baseline is **not yet selected**.
-Choose it after all required functional prerequisites and the first stable
-candidate are accepted. Pin the first stable version, immutable source tag/commit,
-package identity and feature/platform matrix together; never use an alpha or a
-moving branch as the formal compatibility baseline.
+The first stable public API baseline is the accepted and published
+`verysync-sidecar` **0.1.0**. Use the crate's exact registry version and
+checksum together with the commit at the GitHub tag `v0.1.0`. The release
+record binds the source, package and verified feature and platform scope.
 
 For subsequent compatible releases, compare the complete public API with the
-accepted stable source using `--baseline-rev` or an explicitly selected published
-stable version. Check default features, `--only-explicit-features` with none,
-and `--all-features`; retain target-specific checks for supported public APIs.
+accepted stable source using `--baseline-rev` with that commit or
+`--baseline-version 0.1.0` with the published package. Check default features,
+`--only-explicit-features` with none, and `--all-features`. Retain
+target-specific checks for supported public APIs.
 The checker must run against the actual release candidate and immutable baseline.
 Version and migration review must handle intentional incompatible changes before
 publishing them. Do not suppress a failed check or change its baseline just to

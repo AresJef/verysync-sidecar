@@ -1,4 +1,4 @@
-# Management TLS and explicit proxies (unreleased)
+# Management TLS and explicit proxies
 
 `ManagementTransport` selects trust and proxy policy for one management
 connection. Pass it to `ConnectOptions::transport()` or

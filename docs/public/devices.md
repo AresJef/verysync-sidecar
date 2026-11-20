@@ -1,4 +1,4 @@
-# Device configuration (unreleased)
+# Device configuration
 
 `Client::devices()` and `Client::device()` read the configured identities, including
 the local identity. `device_defaults()` reads the engine's current creation

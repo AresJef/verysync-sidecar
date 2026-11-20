@@ -2,6 +2,11 @@
 
 ## 0.1.0
 
+Version 0.1.0 is the first stable public Rust API baseline. The entries below
+record changes since the first alpha, including the validation state when
+individual changes landed. Current coverage and deferred cases are documented
+in the [release checks](docs/public/release-checklist.md).
+
 - Document the fixed v2.33.2 Windows ARM64 IPv6 traffic-class boundary. In
   two native runs settings 16 and 32 persisted, while the captured TCP packets
   carried class 0. IPv4 and the IPv6 zero control matched their settings.

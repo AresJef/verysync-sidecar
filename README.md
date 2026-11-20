@@ -1,33 +1,33 @@
 # verysync-sidecar
 
-Unreleased [native GUI listener controls](docs/public/gui-listener.md) separate
+The [native GUI listener controls](docs/public/gui-listener.md) separate
 explicit address/TLS/server-enable/socket-mode writes from caller reconnection,
 certificate trust and process ownership. Live GUI/API hot-disable is unsupported
-on fixed v2.33.2; a stored false enable flag does not prove endpoint closure.
-Full platform acceptance is pending.
+on fixed v2.33.2. Verify endpoint closure separately from the stored enable flag.
 
-Unreleased [management transport policy](docs/public/management-transport.md)
+The [management transport policy](docs/public/management-transport.md)
 accepts per-connection trusted certificates and explicit authenticated HTTP(S)
-proxies. Certificate/hostname verification and reconnect policy remain explicit;
-full same-source platform acceptance is pending.
+proxies. Certificate and hostname verification and reconnection policy remain
+explicit.
 
 The [remote-management API](docs/public/remote-management.md) keeps
 native permissions, explicit tunnel probes and target-identity gateway
 connections separate. Licensed native sessions and cross-network acceptance
-remain pending.
+are deferred in this release.
 
 The [license API](docs/public/licenses.md) preserves native license
 metadata and separates explicit refresh/trial acknowledgements from actual
-licensed effects. Authorized positive acceptance remains pending.
+licensed effects. Positive validation requiring a dedicated Pro entitlement is
+deferred in this release.
 
 The [official-account API](docs/public/official-accounts.md) separates
 explicit cloud-account login/logout from GUI sessions and licensed entitlements.
 Native acknowledgements, actual account state and upstream rejection codes have
-separate results; authenticated cloud-session acceptance remains pending.
+separate results. Actual cloud-account sessions are deferred in this release.
 
-Unreleased [file transfers](docs/public/file-transfers.md) stream explicit local
+The [file transfer APIs](docs/public/file-transfers.md) stream explicit local
 inputs/outputs with finite bounds, inclusive ranges, all seven native archive
-formats and post-upload digest verification. Complete native acceptance is pending.
+formats and post-upload digest verification.
 
 A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
 
@@ -365,22 +365,37 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before running engine integration tests.
 
 All public APIs are unstable throughout alpha. Methods, modules, parameters, return values, configuration, errors, and events may be added, removed, renamed, or reorganized without backward compatibility. Compatibility layers for earlier alpha releases are not required. Pin an exact alpha version and review the changelog before upgrading.
 
-Compatibility commitments begin with the first formal release. Compatible updates preserve existing usage; incompatible changes require an explicit incompatible version and migration guidance.
+Version 0.1.0 is the first stable public API baseline. Compatible updates
+preserve existing usage. Incompatible changes require a corresponding version
+change and migration guidance. [API compatibility guide](docs/public/api-compatibility.md)
 
 ## Licensing
 
 Project-owned code is licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. The official VerySync program and third-party dependencies remain subject to their own terms. The controller's license does not grant redistribution rights for the official program. No official executable is included in this repository or crate.
 
 
-Unreleased [file versioning](docs/public/file-history.md) adds explicit simple/trashcan/staggered policies, caller-selected native external versioners, archive locations, bounded archive browsing and guarded file/directory restoration. Global audit recording remains subject to Pro entitlement and separate positive acceptance.
+The [file versioning API](docs/public/file-history.md) covers simple, trashcan
+and staggered policies, caller-selected native external versioners, archive
+locations, bounded archive browsing and guarded restoration. Global audit
+recording requires Pro entitlement.
 
-Unreleased [core maintenance](docs/public/core-maintenance.md) exposes native error logs, bounded log snapshots, explicit package-level changes, target-syntax diagnostic locations, native profiles and authenticated metrics. Explicit index resets and stopped-owner database commands have separate operation choices and return native outcomes; callers coordinate backups, peers and restarts. These APIs do not configure the controller application's logging.
+The [core maintenance API](docs/public/core-maintenance.md) exposes native error
+logs, bounded log snapshots, native profiles and authenticated metrics. Scoped
+index resets and stopped-owner database commands return their native outcomes.
+Callers coordinate backups, peers and restarts.
 
-Unreleased [resource mutations](docs/public/file-mutations.md) provide explicit native directory creation, file copy/move, text replacement and scoped deletion. Copy/move are confined to one logical volume; native directory failures on Windows retain separate pending positive acceptance and explicit partial-data diagnostics.
+The [resource mutation API](docs/public/file-mutations.md) covers native directory
+creation, file copy/move, text replacement and scoped deletion. Copy and move
+stay within one logical volume. For Windows directory move-and-merge and recursive
+deletion, v2.33.2 may return an error after partial effects. Check the actual
+filesystem when the outcome is unknown.
 
-Unreleased [Local Sync controls](docs/public/local-sync.md) expose explicit basic storage endpoints, native job registrations, analysis and separate all-action execution, actual state/result/history observations and scoped updates that preserve unselected settings. Per-protocol data effects and the remaining native task controls retain separate pending acceptance.
+The [Local Sync API](docs/public/local-sync.md) covers explicit storage endpoints,
+job registration, analysis, execution and observation, plus scoped updates that
+preserve unselected settings. See the release checks for scope by protocol and
+for the entitled triggers deferred in this release.
 
-Unreleased [native Local-API connections](docs/public/local-api.md) provide separate
+The [native Local-API connections](docs/public/local-api.md) provide separate
 typed version/status reads, bounded scoped raw requests and explicit owned startup
-configuration. Basic reads do not establish commercial entitlement; licensed
-operations and final cross-platform runtime acceptance remain separate gates.
+configuration. The release checks record the ordinary effects, native entitlement
+refusals and deferred licensed cases.

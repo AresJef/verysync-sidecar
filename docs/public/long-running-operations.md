@@ -1,6 +1,6 @@
 # Observing long operations
 
-The unreleased scan API observes actual folder state transitions in VerySync
+The scan API observes actual folder state transitions in VerySync
 v2.33.2. The published `0.1.0-alpha.1` package predates this API. A scan request,
 an observed scanning phase, and peer synchronization are distinct results.
 

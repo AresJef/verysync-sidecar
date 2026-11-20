@@ -1,6 +1,6 @@
 # Sharing keys and folder registration
 
-The unreleased sharing API uses the official v2.33.2 engine to generate and
+The sharing API uses the official v2.33.2 engine to generate and
 validate folder-sharing keys. `ShareKey` and the management `ApiKey` are distinct
 types. Neither a key prefix nor a caller-chosen common folder ID determines
 permission. Ordinary Debug omits keys and unknown credential-bearing fields;

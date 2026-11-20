@@ -1,4 +1,4 @@
-# Native tunnel probe validation (unreleased)
+# Native tunnel probe validation
 
 The existing public Rust `Client::probe_device_tunnel()` has a positive native
 path with two isolated VerySync v2.33.2 instances and explicit auxiliary

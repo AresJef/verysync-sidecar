@@ -177,7 +177,7 @@ and signed global metadata while the receiver retains the native zero local
 record and has no completed file. Its explicit rate/configuration setup and
 caller-controlled polling are test fixtures, not implicit behavior of this read.
 They do not establish WAN behavior, completed downloads or signature trust.
-Full same-source native platform acceptance remains pending.
+The release checks specify the validated platform and network scope.
 
 ## Native index-file diagnostic route
 

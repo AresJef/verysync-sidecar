@@ -1,6 +1,6 @@
 # Core logs and diagnostic metadata
 
-These unreleased APIs operate on the authenticated official core selected by a
+These APIs operate on the authenticated official core selected by a
 `Client`. They do not install a logger, change global tracing, handle application
 signals, exit the caller, or automatically collect private diagnostic files.
 
