@@ -1,0 +1,44 @@
+name: Observe the Windows ARM64 tracker write result
+
+on:
+  push:
+    branches: ['verify/r28/windows-arm64-tracker-write-observation']
+
+permissions:
+  contents: read
+
+jobs:
+  exact-native-tracker-observation:
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: windows-11-arm
+    timeout-minutes: 16
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Require the fixed candidate and the scoped diagnostic additions
+        run: |
+          test "$(git rev-parse HEAD^)" = 4d0204ebda5f21ae1fee9a8d4751787ceff7bb58
+          git diff --exit-code HEAD^ HEAD -- Cargo.toml Cargo.lock src scripts/run-official-tracker-test.py
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare the exact owned Windows ARM64 engine
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package windows-arm64-standard
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Observe native tracker writes and preserve the original acceptance
+        run: >-
+          python scripts/run-official-tracker-test.py --toolchain "$TEST_TOOLCHAIN"
+          --allow-official-tracker --evidence-dir "${{ runner.temp }}/vs-official-tracker-write-observation"
+      - name: Require exact engine cleanup after the observed outcome
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup

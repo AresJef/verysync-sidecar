@@ -1,6 +1,64 @@
 //! Explicit official tracker registration and controlled disconnect observations.
 use super::*;
-use verysync_sidecar::TransportPatch;
+use verysync_sidecar::{TransportPatch, TransportUpdate};
+
+async fn observe_tracker_write(
+    core: &ManagedInstance,
+    identity: &DeviceId,
+    requested: bool,
+    expected: &serde_json::Value,
+) -> verysync_sidecar::Result<TransportUpdate> {
+    let update = core
+        .client()
+        .update_transport_configuration(&TransportPatch::default().tracker(requested))
+        .await;
+    match &update {
+        Ok(result) => eprintln!(
+            "tracker write observation: {}",
+            json!({"enable":requested, "typed_acknowledgement":true, "fields_match":result.requested_fields_match})
+        ),
+        Err(error) => {
+            let underlying = match error {
+                Error::MutationOutcomeUnknown { source, .. } => match source.as_ref() {
+                    Error::Timeout { .. } => "timeout",
+                    Error::Transport { .. } => "transport",
+                    Error::InvalidResponse { .. } => "invalid response",
+                    Error::Http { .. } => "HTTP error",
+                    _ => "other unknown result",
+                },
+                _ => "different API error",
+            };
+            let readback = tokio::time::timeout(Duration::from_secs(4), async {
+                let identity_matches = core
+                    .client()
+                    .system_status()
+                    .await
+                    .is_ok_and(|status| status.device_id == *identity);
+                (identity_matches, core.client().configuration().await.ok())
+            })
+            .await;
+            let (identity_matches, document) = readback
+                .map(|(matches, document)| (Some(matches), document))
+                .unwrap_or((None, None));
+            let observed = document.as_ref().and_then(|config| {
+                config
+                    .native_document()
+                    .pointer("/options/trackerEnabled")
+                    .and_then(serde_json::Value::as_bool)
+            });
+            let exact = document
+                .as_ref()
+                .is_some_and(|config| config.native_document() == expected);
+            eprintln!(
+                "tracker write observation: {}",
+                json!({"enable":requested, "typed_acknowledgement":false, "error_kind":underlying,
+                       "identity_matches":identity_matches, "independent_readback":observed,
+                       "entire_configuration_matches":exact, "write_retried":false})
+            );
+        }
+    }
+    update
+}
 
 #[tokio::test]
 async fn native_tracker_registers_and_exposes_controlled_disconnect() -> TestResult {
@@ -43,17 +101,14 @@ async fn native_tracker_registers_and_exposes_controlled_disconnect() -> TestRes
         std::fs::read(state.join("key.pem"))?,
         std::fs::read(state.join("cert.pem"))?,
     ];
-    let changed = core
-        .client()
-        .update_transport_configuration(&TransportPatch::default().tracker(true))
-        .await?;
+    let mut enabled_document = before.native_document().clone();
+    enabled_document["options"]["trackerEnabled"] = serde_json::json!(true);
+    let changed = observe_tracker_write(&core, &identity, true, &enabled_document).await?;
     assert!(changed.requested_fields_match && changed.configuration.tracker_enabled);
     assert!(
         changed.configuration.extra == original.extra,
         "unrelated transport fields changed"
     );
-    let mut enabled_document = before.native_document().clone();
-    enabled_document["options"]["trackerEnabled"] = serde_json::json!(true);
     assert!(
         core.client().configuration().await?.native_document() == &enabled_document,
         "unrelated enabled configuration changed"
@@ -113,10 +168,7 @@ async fn native_tracker_registers_and_exposes_controlled_disconnect() -> TestRes
         failure_ms.is_some(),
         "actual native error after controlled cut was not observed"
     );
-    let changed = core
-        .client()
-        .update_transport_configuration(&TransportPatch::default().tracker(false))
-        .await?;
+    let changed = observe_tracker_write(&core, &identity, false, before.native_document()).await?;
     assert!(changed.requested_fields_match);
     core.restart(Duration::from_secs(30)).await?;
     assert!(
