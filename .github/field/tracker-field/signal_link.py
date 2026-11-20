@@ -6,13 +6,13 @@ from pathlib import Path
 import re
 import subprocess
 import time
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 
 REPO = "AresJef/verysync-sidecar"
-BRANCH = "test/tracker-rendezvous-20261120"
+BRANCH = "test/tracker-retry-rendezvous-20261120"
 ROOT = "https://api.github.com/repos/" + REPO + "/contents/field-signal/"
 
 
@@ -52,7 +52,7 @@ class Signal:
                    "User-Agent": "verysync-sidecar-isolated-test", "Content-Type": "application/json",
                    "X-GitHub-Api-Version": "2022-11-28"}
         query = Request(url, data=body, headers=headers, method=method)
-        with self.opener.open(query, timeout=4) as response:
+        with self.opener.open(query, timeout=12) as response:
             return json.loads(response.read(200000))
 
     def read(self, name):
@@ -69,24 +69,38 @@ class Signal:
         blob = self.crypto("seal", name, value)
         body = {"message": "Record a sealed isolated acceptance signal", "branch": BRANCH,
                 "content": base64.b64encode(blob.encode("ascii")).decode()}
-        for _ in range(3):
+        for attempt in range(4):
             try:
                 self.request("PUT", name, body)
                 return
             except HTTPError as error:
-                if error.code not in (409, 422):
+                if error.code not in (409, 422, 429, 502, 503, 504):
                     raise
+            except (URLError, TimeoutError):
+                pass
+            try:
                 if self.read(name) == value:
                     return
-                time.sleep(0.7)
+            except HTTPError as error:
+                if error.code not in (429, 502, 503, 504):
+                    raise
+            except (URLError, TimeoutError):
+                pass
+            time.sleep(0.75 * (attempt + 1))
         raise RuntimeError("could not record one sealed coordination message")
 
     def wait(self, name, seconds):
         until = time.monotonic() + seconds
         while time.monotonic() < until:
-            if result := self.read(name):
-                return result
-            time.sleep(1)
+            try:
+                if result := self.read(name):
+                    return result
+            except HTTPError as error:
+                if error.code not in (429, 502, 503, 504):
+                    raise
+            except (URLError, TimeoutError):
+                pass
+            time.sleep(1.5)
         raise TimeoutError("required sealed coordination message did not arrive")
 
 

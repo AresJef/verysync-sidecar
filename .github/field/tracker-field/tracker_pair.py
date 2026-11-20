@@ -9,7 +9,6 @@ import ipaddress
 import json
 import os
 from pathlib import Path
-import pwd
 import secrets
 import shutil
 import socket
@@ -61,8 +60,12 @@ def isolated_process(root, args, runtime_env):
             rule=["-m","owner","--gid-owner",str(group.gr_gid),"-j",chain]
             w.local_command([*command,"-I","OUTPUT","1",*rule])
             release.callback(w.local_command,[*command,"-D","OUTPUT",*rule])
-        yield ["sudo","-n","-u",pwd.getpwuid(os.getuid()).pw_name,"-g",name,"--",
-               "/usr/bin/env",*[f"{name}={value}" for name,value in runtime_env.items()]]
+        launcher=["sudo","-n","/usr/bin/setpriv","--reuid",str(os.getuid()),"--regid",
+                  str(group.gr_gid),"--clear-groups","/usr/bin/env",
+                  *[f"{key}={value}" for key,value in runtime_env.items()]]
+        trial=w.local_command([*launcher,"/usr/bin/id","-g"])
+        assert int(trial)==group.gr_gid, "owned Linux tracker group could not be observed"
+        yield launcher
 
 
 def public_candidates(items):
@@ -127,13 +130,19 @@ def run_fixture(args, link, report):
                     owner=subprocess.Popen(command,env=environment,cwd=root,stdin=subprocess.DEVNULL,
                                            stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                     try:
+                        report["phase"]="native_launch"
                         ready=w.read_event(owner.stdout,40)
                         assert ready["event"]=="ready" and ready["version"]=="v2.33.2"
                         assert w.DEVICE.fullmatch(ready["device"])
+                        report["phase"]="sealed_rendezvous"
                         message={"device":ready["device"],"read_only_share":ready["read_only_share"]}
                         link.put(args.role+"-ready",message)
                         remote=link.wait(other+"-ready",145)
                         assert w.DEVICE.fullmatch(remote["device"]) and remote["device"]!=ready["device"]
+                        link.put(args.role+"-peer-ready",{"paired":True})
+                        peer_ready=link.wait(other+"-peer-ready",35)
+                        assert peer_ready["paired"] is True
+                        report["phase"]="tracker_observation"
                         plan={"peer":remote["device"],"read_only_share":remote["read_only_share"]}
                         temp=root/"node/peer-plan.pending"
                         w.write_private(temp,plan)
@@ -157,6 +166,16 @@ def run_fixture(args, link, report):
                         if public:
                             link.put(args.role+"-candidate",{"matches":public,"device":ready["device"]})
                     finally:
+                        if owner.poll() is not None and owner.returncode != 0:
+                            error=owner.stderr.read(4096).decode("utf-8","replace")
+                            categories={"PermissionDenied":"permission","Operation not permitted":"permission",
+                                        "Permission denied":"permission","Address already in use":"address_in_use",
+                                        "error while loading shared libraries":"loader",
+                                        "not allowed to execute":"launcher_authority","Bad system call":"syscall",
+                                        "No such file or directory":"missing_file","timed out":"timeout",
+                                        "sudo:":"sudo","setpriv:":"setpriv"}
+                            report["launch_error_categories"]=sorted({code for text,code in categories.items() if text in error})
+                            report["driver_exit"]=owner.returncode
                         if owner.poll() is None:
                             owner.terminate()
                             try:
@@ -178,8 +197,8 @@ def run_fixture(args, link, report):
                 worker.join(3)
                 report["tracker_tunnel_count"]=proxy.upgrade_connections
                 report["approved_scope_only_proxy"]=True
+                report["proxy_rejected_requests"]=sum(proxy.observed.values())
                 report["egress_window_seconds"]=round(closed_at-active_at,3) if active_at else 0
-        report["private_work_removed"]=not root.exists()
     report["private_work_removed"]=not root.exists()
 
 
