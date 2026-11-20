@@ -1,0 +1,63 @@
+name: Identity-pinned official directory relay preflight
+
+on:
+  push:
+    branches: [test/relay-probe-20261120]
+
+permissions:
+  contents: read
+
+jobs:
+  probes:
+    if: github.run_attempt == 1 && github.actor == 'AresJef'
+    name: One approved native probe per relay
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          path: stable
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Verify the stable source and compile the pinned relay driver
+        working-directory: stable
+        run: |
+          test "$(git rev-parse HEAD)" = 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          test "$(git rev-parse 'HEAD^{tree}')" = 3da7a8516223b8502fae1fc9aef7fe4033c76dcf
+          test -z "$(git status --porcelain)"
+          cp "$GITHUB_WORKSPACE/.github/field/relay-field/relay_peer_node.rs" examples/
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          python -m pip install psutil==7.2.2
+          cargo +"$TEST_TOOLCHAIN" build --locked --example acceptance_node --example relay_peer_node
+      - name: Explicitly prepare the matching pinned VerySync program
+        working-directory: stable
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Run two identity-pinned relay probes on separate fresh test instances
+        run: >-
+          python -B .github/field/relay-field/probe_selected_relays.py linux
+          --engine "$VERYSYNC_TEST_BINARY" --sha "$VERYSYNC_TEST_BINARY_SHA256"
+          --example "$GITHUB_WORKSPACE/stable/target/debug/examples/acceptance_node"
+          --control "$GITHUB_WORKSPACE/stable/target/debug/examples/relay_peer_node"
+          --receipt "$RUNNER_TEMP/public-relays-linux.json"
+      - name: Require exact native cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        working-directory: stable
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Retain only the permitted relay observations
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: approved-relays-${{ github.run_id }}
+          path: ${{ runner.temp }}/public-relays-linux.json
+          retention-days: 7
+          if-no-files-found: warn
