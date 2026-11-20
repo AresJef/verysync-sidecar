@@ -46,30 +46,46 @@ def mapped_candidate(link, key, other, sock, role, report):
     sent = marker(key, role)
     expected = marker(key, other)
     sock.settimeout(0.25)
-    observed = None
-    window = time.monotonic() + 15
-    while time.monotonic() < window:
-        sock.sendto(sent, remote)
-        try:
-            incoming, candidate = sock.recvfrom(128)
-        except TimeoutError:
-            continue
-        if candidate[0] == remote[0] and hmac.compare_digest(incoming, expected):
-            observed = candidate
-            # A short tail gives the other endpoint time to verify our marker.
-            for _ in range(6):
-                sock.sendto(sent, observed)
-                time.sleep(0.15)
-            break
-    report["authenticated_inbound_udp"] = observed is not None
-    link.put(role + "-probe", {"observed": observed is not None})
-    peer_result = link.wait(other + "-probe", 35)
-    report["authenticated_outbound_udp"] = peer_result["observed"] is True
-    if observed is None or not report["authenticated_outbound_udp"]:
+    observed = set()
+    matched_packets = 0
+
+    def exchange(seconds):
+        nonlocal matched_packets
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            for target in sorted({remote} | observed):
+                sock.sendto(sent, target)
+            try:
+                incoming, candidate = sock.recvfrom(128)
+            except TimeoutError:
+                continue
+            if (not hmac.compare_digest(incoming, expected) or
+                    not ipaddress.IPv4Address(candidate[0]).is_global or
+                    candidate[1] <= 1024 or candidate[1] in (18886, 3478, 1900, 5351)):
+                continue
+            matched_packets += 1
+            if len(observed) < 2:
+                observed.add(candidate)
+
+    exchange(8)
+    link.put(role + "-reflexive", {"peer_sources": [list(x) for x in sorted(observed)]})
+    exchange(17)
+    report["matched_packets"] = matched_packets
+    report["peer_authenticated_source_changed_port"] = any(ep[1] != remote[1] for ep in observed)
+    report["peer_authenticated_source_changed_ip"] = any(ep[0] != remote[0] for ep in observed)
+    report["authenticated_inbound_udp"] = bool(observed)
+    response = link.wait(other + "-reflexive", 20)
+    for peer_seen in response["peer_sources"]:
+        reported = str(ipaddress.IPv4Address(peer_seen[0])), int(peer_seen[1])
+        report["own_first_observed_egress_differs_from_stun"] = reported != (str(address), port)
+        break
+    link.put(role + "-probe", {"observed": bool(observed)})
+    paired = link.wait(other + "-probe", 30)
+    report["authenticated_outbound_udp"] = paired["observed"] is True
+    if not (observed and report["authenticated_outbound_udp"]):
         return None
-    owned.require(1024 < observed[1] <= 65535 and observed[1] not in (18886, 3478, 1900, 5351), "unsafe negotiated test port")
     report["authenticated_bidirectional_udp"] = True
-    return observed
+    return remote if remote in observed else sorted(observed)[0]
 
 
 def any_stun_alternate(packet):
@@ -230,7 +246,7 @@ def main():
         token=os.environ.pop("UDP_PROJECT_TOKEN")
     session_id=hashlib.sha256(bytes.fromhex(key)).hexdigest()[:20]
     report={"role":args.mode,"session_digest":session_id,"stable_source":BASELINE,"status":"failed","native_public_pair_file_recovery":False,
-            "authorization_scope":"round_two","public_test_addresses_logged":False,"router_manual_changes":False}
+            "authorization_scope":"one_reflexive_endpoint_supplement","public_test_addresses_logged":False,"router_manual_changes":False}
     try:
         round_two(args, Signal(token,key,session_id), report)
         report["status"]="observed"

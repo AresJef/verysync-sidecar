@@ -1,0 +1,74 @@
+name: Isolated same-port UDP acceptance without a fixed address
+
+on:
+  push:
+    branches: [test/native-udp-reflexive-20261120]
+
+permissions:
+  contents: read
+
+jobs:
+  paired:
+    if: github.run_attempt == 1 && github.actor == 'AresJef'
+    name: Supplement the authenticated bidirectional UDP path
+    runs-on: ubuntu-24.04
+    timeout-minutes: 17
+    # The explicitly approved rendezvous writes encrypted files only on one
+    # independent branch with no workflow configuration.
+    permissions:
+      contents: write
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-unknown-linux-gnu
+    steps:
+      - name: Check out the isolated test harness
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Check out the exact stable candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          path: stable
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Build the exact candidate and the isolated verification driver
+        working-directory: stable
+        run: |
+          test "$(git rev-parse HEAD)" = 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          test "$(git rev-parse 'HEAD^{tree}')" = 3da7a8516223b8502fae1fc9aef7fe4033c76dcf
+          test -z "$(git status --porcelain)"
+          test ! -e examples/udp_peer_node.rs
+          cp "$GITHUB_WORKSPACE/.github/field/udp-round2/udp_peer_node.rs" examples/
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          python -m pip install psutil==7.2.2
+          cargo +"$TEST_TOOLCHAIN" build --locked --example acceptance_node --example udp_peer_node
+      - name: Prepare the matching pinned private program
+        working-directory: stable
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Verify the matched UDP path and conditionally test native files and recovery
+        env:
+          UDP_SIGNAL_KEY: ${{ secrets.VS_FOLLOWUP_UDP_REFLEXIVE_KEY_20261120 }}
+          UDP_PROJECT_TOKEN: ${{ github.token }}
+          PYTHONNOUSERSITE: '1'
+        run: >-
+          python -B .github/field/udp-round2/udp_pair_round2.py linux
+          --engine "$VERYSYNC_TEST_BINARY" --sha "$VERYSYNC_TEST_BINARY_SHA256"
+          --example "$GITHUB_WORKSPACE/stable/target/debug/examples/acceptance_node"
+          --control "$GITHUB_WORKSPACE/stable/target/debug/examples/udp_peer_node"
+          --receipt "$RUNNER_TEMP/paired-udp-reflexive.json"
+      - name: Require exact prepared-image cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        working-directory: stable
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Save the address-free acceptance result
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: stable-native-udp-reflexive-${{ github.run_id }}
+          path: ${{ runner.temp }}/paired-udp-reflexive.json
+          retention-days: 7
+          if-no-files-found: warn

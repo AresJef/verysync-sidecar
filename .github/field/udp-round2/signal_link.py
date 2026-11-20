@@ -12,7 +12,7 @@ from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 
 REPO = "AresJef/verysync-sidecar"
-BRANCH = "test/udp-rendezvous-20261120"
+BRANCH = "test/udp-reflexive-rendezvous-20261120"
 ROOT = "https://api.github.com/repos/" + REPO + "/contents/field-signal/"
 
 
