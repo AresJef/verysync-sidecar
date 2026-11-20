@@ -257,10 +257,12 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
     for core in [&a, &b] {
         setup(core.client(), port, &multicast, true).await?;
     }
+    eprintln!("local announcement phase: restart receiving peer with discovery enabled");
     restart_normal(&mut b, &b_state, &a_id).await?;
     let receiver_ports = tcp_ports(b.client()).await?;
     // Start discovery on the initiating process after the receiver is listening.
     // The peer still has to discover the endpoint and connect on its own.
+    eprintln!("local announcement phase: restart initiating peer with discovery enabled");
     restart_normal(&mut a, &a_state, &b_id).await?;
     let found = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
@@ -356,7 +358,9 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
     for core in [&a, &b] {
         setup(core.client(), port, &multicast, false).await?;
     }
+    eprintln!("local announcement phase: restart initiating peer with discovery disabled");
     restart_normal(&mut a, &a_state, &b_id).await?;
+    eprintln!("local announcement phase: restart receiving peer with discovery disabled");
     restart_normal(&mut b, &b_state, &a_id).await?;
     // A fresh third identity has no saved endpoints. Existing peers may retain
     // their old connections; disabling discovery does not promise eviction.
@@ -381,6 +385,7 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
         )
         .await?;
     setup(c.client(), port, &multicast, true).await?;
+    eprintln!("local announcement phase: restart fresh third identity");
     restart_normal(&mut c, &c_state, &a_id).await?;
     no_peer_for(c.client(), &a_id, 12).await?;
     assert!(c.client().discovery_cache().await?.is_empty());
@@ -398,7 +403,12 @@ async fn actual_local_announcements_discover_dynamic_peers_and_stop_after_restar
     }
     connection(a.client(), &b_id, false).await?;
     connection(b.client(), &a_id, false).await?;
-    for core in [&mut c, &mut b, &mut a] {
+    for (role, core) in [
+        ("third", &mut c),
+        ("receiver", &mut b),
+        ("initiator", &mut a),
+    ] {
+        eprintln!("local announcement phase: normal shutdown of {role}");
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
