@@ -585,7 +585,32 @@ async fn cancelled_start_dangling_control_links_are_not_fresh_state() -> TestRes
         assert_eq!(std::fs::read(&sample)?, b"synthetic cold-state sample");
         std::fs::remove_file(&alias)?;
         if index == 0 {
-            let mut repaired = start_checked(case.settings.clone()).await?;
+            let result = start_checked(case.settings.clone()).await;
+            if let Err(verysync_sidecar::Error::ManagedProcessExited {
+                code, diagnostic, ..
+            }) = &result
+            {
+                let output = diagnostic
+                    .as_ref()
+                    .map(|value| String::from_utf8_lossy(value.body_bytes()).to_ascii_lowercase())
+                    .unwrap_or_default();
+                println!(
+                    "cold-link explicit repair exit: {}",
+                    serde_json::json!({
+                        "code": code,
+                        "private_diagnostic_bytes": output.len(),
+                        "mentions_bind_conflict": output.contains("address already in use"),
+                        "mentions_permission_denial": output.contains("permission denied"),
+                        "mentions_state_lock": output.contains("verysync.lock"),
+                        "mentions_panic": output.contains("panic:"),
+                        "management_settings_written": case.state.join("setting.dat").is_file(),
+                        "identity_certificate_written": case.state.join("cert.pem").is_file(),
+                        "synthetic_sample_retained": std::fs::read(&sample)
+                            .is_ok_and(|bytes| bytes == b"synthetic cold-state sample"),
+                    })
+                );
+            }
+            let mut repaired = result?;
             assert!(inventory(&case.binary)
                 .await?
                 .contains(&repaired.process_id()));

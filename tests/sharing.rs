@@ -278,10 +278,29 @@ async fn key_registered_folders_receive_real_data_over_private_loopback() -> Tes
         "private key join probe effects: {}",
         json!({"actual_loopback_listeners":true,"distinct_local_ids":af.configuration.id!=bf.configuration.id,"origin_connected":connected_a,"receiver_connected":connected_b,"actual_received_sample_matches":observed.is_ok()})
     );
-    let exit = b.shutdown(Duration::from_secs(10)).await?;
-    assert!(exit.tree_stopped && !exit.forced);
-    let exit = a.shutdown(Duration::from_secs(10)).await?;
-    assert!(exit.tree_stopped && !exit.forced);
+    for (role, instance) in [("receiver", &mut b), ("sender", &mut a)] {
+        let started = std::time::Instant::now();
+        let stopped = instance.shutdown(Duration::from_secs(10)).await;
+        println!(
+            "native sharing shutdown: role={role} elapsed_ms={} success={} timeout={}",
+            started.elapsed().as_millis(),
+            stopped.is_ok(),
+            matches!(&stopped, Err(Error::Timeout { .. })),
+        );
+        if matches!(&stopped, Err(Error::Timeout { .. })) {
+            let ended =
+                tokio::time::timeout(Duration::from_secs(30), instance.wait_for_exit()).await;
+            match ended {
+                Ok(Ok(report)) => println!(
+                    "native sharing passive exit: role={role} code={:?} forced={} tree_stopped={} state_released={}",
+                    report.code, report.forced, report.tree_stopped, report.state_released,
+                ),
+                _ => println!("native sharing passive exit: role={role} confirmation_missing=true"),
+            }
+        }
+        let exit = stopped?;
+        assert!(exit.tree_stopped && !exit.forced);
+    }
     observed?;
     assert!(connected_a && connected_b);
     assert_eq!(std::fs::read(a_path.join("sample.bin"))?, sample);
