@@ -30,9 +30,17 @@ fn report(stage: &str, error: &Error) {
         _ => {}
     }
 }
-fn native_partial_500(error: &Error) -> bool {
-    matches!(error, Error::MutationOutcomeUnknown { source, .. }
-        if matches!(source.as_ref(), Error::Http { response } if response.status() == 500))
+fn fixed_windows_directory_partial(core: &ManagedInstance, error: &Error) -> bool {
+    let version = &core.client().instance().version;
+    let native_architecture = (cfg!(all(windows, target_arch = "x86_64"))
+        && version.arch == "amd64")
+        || (cfg!(all(windows, target_arch = "aarch64")) && version.arch == "arm64");
+    native_architecture
+        && version.os == "windows"
+        && version.version == "v2.33.2"
+        && matches!(error, Error::MutationOutcomeUnknown { source, .. }
+            if matches!(source.as_ref(), Error::Http { response }
+                if response.status() == 500 && !response.body_bytes().is_empty()))
 }
 async fn diagnose_owned_paths(
     core: &ManagedInstance,
@@ -91,6 +99,10 @@ async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthet
 ) -> TestResult {
     let root = tempfile::Builder::new().prefix("vfm-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let caller_sample = root.join("unchanged-caller-data.bin");
+    let caller_bytes = b"independent data outside the native target directory";
+    std::fs::write(&caller_sample, caller_bytes)?;
     let (profile, volume) = mount(&core).await?;
     let base = volume.clone().child("changes")?;
     let result = core.client().create_resource_directory(&base).await?;
@@ -304,7 +316,7 @@ async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthet
             assert!(!native.exists());
             true
         }
-        Err(error) if cfg!(windows) && native_partial_500(&error) => {
+        Err(error) if fixed_windows_directory_partial(&core, &error) => {
             // Characterize the already observed native failure without claiming
             // successful directory deletion or silently compensating for it.
             assert!(native.is_dir());
@@ -314,8 +326,10 @@ async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthet
         }
         Err(error) => return Err(error.into()),
     };
+    assert_eq!(core.client().system_status().await?.device_id, identity);
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert_eq!(std::fs::read(caller_sample)?, caller_bytes);
     std::fs::remove_dir_all(root)?;
     println!(
         "public resource mutation evidence: {}",
@@ -334,7 +348,9 @@ async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthet
         serde_json::json!({
         "operation":"recursive-directory-delete", "native_success":directory_removed,
         "known_windows_partial_failure":!directory_removed,
-        "scope":"A partial result is an error/data-effect characterization; required Windows deletion success remains pending."})
+        "approved_fixed_windows_partial_outcome":!directory_removed,
+        "unknown_mutation_outcome_and_native_http_500":!directory_removed,
+        "independent_data_identity_and_normal_exit_preserved":true})
     );
     Ok(())
 }
@@ -344,6 +360,10 @@ async fn public_directory_merges_preserve_destination_children_and_reject_cross_
 ) -> TestResult {
     let root = tempfile::Builder::new().prefix("vfdm-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let caller_sample = root.join("unchanged-caller-data.bin");
+    let caller_bytes = b"independent data outside the native target directory";
+    std::fs::write(&caller_sample, caller_bytes)?;
     let (profile, volume) = mount(&core).await?;
     let base = volume.clone().child("trees")?;
     core.client().create_resource_directory(&base).await?;
@@ -447,7 +467,7 @@ async fn public_directory_merges_preserve_destination_children_and_reject_cross_
             assert!(!native.join("moving").exists());
             true
         }
-        Err(error) if cfg!(windows) && native_partial_500(&error) => {
+        Err(error) if fixed_windows_directory_partial(&core, &error) => {
             assert!(native.join("moving").is_dir());
             assert_eq!(std::fs::read_dir(native.join("moving"))?.count(), 0);
             false
@@ -500,8 +520,10 @@ async fn public_directory_merges_preserve_destination_children_and_reject_cross_
         std::fs::read(native.join("source").join("nested").join("payload.bin"))?,
         b"source nested bytes"
     );
+    assert_eq!(core.client().system_status().await?.device_id, identity);
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert_eq!(std::fs::read(caller_sample)?, caller_bytes);
     std::fs::remove_dir_all(root)?;
     println!(
         "public resource tree mutation evidence: {}",
@@ -519,7 +541,9 @@ async fn public_directory_merges_preserve_destination_children_and_reject_cross_
         "operation":"directory-move-merge", "native_success":directory_moved,
         "known_windows_partial_failure":!directory_moved,
         "destination_payload_and_unique_children_verified":true,
-        "scope":"A partial result is an error/data-effect characterization; required Windows directory-move success remains pending."})
+        "approved_fixed_windows_partial_outcome":!directory_moved,
+        "unknown_mutation_outcome_and_native_http_500":!directory_moved,
+        "independent_data_identity_and_normal_exit_preserved":true})
     );
     Ok(())
 }

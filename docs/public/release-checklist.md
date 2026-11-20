@@ -39,6 +39,12 @@ Verify account operations, Local-API and Windows packet traffic class
 against their own requirements. Apply the original positive and negative
 checks to each area. Record any applicable outcome that remains unverified.
 
+For v2.33.2 on Windows AMD64 and ARM64, the [directory mutation check](file-mutations.md)
+covers the observed native HTTP 500 and partial contents after directory
+move-and-merge or recursive deletion. Require the typed unknown outcome,
+actual filesystem effects and exact cleanup. Verify complete positive effects
+for ordinary file operations and the other applicable native profiles.
+
 The six required native functional profiles cover macOS, Windows and Linux
 on AMD64 and ARM64. Use the [platform index](../platforms.csv) to identify
 additional targets and their actual execution mode.

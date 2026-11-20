@@ -39,12 +39,15 @@ data may already have changed; do not interpret the error as an unchanged tree.
 Explicit native heap collection did not establish a remedy. No such collection,
 restart, direct filesystem compensation or silent success is added by the SDK.
 
-Tests characterize only that precise partial state and error class. Such a case
-does **not** satisfy required positive Windows directory-move or recursive-delete
-acceptance; those remain pending. Other unexpected failures still fail the
-native gate. Successful file operations, directory creation/copy and request
-cancellation have separate effect assertions and verification states. Local
-macOS effects are observed; final same-source native acceptance remains pending.
+The fixed-version release check for Windows AMD64 and ARM64 accepts this
+precise outcome for directory move-and-merge and recursive directory deletion.
+It requires the original HTTP 500 through `MutationOutcomeUnknown`, the
+observed residual directory and partial effects, file protection and normal
+cleanup. A move check verifies the transferred bytes and destination-only
+files. A deletion check verifies which synthetic children disappear.
+Complete native directory removal in those cases awaits separate positive
+verification. File operations, directory creation and copying, and other
+platforms retain their own positive checks.
 
 Default diagnostics omit private resource values and response bodies. Callers
 can explicitly inspect bounded error diagnostics, then reconcile actual target
