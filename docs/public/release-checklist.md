@@ -31,10 +31,13 @@ DELETE's configuration snapshot and file retention, then verify native
 readmission and a new transfer with the existing shared keys.
 See [device configuration](devices.md).
 
-Verify account operations, Local-API, enterprise controls and Windows packet
-traffic class against their own requirements. Apply the original positive and
-negative checks to each of these areas. Assign an explicit unresolved status
-where an applicable required outcome remains unverified.
+Enterprise control is deferred from the first stable release. Resume
+implementation and native verification when the official caller contract
+and a dedicated enterprise test entitlement are available.
+
+Verify account operations, Local-API and Windows packet traffic class
+against their own requirements. Apply the original positive and negative
+checks to each area. Record any applicable outcome that remains unverified.
 
 The six required native functional profiles cover macOS, Windows and Linux
 on AMD64 and ARM64. Use the [platform index](../platforms.csv) to identify

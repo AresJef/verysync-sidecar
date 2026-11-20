@@ -66,5 +66,7 @@ neither establishes a commercial license or completed session. The tests retain
 the actual result and verify permission revocation,
 the target identity, unrelated configuration, restart persistence and synthetic
 file contents. Licensed positive sessions, actual remote operations and final
-cross-network effects remain required acceptance conditions. Local-API and
-enterprise control retain their separate, pending contracts.
+cross-network effects remain required acceptance conditions. Local-API
+authorization and control are verified separately. Enterprise control is
+deferred from the first stable release pending the official caller contract
+and a dedicated enterprise test entitlement.
