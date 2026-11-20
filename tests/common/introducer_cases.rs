@@ -457,15 +457,23 @@ async fn observe_introduction(keep: bool, probe_direct_data: bool) -> TestResult
         );
         assert_eq!(fresh_session_observed, keep);
     }
-    if follow_withdrawal {
-        let peers = [
+    if follow_withdrawal || probe_direct_data {
+        let mut peers = vec![
             (receiver.client(), &introducer_id),
             (introducer.client(), &receiver_id),
             (introducer.client(), &third_id),
             (third.client(), &introducer_id),
         ];
-        eprintln!("native introducer shutdown: pause the fixture links after verified withdrawal");
-        for (client, peer) in peers {
+        if probe_direct_data {
+            peers.extend([
+                (receiver.client(), &third_id),
+                (third.client(), &receiver_id),
+            ]);
+        }
+        // The file and association checks are complete. Disconnect the fixture
+        // links before requiring a normal exit from each independently owned node.
+        eprintln!("native introducer shutdown: pause the verified fixture links");
+        for &(client, peer) in &peers {
             assert!(client.pause_device(peer).await?.configuration.paused);
         }
         wait_for_disconnect(&peers).await?;

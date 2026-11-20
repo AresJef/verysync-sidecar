@@ -1,0 +1,56 @@
+name: Verify native three-peer effects and normal exit
+
+on:
+  push:
+    branches: ['verify/r28/introducer-normal-exit']
+
+permissions:
+  contents: read
+
+jobs:
+  native-three-peer-suite:
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    name: ${{ matrix.package }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+          - package: windows-amd64-standard
+            runner: windows-2022
+            rust: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Reproduce the original native suite with the scoped fixture teardown
+        run: |
+          test "$(git rev-parse HEAD^)" = 4d0204ebda5f21ae1fee9a8d4751787ceff7bb58
+          git diff --exit-code HEAD^ HEAD -- . ':!.github/workflows/r28-introducer-normal-exit.yml' ':!tests/common/introducer_cases.rs'
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare fixed owned v2.33.2
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify actual peers, files, withdrawal, persistence and native exits
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target p2p_three_nodes
+          --evidence-dir "${{ runner.temp }}/vs-native-three-peer-proxy"
+      - name: Require exact engine cleanup after the observed outcome
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
