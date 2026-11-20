@@ -1,0 +1,51 @@
+name: Verify the Linux ARM64 official upgrade CLI phases
+
+on:
+  push:
+    branches: ['verify/r28/linux-arm64-provider-cli-phases']
+
+permissions:
+  contents: read
+
+jobs:
+  exact-linux-arm64-provider:
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 18
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-aarch64-unknown-linux-gnu
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Require the exact current source with only additional phase observations
+        run: |
+          test "$(git rev-parse HEAD^)" = 878a27a5090991a18b7c8bee7d66653df720cff1
+          git diff --exit-code HEAD^ HEAD -- . ':!.github/workflows/r28-provider-cli-phases.yml' ':!tests/upgrade_engine.rs'
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare matching fixed baseline and older official fixture
+        run: |
+          python scripts/prepare-test-engine.py prepare --package linux-arm64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          python scripts/prepare-test-engine.py prepare --upgrade-source --package linux-arm64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Require actual fixed URL and official-provider CLI upgrade effects
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --test-filter stopped_owner_cli_checks_and_upgrades_the_dedicated_program
+          --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-focused-official-provider"
+      - name: Require exact owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Require exact older owned-executable cleanup
+        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source

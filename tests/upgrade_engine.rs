@@ -973,9 +973,18 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
             .is_err());
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
-        let check = core
+        eprintln!("native CLI diagnostic: provider={provider} phase=stopped-check deadline_s=20");
+        let check_started = std::time::Instant::now();
+        let checked = core
             .run_cli_upgrade(KernelUpgradeCommand::Check, Duration::from_secs(20))
-            .await?;
+            .await;
+        eprintln!(
+            "native CLI diagnostic: provider={provider} phase=stopped-check elapsed_ms={} success={} timeout={}",
+            check_started.elapsed().as_millis(),
+            checked.is_ok(),
+            matches!(&checked, Err(Error::Timeout { .. }))
+        );
+        let check = checked?;
         report_upgrade_diagnostic("cli-check", check.diagnostic.body_bytes());
         eprintln!(
             "native CLI upgrade check: code={:?} output_bytes={}",
@@ -1006,9 +1015,16 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
                 .map_err(|_| "cannot select explicit local test archive source")?;
             KernelUpgradeCommand::FromUrl(url)
         };
-        let upgraded = core
-            .run_cli_upgrade(command, Duration::from_secs(30))
-            .await?;
+        eprintln!("native CLI diagnostic: provider={provider} phase=upgrade deadline_s=30");
+        let upgrade_started = std::time::Instant::now();
+        let upgraded = core.run_cli_upgrade(command, Duration::from_secs(30)).await;
+        eprintln!(
+            "native CLI diagnostic: provider={provider} phase=upgrade elapsed_ms={} success={} timeout={}",
+            upgrade_started.elapsed().as_millis(),
+            upgraded.is_ok(),
+            matches!(&upgraded, Err(Error::Timeout { .. }))
+        );
+        let upgraded = upgraded?;
         report_upgrade_diagnostic("cli-upgrade", upgraded.diagnostic.body_bytes());
         std::fs::write(
             root.join("cli-upgrade-output.bin"),
