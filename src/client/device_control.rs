@@ -185,6 +185,9 @@ impl Client {
                 reason: "device disconnect/removal deadline must be positive and representable",
             })?;
         let mut modified = false;
+        let started = std::time::Instant::now();
+        let mut diagnostic_phase = "mutation_lock";
+        let mut peer_snapshots = [0_u32; 3];
         let check_deadline = || {
             if tokio::time::Instant::now() >= deadline {
                 Err(Error::Timeout {
@@ -197,12 +200,15 @@ impl Client {
         let result = tokio::time::timeout_at(deadline, async {
             let _guard = self.connection.mutation_lock.lock().await;
             check_deadline()?;
+            diagnostic_phase = "target_identity";
             self.system_status().await?;
+            diagnostic_phase = "original_peer_configuration";
             let previous = self.device(id).await?;
             check_deadline()?;
             if !previous.paused {
                 let url = self.device_url(id)?;
                 modified = true;
+                diagnostic_phase = "pause_patch";
                 self.connection
                     .request_bytes(
                         "pause peer before explicit removal",
@@ -212,14 +218,21 @@ impl Client {
                         true,
                     )
                     .await?;
+                diagnostic_phase = "paused_configuration_readback";
                 if !self.device(id).await?.paused {
                     return Err(Error::ManagedFailure {
                         reason: "peer pause was not observed before removal",
                     });
                 }
             }
+            diagnostic_phase = "wait_for_disconnected_peer";
             loop {
                 let snapshot = self.connections().await?;
+                match snapshot.connections.get(id).map(|peer| peer.connected) {
+                    None => peer_snapshots[0] += 1,
+                    Some(true) => peer_snapshots[1] += 1,
+                    Some(false) => peer_snapshots[2] += 1,
+                }
                 if snapshot
                     .connections
                     .get(id)
@@ -231,12 +244,22 @@ impl Client {
             }
             check_deadline()?;
             modified = true;
+            diagnostic_phase = "single_delete_and_configuration_readback";
             self.delete_device_registration(id, previous).await
         })
         .await
         .unwrap_or(Err(Error::Timeout {
             operation: "disconnect and remove device",
         }));
+        eprintln!(
+            "explicit removal phases: phase={diagnostic_phase} elapsed_ms={} missing={} connected={} disconnected={} success={} timeout={}",
+            started.elapsed().as_millis(),
+            peer_snapshots[0],
+            peer_snapshots[1],
+            peer_snapshots[2],
+            result.is_ok(),
+            matches!(&result, Err(Error::Timeout { .. })),
+        );
         result.map_err(|error| {
             if modified && !matches!(&error, Error::MutationOutcomeUnknown { .. }) {
                 uncertain("disconnect and remove device", error)
