@@ -1,0 +1,69 @@
+name: Two isolated peers on the approved VerySync tracker
+
+on:
+  push:
+    branches: [test/official-tracker-pair-20261120]
+
+permissions:
+  contents: read
+
+jobs:
+  tracker:
+    if: github.run_attempt == 1 && github.actor == 'AresJef'
+    name: Hosted Linux, bounded official tracker and exact dynamic target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: write
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          path: stable
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Compile the dedicated driver from the exact stable crate
+        working-directory: stable
+        run: |
+          test "$(git rev-parse HEAD)" = 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          test "$(git rev-parse 'HEAD^{tree}')" = 3da7a8516223b8502fae1fc9aef7fe4033c76dcf
+          test -z "$(git status --porcelain)"
+          cp "$GITHUB_WORKSPACE/.github/field/tracker-field/tracker_pair_node.rs" examples/
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          python -m pip install psutil==7.2.2
+          cargo +"$TEST_TOOLCHAIN" build --locked --example tracker_pair_node
+      - name: Explicitly prepare the matching native core
+        working-directory: stable
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Observe the dynamic peer only through the previously pinned tracker hosts
+        env:
+          UDP_SIGNAL_KEY: ${{ secrets.VS_FOLLOWUP_TRACKER_PAIR_KEY_20261120 }}
+          UDP_PROJECT_TOKEN: ${{ github.token }}
+          PYTHONNOUSERSITE: '1'
+        run: >-
+          python -B .github/field/tracker-field/tracker_pair.py linux
+          --source "$GITHUB_WORKSPACE/stable"
+          --engine "$VERYSYNC_TEST_BINARY" --sha "$VERYSYNC_TEST_BINARY_SHA256"
+          --driver "$GITHUB_WORKSPACE/stable/target/debug/examples/tracker_pair_node"
+          --receipt "$RUNNER_TEMP/official-tracker-paired-linux.json"
+      - name: Require exact prepared-image cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        working-directory: stable
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Keep only address-free observations
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: stable-official-tracker-pair-${{ github.run_id }}
+          path: ${{ runner.temp }}/official-tracker-paired-linux.json
+          retention-days: 7
+          if-no-files-found: warn
