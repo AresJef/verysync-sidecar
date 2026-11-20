@@ -19,11 +19,13 @@ evidence. The pending positive cases remain available for future validation.
 | Pro license and trial | Effective license reads, refresh, persistence and trial activation | Observed empty, denied and indeterminate results and preserved state |
 | Official Pro remote management | A real official tunnel session, verified target identity and management operations | Explicit caller-configured HTTP(S) management and identity checks |
 
-Verify a real pending-device record from an isolated peer, its identity through
-the typed API, and its absence after scoped dismissal. Check that unrelated
-configuration and files are retained and that the owned instances stop normally.
-Record this outcome separately from pending-folder validation.
-See [invitation validation](invitations.md).
+The first stable release defers three further sets of native cases.
+
+| Area | Deferred cases | Checks that remain required |
+| --- | --- | --- |
+| [Pending devices](invitations.md) | Observe a real nonempty device record from an isolated peer, verify its typed identity and dismiss it while retaining unrelated configuration and files | Typed reads, native empty results and missing-record rejection. Pending-folder validation remains separate. |
+| [Official cloud accounts](official-accounts.md) | Real login, account-service rejection of incorrect credentials, session persistence through restart and authenticated logout | Ordinary management authentication, the empty account and empty-session logout, and the observed native upstream rejection. |
+| [Local-API](local-api.md) | Cases that require a corresponding official entitlement on an isolated test instance | The 28 typed entries, applicable ordinary native effects and observed native license refusals. |
 
 Verify actual disconnection and retained file bytes for
 `disconnect_and_remove_device()`. For `remove_device()`, verify the single
@@ -35,9 +37,9 @@ Enterprise control is deferred from the first stable release. Resume
 implementation and native verification when the official caller contract
 and a dedicated enterprise test entitlement are available.
 
-Verify account operations, Local-API and Windows packet traffic class
-against their own requirements. Apply the original positive and negative
-checks to each area. Record any applicable outcome that remains unverified.
+Use a dedicated, authorized cloud account to resume the account cases. Use a
+fixed isolated test instance with the required entitlement to resume the
+Local-API cases. Record applicable outcomes and gaps with the release evidence.
 
 For v2.33.2 on Windows AMD64 and ARM64, the [directory mutation check](file-mutations.md)
 covers the observed native HTTP 500 and partial contents after directory
@@ -80,8 +82,11 @@ the observed IPv4 and IPv6 routed paths, file effects, recovery and node
 lifecycle checks. Revalidate the applicable controlled cases on the final
 candidate. Run the separate [Windows packet validation](controlled-network-acceptance.md#windows-packet-traffic-class)
 for IPv4 and IPv6. The fixed Windows AMD64 direct TCP check includes the
-observed default-octet boundary. Windows ARM64 keeps its own packet-effect
-requirement.
+observed default-octet boundary. For the fixed Windows ARM64 direct TCP path,
+IPv4 and the IPv6 zero control must match the configured class. For IPv6
+settings 16 and 32, independent capture can also confirm the observed all-zero
+v2.33.2 behavior. Both architectures require the applicable same-link controls,
+persisted settings, actual file effects, authenticated identity and exact cleanup.
 
 macOS Intel formal resource collection and its independent reruns are deferred.
 Both standard Intel labels produced zero qualifying formal samples. Resume

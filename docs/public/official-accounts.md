@@ -59,6 +59,9 @@ forwarding, unchanged GUI/configuration and identity, retained sample data,
 empty state after explicit restart and normal owned exit. It does not send real
 user credentials. Synthetic transport cases cover positive UID receipt shapes,
 unknown/malformed state, mismatched readback, identity changes and single-request
-semantics. Successful real cloud login, rejection of an incorrect password by
-the account service, authenticated logout/session persistence and complete
-same-source platform acceptance remain pending.
+semantics. The first stable release defers successful real cloud login,
+account-service rejection of an incorrect password, session persistence
+through restart and authenticated logout. Resume these cases with a dedicated
+authorized account, a fixed isolated instance and permission for actual
+account-service requests. Management authentication and the ordinary native
+account cases remain part of candidate validation.

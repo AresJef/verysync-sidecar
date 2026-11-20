@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased (0.1.0-alpha.2)
+## 0.1.0
+
+- Document the fixed v2.33.2 Windows ARM64 IPv6 traffic-class boundary. In
+  two native runs settings 16 and 32 persisted, while the captured TCP packets
+  carried class 0. IPv4 and the IPv6 zero control matched their settings.
+
+- Retain the typed pending-device, official cloud-account and Local-API
+  interfaces. Defer the nonempty pending-device dismissal, actual cloud-account
+  sessions and Local-API cases requiring unavailable entitlements. The
+  [release checks](docs/public/release-checklist.md) describe what remains
+  applicable and the requirements for each deferred case.
+
+- Add an isolated native Local-API regression that installs fixed v2.33.2 over
+  v2.33.1 on Apple Silicon, preserving identity, index, share keys and file bytes.
 
 - Add typed per-peer encryption password controls and capability entries for
   folder-peer encryption and native device introduction. On VerySync v2.33.2,

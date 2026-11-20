@@ -99,7 +99,7 @@ CANDIDATE_ACTION_JOBS = {
         "Observe the socket control and SDK on one owned Windows ARM64 link": (
             "Build the exact native Rust receiver and SDK harness",
             "Explicitly prepare the pinned native ARM64 VerySync",
-            "Verify independent qWAVE controls and strict actual SDK file traffic",
+            "Require independent qWAVE controls and all six scoped ARM64 packet cases",
             "Confirm exact native program cleanup",
         ),
     },

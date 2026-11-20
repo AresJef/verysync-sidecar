@@ -6,15 +6,15 @@ program with its own license. The crate does not download or start it when added
 as a dependency or compiled. This release's `Client` borrows a running instance;
 dropping it leaves that instance running.
 
-For the initial alpha, pin the exact registry version:
+Install the 0.1.0 release from crates.io.
 
 ```toml
 [dependencies]
-verysync-sidecar = "=0.1.0-alpha.1"
+verysync-sidecar = "0.1.0"
 ```
 
 During local development a path dependency or reviewed pinned Git revision can
-be used. All alpha interfaces can change without compatibility layers. Rust 1.85
+be used. Rust 1.85
 or later and a caller-owned Tokio runtime with I/O and timers
 are required. The validated engine baseline is exactly **v2.33.2**; changing it
 requires an explicit `VersionPolicy::AllowUnverified` choice.

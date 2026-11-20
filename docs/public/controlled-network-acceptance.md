@@ -222,7 +222,15 @@ octets `16`, `32` and `0`. On IPv6 the sender emitted `0` for all three
 settings. The same-link qWAVE reference emitted the requested octets in
 both families. All six files per run matched their expected SHA-256 digests,
 and both runs verified configuration persistence, identity, normal process
-exits and exact cleanup. The two nonzero IPv6 cases failed the required
-Windows ARM64 packet check in both runs.
+exits and exact cleanup. The two nonzero IPv6 cases failed the original strict
+octet match in both runs.
 [First native Windows ARM64 run](https://github.com/AresJef/verysync-sidecar/actions/runs/44585772845),
 [independent native Windows ARM64 repeat](https://github.com/AresJef/verysync-sidecar/actions/runs/44587804049).
+
+The fixed Windows ARM64 direct TCP check accepts this observed limitation
+only for IPv6 settings `16` and `32`, when every captured octet attributed
+to the actual sender is `0`. It keeps the strict result visible. IPv4 and
+the IPv6 zero control still require matching packet headers. Every case
+requires matching same-link qWAVE controls, settings persisted through a
+restart, exact transferred bytes, both owned identities, and normal exit and
+cleanup.

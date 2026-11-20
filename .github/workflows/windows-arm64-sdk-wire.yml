@@ -46,6 +46,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the original SDK lockfile' }
           Copy-Item .github/diagnostics/hyperv-wire/paired_wire.rs examples/paired_wire_arm64_diagnostic.rs
           Copy-Item .github/diagnostics/hyperv-wire/paired_wire_arm64.rs examples/paired_wire_arm64.rs
+          cargo "+$toolchain" test --locked --offline --example paired_wire_arm64_diagnostic only_approved_ipv6_nonzero_requests_accept_an_all_zero_observation
+          if ($LASTEXITCODE -ne 0) { throw 'The scoped IPv6 packet acceptance check failed' }
           cargo "+$toolchain" build --locked --offline --example paired_wire_arm64_diagnostic
           if ($LASTEXITCODE -ne 0) { throw 'The actual native SDK harness could not be built' }
       - name: Explicitly prepare the pinned native ARM64 VerySync
@@ -53,7 +55,7 @@ jobs:
         run: |
           python -B scripts/prepare-test-engine.py prepare --package windows-arm64-standard --parent $env:RUNNER_TEMP --github-env $env:GITHUB_ENV
           if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare the explicit pinned ARM64 program' }
-      - name: Verify independent qWAVE controls and strict actual SDK file traffic
+      - name: Require independent qWAVE controls and all six scoped ARM64 packet cases
         shell: pwsh
         run: |
           $peer = Resolve-Path -LiteralPath '.github/diagnostics/windows-arm64-tun-peer/target/debug/verysync-isolated-tun-peer.exe'

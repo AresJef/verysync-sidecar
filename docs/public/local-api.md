@@ -199,8 +199,12 @@ The APIs cover connection/status, projections, configuration changes, scans,
 selection and listing, progress/statistics, history, share-key operations,
 system actions, temporary cleanup and index events.
 
-Native licensed selection, populated history and events, and configuration writes
-still require their own positive evidence. Existing unlicensed refusals, empty
-pages, partial hardware errors and acknowledgement-only observations keep their
-stated limits. The Local-API router does not establish an independent enterprise-control
-contract or another feature's commercial entitlement.
+The first stable release defers the positive cases that require an official
+entitlement on an isolated test instance. Resume those cases with the fixed
+program and corresponding authorization, including licensed selection,
+populated history and events, and actual licensed configuration writes.
+Applicable ordinary native effects and observed native license refusals remain
+part of candidate validation. Empty pages, partial hardware errors and
+acknowledgement-only observations keep their stated limits. The Local-API
+router does not establish an independent enterprise-control contract or another
+feature's commercial entitlement.

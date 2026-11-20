@@ -981,9 +981,11 @@ The formal candidate must pass the applicable native checks for the two Linux
 and two macOS standard profiles. They include observer cleanup, source and
 receiver bytes, private credentials, identities, unrelated sections, normal
 core-tree and state exits, and the caller sentinel. Independent receiver
-observations cover routed Linux IPv4 and IPv6 and the Windows AMD64 diagnostic.
-Windows nonzero marking, Windows ARM64 and real remote paths still require
-their applicable evidence.
+observations cover routed Linux IPv4 and IPv6 and scoped Windows AMD64 and
+ARM64 direct TCP paths. On Windows ARM64 v2.33.2 the IPv6 settings 16 and 32
+persisted while transmitted packets carried class 0. The IPv4 settings and
+IPv6 zero control matched their configured classes. The final candidate
+must reproduce the applicable wire results and controls.
 [Controlled network acceptance](controlled-network-acceptance.md).
 
 

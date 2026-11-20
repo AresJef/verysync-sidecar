@@ -11,16 +11,16 @@ accepts per-connection trusted certificates and explicit authenticated HTTP(S)
 proxies. Certificate/hostname verification and reconnect policy remain explicit;
 full same-source platform acceptance is pending.
 
-The unreleased [remote-management API](docs/public/remote-management.md) keeps
+The [remote-management API](docs/public/remote-management.md) keeps
 native permissions, explicit tunnel probes and target-identity gateway
 connections separate. Licensed native sessions and cross-network acceptance
 remain pending.
 
-The unreleased [license API](docs/public/licenses.md) preserves native license
+The [license API](docs/public/licenses.md) preserves native license
 metadata and separates explicit refresh/trial acknowledgements from actual
 licensed effects. Authorized positive acceptance remains pending.
 
-The unreleased [official-account API](docs/public/official-accounts.md) separates
+The [official-account API](docs/public/official-accounts.md) separates
 explicit cloud-account login/logout from GUI sessions and licensed entitlements.
 Native acknowledgements, actual account state and upstream rejection codes have
 separate results; authenticated cloud-session acceptance remains pending.
@@ -31,48 +31,52 @@ formats and post-upload digest verification. Complete native acceptance is pendi
 
 A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
 
-The unreleased [program upgrade and state snapshot API](docs/public/program-upgrades.md)
+The [program upgrade and state snapshot API](docs/public/program-upgrades.md)
 separates explicit executable selection, kernel upgrade requests and offline
 state restoration. A restored old snapshot is distinct from opening a migrated
 database with an older executable.
 
-The unreleased [file-manager read API](docs/public/file-resources.md) separates
+The [file-manager read API](docs/public/file-resources.md) separates
 opaque mounted-volume IDs from sync-folder IDs, preserves target path syntax,
 and exposes bounded resource metadata and actual file checksums.
 
-The unreleased optional [`download` feature](docs/public/program-preparation.md)
+The optional [`download` feature](docs/public/program-preparation.md)
 adds explicit fixed-version transfer, full archive SHA-256 verification and
 bounded extraction into a new private directory. Preparing a program and
 starting its isolated managed instance remain separate runtime operations.
 
-The unreleased [program cache](docs/public/program-cache.md) adds explicit
+The [program cache](docs/public/program-cache.md) adds explicit
 offline resolution, cross-process preparation and immutable generations that
 preserve previously returned or running program paths.
 
-The project is under active development. The current API provides explicit endpoints and target paths, authenticated version/identity checks, fresh typed status reads, and folder registration, partial label/pause updates and unregistering while retaining files. Further management operations are being implemented and tested. The initial alpha version is `0.1.0-alpha.1`; pin it exactly and review the validation scope. Runtime acceptance is tracked per operation and platform; successful engine fixture tests alone do not establish control-library functionality.
+This documentation targets `verysync-sidecar` 0.1.0 and official VerySync v2.33.2.
+See the [release checks](docs/public/release-checklist.md) for tested native
+conditions, platform boundaries and deferred positive cases.
 
-The working branch also develops explicit owned-program startup and deliberately selected persistence. See [managed instances](docs/public/managed-instances.md) for the unreleased API and its distinct lifetime/state responsibility; the published initial alpha still targets already running instances.
+[Managed instances](docs/public/managed-instances.md) cover explicit owned-program
+start, stop, restart and selected persistence. A borrowed client connects to
+an instance with a caller-managed lifetime.
 
-The unreleased [event subscription API](docs/public/events.md) provides bounded
+The [event subscription API](docs/public/events.md) provides bounded
 queues, explicit continuity gaps and finite read-only recovery. Its task belongs
 to the subscription; closing it leaves the engine running.
 
-The unreleased [scan observation API](docs/public/long-running-operations.md)
+The [scan observation API](docs/public/long-running-operations.md)
 separates an explicit scan request from observed scanning entry/exit and fresh
 status. Cancelling observation closes only its read subscription; completion
 does not certify peer synchronization or invent a server job identifier.
 
-The unreleased [sharing API](docs/public/sharing.md) generates and validates
+The [sharing API](docs/public/sharing.md) generates and validates
 actual engine keys, preserves reported read-only/read-write permissions and
 registers using the target's proposed local ID. Registration readback and peer
 association are separate observations.
 
-The unreleased [device configuration API](docs/public/devices.md) reads actual
+The [device configuration API](docs/public/devices.md) reads actual
 defaults, guards creation and partial updates, controls a remote device's pause
 layer, and observes removal and remaining folder associations. Configuration
 readback remains separate from connection and file-transfer evidence.
 
-The unreleased [creation-default and application-state APIs](docs/public/configuration.md)
+The [creation-default and application-state APIs](docs/public/configuration.md)
 change explicit fields inherited by future folders and devices, retain other
 template values, and separately expose the engine's configuration application flag.
 They share typed scan, file-order, selective and advanced selections with existing
@@ -81,54 +85,54 @@ are separate observations.
 Identity-bound complete saves retain native sections and reject a known stale
 snapshot before writing; independent writers still need coordination.
 
-The unreleased [management credential API](docs/public/management-authentication.md)
+The [management credential API](docs/public/management-authentication.md)
 rotates an explicit API key once, verifies readback and old-key refusal, and
 provides fresh identity-checked connections for normal operation and recovery.
 Explicit local GUI credential changes and in-memory GUI sessions additionally
 verify native password login, CSRF handling and server-side logout independently
 of API-key management.
 
-The unreleased [invitation and folder-peer APIs](docs/public/invitations.md)
+The [invitation and folder-peer APIs](docs/public/invitations.md)
 distinguish remote offers, persistent ignores, local key registration and explicit
 peer association. Nonempty pending-device records remain separately unverified.
 Explicit device-ignore changes preserve the full fixed-version configuration
 and report settings separately from observed connection rejection/recovery.
 
-The unreleased [network API](docs/public/network.md) separates explicit settings,
+The [network API](docs/public/network.md) separates explicit settings,
 listener status, discovery cache records and live peer snapshots. Real private
 TCP and isolated discovery lookup effects have dedicated tests; LAN, UDP, relay,
 announcements and WAN acceptance remain separate.
 
-The unreleased [transport](docs/public/transports.md) and
+The [transport](docs/public/transports.md) and
 [relay-server APIs](docs/public/relay.md) add explicit protocol settings,
 tracker/NAT observations, official relay runtime and caller-selected probes.
 Dedicated tests cover private UDP/QUIC peers and a three-core relay path.
 Cross-WAN traversal, public providers and authenticated relay enforcement
 retain separate acceptance requirements.
 
-The unreleased [synchronization snapshots](docs/public/sync-observation.md)
+The [synchronization snapshots](docs/public/sync-observation.md)
 preserve completion uncertainty, explicit need/change/error pages and actual
 device/folder statistics. Synthetic file/index, active need and local-change
 effects have dedicated native tests; snapshots do not certify business batches.
 
-The unreleased [scan control API](docs/public/scan-control.md) adds explicit
+The [scan control API](docs/public/scan-control.md) adds explicit
 relative subpaths, all-folder requests and partial periodic/watcher settings,
 with actual index changes checked separately from configuration readback.
 
-The unreleased [ignore-pattern API](docs/public/ignore-patterns.md) preserves
+The [ignore-pattern API](docs/public/ignore-patterns.md) preserves
 ordered engine rules, reports stored parser failures explicitly, and separates
 clearing rules from restoring the engine's built-in defaults.
 
-The unreleased [scheduling API](docs/public/scheduling.md) adds file pull-order
+The [scheduling API](docs/public/scheduling.md) adds file pull-order
 settings, explicit priority pages and global/per-device KiB/s limits. Native
 queue and byte-cap effects have distinct mode and measurement conditions.
 
-The unreleased [selective index API](docs/public/selective-sync.md) provides
+The [selective index API](docs/public/selective-sync.md) provides
 actual trees, scoped search pages, opaque cursors and explicit mode settings.
 Conditional selection requests report real Pro-license refusals as typed errors;
 licensed selection and all-node removal effects remain unverified.
 
-The unreleased [folder recovery API](docs/public/recovery.md) sends explicit
+The [folder recovery API](docs/public/recovery.md) sends explicit
 receive-only reversion, send-only override and marker-repair requests. Real
 data, marker and identity observations remain separate from acknowledgements.
 
@@ -148,7 +152,7 @@ The development plan runs through full delivery. Alpha releases are intermediate
 - One crate with internal modules and optional features for capabilities such as downloading the official program.
 - Local development on macOS; cross-platform builds and runtime acceptance through GitHub Actions.
 - English-only documentation for the first public release.
-- Source on GitHub and package releases on crates.io. First implement genuine, tested functionality with accurate English documentation, then publish an alpha to acquire the package name. Continue toward the complete agreed scope; full release acceptance remains unchanged.
+- Source on GitHub and package releases on crates.io. The first alpha established the package with tested management operations. The first stable release follows the documented native, platform and registry checks.
 
 The library remains independent of application frameworks and business workflows. Callers choose when to run instances, what roles devices take, and how to combine operations.
 
@@ -353,7 +357,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo doc --no-deps --all-features --locked
 ```
 
-Read the [initial alpha validation scope](docs/public/alpha-scope.md) and the [getting-started guide](docs/public/getting-started.md) for explicit connection, folder control, failure interpretation and actual example commands. The [complete management example](examples/manage_existing.rs) confirms create/update/resume/pause/unregister configuration readbacks on a deliberately chosen instance.
+Read the [release checks](docs/public/release-checklist.md) and the [getting-started guide](docs/public/getting-started.md) for explicit connection, folder control, failure interpretation and actual example commands. The [complete management example](examples/manage_existing.rs) confirms create/update/resume/pause/unregister configuration readbacks on a deliberately chosen instance.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before running engine integration tests. Tests must use an explicitly supplied official executable, isolated state and synthetic data. The existing user instance is never a test target.
 

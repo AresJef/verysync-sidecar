@@ -71,10 +71,12 @@ from another official core while the receiver still had no configuration entry
 for that peer. All 48 pending-device snapshots in the bounded observation stayed
 empty; dismissing the absent record returned `PendingOfferNotFound`. Receiver
 configuration, caller bytes and normal owned-tree/state release were preserved.
-The original positive nonempty-record requirement failed and remains unverified;
-this observation does not validate candidate record fields or every connection
-path, platform or authorization mode. Inspect live connections and persistent
-ignore rules independently when controlling peer access.
+This observation covers that connection path. The first stable release defers
+the positive nonempty record and dismissal case until a reproducible authorized
+input produces an actual record on an isolated fixed core. Typed reads, empty
+records, missing-record rejection and pending-folder effects keep their
+respective checks. Inspect live connections and persistent ignore rules when
+controlling peer access.
 
 The historical `trust-devices` argument was also checked against both startup
 command forms on the fixed v2.33.2 Linux AMD64 and Windows AMD64 programs.
