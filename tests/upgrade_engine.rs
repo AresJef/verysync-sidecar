@@ -160,15 +160,44 @@ fn windows_delete_admission_distinguishes_a_real_held_handle_without_removing_da
 
 #[tokio::test]
 async fn kernel_provider_upgrade_replaces_only_the_owned_old_copy() -> TestResult {
-    kernel_upgrade(false).await
+    kernel_upgrade(UpgradeRoute::Provider).await
 }
 #[tokio::test]
 async fn kernel_streamed_archive_upload_replaces_only_the_owned_old_copy() -> TestResult {
-    kernel_upgrade(true).await
+    kernel_upgrade(UpgradeRoute::StreamedArchive).await
 }
-async fn kernel_upgrade(upload: bool) -> TestResult {
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[tokio::test]
+async fn local_api_provider_upgrade_without_a_license_preserves_owned_identity_and_bytes(
+) -> TestResult {
+    kernel_upgrade(UpgradeRoute::LocalApi).await
+}
+
+enum UpgradeRoute {
+    Provider,
+    StreamedArchive,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    LocalApi,
+}
+
+impl UpgradeRoute {
+    fn uses_local_api(&self) -> bool {
+        match self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            Self::LocalApi => true,
+            Self::Provider | Self::StreamedArchive => false,
+        }
+    }
+}
+
+async fn kernel_upgrade(route: UpgradeRoute) -> TestResult {
     use sha2::{Digest, Sha256};
-    use verysync_sidecar::{CreateFolderOptions, FolderId, ManagedUpgradeChecks};
+    use verysync_sidecar::{
+        CreateFolderOptions, FolderId, LocalApiClient, LocalApiConnectOptions,
+        ManagedUpgradeChecks, ManagementEndpoint,
+    };
+    let upload = matches!(route, UpgradeRoute::StreamedArchive);
+    let use_local_api = route.uses_local_api();
     let root = tempfile::Builder::new().prefix("vku-").tempdir()?.keep();
     let source = upgrade_source()?;
     let program = root.join(source.path().file_name().ok_or("program name missing")?);
@@ -180,12 +209,24 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     )
     .into();
     let base = options(&root.join("c"))?;
+    let endpoint = if use_local_api {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        let addr = listener.local_addr()?;
+        ManagementEndpoint::http(&format!("http://{addr}/"))?
+    } else {
+        base.management_endpoint().clone()
+    };
     let settings = ManagedOptions::new(
         LocalProgram::new(&program)?.expected_sha256(old_sha),
         base.state_directory(),
-        base.management_endpoint().clone(),
+        endpoint.clone(),
     )?
     .version_policy(VersionPolicy::AllowUnverified);
+    let settings = if use_local_api {
+        settings.local_api_enabled(true)?
+    } else {
+        settings
+    };
     let mut core = ManagedInstance::start(settings.clone()).await?;
     assert!(matches!(core.client().check_kernel_upgrade().await,
         Err(Error::Http { response }) if response.status() == 501));
@@ -228,6 +269,30 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     })
     .await??;
     let before = core.client().folder(&id).await?;
+    let local = if use_local_api {
+        assert!(core.client().license_status().await?.licenses().is_none());
+        let connected = LocalApiClient::connect(
+            LocalApiConnectOptions::new(endpoint.clone())?
+                .version_policy(VersionPolicy::AllowUnverified)
+                .expected_device_id(identity.clone()),
+        )
+        .await;
+        let client = match connected {
+            Ok(client) => client,
+            Err(error) => {
+                let exit = core.shutdown(Duration::from_secs(10)).await?;
+                assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+                eprintln!("fixed old-version Local-API admission rejected: {error:?}");
+                return Err(error.into());
+            }
+        };
+        assert_eq!(client.version().await?.version, "v2.33.1");
+        assert_eq!(client.system_status().await?.device_id, identity);
+        println!("native Local-API upgrade input: v2.33.1, owned identity, license absent");
+        Some(client)
+    } else {
+        None
+    };
     if !upload {
         let provider_started = std::time::Instant::now();
         eprintln!("provider-check-begin management_request_deadline_s=10 initial_retry_count=0");
@@ -309,7 +374,17 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
         }
     }
 
-    let result = if upload {
+    let result = if let Some(client) = &local {
+        client.request_server_selected_upgrade().await.map(|ack| {
+            assert_eq!(ack.response.status(), 200);
+            assert!(ack.restart_acknowledged);
+            println!(
+                "native Local-API upgrade acknowledgement: status={} restarting={}",
+                ack.response.status(),
+                ack.restart_acknowledged
+            );
+        })
+    } else if upload {
         let invalid = root.join("bad.zip");
         std::fs::write(&invalid, b"invalid archive")?;
         assert!(matches!(
@@ -338,8 +413,12 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
                 &baseline_asset()?,
             )
             .await
+            .map(drop)
     } else {
-        core.client().request_server_selected_upgrade().await
+        core.client()
+            .request_server_selected_upgrade()
+            .await
+            .map(drop)
     };
     if let Err(e) = &result {
         let mut detail = format!("{e:?}");
@@ -380,6 +459,15 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     assert_eq!(core.program_info().version, "v2.33.2");
     assert_eq!(core.client().system_status().await?.device_id, identity);
     assert_eq!(core.client().folder_status(&id).await?.local_files, Some(1));
+    if use_local_api {
+        let current = LocalApiClient::connect(
+            LocalApiConnectOptions::new(endpoint)?.expected_device_id(identity.clone()),
+        )
+        .await?;
+        assert_eq!(current.version().await?.version, "v2.33.2");
+        assert_eq!(current.system_status().await?.device_id, identity);
+        assert!(core.client().license_status().await?.licenses().is_none());
+    }
     let after = core.client().folder(&id).await?;
     assert_eq!(before.id, after.id);
     for field in ["secretKey", "readOnlySecret", "readWriteSecret"] {
@@ -397,7 +485,8 @@ async fn kernel_upgrade(upload: bool) -> TestResult {
     })?;
     println!(
         "public native kernel upgrade evidence: {}",
-        serde_json::json!({"mode":if upload { "streamed_archive" } else { "provider" },
+        serde_json::json!({"mode":if use_local_api { "local_api_provider" } else if upload { "streamed_archive" } else { "provider" },
+        "actual_local_api_without_license_before_and_after":if use_local_api { Some(true) } else { None },
         "default_check_rejected_without_program_change":true,"manual_periodic_checks_disabled":true,
         "actual_explicit_mode_prerequisites_checked":true,"actual_old_program_normally_stopped":true,
         "actual_owned_program_replaced_with_fixed_baseline_sha":true,"actual_new_version_authenticated":true,

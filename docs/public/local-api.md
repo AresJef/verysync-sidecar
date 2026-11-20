@@ -141,8 +141,15 @@ provider and installer, which can replace its executable. Use a dedicated mutabl
 program and backups. The SDK downloads/selects nothing itself and does not retry,
 relaunch or roll back. `restart_acknowledged: false` preserves the core's empty
 successful reply, distinct from its `restarting` marker. Neither is an installed
-version/hash receipt. Native Local-API upgrade effects remain pending acceptance;
-synthetic acknowledgement contracts do not establish an installation.
+version or executable hash receipt.
+
+An isolated macOS ARM64 test used this Local-API action without a configured
+license. With explicit manual upgrade checks enabled, the official release
+provider selected v2.33.2 for an owned v2.33.1 instance. The test supplied a
+verified local copy of the official archive. It observed the old process exit,
+matched the installed executable with the fixed v2.33.2 digest, and started a new
+generation explicitly. The device identity, share keys, existing index and sample
+bytes were preserved, and the new generation shut down normally.
 
 `request_folder_temporary_cleanup(folder)` is an explicit destructive operation
 on a configured folder's `.verysync/*.tmp` and `*.sess` entries, including matching
@@ -192,9 +199,8 @@ The APIs cover connection/status, projections, configuration changes, scans,
 selection and listing, progress/statistics, history, share-key operations,
 system actions, temporary cleanup and index events.
 
-This records interface coverage. Native licensed selection, populated history
-and events, configuration writes and server-selected upgrade effects still
-require their own positive evidence. Existing unlicensed refusals, empty pages,
-partial hardware errors and acknowledgement-only observations keep their stated
-limits. The Local-API router does not establish an independent enterprise-control
+Native licensed selection, populated history and events, and configuration writes
+still require their own positive evidence. Existing unlicensed refusals, empty
+pages, partial hardware errors and acknowledgement-only observations keep their
+stated limits. The Local-API router does not establish an independent enterprise-control
 contract or another feature's commercial entitlement.
