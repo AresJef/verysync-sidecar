@@ -582,6 +582,33 @@ async fn incomplete_native_peer_observation(observe_download: bool) -> TestResul
     assert_eq!(std::fs::read(origin.join("sample.bin"))?, sample);
     assert_eq!(a.client().system_status().await?.device_id, aid);
     assert_eq!(b.client().system_status().await?.device_id, bid);
+
+    // Close both fixture links after recording the requested index and data
+    // effects. Each owner must still complete its original normal-stop check.
+    let links = [(a.client(), &bid), (b.client(), &aid)];
+    for (client, peer) in links {
+        assert!(client.pause_device(peer).await?.configuration.paused);
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let mut connected = false;
+            for (client, peer) in links {
+                connected |= client
+                    .connections()
+                    .await?
+                    .connections
+                    .get(peer)
+                    .is_some_and(|connection| connection.connected);
+            }
+            if !connected {
+                return Ok::<(), Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    println!("native partial-peer teardown: both fixture links confirmed disconnected");
+
     for (index, owner) in [&mut b, &mut a].into_iter().enumerate() {
         let started = std::time::Instant::now();
         let initial = owner.shutdown(Duration::from_secs(10)).await;
