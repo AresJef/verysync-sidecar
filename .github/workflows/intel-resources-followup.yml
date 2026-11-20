@@ -1,0 +1,124 @@
+name: Stable resource qualification on the original Intel runner
+
+on:
+  push:
+    branches: [test/intel-resources-20261120]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-intel-resources-20261120
+  cancel-in-progress: false
+
+jobs:
+  intel:
+    name: Frozen resource qualification on native macOS Intel
+    runs-on: macos-15-intel
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Require the accepted source and frozen resource protocol
+        run: |
+          test "$(git rev-parse HEAD)" = 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          test "$(shasum -a 256 tests/fixtures/resource-protocol.json | cut -d " " -f1)" = d175e8d5f571140649d63db009f1f9263d52739ac50b73d8e67ab70a26b7df58
+      - name: Install fixed explicit measurement dependency and native MSRV
+        run: |
+          python -m pip install -r scripts/resource-test-requirements.txt
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Verify frozen preparation inputs before preparing the engine
+        run: >-
+          python scripts/preflight-native-resources.py --check-source
+          --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
+          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
+      - name: Verify measurement quality and complete-group contracts
+        run: |
+          python -m unittest discover -s scripts/tests -p 'test_resource_*.py'
+          python -m unittest discover -s scripts/tests -p 'test_macos_timer_probe.py'
+          python -m unittest discover -s scripts/tests -p 'test_macos_observer_activity.py'
+          python -m unittest discover -s scripts/tests -p 'test_native_observer_diagnosis.py'
+      - name: Build the frozen Darwin snapshot helper
+        if: runner.os == 'macOS'
+        run: |
+          library="$RUNNER_TEMP/verysync-darwin-owned-sample.dylib"
+          xcrun clang -O2 -Wall -Wextra -Werror -dynamiclib scripts/darwin-owned-sample.c -o "$library"
+          printf 'VERYSYNC_DARWIN_METRICS_LIBRARY=%s\n' "$library" >> "$GITHUB_ENV"
+      - name: Explicitly prepare this profile's fixed private core
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package "macos-amd64-standard"
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Retain actual counter resolution and balanced timer wakeup calibration
+        run: >-
+          python scripts/measure-native-resources.py --stage calibration --timer-calibration
+          --evidence-dir "${{ runner.temp }}/vs-resource-clock-calibration"
+      - name: Build the exact release workload before acquisition
+        run: cargo +"$TEST_TOOLCHAIN" test --release --no-run --features engine-tests,download --test resource_usage_engine --locked
+      - name: Require complete fresh-process preparation on this actual profile
+        run: >-
+          python scripts/preflight-native-resources.py
+          --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
+          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
+          --evidence-dir "${{ runner.temp }}/vs-resource-v25-pretrial"
+      - name: Collect four formal and two independent original-order cycles
+        id: collection
+        run: >-
+          python scripts/collect-native-resources.py --stage all
+          --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
+          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
+          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v25"
+      - name: Require frozen resource limits and exact candidate identity
+        if: steps.collection.outcome == 'success'
+        run: >-
+          python scripts/check-native-resource-profile.py --profile "macos-amd64-standard"
+          --protocol tests/fixtures/resource-protocol.json
+          --collection "${{ runner.temp }}/vs-frozen-resource-v25"
+          --preparation "${{ runner.temp }}/vs-resource-v25-pretrial"
+          --output "${{ runner.temp }}/vs-resource-verdict"
+          --source "$(git rev-parse HEAD)" --tree "$(git rev-parse 'HEAD^{tree}')"
+          --engine-sha256 "$VERYSYNC_TEST_BINARY_SHA256"
+      - name: Require exact owned-program cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Preserve sanitized raw measurements and immutable group records
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: frozen-resources-macos-amd64-standard-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/vs-resource-verdict/resource-report.json
+            ${{ runner.temp }}/vs-resource-verdict/resource-report.md
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/collection-state.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/frozen-protocol.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/accepted-group.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/attempt.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/preparation-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/quality-result.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/samples.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/events.jsonl
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/safe-error.json
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/console.log
+            ${{ runner.temp }}/vs-frozen-resource-v25/**/*.console.log
+            ${{ runner.temp }}/vs-resource-clock-calibration/calibration.json
+            ${{ runner.temp }}/vs-resource-clock-calibration/safe-error.json
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/preparation-result.json
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/quality-result.json
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/samples.jsonl
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/events.jsonl
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/safe-error.json
+            ${{ runner.temp }}/vs-resource-v25-pretrial/**/console.log
+            ${{ runner.temp }}/vs-resource-v25-pretrial/pretrial-result.json
