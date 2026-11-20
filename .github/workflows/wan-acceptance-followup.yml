@@ -1,0 +1,77 @@
+name: Stable external direct acceptance
+
+on:
+  push:
+    branches: [test/field-wan-20261120]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-field-wan-20261120
+  cancel-in-progress: false
+
+jobs:
+  direct:
+    name: Stable hosted Linux through one private test port
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-unknown-linux-gnu
+    steps:
+      - name: Check out the exact test harness
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Check out the accepted SDK candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          path: stable
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Verify the stable source and build the independent test driver
+        working-directory: stable
+        run: |
+          test "$(git rev-parse HEAD)" = 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          test "$(git rev-parse 'HEAD^{tree}')" = 3da7a8516223b8502fae1fc9aef7fe4033c76dcf
+          test "$(git rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE/stable"
+          test -z "$(git status --porcelain)"
+          test ! -e examples/vs_wan_node.rs
+          cp "$GITHUB_WORKSPACE/.github/field/wan_node.rs" examples/vs_wan_node.rs
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          python -m pip install psutil==7.2.2
+          cargo +"$TEST_TOOLCHAIN" build --locked --example acceptance_node --example vs_wan_node
+      - name: Prepare the matching pinned private program
+        working-directory: stable
+        run: >-
+          python scripts/prepare-test-engine.py prepare --package linux-amd64-standard
+          --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Qualify the exact packet cutoff on a private loopback socket
+        run: python .github/field/check_runner_cut.py "$RUNNER_TEMP/external-direct-runner-control.json"
+      - name: Verify the public TCP path, actual data and network interruption recovery
+        if: contains(github.event.head_commit.message, '[wan-active]')
+        env:
+          FIELD_SESSION: ${{ secrets.VS_FOLLOWUP_WAN_SESSION_20261120 }}
+        run: >-
+          python .github/field/run_wan.py linux
+          --example "$GITHUB_WORKSPACE/stable/target/debug/examples/acceptance_node"
+          --control "$GITHUB_WORKSPACE/stable/target/debug/examples/vs_wan_node"
+          --engine "$VERYSYNC_TEST_BINARY" --sha "$VERYSYNC_TEST_BINARY_SHA256"
+          --receipt "$RUNNER_TEMP/external-direct-linux.json"
+      - name: Require exact owned-program cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        working-directory: stable
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Preserve only the sanitized run receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: stable-wan-linux-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/external-direct-linux.json
+            ${{ runner.temp }}/external-direct-runner-control.json
+          if-no-files-found: warn
+          retention-days: 7
