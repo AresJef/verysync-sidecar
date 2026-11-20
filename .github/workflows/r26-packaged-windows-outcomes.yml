@@ -1,0 +1,121 @@
+name: Packaged Windows directory outcomes
+
+on:
+  push:
+    branches: ['verify/r26/packaged-windows-directory-20261120']
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SOURCE: e15bb933224652bd7e5cc092fa7236f98b8d9c08
+  CANDIDATE_TREE: 5de6a8a479df506647889939958b56be3b0811ce
+  CRATE_NAME: verysync-sidecar-0.1.0-alpha.2
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    outputs:
+      package_sha256: ${{ steps.package.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE }}
+          persist-credentials: false
+      - name: Create one archive for both native jobs
+        id: package
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          test -z "$(git status --porcelain)"
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 fetch --locked
+          cargo +1.85.0 package --offline --no-verify --locked
+          sha256sum "target/package/$CRATE_NAME.crate"
+          printf 'sha256=%s\n' "$(sha256sum "target/package/$CRATE_NAME.crate" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: exact-r26-crate
+          path: target/package/${{ env.CRATE_NAME }}.crate
+          if-no-files-found: error
+          retention-days: 3
+  native:
+    name: Exact crate directory outcomes (${{ matrix.package }})
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            package: windows-amd64-standard
+            rust: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            package: windows-arm64-standard
+            rust: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      PACKAGE_SHA256: ${{ needs.package.outputs.package_sha256 }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: exact-r26-crate
+          path: ${{ runner.temp }}/vs-r26-crate
+      - name: Verify and unpack the exact archive
+        run: |
+          python - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+          import json, os, tarfile
+
+          scratch=Path(os.environ['RUNNER_TEMP'])
+          name=os.environ['CRATE_NAME']
+          archive=scratch/'vs-r26-crate'/(name+'.crate')
+          digest=sha256(archive.read_bytes()).hexdigest()
+          if digest != os.environ['PACKAGE_SHA256']:
+              raise ValueError('downloaded crate differs from producer')
+          dest=scratch/'vs-r26-unpacked'
+          with tarfile.open(archive,'r:gz') as package:
+              files=package.getmembers()
+              if len(files)!=426 or any(not f.isfile() or not f.name.startswith(name+'/') for f in files):
+                  raise ValueError('unexpected package members')
+              package.extractall(dest,filter='data')
+          package=dest/name
+          metadata=json.loads((package/'.cargo_vcs_info.json').read_text())
+          if metadata['git']['sha1']!=os.environ['CANDIDATE_SOURCE'] or metadata['git'].get('dirty'):
+              raise ValueError('package source differs from candidate')
+          checklist=(package/'docs/public/release-checklist.md').read_text(encoding='utf-8')
+          if 'Enterprise control is deferred from the first stable release.' not in checklist or 'observed native HTTP 500' not in checklist:
+              raise ValueError('package is missing the scoped English pages')
+          print('Actual crate', metadata['git']['sha1'], digest, 'files',len(files))
+          PY
+      - name: Prepare locked dependencies and record the native compiler host
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare independent fixed VerySync
+        id: fixture
+        run: >-
+          python scripts/prepare-test-engine.py prepare
+          --package "${{ matrix.package }}" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Run every original file mutation test from the actual package
+        working-directory: ${{ runner.temp }}/vs-r26-unpacked/${{ env.CRATE_NAME }}
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_mutation_engine --evidence-dir "${{ runner.temp }}/vs-r26-native"
+      - name: Confirm exactly owned process cleanup
+        if: always() && steps.fixture.outcome == 'success'
+        run: python scripts/prepare-test-engine.py check-cleanup
