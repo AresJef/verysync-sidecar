@@ -146,7 +146,8 @@ def main():
                      f"{destination}:{ROLE_PORT}",str(port),"public-stun-only"]
                 clock=time.monotonic()
                 with subprocess.Popen(run,stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                      env=env,cwd=state,start_new_session=True) as process:
+                                      env=env,cwd=root,start_new_session=True) as process:
+                    report["native_launcher_started"] = True
                     try:
                         stdout, stderr=process.communicate(timeout=79)
                     except subprocess.TimeoutExpired:
