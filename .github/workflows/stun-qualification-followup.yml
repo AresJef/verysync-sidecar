@@ -1,0 +1,29 @@
+name: One approved hosted STUN binding qualification
+
+on:
+  push:
+    branches: [test/stun-qualification-20261120]
+
+permissions:
+  contents: read
+
+jobs:
+  binding:
+    # Only the explicitly approved first run may send the single packet.
+    if: github.run_attempt == 1
+    name: Hosted Linux, one STUN binding request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Send one identity-free UDP binding request and observe the reply
+        run: python3 -IB .github/field/stun_binding_observation.py "$RUNNER_TEMP/stun-observation.json"
+      - name: Retain the address-free observation
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: stun-binding-qualification-${{ github.run_id }}
+          path: ${{ runner.temp }}/stun-observation.json
+          retention-days: 7
+          if-no-files-found: error
