@@ -1,0 +1,70 @@
+name: Owned Windows directory read controls
+
+on:
+  push:
+    branches: ['verify/r24/windows-directory-read-control-20261120']
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Compare three native read orders (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            package: windows-amd64-standard
+            rust: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            package: windows-arm64-standard
+            rust: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Verify the diagnostic changes only the test and its workflow
+        run: |
+          python - <<'PY'
+          import hashlib, pathlib, subprocess
+          base='f9171fb196948dd378ff8e0d72fe8f5e36605d36'
+          commit=subprocess.check_output(['git','rev-parse','HEAD','HEAD^'],text=True).splitlines()
+          assert commit[1] == base
+          changed=subprocess.check_output(['git','diff','--name-only','HEAD^','HEAD'],text=True).splitlines()
+          test='tests/file_mutation_engine.rs'
+          assert set(changed)=={test,'.github/workflows/r24-owned-windows-directory-read-controls.yml'}
+          old=subprocess.check_output(['git','show',base+':'+test])
+          new=pathlib.Path(test).read_bytes().replace(b'\r\n',b'\n')
+          assert new.startswith(old) and b'owned_native_directory_mutation_read_controls' in new[len(old):]
+          print('exact production source parent', base, 'diagnostic', commit[0], 'test SHA-256', hashlib.sha256(new).hexdigest())
+          PY
+      - name: Prepare locked dependencies and record native compiler host
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare the exact official executable in a private directory
+        id: fixture
+        run: >-
+          python scripts/prepare-test-engine.py prepare
+          --package "${{ matrix.package }}" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Compare cold, parent-only and target-read native changes
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_mutation_engine --test-filter owned_native_directory_mutation_read_controls
+          --evidence-dir "${{ runner.temp }}/vs-owned-dir-read-controls"
+      - name: Confirm exact test process exit
+        if: always() && steps.fixture.outcome == 'success'
+        run: python scripts/prepare-test-engine.py check-cleanup

@@ -610,3 +610,117 @@ async fn public_cancelled_directory_copy_reconciles_partial_merge_without_rollin
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
+
+// Narrow diagnostic for v2.33.2 using only separately created owned trees.
+#[tokio::test]
+async fn owned_native_directory_mutation_read_controls() -> TestResult {
+    use std::path::{Component, Path};
+    use verysync_sidecar::{RawMethod, RawRequest, RequestEffect};
+
+    let root = tempfile::Builder::new().prefix("vdirctl-").tempdir()?;
+    let mut core = ManagedInstance::start(options(&root.path().join("c"))?).await?;
+    let identity = core.client().instance().device_id.clone();
+    let volumes = core.client().resource_volumes().await?;
+    let (profile, volume, relative) = resource_fixture::owned_base(&core, &volumes)?;
+    let mut prefix = vec![volume.volume().as_str()];
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            return Err("expected an owned relative path".into());
+        };
+        prefix.push(component.to_str().ok_or("expected a UTF-8 owned fixture path")?);
+    }
+    let components = |names: &[&str]| -> Vec<String> {
+        let mut segments = vec!["rest", "f", "api", "resources"];
+        segments.extend(prefix.iter().copied());
+        segments.extend_from_slice(names);
+        segments.into_iter().map(str::to_owned).collect()
+    };
+    let write_root = |parent: &Path, name: &str| -> TestResult {
+        std::fs::create_dir_all(parent.join(name).join("nested"))?;
+        std::fs::write(parent.join(name).join("nested").join("sample.bin"), b"owned content")?;
+        Ok(())
+    };
+    let sentinel = profile.join("caller-owned-sentinel.bin");
+    std::fs::write(&sentinel, b"unchanged canary")?;
+    let mut cases = 0;
+    for read in ["none", "parent", "target"] {
+        let parent = profile.join(read);
+        let logical = volume.clone().child(read)?;
+        write_root(&parent, "delete")?;
+        write_root(&parent, "from")?;
+        std::fs::create_dir(parent.join("to"))?;
+        std::fs::write(parent.join("to").join("preserve.bin"), b"destination-only payload")?;
+
+        if read == "parent" {
+            let listing = core.client().resource_info(&logical).await?;
+            let entries = listing.items.ok_or("parent listing omitted child entries")?;
+            for name in ["delete", "from", "to"] {
+                assert_eq!(entries.iter().filter(|item| item.name == name && item.is_dir).count(), 1);
+            }
+        }
+        if read == "target" {
+            for name in ["delete", "from", "to"] {
+                assert!(core.client().resource_info(&logical.clone().child(name)?).await?.is_dir);
+            }
+        }
+
+        let delete = RawRequest::new(
+            RawMethod::Delete,
+            components(&[read, "delete"]),
+            RequestEffect::MayModify,
+        )?;
+        let deleted = core.client().raw_request(&delete).await?;
+        let removed = !parent.join("delete").exists();
+        let child_removed = !parent.join("delete").join("nested").join("sample.bin").exists();
+        println!("owned native directory mutation control: {}", serde_json::json!({
+            "operation": "delete", "prior_read":read, "http":deleted.status(),
+            "source_root_absent":removed, "source_child_absent":child_removed,
+            "response_bytes":deleted.body_bytes().len()
+        }));
+        assert!(matches!(deleted.status(), 200 | 500));
+        if deleted.status() == 200 {
+            assert!(removed && child_removed);
+        }
+
+        let destination = components(&[read, "to"]);
+        // Build an encoded logical resource destination for the native PATCH query.
+        let mut logical_destination = url::Url::parse("http://localhost/")?;
+        logical_destination.path_segments_mut().map_err(|()| "expected a hierarchy")?
+            .pop_if_empty().extend(&destination[4..]);
+        let move_to = RawRequest::new(
+            RawMethod::Patch,
+            components(&[read, "from"]),
+            RequestEffect::MayModify,
+        )?
+        .query("action", "rename")
+        .query("destination", logical_destination.path())
+        .query("override", "true")
+        .query("rename", "false");
+        let moved = core.client().raw_request(&move_to).await?;
+        let source_lost = !parent.join("from").exists();
+        let contents_remain = std::fs::read(parent.join("from").join("nested").join("sample.bin"))
+            .is_ok_and(|bytes| bytes == b"owned content");
+        let contents_arrived = std::fs::read(parent.join("to").join("nested").join("sample.bin"))
+            .is_ok_and(|bytes| bytes == b"owned content");
+        assert_eq!(std::fs::read(parent.join("to").join("preserve.bin"))?, b"destination-only payload");
+        assert_eq!(std::fs::read(&sentinel)?, b"unchanged canary");
+        println!("owned native directory mutation control: {}", serde_json::json!({
+            "operation":"move", "prior_read":read, "http":moved.status(),
+            "source_root_absent":source_lost, "source_payload_present":contents_remain,
+            "destination_payload_matches":contents_arrived,"destination_only_payload_preserved":true,
+            "response_bytes":moved.body_bytes().len()
+        }));
+        assert!(matches!(moved.status(), 200 | 500));
+        if moved.status() == 200 {
+            assert!(source_lost && !contents_remain && contents_arrived);
+        }
+        cases += 2;
+    }
+    assert_eq!(core.client().system_status().await?.device_id, identity);
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    assert_eq!(std::fs::read(sentinel)?, b"unchanged canary");
+    assert_eq!(cases, 6);
+    println!("owned native directory mutation controls: 6 completed; exact identity and normal exit verified");
+    Ok(())
+}
