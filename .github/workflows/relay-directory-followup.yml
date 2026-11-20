@@ -1,0 +1,66 @@
+name: Qualify the public VerySync relay directory
+
+on:
+  push:
+    branches: [test/relay-directory-20261120]
+
+permissions:
+  contents: read
+
+jobs:
+  directory:
+    if: github.run_attempt == 1 && github.actor == 'AresJef'
+    name: Fetch the public directory without a test identity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Check directory availability and first-party relay candidates
+        run: |
+          python3 -IB - <<'PY'
+          import json
+          from pathlib import Path
+          import os
+          from urllib.error import HTTPError
+          from urllib.parse import urlsplit
+          from urllib.request import Request, HTTPRedirectHandler, build_opener
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs):
+                  return None
+
+          url="https://relays.verysync.cn/endpoint"
+          report={"directory":url,"own_service_metadata_sent":False,"engine_started":False,
+                  "individual_relays_contacted":0,"public_link_status":"unavailable"}
+          try:
+              with build_opener(NoRedirect()).open(Request(url,headers={"Accept":"application/json"}),timeout=10) as response:
+                  report["http_status"]=response.status
+                  payload=response.read(262145)
+                  assert len(payload)<=262144
+                  catalog=json.loads(payload)
+                  entries=catalog.get("relays",[]) if isinstance(catalog,dict) else catalog
+                  if not isinstance(entries,list):
+                      raise ValueError("unrecognized directory")
+                  hostnames=[]
+                  for value in entries[:200]:
+                      if isinstance(value,dict):
+                          value=value.get("url")
+                      if not isinstance(value,str): continue
+                      url=urlsplit(value)
+                      if url.scheme=="relay" and url.hostname:
+                          hostnames.append(url.hostname.rstrip(".").lower())
+                  vendor=[h for h in hostnames if h=="verysync.cn" or h.endswith(".verysync.cn")]
+                  report.update(public_link_status="catalog_parsed",listed_entries=len(entries),
+                                usable_relay_urls=len(hostnames),vendor_dns_names=sorted(set(vendor)),
+                                addresses_published=False)
+          except (OSError, ValueError, AssertionError) as error:
+              report["error"]=type(error).__name__
+              if isinstance(error,HTTPError): report["http_status"]=error.code
+          (Path(os.environ["RUNNER_TEMP"])/"relay-directory.json").write_text(json.dumps(report,indent=2)+"\n")
+          print(json.dumps(report))
+          PY
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: verysync-relay-directory-${{ github.run_id }}
+          path: ${{ runner.temp }}/relay-directory.json
+          retention-days: 7
+          if-no-files-found: error
