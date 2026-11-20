@@ -1,0 +1,71 @@
+name: Verify Windows AMD64 managed and stopped-owner official upgrade effects
+
+on:
+  push:
+    branches: ['verify/r28/windows-amd64-official-upgrades']
+
+permissions:
+  contents: read
+
+jobs:
+  windows-amd64-upgrades:
+    if: github.repository == 'AresJef/verysync-sidecar' && !github.event.deleted
+    runs-on: windows-2022
+    timeout-minutes: 22
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Require byte-identical candidate SDK and upgrade tests
+        run: |
+          test "$(git rev-parse HEAD^)" = 99ee1036b70b9b115df26ca76c57559e7dc038a3
+          git diff --exit-code HEAD^ HEAD -- . ':!.github/workflows/r28-windows-official-upgrade-recheck.yml'
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare the pinned baseline and dedicated older version fixture
+        run: |
+          python scripts/prepare-test-engine.py prepare --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          python scripts/prepare-test-engine.py prepare --upgrade-source --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Require the managed official-provider upgrade with the original deadlines
+        id: managed
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --test-filter kernel_provider_upgrade_replaces_only_the_owned_old_copy
+          --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "$RUNNER_TEMP/vs-windows-amd64-provider-managed"
+      - name: Require exact owned-executable cleanup before the independent case
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: |
+          python scripts/prepare-test-engine.py check-cleanup
+          python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Require actual stopped-owner checks and both native replacement modes
+        id: cli
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --test-filter stopped_owner_cli_checks_and_upgrades_the_dedicated_program
+          --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "$RUNNER_TEMP/vs-windows-amd64-provider-cli"
+      - name: Require both exact fixture image inventories to be empty
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: |
+          python scripts/prepare-test-engine.py check-cleanup
+          python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Require both real native upgrade paths
+        if: always()
+        env:
+          MANAGED_RESULT: ${{ steps.managed.outcome }}
+          CLI_RESULT: ${{ steps.cli.outcome }}
+        run: test "$MANAGED_RESULT" = success && test "$CLI_RESULT" = success
