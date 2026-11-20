@@ -17,11 +17,13 @@ jobs:
       - name: Check directory availability and first-party relay candidates
         run: |
           python3 -IB - <<'PY'
+          import ipaddress
           import json
+          import re
           from pathlib import Path
           import os
           from urllib.error import HTTPError
-          from urllib.parse import urlsplit
+          from urllib.parse import parse_qs, urlsplit
           from urllib.request import Request, HTTPRedirectHandler, build_opener
 
           class NoRedirect(HTTPRedirectHandler):
@@ -41,17 +43,37 @@ jobs:
                   if not isinstance(entries,list):
                       raise ValueError("unrecognized directory")
                   hostnames=[]
-                  for value in entries[:200]:
-                      if isinstance(value,dict):
-                          value=value.get("url")
+                  candidates=[]
+                  for entry in entries[:200]:
+                      meta=entry if isinstance(entry,dict) else {}
+                      value=meta.get("url",entry)
                       if not isinstance(value,str): continue
                       url=urlsplit(value)
-                      if url.scheme=="relay" and url.hostname:
-                          hostnames.append(url.hostname.rstrip(".").lower())
+                      if url.scheme!="relay" or not url.hostname:
+                          continue
+                      hostnames.append(url.hostname.rstrip(".").lower())
+                      try:
+                          ip=ipaddress.IPv4Address(url.hostname)
+                          port=url.port
+                      except ValueError:
+                          continue
+                      if not (ip.is_global and port is not None and port>0):
+                          continue
+                      identity=parse_qs(url.query).get("id",[""])[0]
+                      if not re.fullmatch(r"[A-Z2-7]{7}(?:-[A-Z2-7]{7}){7}",identity):
+                          continue
+                      loc=meta.get("location",{})
+                      country=loc.get("country","") if isinstance(loc,dict) else ""
+                      country=country if isinstance(country,str) and re.fullmatch("[A-Z]{2}",country) else None
+                      candidates.append((str(ip),port,identity,country))
                   vendor=[h for h in hostnames if h=="verysync.cn" or h.endswith(".verysync.cn")]
                   report.update(public_link_status="catalog_parsed",listed_entries=len(entries),
                                 usable_relay_urls=len(hostnames),vendor_dns_names=sorted(set(vendor)),
                                 addresses_published=False)
+                  candidates.sort(key=lambda row: (row[3] not in ("CN","HK","SG","JP"),row[1]!=443,row[0],row[1]))
+                  report["public_ipv4_pinned_candidates"]=len(candidates)
+                  report["public_directory_shortlist"]=[{"host":host,"port":port,"relay_cert_id":identity,"country":country}
+                      for host,port,identity,country in candidates[:3]]
           except (OSError, ValueError, AssertionError) as error:
               report["error"]=type(error).__name__
               if isinstance(error,HTTPError): report["http_status"]=error.code
