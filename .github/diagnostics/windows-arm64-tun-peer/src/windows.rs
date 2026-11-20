@@ -333,6 +333,7 @@ fn relay_case(interface: &mut Interface, device: &mut Tun, family: u8, owned_por
 pub fn run() -> Report {
     if !cfg!(target_arch = "aarch64")
         || env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
+        || env::var("RUNNER_ENVIRONMENT").as_deref() != Ok("github-hosted")
         || env::var("GITHUB_REPOSITORY").as_deref() != Ok("AresJef/verysync-sidecar")
     {
         return Err("use only the assigned disposable native Windows ARM64 job".into());
@@ -343,25 +344,27 @@ pub fn run() -> Report {
         .next()
         .and_then(|name| name.into_string().ok())
         .ok_or("missing exact owned adapter name")?;
-    let mode = match env::var("GITHUB_REF").as_deref() {
-        Ok("refs/heads/verify/r24/windows-arm64-verysync-wire") if args.len() != 0 => {
-            let family = args
-                .next()
-                .and_then(|value| value.to_str()?.parse::<u8>().ok())
-                .filter(|family| [4, 6].contains(family))
-                .ok_or("missing explicit owned address family")?;
-            let owned_port = args
-                .next()
-                .and_then(|value| value.to_str()?.parse::<u16>().ok())
-                .filter(|port| *port != 0 && *port != PORT)
-                .ok_or("missing exact private receiver loopback port")?;
-            Mode::Relay { family, owned_port }
-        }
-        Ok(
-            "refs/heads/verify/r24/windows-arm64-tun-data"
-            | "refs/heads/verify/r24/windows-arm64-verysync-wire",
-        ) => Mode::Calibration,
-        _ => return Err("the owned TCP test requires a dedicated verification ref".into()),
+    let reference = env::var("GITHUB_REF")?;
+    let wire_ref = reference == "refs/heads/verify/r24/windows-arm64-verysync-wire"
+        || reference
+            .strip_prefix("refs/heads/ci/formal-candidate/")
+            .is_some_and(|name| !name.is_empty() && !name.starts_with('/'));
+    let mode = if wire_ref && args.len() != 0 {
+        let family = args
+            .next()
+            .and_then(|value| value.to_str()?.parse::<u8>().ok())
+            .filter(|family| [4, 6].contains(family))
+            .ok_or("missing explicit owned address family")?;
+        let owned_port = args
+            .next()
+            .and_then(|value| value.to_str()?.parse::<u16>().ok())
+            .filter(|port| *port != 0 && *port != PORT)
+            .ok_or("missing exact private receiver loopback port")?;
+        Mode::Relay { family, owned_port }
+    } else if wire_ref || reference == "refs/heads/verify/r24/windows-arm64-tun-data" {
+        Mode::Calibration
+    } else {
+        return Err("the owned TCP test requires a dedicated verification ref".into());
     };
     if !path.is_absolute()
         || path.file_name().and_then(|part| part.to_str()) != Some("wintun.dll")
