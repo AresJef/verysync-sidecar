@@ -1,5 +1,10 @@
 # Resource measurement evidence
 
+Each result below belongs to its recorded software version, run and
+measurement protocol. The legacy frozen resource workflow checks these
+inputs before sampling. A new candidate with different inputs needs a new
+recorded preparation and measurement before you can compare its resource use.
+
 Protocol v27 binds literal external compilation inputs as well as Rust source
 files. This includes the runtime release catalog and, conservatively, rustdoc
 `include_str!` documents. Missing files, unsupported nonliteral includes and

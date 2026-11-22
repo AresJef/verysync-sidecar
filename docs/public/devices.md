@@ -1,5 +1,11 @@
 # Device configuration
 
+Device removal changes the registration without requesting file deletion. Use
+`disconnect_and_remove_device()` when you also need to observe the connection
+close before removing the registration. With `remove_device()`, verify the
+returned configuration and check the connection separately. VerySync can
+accept a device again while its sharing key is still valid.
+
 `Client::devices()` and `Client::device()` read the configured identities, including
 the local identity. `device_defaults()` reads the engine's current creation
 template. A template can have an empty identity; a configured `DeviceConfig`

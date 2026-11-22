@@ -1,5 +1,10 @@
 # Explicit official tracker validation
 
+This test observes whether a selected VerySync instance met the tracker
+connection conditions. A tracker connection is an intermediate step. Check
+for the intended peer address and then verify an authenticated peer connection
+and file receipt when you need evidence about a transfer.
+
 `Client::transport_status()` returns the official program's tracker observations.
 `TrackerStatus::connection_state` preserves the actual `connectStatus` label;
 an unfamiliar label remains unfamiliar. Version-specific `state`, `host` and

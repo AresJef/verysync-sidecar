@@ -1,5 +1,12 @@
 # Native GUI listener control
 
+Check the existing address before changing where VerySync accepts management
+connections. After a change, read the settings and separately test whether the
+old address still answers and the intended new address accepts the expected
+device identity. Have a way to manage the selected process if the old
+connection stops answering. Check the documented v2.33.2 live-disable limit
+before depending on an address or listener setting to take effect.
+
 `Client::gui_listener()` reads the stored server enable flag, native bind address,
 TLS selection and Unix socket mode after checking the current device identity.
 Known management username, password and API key fields are excluded from this

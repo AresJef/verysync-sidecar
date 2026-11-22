@@ -1,5 +1,9 @@
 # Windows packet observer feasibility
 
+This check asks whether the Windows runner can observe the packet data needed
+for the test. If the runner has no usable capture, the packet contents remain
+unknown. Use the linked independent receiver observations for actual headers.
+
 This page records the Windows loopback feasibility checks for the in-box
 Packet Monitor. The [independent receiver results][receiver] cover the later
 Windows AMD64 measurements and the remaining ARM64 packet requirements.

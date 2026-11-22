@@ -1,6 +1,10 @@
 
 ## Scan scope and automatic scanning
 
+Choose a whole folder or name the paths you want VerySync to scan within that
+folder. A request returning successfully means it was accepted. Observe the
+selected folder to find out whether the scan ran and completed.
+
 `request_scan` requests one whole-folder scan. `request_scan_subpaths` requests
 1 through 256 explicit relative paths inside one existing, unpaused folder.
 Use native `Path` operations and `TargetPath::local` for a local instance, or

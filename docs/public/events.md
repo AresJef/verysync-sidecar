@@ -1,8 +1,13 @@
 # Event subscriptions
 
-The SDK provides caller-owned event subscriptions for VerySync
-v2.33.2. The published `0.1.0-alpha.1` package predates this API. A subscription
-observes the engine; it never owns, restarts or stops that engine.
+Subscribe to watch changes on the selected VerySync v2.33.2 instance. A
+subscription belongs to the caller. Closing it leaves the program running.
+
+If events 2 and 4 arrive after the saved position 1, you receive event 2, a
+notice that event 3 is missing, then event 4. Your position moves to 2, 3 and 4
+as you receive those items. On the gap, read the current state you need before
+relying on later updates. Store the position only after your application has
+processed the item and any required refresh.
 
 ```rust
 use verysync_sidecar::{Client, EventOptions, EventStreamItem, Result};
@@ -20,7 +25,8 @@ async fn observe(client: &Client) -> Result<()> {
                 // Inspect event.data() explicitly if needed; it may contain secrets.
                 let _ = cursor;
             }
-            EventStreamItem::Gap(_) => {
+            EventStreamItem::Gap(gap) => {
+                eprintln!("{}", gap.reason);
                 // Re-query all state relevant to your application before treating
                 // event-derived views as complete. This example only reads status.
                 let _status = client.system_status().await?;

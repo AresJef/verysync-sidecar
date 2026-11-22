@@ -7,9 +7,11 @@ auxiliary address when restarted. These local address choices do not constitute
 an OS-wide network isolation policy; explicit network scenarios have separate
 configuration and validation requirements.
 
-This guide describes the **0.1.0-alpha.2 development API**, not the published
-initial alpha. Use a reviewed checkout/path dependency to evaluate it. The
-published `0.1.0-alpha.1` controls an explicitly selected running instance.
+Use `ManagedInstance` when your application should start and stop a dedicated
+VerySync program. Choose a private state directory and matching official binary.
+A normal shutdown confirms the owned program has exited. Inspect the state and
+files before explicitly clearing anything. Use `Client::connect()` when another
+application or operator controls the running instance.
 
 `ManagedInstance` owns a selected local official **v2.33.2** program and a
 dedicated persistent state directory. `Client` remains borrowed management
@@ -61,7 +63,7 @@ checked before execution. The default version policy requires exactly v2.33.2;
 `ManagedOptions::version_policy(VersionPolicy::AllowUnverified)` explicitly permits
 other versions while retaining identity, schema and authentication checks.
 The authenticated management version must equal the actual CLI version. See
-[program upgrades](program-upgrades.md) for separate snapshot/transition gates.
+[program upgrades](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/program-upgrades.md) for separate snapshot/transition gates.
 Keep a caller-provided executable stable while starting it: an external writer
 can replace its bytes after inspection. CLI credentials travel through private
 stdin/configuration, never command-line arguments or ordinary Debug output.

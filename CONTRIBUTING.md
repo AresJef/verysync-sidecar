@@ -347,6 +347,16 @@ separately; they are not proof of system-wide network isolation. Both native
 outcomes are mandatory CI steps; no provider response is replaced with a mock
 image and no upstream picture/body is stored in shared evidence.
 
+## Write messages people can act on
+
+Describe the operation and the observed result in plain English. When files or
+sessions may have changed, say what is known and give the reader a specific
+check before repeating the action. For example, “VerySync declined this
+sign-in” describes an explicit refusal. “Check whether you already have a
+session before trying again” belongs to an uncertain reply. Keep typed errors
+and machine output stable, and keep credentials out of ordinary displays.
+Use synthetic data to test each revised message at the point where readers see it.
+
 ## Public content
 
 The repository tracks source, tests, English user documentation, CI and sanitized

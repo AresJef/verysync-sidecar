@@ -117,7 +117,7 @@ impl TryFrom<BTreeMap<String, serde_json::Value>> for LicenseStatus {
             .remove("licenses")
             .map(serde_json::from_value)
             .transpose()
-            .map_err(|_| "invalid native license collection")?;
+            .map_err(|_| "VerySync returned license entries in an unexpected format.")?;
         Ok(Self {
             licenses,
             extra: value,

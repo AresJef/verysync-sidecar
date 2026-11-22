@@ -1,5 +1,12 @@
 # Sharing keys and folder registration
 
+A sharing key lets VerySync join a folder share. An API key lets a caller
+manage the selected instance. Keep both private and choose the key for the
+task you intend. A new typed registration needs an addressable ID. Choose
+an ID other than `.` or `..` when you create a folder. If VerySync proposes one
+of those IDs when joining, check the invitation with its administrator before
+retrying. Existing dot registrations can still be read.
+
 The sharing API uses the official v2.33.2 engine to generate and
 validate folder-sharing keys. `ShareKey` and the management `ApiKey` are distinct
 types. Neither a key prefix nor a caller-chosen common folder ID determines

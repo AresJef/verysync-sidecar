@@ -1,5 +1,11 @@
 # Native licenses and explicit requests
 
+Read the license from the selected VerySync instance first. A request to
+refresh the license or start a trial can be accepted before any entitlement is
+shown. Read the license again and verify the particular operation you need.
+If Local-API returns code 3001, check that the selected instance has permission
+for that Local-API operation.
+
 `license_status()` reads the selected core's `myLicense` object with a fresh
 device identity check. An empty object means that the response advertises no
 license data. Missing/null/nonobject metadata is an error. Reported null, list

@@ -1,5 +1,10 @@
 # Controlled network acceptance nodes
 
+Start only the dedicated nodes named in your test plan. A node's ready receipt
+confirms that its test management endpoint is ready. To confirm a transfer, use
+the observer's result for the selected files and compare their byte counts and
+checksums. A successful connection alone does not establish that files arrived.
+
 `acceptance_node` is a finite example for dedicated test machines provided by
 the caller. It uses the public `ManagedInstance` API. It is not a system service
 and installs no background helper. Building the example does not download or run

@@ -45,12 +45,12 @@ async fn serve(instance: &ManagedInstance, root: &std::path::Path, ttl: Duration
         .pointer("/gui/apiKey")
         .and_then(serde_json::Value::as_str)
         .filter(|key| !key.is_empty())
-        .ok_or("native management credential is absent")?;
+        .ok_or("The test node has no management credential to include in its private receipt.")?;
     let endpoint = instance
         .client()
         .endpoint()
         .http_url()
-        .ok_or("HTTP endpoint required")?;
+        .ok_or("This test node needs its dedicated loopback HTTP endpoint.")?;
     let receipt = root.join("state").join("acceptance-connection.json");
     let identity = instance.client().system_status().await?.device_id;
     let program = instance.program_info();
@@ -75,6 +75,7 @@ async fn serve(instance: &ManagedInstance, root: &std::path::Path, ttl: Duration
         "receipt":receipt, "ttl_seconds":ttl.as_secs()})
     )?;
     io::stdout().flush()?;
+    eprintln!("The test node is ready. Its private receipt contains the connection credential. The node stops at the requested deadline or when it receives a stop command.");
 
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
     // A blocked standard-input reader must not prevent Tokio runtime shutdown
@@ -109,20 +110,25 @@ async fn main() -> Result {
         args.next()
             .ok_or("usage: acceptance_node PROGRAM SHA256 NEW_ROOT TTL_SECONDS")?,
     );
-    let hash = args.next().ok_or("explicit SHA-256 required")?;
+    let hash = args
+        .next()
+        .ok_or("Supply the expected SHA-256 of the isolated test program.")?;
     let hash = digest(hash.to_str().ok_or("SHA-256 must be ASCII")?)?;
-    let root = PathBuf::from(args.next().ok_or("new absolute root required")?);
+    let root = PathBuf::from(
+        args.next()
+            .ok_or("Supply an absolute path to a new directory for the test node.")?,
+    );
     let ttl: u64 = args
         .next()
-        .ok_or("TTL seconds required")?
+        .ok_or("Supply how many seconds the test node should wait before shutting down.")?
         .to_str()
         .ok_or("TTL must be ASCII")?
         .parse()?;
     if args.next().is_some() || !(1..=7200).contains(&ttl) {
-        return Err("provide exactly four arguments; TTL must be 1..=7200 seconds".into());
+        return Err("Supply exactly four arguments and a lifetime from 1 to 7200 seconds.".into());
     }
     if !root.is_absolute() || root.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err("new root must be absolute without parent components".into());
+        return Err("Use a new absolute test directory without parent path components.".into());
     }
     let program = LocalProgram::new(program)?.expected_sha256(hash);
     let builder = fs::DirBuilder::new();
@@ -138,7 +144,7 @@ async fn main() -> Result {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     let port = listener.local_addr()?.port();
     if port == 18886 {
-        return Err("reserved user-instance port refused before core startup".into());
+        return Err("The selected port is reserved for the user instance. The test program was not started.".into());
     }
     let endpoint = ManagementEndpoint::http(&format!("http://127.0.0.1:{port}"))?;
     let options = ManagedOptions::new(program, root.join("state"), endpoint)?;
@@ -155,7 +161,7 @@ async fn main() -> Result {
         || !exit.tree_stopped
         || !exit.state_released
     {
-        return Err("owned core did not confirm a normal successful tree exit".into());
+        return Err("The test node could not confirm a normal shutdown. Check the owned test processes before cleaning its directory.".into());
     }
     println!(
         "{}",
@@ -163,5 +169,6 @@ async fn main() -> Result {
         "forced":exit.forced, "tree_stopped":exit.tree_stopped,
         "state_released":exit.state_released})
     );
+    eprintln!("The owned test node shut down normally. Its private state was kept.");
     served
 }

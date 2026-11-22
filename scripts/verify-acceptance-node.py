@@ -14,9 +14,6 @@ import time
 import urllib.parse
 import urllib.request
 
-import psutil
-
-
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
@@ -33,6 +30,10 @@ def event(lines, deadline):
 
 
 def verify(args, mode, parent):
+    try:
+        import psutil
+    except ImportError as error:
+        raise RuntimeError("The node check needs psutil. Install the test dependency with python -m pip install psutil==7.2.2.") from error
     root = parent / mode
     ttl = 2 if mode == "ttl" else 60
     started = time.monotonic()
@@ -129,10 +130,10 @@ def verify(args, mode, parent):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--example", type=Path, required=True)
-    parser.add_argument("--program", type=Path, required=True)
-    parser.add_argument("--sha256", required=True)
-    parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--example", type=Path, required=True, help="absolute path to the compiled acceptance_node example")
+    parser.add_argument("--program", type=Path, required=True, help="absolute path to the isolated VerySync test program")
+    parser.add_argument("--sha256", required=True, help="expected SHA-256 of that test program")
+    parser.add_argument("--evidence", type=Path, required=True, help="new file for this test's results")
     args = parser.parse_args()
     require(args.program.is_absolute() and args.example.is_absolute(), "explicit absolute programs required")
     require(len(args.sha256) == 64 and sha(args.program) == args.sha256, "core digest differs")

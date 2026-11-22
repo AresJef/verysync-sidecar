@@ -231,6 +231,27 @@ pub enum EventGapReason {
     ObservationChanged,
 }
 
+impl fmt::Display for EventGapReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ResumedContinuityUnverified =>
+                "Some updates may be missing between the saved position and this subscription. Read the current state.",
+            Self::EngineStartTimeChanged =>
+                "VerySync reported a different start time. Read the current state before using further updates.",
+            Self::CursorReset =>
+                "The saved event position is ahead of the position VerySync now reports. Read the current state.",
+            Self::MissingEvents =>
+                "Some updates were skipped in the event stream. Read the current state before relying on later updates.",
+            Self::ConnectionInterrupted =>
+                "The connection stopped providing updates. Check the current state of the operation you were watching.",
+            Self::BatchUnavailable =>
+                "A previously available batch of updates could not be retrieved. Read the current state.",
+            Self::ObservationChanged =>
+                "VerySync's reported start time changed while reading updates. Read the current state again.",
+        })
+    }
+}
+
 /// Explicit loss/uncertainty notification; callers must refresh relevant state.
 #[derive(Clone, Debug)]
 pub struct EventGap {

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1-rc.2 (unreleased)
+
+- The detailed GUI sign-in method reports a confirmed 401 or 403 as a refusal
+  even when the diagnostic reply is too long or ends early. Callers that use
+  `GuiSession::login()` can keep matching the same typed errors as in 0.1.0.
+- Sign-in and file-operation messages explain what is known and what to check
+  before trying again. English guides and examples use these same distinctions.
+  Match typed errors or documented output fields in programs that need a stable
+  result code.
+
 ## 0.1.1-rc.1
 
 - Prevent complete single-file downloads on the fixed engine from falling

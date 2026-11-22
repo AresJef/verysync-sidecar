@@ -1,5 +1,10 @@
 # Native tunnel probe validation
 
+A successful tunnel probe means the peer answered the probe through the
+configured route. It does not sign in or verify that you can manage that peer.
+Use the separate authenticated connection for management and check the
+expected device identity.
+
 The existing public Rust `Client::probe_device_tunnel()` has a positive native
 path with two isolated VerySync v2.33.2 instances and explicit auxiliary
 listeners. The permission setting, probe result and authenticated remote

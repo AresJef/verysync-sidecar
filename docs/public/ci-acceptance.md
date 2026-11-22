@@ -1,5 +1,11 @@
 # CI execution and acceptance
 
+Open the Actions run for the candidate's exact commit. A successful quality or
+compile job means that check passed. Open the six standard engine jobs to see
+whether native tests actually ran, handled files correctly and cleaned up.
+Pushing an authorized `ci/formal-candidate/*` branch also starts the registered
+candidate workflows.
+
 Draft pull requests run quality checks and focused native cases. The full six
 standard native bundles and additional compatibility/emulation matrix run when
 the candidate is ready for review or the corresponding workflow is explicitly

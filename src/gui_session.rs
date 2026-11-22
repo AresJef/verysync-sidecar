@@ -139,7 +139,6 @@ impl GuiLoginPhase {
 }
 
 /// A GUI login failure with its phase and inspectable underlying error.
-#[derive(Debug)]
 pub struct GuiLoginError {
     phase: GuiLoginPhase,
     legacy: Error,
@@ -203,12 +202,26 @@ impl GuiLoginError {
 
 impl fmt::Display for GuiLoginError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "native GUI login failed in {:?} ({})",
-            self.phase,
-            self.cause()
-        )
+        formatter.write_str(match self.phase {
+            GuiLoginPhase::BeforeLoginRequest =>
+                "Sign-in stopped before the request was sent. Check the connection and sign-in settings for the selected VerySync instance.",
+            GuiLoginPhase::LoginRejected =>
+                "VerySync declined this sign-in. Check the credentials and permissions for the selected instance.",
+            GuiLoginPhase::LoginOutcomeUnknown =>
+                "We could not tell whether VerySync signed you in. Check for an existing session before trying again.",
+            GuiLoginPhase::SessionCookieUnavailable =>
+                "VerySync replied without a usable sign-in cookie. Check whether it created a session before trying again.",
+            GuiLoginPhase::VerifyVersion =>
+                "VerySync sent a sign-in cookie. The library could not verify the program version. Check which version is running before trying again.",
+            GuiLoginPhase::VerifyIdentity =>
+                "VerySync sent a sign-in cookie. The library could not confirm the device identity. Verify the endpoint and the expected device before trying again.",
+        })
+    }
+}
+
+impl fmt::Debug for GuiLoginError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "GuiLoginError({self})")
     }
 }
 

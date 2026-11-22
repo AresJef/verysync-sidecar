@@ -9,11 +9,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .next()
         .and_then(|s| s.into_string().ok())
         .ok_or("usage: cache_program TARGET CACHE_ROOT [SOURCE_URL]")?;
-    let root = PathBuf::from(args.next().ok_or("explicit cache root required")?);
+    let root = PathBuf::from(
+        args.next()
+            .ok_or("Supply the directory for the verified program cache.")?,
+    );
     let asset = official_programs()?
         .into_iter()
         .find(|a| a.target().id() == target)
-        .ok_or("target must be listed in the fixed catalog")?;
+        .ok_or("This target is missing from the program catalog. Choose a listed system and architecture.")?;
     let mut cache = ProgramCache::new(root)?;
     if let Some(source) = args.next() {
         cache = cache.source_url(
@@ -24,9 +27,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
     if args.next().is_some() {
-        return Err("unexpected argument".into());
+        return Err("Supply only the target, cache directory and optional source URL.".into());
     }
     let program = cache.resolve(asset, CachePolicy::DownloadMissing).await?;
+    if program.status() == CacheStatus::Downloaded {
+        eprintln!("Downloaded and verified the selected VerySync program. It is ready to start explicitly.");
+    } else {
+        eprintln!("Verified the selected VerySync program in the local cache. It is ready to start explicitly.");
+    }
     println!(
         "{}",
         serde_json::json!({"target":target,"downloaded":program.status() == CacheStatus::Downloaded,"program":format!("{:?}",program.program().path())})

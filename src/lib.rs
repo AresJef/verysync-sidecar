@@ -1,12 +1,13 @@
 //! Asynchronous management of the official VerySync program.
 //!
-//! This crate is under development. It provides explicit endpoint/path values
-//! authenticated management connections with version and identity checks, and
-//! fresh typed system/folder status reads, and folder registration/configuration.
-//! Adding this dependency or compiling it does not download or
-//! start VerySync, install services, or configure global logging or signals.
+//! Connect to an official VerySync instance to read its status or change its
+//! settings. Choose the endpoint and check the device identity before changing
+//! files or configuration. Use a managed instance when your application should
+//! start and stop a dedicated copy of VerySync.
 //!
-//! All public interfaces are unstable during alpha.
+//! Build and dependency resolution leave the official program, system services
+//! and application logging under the caller's control. The stable public Rust
+//! API starts at version 0.1.0.
 //!
 //! ```
 //! use verysync_sidecar::{EndpointKind, ManagementEndpoint, PathStyle, TargetPath};

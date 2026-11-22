@@ -1,5 +1,13 @@
 # Native Local Sync and storage endpoints
 
+Preview a job to see what VerySync proposes to copy. Start it explicitly
+when you accept that plan. Compare the destination with the source after a run
+to verify the files you need. If the connection ends before the result is
+known, some files may already have been copied. Check the run and destination
+before resuming or starting another run. Removing the job removes its
+registration. Check the documented file retention behavior for the operation
+you are using.
+
 The Local Sync API controls the official core's storage jobs. These
 registrations are distinct from P2P synchronization folders and file-manager
 volumes. Every method uses the selected authenticated connection. The SDK does

@@ -1,5 +1,9 @@
 # Native local announcements
 
+Enable local announcements when your own devices need to find each other on
+the local network. After a device appears, check which identity and connection
+VerySync recognized before sharing files with it.
+
 `NetworkPatch` exposes the local discovery enable flag, UDP port and multicast
 address. Readback reports settings; discovery-cache entries and authenticated
 peer connections provide separate runtime evidence. Local discovery can emit

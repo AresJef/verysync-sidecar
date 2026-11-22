@@ -69,7 +69,7 @@ def prepare(args):
 
 def root_command(argv, env):
     if sys.platform != "linux":
-        raise ValueError("host test elevation is supported only in the Linux CI job")
+        raise ValueError("This host test adapter runs only in the isolated Linux CI job. Open that job for its build and process results.")
     if env.get("GITHUB_ACTIONS") != "true" or env.get("VERYSYNC_TEST_ALLOW_HOST_CONFIGURATION") != SCOPE:
         raise ValueError("host mutations require the explicit isolated GitHub VM scope")
     receipt = Path(env["VERYSYNC_HOST_TEST_RECEIPT"])
@@ -124,10 +124,10 @@ def packet_command(argv, env):
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "prepare":
         parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument("--cargo", default="cargo")
-        parser.add_argument("--toolchain", required=True)
-        parser.add_argument("--parent", required=True, type=Path)
-        parser.add_argument("--github-env", required=True, type=Path)
+        parser.add_argument("--cargo", default="cargo", help="path to Cargo for the unprivileged build")
+        parser.add_argument("--toolchain", required=True, help="Rust toolchain for this test build")
+        parser.add_argument("--parent", required=True, type=Path, help="parent directory for the private build receipt")
+        parser.add_argument("--github-env", required=True, type=Path, help="GitHub environment file for the test executable information")
         parser.add_argument("--case", choices=(CASE, SLEEP_CASE, PACKET_CASE, PACKET_IPV6_CASE), default=CASE)
         print(json.dumps(prepare(parser.parse_args(sys.argv[2:]))))
         return 0

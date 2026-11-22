@@ -1,5 +1,12 @@
 # File versions and restoration
 
+Choose the version and destination before restoring. A restore can replace
+the current file. VerySync orders old and current files by its own clock. The
+library reads that clock again immediately before asking VerySync to restore.
+If the selected archive is in the current second, the library refuses the
+write. Choose a strictly older version and verify the destination and the
+archive you selected after the request.
+
 Versioning belongs to a configured synchronization folder, independently from
 file-manager mounts and the global Pro history log. It archives remote changes;
 it is not a backup of arbitrary controller edits or a snapshot of every local

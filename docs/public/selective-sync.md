@@ -1,6 +1,11 @@
 
 ## Selective index browsing and conditional selection requests
 
+Browse the index to see which files VerySync knows about. Request a selection
+explicitly when you want those files. If a selection is cancelled, check the
+destination for already received files. Verify the selected files after they
+appear on disk.
+
 `browse_selective` reads one actual tree for an exact configured folder. Choose
 `SelectiveScope::FolderRoot` or an explicit target-relative file/directory path.
 `SelectiveBrowseOptions` defaults to one level and bounds depth to 1..=32.

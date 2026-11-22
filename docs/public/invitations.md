@@ -1,5 +1,10 @@
 # Pending offers and folder sharing
 
+Review pending offers first, then check which device offered the folder before
+joining. A folder offer identifies what was offered. A device offer identifies
+who requested contact. When a folder needs a sharing key, get it through an
+approved channel and verify the permission VerySync reports.
+
 `pending_folders()` reads the actual remote folder IDs and their offering device
 identities. An optional device filter restricts this read. A remote offer ID,
 an engine-proposed local registration ID, and a sharing key have distinct roles;
@@ -56,7 +61,7 @@ native field as `None`. The update receipt also reports an exact match.
 When preparing a receive-encrypted replica, establish the association and
 set the password with the peer and folder paused before marking the encrypted
 peer untrusted. Use explicit, matching folder IDs for the tested v2.33.2
-configuration described in [Configuration](configuration.md).
+configuration described in [Configuration](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/configuration.md).
 
 `pending_devices()` and `dismiss_pending_device()` provide a typed surface for
 the fixed engine's pending-device route. Native validation currently observes

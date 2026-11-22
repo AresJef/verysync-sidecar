@@ -1,6 +1,10 @@
 
 ## Synchronization snapshots and explicit pages
 
+Use progress and need snapshots to see what the selected engine reports as
+remaining. When you need to prove that particular files have arrived, compare
+those files on the two endpoints. A reported percentage describes the index.
+
 `folder_completion`, `folder_completions` and `batch_folder_status` read actual
 engine snapshots. A completion value is a reported percentage for an index;
 even 100 can accompany `remote_state = Some("unknown")`. It does not establish

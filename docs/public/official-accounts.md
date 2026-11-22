@@ -1,5 +1,11 @@
 # Official VerySync accounts
 
+Use these methods for the VerySync cloud account associated with the selected
+instance. Use `GuiSession` for sign-in to the instance's management interface.
+Read the cloud-account state to see whether the selected instance reports an
+account. If the result of a login is uncertain, read that state before trying
+again. Verify trial and licensed features through their own license results.
+
 `official_account_status()` reads the selected core's official-account object
 with a fresh device identity check. `login_official_account()` submits explicit
 username/password credentials once; `logout_official_account()` explicitly

@@ -72,8 +72,8 @@ impl fmt::Debug for ResponseDiagnostic {
 
 /// An error returned by the control library.
 ///
-/// Error messages never include management credentials. Alpha variants may
-/// change; callers should handle the cases relevant to their operation.
+/// Default messages omit management credentials. Match typed variants and
+/// inspect their causes when your application needs to decide what to do.
 #[non_exhaustive]
 pub enum Error {
     /// No complete program for the exact asset is available in offline cache.
@@ -359,8 +359,8 @@ pub enum Error {
     },
     /// A modifying request or its verification failed after a write could start.
     ///
-    /// Reconcile by reading configuration before retrying. The engine may have
-    /// applied the request even though no successful readback was obtained.
+    /// VerySync may have applied the request. Check the affected files,
+    /// settings or session before deciding whether to try again.
     MutationOutcomeUnknown {
         /// The attempted operation, without arguments or credentials.
         operation: &'static str,
@@ -392,110 +392,201 @@ impl fmt::Debug for Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ResourceTransferRejected { reason } => write!(formatter, "file transfer rejected: {reason}"),
-            Self::ResourceMutationRejected { reason } => write!(formatter, "resource mutation rejected: {reason}"),
-            Self::ResourceNotFound => formatter.write_str("resource was not found"),
-            Self::ResourceAlreadyExists => formatter.write_str("resource already exists; mutation did not start"),
-            Self::CacheMiss => formatter.write_str("no complete program is available in the offline cache"),
-            Self::CacheCorrupt { reason } => write!(formatter, "program cache is corrupt: {reason}"),
-            Self::CacheRejected { reason } => write!(formatter, "program cache rejected: {reason}"),
-            Self::DownloadRejected { reason } => write!(formatter, "program preparation rejected: {reason}"),
-            Self::DownloadHttp { status } => write!(formatter, "program source returned HTTP {status}"),
-            Self::EventSubscriptionFailure => formatter.write_str("event subscription task failed"),
-            Self::EventGenerationChanged => formatter.write_str("engine generation changed during event observation"),
-            Self::ScanNotIdle => formatter.write_str("next-scan observation requires an idle folder"),
-            Self::UnlistedProgramVersion => formatter.write_str("requested program version is not in the fixed catalog"),
-            Self::UnsupportedProgramTarget { .. } => formatter.write_str("requested program target is not in the fixed catalog"),
-            Self::ShareKeyRejected { .. } => formatter.write_str("engine rejected the sharing key"),
-            Self::OfficialAccountRejected { code, .. } => write!(formatter, "native official account request rejected (code {code})"),
-            Self::LicenseRequired { code, .. } => write!(formatter, "engine requires a feature license (code {code})"),
-            Self::IgnorePatternsRejected { .. } => formatter.write_str("engine reported invalid stored ignore patterns; inspect or explicitly restore the rules"),
-            Self::ShareAlreadyConfigured { .. } => formatter.write_str("sharing group is already configured locally"),
-            Self::ScanObservationLost => formatter.write_str("scan observation lost continuity; query state explicitly"),
-            Self::ProgramRejected { reason } => write!(formatter, "selected program rejected: {reason}"),
-            Self::UpgradeReleaseUnavailable { .. } => formatter.write_str("kernel upgrade provider has no matching release archive"),
-            Self::ManagedProcessExited { operation, code, .. } => write!(formatter, "owned program exited while attempting to {operation} (code {code:?})"),
-            Self::ManagedFailure { reason } => write!(formatter, "managed operation failed: {reason}"),
-            Self::StateBackupRejected { reason } => write!(formatter, "private state copy rejected: {reason}"),
-            Self::ManagedStateInUse { lock } => formatter.write_str(match lock {
-                ManagedStateLock::LibraryLease => "managed state library lease is busy",
-                ManagedStateLock::EngineLock => "managed state upstream engine lock is busy",
-            }),
-            Self::UnmanagedState => formatter.write_str("state is not an admissible private library-owned directory"),
-            Self::LocalIo { operation, .. } => write!(formatter, "native operation failed while attempting to {operation}"),
-            Self::InvalidConfiguration { reason } => {
-                write!(formatter, "invalid configuration: {reason}")
+        let message = match self {
+            Self::ResourceTransferRejected { reason } => {
+                let summary = match *reason {
+                    "resource exceeded the explicit transfer byte bound"
+                    | "resource body length differs from the announced interval" =>
+                        "The download stopped after opening the new file. Check it for incomplete data.",
+                    _ => "The file transfer could not be completed.",
+                };
+                return explain(formatter, summary, reason);
             }
-            Self::ConfigurationChanged => formatter.write_str("configuration changed since the reviewed snapshot; no replacement was sent"),
-            Self::InvalidCredential { reason } => {
-                write!(formatter, "invalid management credential: {reason}")
+            Self::ResourceMutationRejected { reason } =>
+                return explain(formatter, "The file operation could not be completed.", reason),
+            Self::ResourceNotFound => "VerySync could not find the selected file or folder. Check the selected device, storage location and path.",
+            Self::ResourceAlreadyExists => "The destination already exists. VerySync received no request to replace it. Choose another destination or review the existing file.",
+            Self::CacheMiss => "The selected VerySync version is missing from the offline cache. Prepare that version before running offline.",
+            Self::CacheCorrupt { reason } =>
+                return explain(formatter, "The cached VerySync program failed verification. Prepare a verified copy of the same version and keep its separate data directory.", reason),
+            Self::CacheRejected { reason } =>
+                return explain(formatter, "The program cache could not be used.", reason),
+            Self::DownloadRejected { reason } =>
+                return explain(formatter, "The VerySync program could not be prepared.", reason),
+            Self::DownloadHttp { status } =>
+                return write!(formatter, "The program download source returned HTTP {status}. Check the source for the selected version."),
+            Self::EventSubscriptionFailure => "Reading events stopped. Read the current state before starting another subscription.",
+            Self::EventGenerationChanged => "VerySync's reported start time changed while reading events. Read the current state before using the event history.",
+            Self::ScanNotIdle => "The folder is active, so the next scan cannot be identified separately. Wait for the folder to become idle before observing a new scan.",
+            Self::UnlistedProgramVersion => "The selected program version has no verified download in the catalog. Select a listed version or verify a local program explicitly.",
+            Self::UnsupportedProgramTarget { .. } => "The catalog has no verified download for the selected system, processor and build. Review the supported targets.",
+            Self::ShareKeyRejected { .. } => "VerySync declined the sharing key. Check the key and the permissions it grants on the selected instance.",
+            Self::OfficialAccountRejected { code, .. } =>
+                return write!(formatter, "VerySync reported a problem with the account request (code {code}). Check the account service before trying again."),
+            Self::LicenseRequired { code, .. } => {
+                let access = match code {
+                    3000 => "VerySync Pro",
+                    3001 => "permission to use this VerySync Local-API feature",
+                    _ => "a VerySync feature license",
+                };
+                return write!(formatter, "This operation requires {access} (code {code}). Check the license on the selected instance.");
             }
-            Self::InvalidIdentity { reason } => {
-                write!(formatter, "invalid device identity: {reason}")
+            Self::IgnorePatternsRejected { .. } => "VerySync rejected one or more ignore rules. Some rules may already be stored. Read the current rules before editing or restoring them.",
+            Self::ShareAlreadyConfigured { .. } => "This share is already registered on the selected device. No new registration was requested.",
+            Self::ScanObservationLost => "The scan can no longer be tracked from these updates. Read the current folder status to find out whether the scan is still running.",
+            Self::ProgramRejected { reason } =>
+                return write!(formatter, "selected program rejected: {reason}. Check the selected VerySync program and its verification details."),
+            Self::UpgradeReleaseUnavailable { .. } => "The upgrade source has no program that matches the requested version and target. Check the version and platform in the upgrade source.",
+            Self::ManagedProcessExited { operation, code, .. } => {
+                write!(formatter, "The managed VerySync program exited while trying to {operation}")?;
+                if let Some(code) = code {
+                    write!(formatter, " (exit code {code})")?;
+                }
+                return formatter.write_str(".");
             }
-            Self::IdentityMismatch { .. } => formatter
-                .write_str("authenticated device identity did not match the expected identity"),
-            Self::IncompatibleVersion { actual } => write!(
-                formatter,
-                "engine version {actual} has not passed compatibility acceptance"
-            ),
-            Self::UnsupportedTransport { transport } => {
-                write!(formatter, "unsupported management transport: {transport}")
+            Self::ManagedFailure { reason } =>
+                return explain(formatter, "The managed VerySync operation could not be completed.", reason),
+            Self::StateBackupRejected { reason } =>
+                return explain(formatter, "The saved VerySync state could not be copied or restored. Keep the existing copy while you check the problem.", reason),
+            Self::ManagedStateInUse { lock } => match lock {
+                ManagedStateLock::LibraryLease => "Another library operation is using the selected state directory. Wait for that operation to finish or choose a separate directory.",
+                ManagedStateLock::EngineLock => "A VerySync process is using the selected state directory. Verify which instance owns it before taking any action.",
+            },
+            Self::UnmanagedState => "The selected state directory is not recognized as belonging to this library. Use the original managed directory or a separate directory for a new instance.",
+            Self::LocalIo { operation, .. } => {
+                if matches!(*operation, "write resource output" | "flush resource output") {
+                    return formatter.write_str("The local download stopped while writing the output. Check the new file for incomplete data before trying again.");
+                }
+                return write!(formatter, "A local file or system operation failed while trying to {operation}. Check access to the selected path or resource.");
             }
-            Self::Authentication { status } => write!(
-                formatter,
-                "management authentication rejected (HTTP {status})"
-            ),
-            Self::AccessDenied { .. } => formatter.write_str("management access denied (HTTP 403); authentication or permissions require inspection"),
-            Self::Timeout { operation } => write!(
-                formatter,
-                "management deadline exceeded while attempting to {operation}"
-            ),
-            Self::ResponseTooLarge { limit } => {
-                write!(formatter, "management response exceeded {limit} bytes")
+            Self::InvalidConfiguration { reason } =>
+                return explain(formatter, "The configuration value could not be used.", reason),
+            Self::ConfigurationChanged => "The configuration changed after it was read. No replacement was sent. Read the current configuration before deciding whether to apply the change.",
+            Self::InvalidCredential { reason } =>
+                return explain(formatter, "The supplied credential cannot be used.", reason),
+            Self::InvalidIdentity { reason } =>
+                return explain(formatter, "The supplied device ID cannot be used.", reason),
+            Self::IdentityMismatch { .. } => "The connected device did not match the expected device. Verify the endpoint and device ID before making changes.",
+            Self::IncompatibleVersion { actual } => {
+                if actual == "event engine is outside the fixed baseline"
+                    || actual.starts_with("[REDACTED")
+                {
+                    return formatter.write_str("The selected VerySync version is outside the verified range. Check which version is running before continuing.");
+                }
+                return write!(formatter, "The current version policy has not verified VerySync version {actual}. Check which version is running on the selected instance.");
             }
-            Self::Http { response } => write!(
-                formatter,
-                "management endpoint returned HTTP {}",
-                response.status
-            ),
-            Self::Api { operation, .. } => write!(formatter, "management API reported a body failure while attempting to {operation}"),
-            Self::InvalidResponse { operation, .. } => write!(
-                formatter,
-                "invalid management response while attempting to {operation}"
-            ),
-            Self::Transport { operation, .. } => write!(
-                formatter,
-                "management transport failed while attempting to {operation}"
-            ),
-            Self::InvalidFolderId { reason } => {
-                write!(formatter, "invalid folder identifier: {reason}")
+            Self::UnsupportedTransport { transport } => match *transport {
+                "Unix-domain sockets on this platform" | "managed Unix socket" =>
+                    "This build cannot connect to a Unix socket on this system. Choose an HTTP or HTTPS management address.",
+                "HTTPS requires the tls feature" | "managed HTTPS requires the tls feature" =>
+                    "This build cannot open an HTTPS connection. Enable the tls feature to use HTTPS.",
+                "HTTPS proxy requires the tls feature" =>
+                    "This build cannot connect to an HTTPS proxy. Enable the tls feature to use the selected proxy.",
+                "trusted certificates require the tls feature" =>
+                    "This build cannot use your trusted certificates. Enable the tls feature to verify HTTPS connections.",
+                "native browser requires an explicit HTTP(S) management URL" =>
+                    "The VerySync browser helper needs an HTTP or HTTPS management address. Supply the address for the selected instance.",
+                _ => return explain(formatter, "This connection method is unavailable.", transport),
+            },
+            Self::Authentication { status } =>
+                return write!(formatter, "VerySync declined authentication (HTTP {status}). Verify the credentials for the selected instance."),
+            Self::AccessDenied { response } =>
+                return write!(formatter, "VerySync declined access (HTTP {}). Check the credentials and permissions for this request.", response.status()),
+            Self::Timeout { operation } => {
+                if is_download(operation) {
+                    return formatter.write_str("The download did not finish in time. If a new output file exists, check it for incomplete data.");
+                }
+                return write!(formatter, "The time limit expired while trying to {operation}.");
             }
-            Self::FolderNotFound {..}=>formatter.write_str("folder is not configured"),
-            Self::FolderPaused {..}=>formatter.write_str("operation requires an unpaused folder"),
-            Self::ArchiveRestorePrecondition {reason}=>write!(formatter,"archive restore precondition failed: {reason}"),
-            Self::FolderIdentityMismatch {..}=>formatter.write_str("response folder identity did not match the requested folder"),
-            Self::DeviceNotFound {..}=>formatter.write_str("device is not configured"),
-            Self::DeviceAlreadyExists {..}=>formatter.write_str("device ID is already configured; creation did not start"),
-            Self::LocalDeviceProtected=>formatter.write_str("remote-device mutation cannot target the local identity"),
-            Self::PendingOfferNotFound=>formatter.write_str("pending offer is not present"),
-            Self::FolderPeerNotAssociated=>formatter.write_str("peer is not associated with this folder"),
-            Self::FolderNotIgnored=>formatter.write_str("folder is not ignored for this device"),
-            Self::DeviceNotIgnored=>formatter.write_str("device is not ignored"),
-            Self::ConfiguredDeviceCannotBeIgnored {..}=>formatter.write_str("configured device must be explicitly removed before it is ignored"),
-            Self::FolderAlreadyExists {..}=>formatter.write_str("folder ID is already configured; creation did not start"),
-            Self::FolderPathAlreadyConfigured {..}=>formatter.write_str("target path string is already configured; creation did not start"),
-            Self::MutationOutcomeUnknown {operation,..}=>write!(formatter,"outcome is unknown after attempting to {operation}; read current configuration before retrying"),
-            Self::InvalidEndpoint { reason } => {
-                write!(formatter, "invalid management endpoint: {reason}")
+            Self::ResponseTooLarge { limit } =>
+                return write!(formatter, "The reply exceeded the configured limit of {limit} bytes."),
+            Self::Http { response } =>
+                return write!(formatter, "The request failed with HTTP {}. Check the service that received the request.", response.status()),
+            Self::Api { operation, .. } =>
+                return write!(formatter, "VerySync reported a problem while trying to {operation}."),
+            Self::InvalidResponse { operation, .. } =>
+                return write!(formatter, "The library could not read the reply while trying to {operation}."),
+            Self::Transport { operation, .. } => {
+                if is_download(operation) {
+                    return formatter.write_str("The download connection was interrupted. If a new output file exists, check it for incomplete data.");
+                }
+                return write!(formatter, "The connection did not complete the request to {operation}. Check the selected connection.");
             }
-            Self::InvalidPath { reason } => write!(formatter, "invalid target path: {reason}"),
-            Self::PathEncoding => formatter.write_str(
-                "native path cannot be represented losslessly by the UTF-8 management protocol",
-            ),
+            Self::InvalidFolderId { reason } =>
+                return explain(formatter, "The supplied folder ID cannot be used.", reason),
+            Self::FolderNotFound { .. } => "The selected folder is not registered on this device. Check the device and folder ID.",
+            Self::FolderPaused { .. } => "This operation needs a running folder. The selected folder is paused.",
+            Self::ArchiveRestorePrecondition { reason } =>
+                return explain(formatter, "The restore did not start. Review the selected archive and the destination before trying again.", reason),
+            Self::FolderIdentityMismatch { .. } => "VerySync returned a different folder from the one requested. Verify the selected folder and device.",
+            Self::DeviceNotFound { .. } => "The selected device is not registered on this instance. Check the device ID.",
+            Self::DeviceAlreadyExists { .. } => "This device is already registered. No new registration was requested.",
+            Self::LocalDeviceProtected => "This operation changes a remote device. The selected ID belongs to the local device.",
+            Self::PendingOfferNotFound => "The selected offer is no longer available. Refresh the list of pending offers.",
+            Self::FolderPeerNotAssociated => "The selected folder is not shared with this device. Check the folder's sharing settings.",
+            Self::FolderNotIgnored => "This folder is not on the ignore list for the selected device.",
+            Self::DeviceNotIgnored => "This device is not on the ignore list.",
+            Self::ConfiguredDeviceCannotBeIgnored { .. } => "The device is already registered. Review its shares and existing registration before deciding whether to remove it and ignore future offers.",
+            Self::FolderAlreadyExists { .. } => "This folder ID is already registered. No new registration was requested.",
+            Self::FolderPathAlreadyConfigured { .. } => "The selected path is already registered. No new registration was requested.",
+            Self::MutationOutcomeUnknown { operation, .. } =>
+                return explain_unknown_outcome(formatter, operation),
+            Self::InvalidEndpoint { reason } =>
+                return explain(formatter, "The supplied connection address cannot be used.", reason),
+            Self::InvalidPath { reason } =>
+                return explain(formatter, "The selected path cannot be used on the target system.", reason),
+            Self::PathEncoding => "The target protocol cannot represent this path without changing its name. Choose a path that the target can represent.",
+        };
+        formatter.write_str(message)
+    }
+}
+
+fn explain(formatter: &mut fmt::Formatter<'_>, summary: &str, reason: &str) -> fmt::Result {
+    formatter.write_str(summary)?;
+    let mut chars = reason.chars();
+    if let Some(first) = chars.next() {
+        write!(formatter, " {}{}", first.to_uppercase(), chars.as_str())?;
+        if !reason.ends_with(['.', '!', '?']) {
+            formatter.write_str(".")?;
         }
     }
+    Ok(())
+}
+
+fn is_download(operation: &str) -> bool {
+    matches!(
+        operation,
+        "download file resource" | "download resource archive" | "download selected resources"
+    )
+}
+
+fn explain_unknown_outcome(formatter: &mut fmt::Formatter<'_>, operation: &str) -> fmt::Result {
+    let message = match operation {
+        "log in to native GUI" | "reconcile native GUI authentication" =>
+            "VerySync may have signed you in. Check for an existing session on the selected instance before trying again.",
+        "log out native GUI session" =>
+            "VerySync may have ended the session. Check whether the session still works before trying again.",
+        "set local GUI credentials" =>
+            "VerySync may have changed the sign-in settings. Check the selected instance before trying again.",
+        "rotate management API key" | "reconcile management API key rotation" =>
+            "VerySync may have replaced the API key. Check which key works on the selected instance before requesting another change.",
+        "upload file resource" | "write existing resource text" =>
+            "The destination file may have changed. Compare its contents with your source on the selected device before trying again.",
+        "move resource" | "copy resource" =>
+            "Some files may have changed. Check the source and destination on the selected device before trying again.",
+        "delete resource" =>
+            "Some or all of the selected files may have been removed. Check what remains on the selected device before requesting another deletion.",
+        "create resource directory" =>
+            "The folder may already exist. Check the selected destination on the device before trying again.",
+        "restore archived directory versions" | "restore explicit file versions" =>
+            "The restore may have written some files. Check the destination on the selected device and preserve any files you still need before trying again.",
+        "request native shutdown" | "request native restart" | "validate native restart acknowledgement" =>
+            "VerySync may have stopped or restarted. Check whether the selected instance is running before sending another request.",
+        "request server-selected upgrade" | "upload fixed kernel upgrade" | "run kernel CLI upgrade" =>
+            "The upgrade may have started. Check the installed version and running program before trying again.",
+        _ => return write!(formatter, "Could not confirm the result of the request to {operation}. Check the affected state before trying again."),
+    };
+    formatter.write_str(message)
 }
 
 impl std::error::Error for Error {

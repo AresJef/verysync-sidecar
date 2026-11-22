@@ -1,5 +1,11 @@
 # Management TLS and explicit proxies
 
+Choose how your application will connect to the selected VerySync instance.
+For HTTPS, supply a trusted certificate chain and the expected host name.
+If a connection fails, check these and any explicit proxy settings before
+sending sensitive requests. A successful connection uses the selected policy
+for that connection.
+
 `ManagementTransport` selects trust and proxy policy for one management
 connection. Pass it to `ConnectOptions::transport()` or
 `GuiLoginOptions::transport()`. The default retains normal TLS certificate and

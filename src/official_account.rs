@@ -70,10 +70,11 @@ impl TryFrom<BTreeMap<String, serde_json::Value>> for OfficialAccountStatus {
                 value.insert("uid".to_owned(), serde_json::Value::Null);
                 None
             }
-            Some(serde_json::Value::Number(n)) => {
-                Some(n.as_i64().ok_or("invalid native account UID")?)
-            }
-            Some(_) => return Err("invalid native account UID"),
+            Some(serde_json::Value::Number(n)) => Some(
+                n.as_i64()
+                    .ok_or("VerySync did not provide a valid numeric account ID.")?,
+            ),
+            Some(_) => return Err("VerySync did not provide a valid numeric account ID."),
         };
         Ok(Self {
             user_id,

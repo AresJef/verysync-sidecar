@@ -1,5 +1,12 @@
 # Program upgrades and offline state restoration
 
+To replace the executable or restore saved state, stop the managed instance
+normally and save its private state first. The built-in upgrade receives a
+request from a running instance. When VerySync is available again, check the
+reported version, device identity, and the files or settings you need. If the
+result is uncertain, preserve the saved state and check the running program
+before requesting another upgrade.
+
 Executable selection, the kernel's built-in upgrader and private-state snapshots
 are separate explicit operations. Adding or compiling this crate performs none
 of them. The default accepted version remains **v2.33.2**. An older/newer program

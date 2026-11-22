@@ -215,6 +215,7 @@ async fn preserves_legacy_errors_and_reports_the_phase_on_the_additive_entry_poi
                     error.session_may_have_been_issued(),
                     !matches!(phase, BeforeLoginRequest | LoginRejected)
                 );
+                println!("GUI message: stage={phase:?} {error}");
                 format!("{error} {error:?} {cause} {cause:?}")
             } else {
                 let error = GuiSession::login(options(&server)?).await.unwrap_err();

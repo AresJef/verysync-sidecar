@@ -1,5 +1,16 @@
 # verysync-sidecar
 
+Use this Rust library to manage an official VerySync instance. Connect to a
+running instance with its management address and API key, read its status and
+confirm the device identity before making changes. Start an isolated instance
+with its own files only when your application should manage its lifetime.
+
+Start with the [connection example](docs/public/getting-started.md). The
+[stable 0.1.0 guide](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/getting-started.md)
+is also available directly from the package page. A setting read back from the
+instance confirms the reported configuration. Check files and peer activity
+separately when you need to confirm a transfer.
+
 The [native GUI listener controls](docs/public/gui-listener.md) separate
 explicit address/TLS/server-enable/socket-mode writes from caller reconnection,
 certificate trust and process ownership. Live GUI/API hot-disable is unsupported
@@ -29,8 +40,6 @@ The [file transfer APIs](docs/public/file-transfers.md) stream explicit local
 inputs/outputs with finite bounds, inclusive ranges, all seven native archive
 formats and post-upload digest verification.
 
-A general-purpose Rust library for managing and controlling the official VerySync program. The goal is complete coverage of its actual programmable capabilities, with explicit version, platform, license, and verification conditions.
-
 The [program upgrade and state snapshot API](docs/public/program-upgrades.md)
 separates explicit executable selection, kernel upgrade requests and offline
 state restoration. A restored old snapshot is distinct from opening a migrated
@@ -49,7 +58,8 @@ The [program cache](docs/public/program-cache.md) adds explicit
 offline resolution, cross-process preparation and immutable generations that
 preserve previously returned or running program paths.
 
-This documentation targets `verysync-sidecar` 0.1.0 and official VerySync v2.33.2.
+The stable installation examples use `verysync-sidecar` 0.1.0. The [changelog](CHANGELOG.md)
+identifies changes in the next candidate. The verified official program is VerySync v2.33.2.
 See the [release checks](docs/public/release-checklist.md) for tested native
 conditions, platform boundaries and deferred positive cases.
 

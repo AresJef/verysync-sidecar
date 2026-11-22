@@ -1,5 +1,10 @@
 # Official remote management
 
+Confirm that the selected device allows remote management. Then probe whether
+the tunnel is reachable. To make a management request, connect through an
+approved endpoint and verify the expected device identity. Check whether the
+selected instance has the required license for the actual remote operation.
+
 The native remote-management permission, a tunnel probe, and an authenticated
 connection are separate operations. None acquires a license or proves another
 operation succeeded. The bundled v2.33.2 GUI marks remote management as a Pro

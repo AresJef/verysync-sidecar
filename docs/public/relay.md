@@ -1,6 +1,10 @@
 
 ## Relay server control and explicit probes
 
+Use the server settings to run an explicitly selected relay. Use the client
+settings to let an instance use a relay. After changing either, read the
+settings and check the live connection before treating the relay as usable.
+
 `relay_server_configuration` and `RelayServerPatch` manage the official engine's
 own relay server. This is independent of `TransportPatch::relay_client` and
 `relay_addresses`. Starting a server can open listeners and contact pools;

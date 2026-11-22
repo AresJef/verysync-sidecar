@@ -1,5 +1,11 @@
 # Explicit native helpers
 
+Choose the helper that matches what you want to learn or change. A health
+reply describes the selected program's response. A path check reports the
+program's observation and has a fixed-version limitation documented below.
+When disposing of an owned instance or opening a folder on the target, check
+the actual state or process result that matters for that action.
+
 `native_health()` reads the program's native HTTP health snapshot through the
 selected authenticated connection, with a fresh target-identity check. The native
 route `/rest/noauth/health` itself does not require authentication; this `Client`

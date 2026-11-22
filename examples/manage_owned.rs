@@ -13,15 +13,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mode = mode.to_str().ok_or("mode must be UTF-8")?;
     let program_path = PathBuf::from(
         args.next()
-            .ok_or("explicit absolute program path required")?,
+            .ok_or("Supply the absolute path of the verified VerySync program.")?,
     );
-    let state = PathBuf::from(args.next().ok_or("explicit private state path required")?);
+    let state = PathBuf::from(
+        args.next()
+            .ok_or("Supply the private state directory for this instance.")?,
+    );
     let transport = args
         .next()
-        .ok_or("explicit http or socket transport required")?;
-    let address = args.next().ok_or("explicit management address required")?;
+        .ok_or("Choose http or socket for the management connection.")?;
+    let address = args
+        .next()
+        .ok_or("Supply the address for this management connection.")?;
     if args.next().is_some() {
-        return Err("too many arguments".into());
+        return Err(
+            "Supply one mode, program path, state directory, connection type and address.".into(),
+        );
     }
     let endpoint = match transport.to_str() {
         Some("http") => {
@@ -33,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut program = LocalProgram::new(program_path)?;
     if let Ok(hex) = std::env::var("VERYSYNC_EXAMPLE_PROGRAM_SHA256") {
         if hex.len() != 64 {
-            return Err("expected program digest must be 64 hexadecimal characters".into());
+            return Err("The expected program SHA-256 must have 64 hexadecimal characters.".into());
         }
         let mut digest = [0; 32];
         for (index, byte) in digest.iter_mut().enumerate() {
@@ -62,6 +69,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json!({"mode":mode,"device_id":status.device_id.as_str(),"process_id":pid,"management_ready":true,
                 "actual_tree_exit":exit.as_ref().map(|e|e.tree_stopped),"forced":exit.as_ref().map(|e|e.forced)})
             );
+            match exit {
+                Some(result) if result.tree_stopped && !result.forced && result.code == Some(0) =>
+                    eprintln!("The owned VerySync instance started and shut down normally. Its state was kept."),
+                Some(result) if result.tree_stopped =>
+                    eprintln!("The owned VerySync processes exited without a normal shutdown. Check the saved state before starting again."),
+                Some(_) =>
+                    eprintln!("VerySync started. This run could not confirm that all owned processes stopped."),
+                None =>
+                    eprintln!("The managed VerySync instance started in persistent mode. Use the same private state to reconnect or request shutdown."),
+            }
             // Persistent deliberately survives this owner/caller exit. The
             // default owned path already observed its normal tree exit above.
             drop(instance);
@@ -77,7 +94,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json!({"mode":mode,"device_id":identity.as_str(),"management_ready":true,
                 "shutdown_acknowledged":mode=="shutdown"})
             );
-            // A shutdown acknowledgement is not an observed OS process exit.
+            if mode == "shutdown" {
+                eprintln!("VerySync accepted the shutdown request. Check that the selected process has stopped before changing its files.");
+            } else {
+                eprintln!(
+                    "Connected to the running VerySync instance using its private state record."
+                );
+            }
+            // Keep the JSON acknowledgement distinct from observed process exit.
         }
         _ => return Err("mode must be owned, persistent, connect or shutdown".into()),
     }

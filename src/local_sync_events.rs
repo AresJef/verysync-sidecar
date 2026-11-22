@@ -134,7 +134,7 @@ impl LocalSyncEventOptions {
     pub fn max_events(mut self, max: usize) -> Result<Self> {
         if !(1..=4096).contains(&max) {
             return Err(crate::local_sync::invalid(
-                "Local Sync event batch bound differs",
+                "choose between 1 and 4096 Local Sync updates per batch",
             ));
         }
         self.max_events = max;

@@ -1,5 +1,17 @@
 # Creation defaults and configuration application
 
+Read the current settings before making changes. To change a few settings, use
+the matching patch method. To replace the whole configuration, start from a
+fresh snapshot of the selected device and coordinate with other writers. The
+library refuses a replacement when its comparison shows that the snapshot
+is stale, before sending the replacement.
+
+A reply accepting a change tells you that VerySync received it. A fresh read
+that matches the requested values tells you what the instance is now reporting.
+Check the current settings after an uncertain write before deciding to send
+another change. Check file or connection activity separately when that is what
+you need to confirm.
+
 `ping()` reads the native management marker without a status/identity request or
 retry. `SystemPing::is_pong()` recognizes only the exact `pong` marker; other
 strings and extension fields remain inspectable. A pong does not establish the
@@ -991,7 +1003,7 @@ ARM64 direct TCP paths. On Windows ARM64 v2.33.2 the IPv6 settings 16 and 32
 persisted while transmitted packets carried class 0. The IPv4 settings and
 IPv6 zero control matched their configured classes. The final candidate
 must reproduce the applicable wire results and controls.
-[Controlled network acceptance](controlled-network-acceptance.md).
+[Controlled network acceptance](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/controlled-network-acceptance.md).
 
 
 ## Linux sleep-inhibitor validation

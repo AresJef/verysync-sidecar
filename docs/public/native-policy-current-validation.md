@@ -1,5 +1,10 @@
 # Current dial and temporary-advertisement validation
 
+These cases check two network settings on owned instances. One controls how
+many connection attempts run at once. The other changes what an isolated
+instance announces temporarily. The results below identify where these
+behaviors were actually observed and where test machines were unavailable.
+
 The original dial-concurrency run 43991606649 had actual Windows AMD64,
 Windows ARM64 and Linux ARM64 passes. Both macOS jobs were cancelled without a
 runner or steps; Linux AMD64 was cancelled before a complete accepted result.

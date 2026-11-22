@@ -95,7 +95,7 @@ fn read_small(path: &Path, private: bool) -> Result<Vec<u8>> {
     {
         use std::os::unix::fs::PermissionsExt;
         if private && file.metadata()?.permissions().mode() & 0o077 != 0 {
-            return Err("each node receipt must be private to its owner".into());
+            return Err("Keep each test node receipt readable only by its owner.".into());
         }
     }
     #[cfg(not(unix))]
@@ -125,13 +125,17 @@ fn is_digest(value: &str) -> bool {
 
 fn read_receipt(path: &Path) -> Result<Receipt> {
     let data = read_small(path, true)?;
-    let receipt: Receipt =
-        serde_json::from_slice(&data).map_err(|_| "invalid private node receipt")?;
+    let receipt: Receipt = serde_json::from_slice(&data).map_err(|_| {
+        "The test node receipt is invalid. Check the private receipt created by the selected node."
+    })?;
     if receipt.schema != 1
         || receipt.program_version != BASELINE_ENGINE_VERSION
         || !is_digest(&receipt.program_sha256)
     {
-        return Err("node receipt must bind the fixed VerySync program".into());
+        return Err(
+            "The test node receipt must identify the fixed VerySync version and program checksum."
+                .into(),
+        );
     }
     Ok(receipt)
 }

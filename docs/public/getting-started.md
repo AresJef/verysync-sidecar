@@ -6,7 +6,12 @@ program with its own license. The crate does not download or start it when added
 as a dependency or compiled. This release's `Client` borrows a running instance;
 dropping it leaves that instance running.
 
-Install the 0.1.0 release from crates.io.
+For a first connection, use the address and API key of a running test instance.
+Read the device identity and status before making any changes. When you later
+submit a change, an accepted reply confirms that VerySync received it. Read back
+the settings to check what changed. A file or scan result needs its own observation.
+
+Install the stable 0.1.0 release from crates.io.
 
 ```toml
 [dependencies]

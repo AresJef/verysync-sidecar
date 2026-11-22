@@ -537,6 +537,7 @@ async fn public_same_second_restore_refusal_preserves_selected_old_archive_and_c
     let data_dir = root.join("data");
     std::fs::create_dir(&data_dir)?;
     let old = b"selected old archive bytes";
+    let side = b"separate earlier archive sentinel";
     let new = b"current synthetic contents of another size";
     for name in ["same.txt", "older.txt"] {
         std::fs::write(data_dir.join(name), new)?;
@@ -610,7 +611,8 @@ async fn public_same_second_restore_refusal_preserves_selected_old_archive_and_c
     std::fs::create_dir_all(&archive)?;
     let same_archive = archive.join(format!("same~{tag}.txt"));
     std::fs::write(&same_archive, old)?;
-    std::fs::write(archive.join("older~20000101-000000.txt"), old)?;
+    let side_path = archive.join("older~20000101-000000.txt");
+    std::fs::write(&side_path, side)?;
     let listed = core.client().folder_versions(&folder.id, None).await?;
     let same_stamp = listed.0["same.txt"][0].version_time.clone();
     let same = FileVersionRestore::new(TargetPath::local(Path::new("same.txt")), same_stamp)?;
@@ -651,6 +653,20 @@ async fn public_same_second_restore_refusal_preserves_selected_old_archive_and_c
         Sha256::digest(std::fs::read(data_dir.join("same.txt"))?),
         Sha256::digest(new)
     );
+    for (label, path, expected) in [
+        ("current", data_dir.join("same.txt"), new.as_slice()),
+        ("same-second archive", same_archive.clone(), old.as_slice()),
+        ("strictly older archive", side_path.clone(), side.as_slice()),
+    ] {
+        let received = std::fs::read(&path)?;
+        assert_eq!(received.as_slice(), expected);
+        assert_eq!(Sha256::digest(&received), Sha256::digest(expected));
+        println!(
+            "after both refusals: {label} bytes={} SHA256={:x}",
+            received.len(),
+            Sha256::digest(&received)
+        );
+    }
     let older = FileVersionRestore::new(
         TargetPath::local(Path::new("older.txt")),
         listed.0["older.txt"][0].version_time.clone(),
@@ -662,7 +678,14 @@ async fn public_same_second_restore_refusal_preserves_selected_old_archive_and_c
             .error_count(),
         0
     );
-    data(&data_dir.join("older.txt"), old).await?;
+    data(&data_dir.join("older.txt"), side).await?;
+    let restored = std::fs::read(data_dir.join("older.txt"))?;
+    assert_eq!(Sha256::digest(&restored), Sha256::digest(side));
+    println!(
+        "after explicit older restore: bytes={} SHA256={:x}",
+        restored.len(),
+        Sha256::digest(&restored)
+    );
     assert_eq!(std::fs::read(&same_archive)?, old);
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));

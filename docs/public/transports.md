@@ -1,6 +1,12 @@
 
 ## Transport settings and tracker/NAT observations
 
+VerySync may use a tracker to find peers, a directly reachable address to
+connect to them, or a relay to pass traffic when direct contact fails. Network
+address translation (NAT) can change the public address and port. A STUN reply
+can report that mapping. Read the current settings first and enable network
+features only for the connections you intend to make.
+
 `transport_configuration` reads the fixed engine's actual tracker, UDP, NAT,
 relay-client, TCP-punching and server-address settings. `TransportPatch` changes
 only explicit fields. The write checks the target identity and shares the

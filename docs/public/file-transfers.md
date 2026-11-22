@@ -1,8 +1,16 @@
 # Explicit file transfers
 
+Use `download_resource()` for one regular file. Supply a range to download
+only the requested bytes. To export a directory or selected entries, use an
+explicit archive method. A regular ZIP is a file and downloads as-is. An empty
+file can produce a successful, zero-byte download.
+
+Choose a new local destination. If the download stops after opening that file,
+check it for incomplete data before using it or trying a new destination.
+
 File-manager mounts and synchronization folders have separate identities. Select
 an actual `ResourceVolumeId` and use `ResourcePath` with the connected target's
-syntax, as described in [file resources](file-resources.md). These operations
+syntax, as described in [file resources](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/file-resources.md). These operations
 transfer bytes through the authenticated management connection. They do not
 register synchronization folders or promise delivery to other peers.
 

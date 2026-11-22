@@ -1,6 +1,10 @@
 
 ## File scheduling and explicit bandwidth settings
 
+Choose pull order to decide which waiting files VerySync should handle first.
+A readback shows the configured order or speed limit. Observe a transfer under
+the relevant conditions to check the actual rate or file order.
+
 `folder_scheduling_configuration` reads the actual file pull order.
 `set_folder_pull_order` changes only that field and reports actual readback.
 `FolderPullOrder` covers random, alphabetic, smallest/largest first and

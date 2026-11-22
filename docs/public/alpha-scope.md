@@ -1,5 +1,9 @@
 # Initial alpha validation scope
 
+This page records the original `0.1.0-alpha.1` milestone. For a new installation,
+start with the [stable connection guide](getting-started.md). The statements below
+describe what that first alpha was tested to do.
+
 The initial alpha controls an explicitly chosen, already running official
 **VerySync v2.33.2** instance. Its Rust API provides authenticated identity/version
 policy, fresh status, guarded folder registration/configuration reads, partial

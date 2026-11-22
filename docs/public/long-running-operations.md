@@ -1,8 +1,10 @@
 # Observing long operations
 
-The scan API observes actual folder state transitions in VerySync
-v2.33.2. The published `0.1.0-alpha.1` package predates this API. A scan request,
-an observed scanning phase, and peer synchronization are distinct results.
+After requesting a scan, wait for an observed scan to start and finish if you
+need a completion result. A request acknowledgment only confirms receipt.
+Check peer transfer separately. Closing the observer stops your observation.
+
+The scan API observes actual folder state transitions on fixed VerySync v2.33.2.
 
 `Client::observe_next_scan` first establishes a bounded event subscription at
 the current position, then admits only an idle folder. It submits no scan

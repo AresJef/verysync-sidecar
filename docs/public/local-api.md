@@ -1,5 +1,12 @@
 # Native Local-API
 
+A read of a full configuration must return the folder that was requested.
+If a write first checks folder A and receives folder B, the request to change
+A stops before the write. If a request for A was already sent and the reply to
+the verification read belongs to B, the error reports an unknown outcome.
+Read A on the selected instance before deciding whether to try again. A
+license refusal is a separate typed result.
+
 `LocalApiClient` connects to an explicitly selected, already enabled native
 Local-API endpoint. It is separate from the GUI API-key `Client` and from
 `ManagedInstance` process ownership. Connecting never changes configuration,

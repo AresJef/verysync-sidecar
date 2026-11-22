@@ -147,31 +147,32 @@ session cookie omitted HttpOnly, Secure and SameSite attributes. The SDK keeps
 that credential outside a browser cookie store and preserves explicit endpoint
 and TLS choices. It does not change the official server's cookie policy.
 
-Call `GuiSession::login_with_outcome()` when handling a failure depends on
-when it occurred. Its `GuiLoginError` identifies the phase and exposes the
-underlying typed cause. An authentication error from the login POST means that
-attempt was refused. The same error during version or identity verification
-occurs after a cookie was received. The server may also have issued a session
-if the login response was interrupted or lacked a usable cookie. In these
-cases, verify the situation at the selected endpoint before choosing whether
-to log in again. A failed attempt returns no session handle and does not
-automatically submit a second login or logout.
+The 0.1.1 repair candidate provides `GuiSession::login_with_outcome()` for
+callers whose next action depends on how far sign-in got. A final 401 or 403
+from the sign-in request confirms a refusal even
+if the diagnostic reply cannot be read. Inspect `cause()` for the refusal and
+`rejection_body_error()` for an omitted diagnostic. If the request ended before
+a final reply, or the reply did not yield a usable session, check whether
+VerySync created a session before trying again. If a cookie arrived and the
+version or identity check failed, verify the selected program or device before
+trying again. A failed call returns no session handle and sends no automatic
+sign-in retry or sign-out.
 
 ```no_run
 use verysync_sidecar::{GuiLoginError, GuiLoginOptions, GuiSession};
 
 async fn login(options: GuiLoginOptions) -> Result<GuiSession, GuiLoginError> {
     GuiSession::login_with_outcome(options).await.inspect_err(|error| {
-        if error.session_may_have_been_issued() {
-            eprintln!("Reconcile the GUI session before another login ({:?})", error.phase());
-        }
+        eprintln!("{error}");
     })
 }
 ```
 
-`GuiSession::login()` retains its existing return type and top-level SDK
-error variants for callers that already match them. Neither entry point
-establishes how long the engine retains an issued session.
+`GuiSession::login()` keeps its existing return type and top-level error types.
+For example, if a refusal's diagnostic body exceeds the configured limit, the
+old method still returns `MutationOutcomeUnknown` with `ResponseTooLarge` as its
+cause. Use the detailed method when the confirmed refusal matters to recovery.
+Session lifetime depends on the selected program and its configuration.
 
 `system_status()`, `version()` and `gui_authentication()` perform typed session
 reads. Reading the GUI configuration explicitly makes its API key available as

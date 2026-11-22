@@ -1,5 +1,10 @@
 # Native target directory helpers
 
+These methods inspect or change the filesystem seen by the selected VerySync
+instance. For a remote instance, use a path in that system's format. Creating
+or removing a temporary test entry here affects the target, so check the exact
+entry and what remains when you clean up.
+
 These helpers use the engine's native directory picker, independently of
 file-manager volumes and synchronization-folder registrations:
 

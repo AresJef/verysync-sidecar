@@ -1,5 +1,10 @@
 # Native progress-reporting interval validation
 
+This setting changes how often VerySync reports progress during a transfer.
+When progress reports are disabled, verify the file receipt to see whether the
+transfer completed. The native test records notification activity and file
+delivery separately.
+
 `GeneralOptionsPatch::progress_update_interval_seconds` selects the native
 progress-reporting interval. The update returns configuration readback; it does
 not restart an instance or establish that reports have changed. The controlled

@@ -1,5 +1,9 @@
 # Incoming request admission validation
 
+The setting limits how much incoming request data VerySync can handle at once
+under the tested conditions. This test observes actual admitted work and file
+delivery under load. A settings reply only shows the stored limit.
+
 `GeneralOptionsPatch::max_concurrent_incoming_request_kib()` selects the native
 incoming request byte budget. The typed options update and full configuration
 replacement APIs preserve the signed native setting. A successful write or

@@ -490,14 +490,14 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--toolchain", required=True)
-    parser.add_argument("--cargo", default=shutil.which("cargo"))
-    parser.add_argument("--evidence-dir", required=True, type=Path)
+    parser.add_argument("--toolchain", required=True, help="Rust toolchain for building and running the selected suite")
+    parser.add_argument("--cargo", default=shutil.which("cargo"), help="path to the Cargo executable")
+    parser.add_argument("--evidence-dir", required=True, type=Path, help="directory for this suite's private test records")
     suite = parser.add_mutually_exclusive_group(required=True)
     parser.add_argument("--release", action="store_true", help="explicit optimized test build")
     suite.add_argument("--test-target", choices=["browser_engine", "managed_lifetime", "managed_instance", "engine_control", "example_control", "events", "operations", "sharing", "download_engine", "cache_engine", "p2p_isolation", "devices", "invitations", "network", "sync_observation", "p2p_three_nodes", "upgrade_engine", "files_engine", "file_transfer_engine", "disk_full_engine", "resource_usage_engine", "file_history_engine", "maintenance_engine", "file_mutation_engine", "local_sync_engine", "local_sync_protocol_engine", "local_sync_advanced_engine", "local_sync_runtime_engine", "local_sync_automation_engine", "local_sync_repair_engine", "local_sync_protocol_advanced_engine", "local_sync_configuration_engine", "configuration_engine", "authentication_engine", "ldap_trusted_ca_engine", "wallpaper_engine", "host_control_engine"])
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
-    parser.add_argument("--test-filter")
+    parser.add_argument("--test-filter", help="run only tests matching this name in the selected suite")
     parser.add_argument("--allow-private-discovery", action="store_true",
                         help="route only allowlisted discovery CONNECTs to a nonce-selected loopback fixture")
     parser.add_argument("--allow-upgrade-metadata", action="store_true",

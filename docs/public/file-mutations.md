@@ -1,5 +1,11 @@
 # Explicit resource mutations
 
+Save any data you need before replacing a destination or deleting a folder.
+On a confirmed readback, the returned information describes what was observed.
+On an unknown result, compare the source, destination and remaining files
+before attempting another change. On fixed v2.33.2 for Windows, some directory
+operations can change files even when VerySync reports HTTP 500.
+
 These methods operate through the authenticated official core's file
 manager. A `ResourcePath` selects one mounted volume and target-syntax components;
 it is independent of a synchronization folder ID. The SDK does not implement a

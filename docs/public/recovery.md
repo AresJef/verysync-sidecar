@@ -1,6 +1,12 @@
 
 ## Explicit folder recovery
 
+Identify which copy of the files you intend to keep. Reverting local changes
+can replace tracked files on the receiving device. Overriding remote changes
+can replace tracked files on connected devices with the sending folder's
+version. Review both sides and save any files you need before making either
+request. Check the affected files after a reply or interruption.
+
 `request_revert_local_changes` and `request_override_remote_changes` send one
 potentially destructive recovery request for an exact configured, unpaused
 folder. They require the actual `receiveonly` or `sendonly` mode respectively.

@@ -1,9 +1,14 @@
 # API compatibility from the first stable release
 
-Every public alpha interface remains unstable: types, names, parameters, results,
-errors, events and module structure may change. No compatibility layer or old
-alpha API branch is required. Current behavior, isolation and data protection
-still require tests. The tooling below does not make an alpha API stable.
+Use the published 0.1.0 Rust API as the compatibility baseline. In application
+code, match the public error variants and status fields you need. Descriptions
+that appear in logs or dialogs can change to explain the same result more
+clearly. Keep documented machine output and explicit protocol values stable.
+
+For example, applications can continue to match errors from `GuiSession::login()`.
+When the application needs to know whether sign-in stopped before or after a
+possible session, use `GuiSession::login_with_outcome()` and inspect the typed
+phase and cause. Earlier alpha releases preceded the stable API contract.
 
 The fixed checker preparation uses
 [`cargo-semver-checks v0.51.0`](https://github.com/obi1kenobi/cargo-semver-checks/releases/tag/v0.51.0)

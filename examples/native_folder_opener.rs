@@ -29,12 +29,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-    let root = PathBuf::from(
-        env::var_os("VERYSYNC_TEST_OPENER_CAPTURE_DIR")
-            .ok_or("explicit owned capture directory required")?,
-    );
+    let root = PathBuf::from(env::var_os("VERYSYNC_TEST_OPENER_CAPTURE_DIR").ok_or(
+        "Set VERYSYNC_TEST_OPENER_CAPTURE_DIR to the private capture directory for this test.",
+    )?);
     if !root.is_absolute() || !root.is_dir() {
-        return Err("owned absolute capture directory required".into());
+        return Err("The capture directory must exist and have an absolute path.".into());
     }
     if env::var("VERYSYNC_TEST_BROWSER_HOLD").as_deref() == Ok("1")
         && env::var("VERYSYNC_TEST_BROWSER_ACTOR").as_deref() != Ok("1")

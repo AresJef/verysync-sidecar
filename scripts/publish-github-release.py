@@ -583,19 +583,20 @@ def publish(metadata):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--metadata", type=Path, default=Path("releases/crates-io-release.json"))
+    parser.add_argument("--metadata", type=Path, default=Path("releases/crates-io-release.json"),
+                        help="path to the metadata for the specific package and source")
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--check-metadata", action="store_true")
-    mode.add_argument("--check-package", type=Path, metavar="LOCAL_CRATE")
-    mode.add_argument("--check-actions", action="store_true")
+    mode.add_argument("--check-metadata", action="store_true", help="check this release metadata locally")
+    mode.add_argument("--check-package", type=Path, metavar="LOCAL_CRATE", help="verify the local package contents and checksum")
+    mode.add_argument("--check-actions", action="store_true", help="check the acceptance jobs recorded for this source")
     mode.add_argument("--check-candidate", type=Path, metavar="LOCAL_CRATE",
                       help="check the local package and hosted runs for one candidate")
     mode.add_argument("--verify-stable-registry", type=Path, metavar="LOCAL_CRATE",
                       help="read the public stable crate, sparse index and bound candidate runs")
     mode.add_argument("--verify-stable-release", type=Path, metavar="LOCAL_CRATE",
                       help="also verify the published stable GitHub tag and release")
-    mode.add_argument("--verify", action="store_true")
-    mode.add_argument("--publish", action="store_true")
+    mode.add_argument("--verify", action="store_true", help="verify the uploaded package and its recorded release information")
+    mode.add_argument("--publish", action="store_true", help="create the recorded GitHub release from the authorized main-branch workflow")
     args = parser.parse_args()
     metadata = json.loads(args.metadata.read_text())
     if args.check_package is not None:

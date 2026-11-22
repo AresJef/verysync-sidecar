@@ -11,13 +11,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let address = args
         .next()
-        .ok_or("an explicit management address is required")?;
+        .ok_or("Supply the address of the VerySync test instance you want to read.")?;
     let endpoint = match mode.to_str() {
         Some("http") => {
             ManagementEndpoint::http(address.to_str().ok_or("HTTP URL must be UTF-8")?)?
         }
         Some("socket") => ManagementEndpoint::unix_socket(PathBuf::from(address))?,
-        _ => return Err("transport must be http or socket".into()),
+        _ => return Err("Choose http for a URL or socket for a Unix socket path.".into()),
     };
     let key = std::env::var("VERYSYNC_EXAMPLE_API_KEY")
         .map_err(|_| "VERYSYNC_EXAMPLE_API_KEY must contain the dedicated instance's API key")?;
@@ -35,7 +35,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     if args.next().is_some() {
-        return Err("too many arguments".into());
+        return Err(
+            "Use at most one expected device ID and one folder ID after the address.".into(),
+        );
     }
     let client = Client::connect(options).await?;
     let info = client.instance();
@@ -45,14 +47,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let system = client.system_status().await?;
     match system.uptime_seconds {
-        Some(seconds) => println!("Reported engine uptime: {seconds} seconds"),
-        None => println!("Reported engine uptime: unknown"),
+        Some(seconds) => println!("VerySync reports it has been running for {seconds} seconds."),
+        None => println!("VerySync did not report its running time."),
     }
     if let Some(folder) = folder {
-        println!(
-            "Folder snapshot: {:?}",
-            client.folder_status(&folder).await?
-        );
+        use verysync_sidecar::FolderState;
+        let status = client.folder_status(&folder).await?;
+        let activity = match status.state {
+            Some(FolderState::Idle) => "VerySync reports the folder is idle.",
+            Some(FolderState::Scanning) => "VerySync is scanning the folder.",
+            Some(FolderState::ScanWaiting) => "The folder is waiting to be scanned.",
+            Some(FolderState::Syncing) => "VerySync is applying changes to the folder.",
+            Some(FolderState::SyncWaiting) => "The folder is waiting to synchronize.",
+            Some(FolderState::Cleaning) => "VerySync is cleaning up the folder.",
+            Some(FolderState::CleanWaiting) => "The folder is waiting for cleanup.",
+            Some(FolderState::Paused) => "VerySync reports the folder is paused.",
+            Some(FolderState::Error) => {
+                "VerySync reports a folder error. Check the folder on the selected instance."
+            }
+            Some(_) => "VerySync reported a folder state this client does not recognize.",
+            None => "VerySync did not report a folder state.",
+        };
+        println!("{activity}");
+        if let Some(files) = status.need_files {
+            println!("VerySync reports {files} files still needed.");
+        }
     }
     Ok(())
 }

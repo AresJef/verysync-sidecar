@@ -1,5 +1,13 @@
 # Core logs and diagnostic metadata
 
+Read the selected instance's error log before deciding to add or clear an
+entry. Save any entries you need first. Profiles, logs and support archives
+can contain private server information. Review the bytes you intend to share.
+
+Resetting the synchronization index is a separate operation. VerySync can
+rebuild the index using the files it finds afterward. Check actual index
+progress and the selected folder's files before treating the reset as complete.
+
 These APIs operate on the authenticated official core selected by a
 `Client`. They do not install a logger, change global tracing, handle application
 signals, exit the caller, or automatically collect private diagnostic files.

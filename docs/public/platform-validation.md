@@ -1,5 +1,12 @@
 # Platform validation
 
+Find your system and processor in [the platform table](../platforms.csv).
+Use the evidence for your exact combination. A native run used the target
+program on the corresponding architecture. Compatibility or emulation tests
+ran the selected program through a compatibility layer or emulator. A compile
+or link result verifies that a build was produced. Notes name the source and
+conditions for those historical observations.
+
 The fixed v2.33.2 catalog contains 21 packages within the agreed Linux, macOS
 and Windows scope. `docs/platforms.csv` retains each package's exact identity,
 candidate Rust target, execution mode and remaining conditions. Preparing a

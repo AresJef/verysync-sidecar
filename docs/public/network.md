@@ -1,6 +1,11 @@
 
 ## Network settings and live observations
 
+Read the settings to see what VerySync is configured to do. Observe the
+listener to see where it is accepting connections, check discovery to see
+which peers it found, and verify the expected peer and files separately to
+confirm a transfer.
+
 `network_configuration` reads listener, discovery, reconnection and reported
 connection-limit settings.
 `update_network_configuration` sends only the fields explicitly selected by a
@@ -99,5 +104,5 @@ support. Enabling discovery in an application can emit network traffic.
 
 
 Official tracker registration and controlled disconnect use an explicitly opted-in
-specialist fixture; see [official tracker validation](official-tracker-validation.md).
+specialist fixture; see [official tracker validation](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/official-tracker-validation.md).
 They remain separate from private-peer networking and cross-WAN acceptance.

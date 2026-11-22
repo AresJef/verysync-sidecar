@@ -1,5 +1,11 @@
 # Release checks
 
+For the 0.1.1 repair candidate, review the exact crate, generated API docs,
+examples and user-facing output together with the six repair results. Sign off
+each message or page against the behavior it describes. Check the stable
+0.1.0 caller examples for matching error types and verify that machine output
+and private diagnostics retain their contracts.
+
 Release claims describe the behavior verified through the public Rust API on
 the exact candidate with the fixed VerySync v2.33.2 engine. The first alpha
 is an intermediate milestone. The first stable release requires every applicable
