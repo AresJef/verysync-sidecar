@@ -73,5 +73,8 @@ cargo run --features download --example cache_program -- \
   linux-amd64-standard /absolute/private/new-cache
 ```
 
-The example prints the selected target, actual download/hit outcome and a native
-debug representation of the program path. It does not start the program.
+The example reports on standard error whether it downloaded a program or verified
+a cached copy. Its JSON on standard output still includes the selected target,
+whether it downloaded the program, and the native representation of the program
+path. Review the path before sharing the JSON. To start the program, use a
+separate managed startup request.

@@ -1,17 +1,17 @@
 # Managed instances
 
+Use `ManagedInstance` when your application should start and stop a dedicated
+VerySync program. Choose a private state directory and matching official binary.
+A normal shutdown confirms the owned program has exited. Inspect the state and
+files before explicitly clearing anything. Use `Client::connect()` when another
+application or operator controls the running instance.
+
 Fresh library-owned instances also select an independent loopback auxiliary
 tunnel address. This avoids using the upstream shared loopback port alongside
 another local instance. Existing marked instances retain their configured
 auxiliary address when restarted. These local address choices do not constitute
 an OS-wide network isolation policy; explicit network scenarios have separate
 configuration and validation requirements.
-
-Use `ManagedInstance` when your application should start and stop a dedicated
-VerySync program. Choose a private state directory and matching official binary.
-A normal shutdown confirms the owned program has exited. Inspect the state and
-files before explicitly clearing anything. Use `Client::connect()` when another
-application or operator controls the running instance.
 
 `ManagedInstance` owns a selected local official **v2.33.2** program and a
 dedicated persistent state directory. `Client` remains borrowed management

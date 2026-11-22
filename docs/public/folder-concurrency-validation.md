@@ -11,8 +11,8 @@ profiles in PR #186, source `fb4e9677151394f250441fc9db672fb15a50f401`.
 Those results retain their original source. Its subsequent implementation
 changes add phase logging without changing the scheduling assertions.
 
-[PR #221](https://github.com/AresJef/verysync-sidecar/pull/221) verifies the
-current dependency graph, including the chrono-to-jiff migration, on native
+[PR #221](https://github.com/AresJef/verysync-sidecar/pull/221) verified the
+dependency graph after the chrono-to-jiff migration on native
 macOS, Windows and Linux AMD64/ARM64. The common execution source is
 `6129c5ee7d77487a4a24c743985d0c1ea13d97ae`, tree
 `3ebc502e4b5559598f927048bd052e3981ea5d75`, with Rust 1.85 and the matching,
@@ -32,7 +32,7 @@ sentinel bytes remain intact, and all three final owned process trees and state
 leases must stop normally. Across six native cases, these final checks cover
 18 owned instances.
 
-All six current native cases passed in
+All six cases on that recorded source passed in
 [run 44193280491](https://github.com/AresJef/verysync-sidecar/actions/runs/44193280491).
 The two Linux preparations initially lost their official archive connections
 before native execution. Each Linux case first executed after one preparation

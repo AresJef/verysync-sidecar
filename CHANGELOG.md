@@ -10,7 +10,7 @@
   Match typed errors or documented output fields in programs that need a stable
   result code.
 
-## 0.1.1-rc.1
+## 0.1.1-rc.1 (review candidate)
 
 - Prevent complete single-file downloads on the fixed engine from falling
   through to directory archiving. Explicit archive methods remain available

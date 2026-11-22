@@ -1,7 +1,12 @@
-# Current native core preference validation
+# Native core preference validation
 
-A dedicated six-platform job runs six existing strict Rust cases sequentially
-against the current source. Every command uses a fresh private evidence directory
+Use these recorded results to check which preferences produced an observable
+effect. The tested source changed process priority, retained temporary files
+by age after restart, produced an event audit, used a private proxy and read
+selected configuration. The crash case checked settings and reported usage
+fields.
+
+The recorded six-platform job ran the same six cases on the exact source below. Every command uses a fresh private evidence directory
 and the unchanged ordinary isolation wrapper. Every original command result is retained. Independent commands continue after
 a failure, and any failed command fails the aggregate job. No skip or readback
 is substituted for required native effects.
@@ -18,9 +23,9 @@ instance is used.
 
 The six dedicated command rows follow the unchanged original 242 catalog rows.
 All ready/manual/fork and final integrated acceptance requirements remain.
-This slice changes no SDK, Cargo, native case or resource-protocol input. Earlier
-proofs retain their own sources. Exact current-source native results must be
-recorded before this group is accepted.
+This validation slice changed no SDK, Cargo, native case or resource-protocol
+input. Earlier proofs retain their own sources. To reuse this result, check the
+recorded source and the conditions for the operation you need.
 
 
 ## Exact native outcomes
@@ -49,6 +54,7 @@ uploaded. The event audit and proxy cases retain their scoped actual effects;
 thumbnail artifacts have their own separate proof. Complete configuration
 acceptance also requires the other scheduling, packet-class and template
 controls. In particular, the existing IPv4/IPv6 packet-header proof covers the
-four macOS/Linux profiles; Windows packet-class effects remain unverified.
+four macOS/Linux profiles in this recorded slice. For later Windows packet
+observations, see [transport settings and evidence](transports.md).
 The parent configuration group and final integrated candidate are not declared
 complete by these 36 cases.

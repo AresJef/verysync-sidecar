@@ -85,11 +85,11 @@ pub struct NodeEvidence {
 fn read_small(path: &Path, private: bool) -> Result<Vec<u8>> {
     const LIMIT: u64 = 16 * 1024;
     if !path.is_absolute() || !std::fs::symlink_metadata(path)?.is_file() {
-        return Err("use an absolute path to a regular input file".into());
+        return Err("Supply the absolute path of a regular input file.".into());
     }
     let file = std::fs::File::open(path)?;
     if !file.metadata()?.is_file() {
-        return Err("the opened input must be a regular file".into());
+        return Err("The selected input is not a regular file. Choose a regular file.".into());
     }
     #[cfg(unix)]
     {
@@ -103,7 +103,7 @@ fn read_small(path: &Path, private: bool) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     file.take(LIMIT + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > LIMIT {
-        return Err("the input exceeds 16 KiB".into());
+        return Err("The selected input exceeds 16 KiB. Use a smaller plan or receipt.".into());
     }
     Ok(bytes)
 }
@@ -144,7 +144,7 @@ impl Node {
     fn endpoint(&self) -> Result<ManagementEndpoint> {
         match &self.management {
             Management::Loopback { port: 0 | 18886 } => {
-                Err("use a dedicated loopback port other than 18886".into())
+                Err("Use a dedicated loopback port other than 18886 for the test node.".into())
             }
             Management::Loopback { port } => Ok(ManagementEndpoint::http(&format!(
                 "http://127.0.0.1:{port}/"
@@ -177,15 +177,15 @@ fn peer(
         (Transport::Quic, Some(PeerConnectionType::QuicServer)) => "quic-server",
         (Transport::Relay, Some(PeerConnectionType::RelayClient)) => "relay-client",
         (Transport::Relay, Some(PeerConnectionType::RelayServer)) => "relay-server",
-        _ => return Err("a peer did not report the expected transport".into()),
+        _ => return Err("One test node reported a different connection method. Check the selected peer and transport.".into()),
     };
     let address = connection
         .address
         .as_ref()
         .filter(|a| !a.is_empty())
-        .ok_or("a peer did not report its connection address")?;
+        .ok_or("One test node provided no peer address. Check whether it is connected to the expected peer.")?;
     if !connection.connected {
-        return Err("a peer is disconnected".into());
+        return Err("One test node is disconnected. Check the connection to the intended peer before checking files.".into());
     }
     Ok(NodeEvidence {
         device_id: receipt.device_id,
@@ -217,18 +217,19 @@ async fn fetch(
         || Sha256::digest(&saved)[..] != got.sha256
         || hex_digest(&got.sha256)? != input.expected_sha256
     {
-        return Err("a retrieved synthetic file differs from its declared size or digest".into());
+        return Err("The retrieved sample differs from the expected size or SHA-256. Compare it with the selected source before repeating the observation.".into());
     }
     Ok(())
 }
 
 pub async fn run(path: &Path) -> Result<PairEvidence> {
     let input: Input = serde_json::from_slice(&read_small(path, false)?)
-        .map_err(|_| "invalid acceptance pair plan")?;
+        .map_err(|_| "The observation plan could not be read. Check the node entries, connection method and file information.")?;
     if !(1..=16 * 1024 * 1024).contains(&input.expected_bytes) || !is_digest(&input.expected_sha256)
     {
         return Err(
-            "specify the synthetic file size (1 byte to 16 MiB) and lowercase SHA-256".into(),
+            "Supply the expected sample size from 1 byte to 16 MiB and its lowercase SHA-256."
+                .into(),
         );
     }
     let sender = read_receipt(&input.sender.receipt)?;
@@ -240,7 +241,7 @@ pub async fn run(path: &Path) -> Result<PairEvidence> {
     let sender_resource = input.sender.resource()?;
     let receiver_resource = input.receiver.resource()?;
     if sender_id == receiver_id || sender_endpoint == receiver_endpoint {
-        return Err("the nodes must have distinct identities and management endpoints".into());
+        return Err("Both entries identify the same node or management address. Choose two distinct test nodes.".into());
     }
     let (a, b) = tokio::try_join!(
         Client::connect(

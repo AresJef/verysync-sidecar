@@ -41,7 +41,7 @@ acceptance on a named modern runner does not establish its exact minimum OS,
 libc or every legacy environment. Unknown conditions remain explicit.
 
 The embedded artifact record is
-[`releases/verysync-v2.33.2.json`](../../releases/verysync-v2.33.2.json), including
+[`releases/verysync-v2.33.2.json`](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/releases/verysync-v2.33.2.json), including
 the retrieval time and checksum-list identity. The public platform table records
 separate build/runtime conditions. Neither model tests nor the earlier test-only
 download helper count as acceptance of the Rust download/cache/upgrade APIs.
