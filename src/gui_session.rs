@@ -133,6 +133,7 @@ impl GuiLoginPhase {
         GuiLoginError {
             phase: self,
             legacy,
+            confirmed_refusal: None,
         }
     }
 }
@@ -142,6 +143,7 @@ impl GuiLoginPhase {
 pub struct GuiLoginError {
     phase: GuiLoginPhase,
     legacy: Error,
+    confirmed_refusal: Option<Box<Error>>,
 }
 
 impl GuiLoginError {
@@ -156,10 +158,35 @@ impl GuiLoginError {
     /// version-policy or identity failure. Treat private response diagnostics
     /// available by explicit inspection like other management diagnostics.
     pub fn cause(&self) -> &Error {
+        self.confirmed_refusal
+            .as_deref()
+            .unwrap_or_else(|| self.legacy_cause())
+    }
+
+    /// Why the diagnostic body could not be read after a confirmed refusal.
+    ///
+    /// When this is present, the refusal status is available through
+    /// [Self::cause]. Incomplete diagnostic bytes are discarded.
+    pub fn rejection_body_error(&self) -> Option<&Error> {
+        self.confirmed_refusal.as_ref().map(|_| self.legacy_cause())
+    }
+
+    fn legacy_cause(&self) -> &Error {
         match &self.legacy {
             Error::MutationOutcomeUnknown { source, .. } => source.as_ref(),
             cause => cause,
         }
+    }
+
+    fn login_request_error(legacy: Error) -> Self {
+        let phase = match &legacy {
+            Error::Authentication { .. }
+            | Error::AccessDenied { .. }
+            | Error::LicenseRequired { .. } => GuiLoginPhase::LoginRejected,
+            Error::InvalidEndpoint { .. } => GuiLoginPhase::BeforeLoginRequest,
+            _ => GuiLoginPhase::LoginOutcomeUnknown,
+        };
+        phase.error(legacy)
     }
 
     /// Whether the engine may have issued a session during this attempt.
@@ -237,14 +264,12 @@ impl GuiWire {
         }
         text
     }
-    async fn request(
+    fn request_builder(
         &self,
-        operation: &'static str,
         method: reqwest::Method,
         route: &str,
         body: Option<&serde_json::Value>,
-        mutation: bool,
-    ) -> Result<crate::RawResponse> {
+    ) -> Result<reqwest::RequestBuilder> {
         let url = self.base.join(route).map_err(|_| Error::InvalidEndpoint {
             reason: "GUI route cannot be joined to its selected endpoint",
         })?;
@@ -256,7 +281,52 @@ impl GuiWire {
         if let Some(body) = body {
             request = request.json(body);
         }
+        Ok(request)
+    }
+
+    async fn request(
+        &self,
+        operation: &'static str,
+        method: reqwest::Method,
+        route: &str,
+        body: Option<&serde_json::Value>,
+        mutation: bool,
+    ) -> Result<crate::RawResponse> {
+        let request = self.request_builder(method, route, body)?;
         crate::client::send_checked(operation, request, mutation, self.limit).await
+    }
+
+    async fn post_login(
+        &self,
+        body: &serde_json::Value,
+    ) -> std::result::Result<crate::RawResponse, GuiLoginError> {
+        const OPERATION: &str = "log in to native GUI";
+        let request = self
+            .request_builder(
+                reqwest::Method::POST,
+                "rest/noauth/auth/password",
+                Some(body),
+            )
+            .map_err(GuiLoginError::login_request_error)?;
+        let response =
+            crate::client::send_bounded_with_status(OPERATION, request, true, self.limit)
+                .await
+                .map_err(|failure| {
+                    let refusal = match failure.status {
+                        Some(401) => Error::Authentication { status: 401 },
+                        Some(403) => Error::AccessDenied {
+                            response: crate::ResponseDiagnostic::new(403, Vec::new()),
+                        },
+                        _ => return GuiLoginError::login_request_error(failure.error),
+                    };
+                    GuiLoginError {
+                        phase: GuiLoginPhase::LoginRejected,
+                        legacy: failure.error,
+                        confirmed_refusal: Some(Box::new(refusal)),
+                    }
+                })?;
+        crate::client::checked_response(OPERATION, response, true)
+            .map_err(GuiLoginError::login_request_error)
     }
 }
 impl GuiSession {
@@ -280,8 +350,7 @@ impl GuiSession {
         options: GuiLoginOptions,
     ) -> std::result::Result<Self, GuiLoginError> {
         use GuiLoginPhase::{
-            BeforeLoginRequest, LoginOutcomeUnknown, LoginRejected, SessionCookieUnavailable,
-            VerifyIdentity, VerifyVersion,
+            BeforeLoginRequest, SessionCookieUnavailable, VerifyIdentity, VerifyVersion,
         };
         let before_login = |error| BeforeLoginRequest.error(error);
         tokio::runtime::Handle::try_current()
@@ -319,25 +388,7 @@ impl GuiSession {
             limit: options.limit,
         };
         let body = serde_json::json!({"username":options.credentials.username,"password":options.credentials.password,"stayLoggedIn":options.stay_logged_in,"forumUser":false});
-        let logged_in = wire
-            .request(
-                "log in to native GUI",
-                reqwest::Method::POST,
-                "rest/noauth/auth/password",
-                Some(&body),
-                true,
-            )
-            .await
-            .map_err(|error| {
-                let phase = match &error {
-                    Error::Authentication { .. }
-                    | Error::AccessDenied { .. }
-                    | Error::LicenseRequired { .. } => LoginRejected,
-                    Error::InvalidEndpoint { .. } => BeforeLoginRequest,
-                    _ => LoginOutcomeUnknown,
-                };
-                phase.error(error)
-            })?;
+        let logged_in = wire.post_login(&body).await?;
         let (session_cookie, session_value) =
             native_cookie(&logged_in, "sessionid-", Some(&suffix), &wire.base)
                 .map_err(|error| SessionCookieUnavailable.error(gui_unknown(error)))?;

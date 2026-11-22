@@ -64,6 +64,7 @@ fn kind(error: &Error) -> &'static str {
         Error::MutationOutcomeUnknown { .. } => "unknown outcome",
         Error::Http { .. } => "HTTP",
         Error::Timeout { .. } => "timeout",
+        Error::ResponseTooLarge { .. } => "response too large",
         Error::Transport { .. } => "transport",
         Error::InvalidResponse { .. } => "invalid response",
         Error::IncompatibleVersion { .. } => "incompatible version",
@@ -252,6 +253,77 @@ async fn preserves_legacy_errors_and_reports_the_phase_on_the_additive_entry_poi
             );
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn refusal_status_is_certain_even_when_its_body_exceeds_the_limit() -> TestResult {
+    let mut wrong = Vec::new();
+    for status in [401, 403] {
+        for limit in [18, 17] {
+            for detailed in [true, false] {
+                let server = ScriptedServer::start(vec![
+                    challenge("AAAAAAA"),
+                    Reply {
+                        status,
+                        body: b"Access was denied.".to_vec(),
+                        headers: String::new(),
+                        delay: Duration::ZERO,
+                    },
+                ])
+                .await?;
+                let options = options(&server)?.response_limit(limit)?;
+                let expected_cause = if status == 401 {
+                    "authentication"
+                } else {
+                    "access denied"
+                };
+                let accurate = if detailed {
+                    let error = GuiSession::login_with_outcome(options).await.unwrap_err();
+                    println!(
+                        "GUI refusal: status={status} limit={limit} detailed=true phase={:?} possible={} cause={}",
+                        error.phase(),
+                        error.session_may_have_been_issued(),
+                        kind(error.cause())
+                    );
+                    error.phase() == GuiLoginPhase::LoginRejected
+                        && !error.session_may_have_been_issued()
+                        && kind(error.cause()) == expected_cause
+                        && if limit == 17 {
+                            matches!(
+                                error.rejection_body_error(),
+                                Some(Error::ResponseTooLarge { limit: 17 })
+                            )
+                        } else {
+                            error.rejection_body_error().is_none()
+                        }
+                } else {
+                    let error = GuiSession::login(options).await.unwrap_err();
+                    println!(
+                        "GUI refusal: status={status} limit={limit} detailed=false error={}",
+                        kind(&error)
+                    );
+                    if limit == 18 {
+                        kind(&error) == expected_cause
+                    } else {
+                        matches!(
+                            error,
+                            Error::MutationOutcomeUnknown { source, .. }
+                                if matches!(*source, Error::ResponseTooLarge { limit: 17 })
+                        )
+                    }
+                };
+                let requests = server.finish().await?;
+                assert_eq!(requests.len(), 2);
+                assert!(requests[0].starts_with("GET /prefix/ "));
+                assert!(requests[1].starts_with("POST /prefix/rest/noauth/auth/password "));
+                if !accurate {
+                    wrong.push((status, limit, detailed));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "misclassified refusal cases: {wrong:?}");
     Ok(())
 }
 

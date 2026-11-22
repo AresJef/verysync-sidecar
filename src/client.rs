@@ -1127,12 +1127,32 @@ pub(crate) async fn send_bounded(
     mutation: bool,
     response_limit: usize,
 ) -> Result<RawResponse> {
-    let uncertain = |source| mutation_error(operation, mutation, source);
-    let mut response = request
-        .send()
+    send_bounded_with_status(operation, request, mutation, response_limit)
         .await
-        .map_err(|e| uncertain(transport_error(operation, e)))?;
+        .map_err(|failure| failure.error)
+}
+
+pub(crate) struct BoundedResponseFailure {
+    pub(crate) status: Option<u16>,
+    pub(crate) error: Error,
+}
+
+pub(crate) async fn send_bounded_with_status(
+    operation: &'static str,
+    request: reqwest::RequestBuilder,
+    mutation: bool,
+    response_limit: usize,
+) -> std::result::Result<RawResponse, BoundedResponseFailure> {
+    let uncertain = |source| mutation_error(operation, mutation, source);
+    let mut response = request.send().await.map_err(|e| BoundedResponseFailure {
+        status: None,
+        error: uncertain(transport_error(operation, e)),
+    })?;
     let status = response.status().as_u16();
+    let body_failed = |source| BoundedResponseFailure {
+        status: Some(status),
+        error: uncertain(source),
+    };
     let headers = response
         .headers()
         .iter()
@@ -1142,10 +1162,10 @@ pub(crate) async fn send_bounded(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|e| uncertain(transport_error(operation, e)))?
+        .map_err(|e| body_failed(transport_error(operation, e)))?
     {
         if chunk.len() > response_limit.saturating_sub(body.len()) {
-            return Err(uncertain(Error::ResponseTooLarge {
+            return Err(body_failed(Error::ResponseTooLarge {
                 limit: response_limit,
             }));
         }
