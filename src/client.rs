@@ -273,6 +273,7 @@ impl Client {
     /// Use preparation from this same target. The key establishes group membership;
     /// no directory ID is manually copied from another node. Readback does not
     /// establish peer association, remote acceptance or file synchronization.
+    /// A proposed dot-segment ID is rejected before the registration POST.
     /// Reconcile folder_id after cancellation/unknown outcome before retrying.
     pub async fn join_folder(
         &self,
@@ -291,6 +292,7 @@ impl Client {
                 reason: "cannot register an unknown sharing permission",
             });
         }
+        validate_folder_item_id(&share.registration_id)?;
         if options.path.style() != self.folder_path_style()? {
             return Err(Error::InvalidPath {
                 reason: "path syntax differs from the connected engine",
@@ -670,7 +672,8 @@ impl Client {
     /// Register a new folder from upstream defaults, then read its configuration.
     ///
     /// Existing IDs and, by default, identical path strings are rejected before
-    /// POST. Clones of this Client serialize creation. The upstream POST is an
+    /// POST. Dot-segment IDs cannot be registered through this method.
+    /// Clones of this Client serialize creation. The upstream POST is an
     /// upsert and ignores the tested If-Match condition: independent clients or
     /// other writers must coordinate; this is not an atomic create-if-absent.
     ///
@@ -678,6 +681,7 @@ impl Client {
     /// scanning and synchronization can continue afterward; inspect folder status.
     /// After cancellation or MutationOutcomeUnknown, read the ID before retrying.
     pub async fn create_folder(&self, options: &CreateFolderOptions) -> Result<FolderConfig> {
+        validate_folder_item_id(&options.id)?;
         let advanced = options
             .advanced
             .as_ref()
@@ -949,6 +953,15 @@ impl fmt::Debug for Client {
     }
 }
 
+fn validate_folder_item_id(id: &FolderId) -> Result<()> {
+    if matches!(id.as_str(), "." | "..") {
+        return Err(Error::InvalidConfiguration {
+            reason: "dot-segment folder IDs cannot be addressed by an item URL",
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn management_http(
     endpoint: &ManagementEndpoint,
     timeout: Duration,
@@ -1051,11 +1064,7 @@ impl<Authorization: RequestAuthorization> Connection<Authorization> {
     }
 
     fn folder_url(&self, id: &FolderId) -> Result<Url> {
-        if matches!(id.as_str(), "." | "..") {
-            return Err(Error::InvalidConfiguration {
-                reason: "dot-segment folder IDs cannot be addressed by an item URL",
-            });
-        }
+        validate_folder_item_id(id)?;
         let mut url = self.management_url("rest/config/folders/", &[])?;
         url.path_segments_mut()
             .map_err(|_| Error::InvalidEndpoint {

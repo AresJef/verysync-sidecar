@@ -1,4 +1,6 @@
 //! Synthetic event transport/failure evidence; not engine-effect acceptance.
+#[path = "common/event_gap_continuity.rs"]
+mod event_gap_continuity;
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},

@@ -21,6 +21,7 @@ pub struct LocalApiFolderCollectionUpdate {
 impl LocalApiClient {
     /// Read a full native configuration through the licensed item proxy. This
     /// differs from the free Local-API folder projection returned by `folder`.
+    /// The returned configuration must identify the exact requested folder.
     pub async fn folder_configuration(&self, id: &FolderId) -> Result<FolderConfig> {
         let style = self.path_style()?;
         let wire: crate::folders::WireFolder = self
@@ -29,6 +30,12 @@ impl LocalApiClient {
                 "read Local-API full folder configuration",
             )
             .await?;
+        if wire.id != *id {
+            return Err(Error::FolderIdentityMismatch {
+                expected: id.clone(),
+                actual: wire.id,
+            });
+        }
         wire.into_config(style)
     }
 

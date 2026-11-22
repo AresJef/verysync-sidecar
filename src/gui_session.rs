@@ -110,6 +110,87 @@ impl GuiLoginOptions {
     }
 }
 
+/// Where the one GUI login attempt failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum GuiLoginPhase {
+    /// No login request was sent, for example when the CSRF challenge failed.
+    BeforeLoginRequest,
+    /// The login request received an explicit authentication or access refusal.
+    LoginRejected,
+    /// The login request may have reached the engine, but its effect is unknown.
+    LoginOutcomeUnknown,
+    /// The login reply did not yield a usable session cookie.
+    SessionCookieUnavailable,
+    /// A cookie was received, but reading or checking the engine version failed.
+    VerifyVersion,
+    /// A cookie was received, but reading or checking the full device identity failed.
+    VerifyIdentity,
+}
+
+impl GuiLoginPhase {
+    fn error(self, legacy: Error) -> GuiLoginError {
+        GuiLoginError {
+            phase: self,
+            legacy,
+        }
+    }
+}
+
+/// A GUI login failure with its phase and inspectable underlying error.
+#[derive(Debug)]
+pub struct GuiLoginError {
+    phase: GuiLoginPhase,
+    legacy: Error,
+}
+
+impl GuiLoginError {
+    /// The phase in which the attempt failed.
+    pub fn phase(&self) -> GuiLoginPhase {
+        self.phase
+    }
+
+    /// The underlying SDK error, with any legacy uncertainty wrapper removed.
+    ///
+    /// This can distinguish an HTTP refusal from a transport, decoding,
+    /// version-policy or identity failure. Treat private response diagnostics
+    /// available by explicit inspection like other management diagnostics.
+    pub fn cause(&self) -> &Error {
+        match &self.legacy {
+            Error::MutationOutcomeUnknown { source, .. } => source.as_ref(),
+            cause => cause,
+        }
+    }
+
+    /// Whether the engine may have issued a session during this attempt.
+    ///
+    /// This is not evidence of persistence or a usable authenticated session.
+    /// Resolve uncertainty at the selected endpoint before deciding to log in again.
+    pub fn session_may_have_been_issued(&self) -> bool {
+        !matches!(
+            self.phase,
+            GuiLoginPhase::BeforeLoginRequest | GuiLoginPhase::LoginRejected
+        )
+    }
+}
+
+impl fmt::Display for GuiLoginError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "native GUI login failed in {:?} ({})",
+            self.phase,
+            self.cause()
+        )
+    }
+}
+
+impl std::error::Error for GuiLoginError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause())
+    }
+}
+
 /// Fresh GUI configuration after one explicit local-credential change.
 #[derive(Clone, Debug)]
 pub struct GuiCredentialUpdate {
@@ -182,34 +263,59 @@ impl GuiSession {
     /// Perform one native local/LDAP login, without an API key. Four bounded
     /// requests establish CSRF, login, version and full identity. Login is never
     /// retried. Passwords are not retained in the returned session.
+    /// Use [Self::login_with_outcome] when failure handling needs the login phase.
     pub async fn login(options: GuiLoginOptions) -> Result<Self> {
-        tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
-            reason: "GUI login requires a Tokio runtime with I/O and timers",
-        })?;
+        Self::login_with_outcome(options)
+            .await
+            .map_err(|error| error.legacy)
+    }
+
+    /// Perform one GUI login with a typed phase on failure.
+    ///
+    /// Only a successful version and identity check yields a session. On
+    /// failure, inspect [GuiLoginError::session_may_have_been_issued] before
+    /// any explicit retry. This method never automatically logs in again or
+    /// logs out an unverified session.
+    pub async fn login_with_outcome(
+        options: GuiLoginOptions,
+    ) -> std::result::Result<Self, GuiLoginError> {
+        use GuiLoginPhase::{
+            BeforeLoginRequest, LoginOutcomeUnknown, LoginRejected, SessionCookieUnavailable,
+            VerifyIdentity, VerifyVersion,
+        };
+        let before_login = |error| BeforeLoginRequest.error(error);
+        tokio::runtime::Handle::try_current()
+            .map_err(|_| Error::InvalidConfiguration {
+                reason: "GUI login requires a Tokio runtime with I/O and timers",
+            })
+            .map_err(before_login)?;
         let (http, base) =
-            crate::client::management_http(&options.endpoint, options.timeout, &options.transport)?;
+            crate::client::management_http(&options.endpoint, options.timeout, &options.transport)
+                .map_err(before_login)?;
         let root = crate::client::send_checked(
             "read GUI CSRF cookie",
             http.get(base.clone()),
             false,
             options.limit,
         )
-        .await?;
+        .await
+        .map_err(before_login)?;
         let expected_short = options.expected.as_ref().map(|id| &id.as_str()[..7]);
-        let (csrf_cookie, csrf_value) = native_cookie(&root, "CSRF-Token-", expected_short, &base)?;
+        let (csrf_cookie, csrf_value) =
+            native_cookie(&root, "CSRF-Token-", expected_short, &base).map_err(before_login)?;
         let suffix = csrf_cookie
             .strip_prefix("CSRF-Token-")
-            .ok_or_else(|| cookie_error(&root))?
+            .ok_or_else(|| before_login(cookie_error(&root)))?
             .to_owned();
         let csrf_name = HeaderName::from_bytes(format!("X-{csrf_cookie}").as_bytes())
-            .map_err(|_| cookie_error(&root))?;
+            .map_err(|_| before_login(cookie_error(&root)))?;
         let mut wire = GuiWire {
             http,
             base,
             endpoint: options.endpoint,
-            cookie: sensitive(&format!("{csrf_cookie}={csrf_value}"))?,
+            cookie: sensitive(&format!("{csrf_cookie}={csrf_value}")).map_err(before_login)?,
             csrf_name,
-            csrf: sensitive(&csrf_value)?,
+            csrf: sensitive(&csrf_value).map_err(before_login)?,
             limit: options.limit,
         };
         let body = serde_json::json!({"username":options.credentials.username,"password":options.credentials.password,"stayLoggedIn":options.stay_logged_in,"forumUser":false});
@@ -221,13 +327,24 @@ impl GuiSession {
                 Some(&body),
                 true,
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                let phase = match &error {
+                    Error::Authentication { .. }
+                    | Error::AccessDenied { .. }
+                    | Error::LicenseRequired { .. } => LoginRejected,
+                    Error::InvalidEndpoint { .. } => BeforeLoginRequest,
+                    _ => LoginOutcomeUnknown,
+                };
+                phase.error(error)
+            })?;
         let (session_cookie, session_value) =
             native_cookie(&logged_in, "sessionid-", Some(&suffix), &wire.base)
-                .map_err(gui_unknown)?;
+                .map_err(|error| SessionCookieUnavailable.error(gui_unknown(error)))?;
         wire.cookie = sensitive(&format!(
             "{csrf_cookie}={csrf_value}; {session_cookie}={session_value}"
-        ))?;
+        ))
+        .map_err(|error| SessionCookieUnavailable.error(error))?;
         let version: crate::EngineVersion = parse(
             wire.request(
                 "read GUI-authenticated version",
@@ -236,22 +353,24 @@ impl GuiSession {
                 None,
                 false,
             )
-            .await?,
+            .await
+            .map_err(|error| VerifyVersion.error(error))?,
             "read GUI-authenticated version",
-        )?;
+        )
+        .map_err(|error| VerifyVersion.error(error))?;
         let compatibility = if version.version == crate::BASELINE_ENGINE_VERSION {
             crate::VersionCompatibility::ValidatedBaseline
         } else if options.policy == VersionPolicy::AllowUnverified {
             crate::VersionCompatibility::Unverified
         } else {
-            return Err(Error::IncompatibleVersion {
+            return Err(VerifyVersion.error(Error::IncompatibleVersion {
                 actual: options.transport.version_diagnostic(
                     &wire
                         .redact(&version.version)
                         .replace(&options.credentials.password, "[REDACTED]")
                         .replace(&options.credentials.username, "[REDACTED]"),
                 ),
-            });
+            }));
         };
         let status: crate::SystemStatus = parse(
             wire.request(
@@ -261,15 +380,17 @@ impl GuiSession {
                 None,
                 false,
             )
-            .await?,
+            .await
+            .map_err(|error| VerifyIdentity.error(error))?,
             "read GUI-authenticated identity",
-        )?;
+        )
+        .map_err(|error| VerifyIdentity.error(error))?;
         if let Some(expected) = options.expected {
             if expected != status.device_id {
-                return Err(Error::IdentityMismatch {
+                return Err(VerifyIdentity.error(Error::IdentityMismatch {
                     expected,
                     actual: status.device_id,
-                });
+                }));
             }
         }
         Ok(Self {

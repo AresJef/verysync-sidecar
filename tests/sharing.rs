@@ -1,6 +1,8 @@
 //! Real key preparation and registration; peer/transfer verdicts are separate.
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/native_folder_registration_ids.rs"]
+mod native_folder_registration_ids;
 use managed_fixture::{options, TestResult};
 use serde_json::json;
 use std::time::Duration;

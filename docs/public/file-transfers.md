@@ -13,6 +13,13 @@ Content-Disposition filenames are never used. Existing parent directories must
 already exist and belong to a location the caller trusts. This is not a
 filesystem sandbox against a concurrent actor changing those directories.
 
+On the fixed v2.33.2 engine, a complete-file request disables the native
+directory archive branch on that same request. The engine's file response can
+still contain a regular ZIP or zero bytes. A directory refusal is returned
+before a local destination is created. This relies on the fixed native handler
+and has no verified guarantee on other engine versions. Use an explicit archive
+method for a directory or a selection.
+
 Local parent components and directory links retain the controller operating
 system's own path semantics. The SDK does not lexically collapse a link followed
 by `..` or assume that Windows and POSIX resolve that input identically. Remote

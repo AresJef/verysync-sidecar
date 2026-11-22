@@ -38,7 +38,9 @@ submitted key, using the actual native join route. Read-only validation and
 readback do not expose a read/write key. Unknown reported permissions remain
 inspectable but registration refuses to guess their meaning.
 
-`join_folder` serializes this Client's modifications, checks fresh identity and
+`join_folder` rejects a proposed `.` or `..` ID before sending a registration
+request, since the item update and unregister routes cannot address those IDs.
+It serializes this Client's modifications, checks fresh identity and
 current configuration, reads target defaults and changes only explicit fields.
 It rejects a colliding local ID, an already registered sharing group, and by
 default an identical configured path string. Path matching does not resolve

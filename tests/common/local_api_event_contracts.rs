@@ -26,9 +26,9 @@ async fn local_index_stream_keeps_source_consumed_cursor_payload_and_ordinary_de
             Reply::json(serde_json::json!([event(1)])),
             status(),
             status(),
-            Reply::json(serde_json::json!([event(3)])),
+            Reply::json(serde_json::json!([event(4)])),
             status(),
-            Reply::json(serde_json::json!([event(2), event(3)])),
+            Reply::json(serde_json::json!([event(2), event(4)])),
             status(),
         ])
         .await?;
@@ -36,7 +36,7 @@ async fn local_index_stream_keeps_source_consumed_cursor_payload_and_ordinary_de
         let selection = EventFilter::new([EventKind::Unknown("future-index-kind".into())])?;
         let settings = EventOptions::default()
             .poll_interval(Duration::from_millis(25))?
-            .queue_capacity(2)?;
+            .queue_capacity(1)?;
         let mut stream = if filtered {
             client
                 .subscribe_filtered_index_events(selection.clone(), settings)
@@ -59,6 +59,21 @@ async fn local_index_stream_keeps_source_consumed_cursor_payload_and_ordinary_de
         assert_eq!(event.extra()["future"], KEY);
         assert_eq!(stream.cursor().last_id, 2);
         assert!(!format!("{stream:?} {event:?}").contains(KEY));
+        let gap = tokio::time::timeout(Duration::from_secs(3), stream.next())
+            .await?
+            .ok_or("index stream ended before the gap")??;
+        assert!(matches!(gap, EventStreamItem::Gap(gap)
+            if gap.reason == EventGapReason::MissingEvents
+                && gap.previous.last_id == 2
+                && gap.resume_from.last_id == 3
+                && gap.previous.source == expected && gap.resume_from.source == expected));
+        assert_eq!(stream.cursor().last_id, 3);
+        let next = tokio::time::timeout(Duration::from_secs(3), stream.next())
+            .await?
+            .ok_or("index stream ended before event 4")??;
+        assert!(matches!(next, EventStreamItem::Event(event)
+            if event.cursor.last_id == 4 && event.cursor.source == expected));
+        assert_eq!(stream.cursor().last_id, 4);
         stream.close().await?;
         let requests = server.finish().await?;
         assert!(

@@ -169,7 +169,7 @@ pub(crate) struct WireFolderIndex {
 }
 #[derive(Deserialize)]
 pub(crate) struct WireFolder {
-    id: FolderId,
+    pub(crate) id: FolderId,
     label: String,
     path: String,
     paused: bool,

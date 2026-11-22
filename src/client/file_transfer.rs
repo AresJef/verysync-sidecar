@@ -14,6 +14,9 @@ impl Client {
     /// absolute local file. Existing files/symlinks are refused by create_new;
     /// no Content-Disposition filename is used. Partial output is retained on
     /// failure/cancellation; inspect or remove that exact destination yourself.
+    /// With the fixed engine, a complete download disables directory archiving
+    /// on the streaming request itself. Use the explicit archive methods for
+    /// directories or selections.
     /// A pending Tokio filesystem write may finish after this future is dropped.
     pub async fn download_resource(
         &self,
@@ -24,7 +27,13 @@ impl Client {
     ) -> Result<ResourceDownload> {
         options.validate()?;
         validate_destination(destination)?;
-        let url = self.resource_url("rest/f/api/raw", path)?;
+        let mut url = self.resource_url("rest/f/api/raw", path)?;
+        if range.is_none() {
+            // In v2.33.2 the directory branch validates the archive algorithm
+            // before building an archive. The file branch streams the resolved
+            // object without consulting it, including an empty regular file.
+            url.query_pairs_mut().append_pair("algo", "none");
+        }
         self.download_resource_url(url, destination, range, None, options)
             .await
     }
@@ -193,7 +202,11 @@ impl Client {
                     }
                     Some(range.last - range.first + 1)
                 }
-                None if status == 200 => response.content_length(),
+                None if status == 200
+                    && (archive.is_some() || !response.headers().contains_key("content-range")) =>
+                {
+                    response.content_length()
+                }
                 None => return Err(rejected("unexpected partial resource response")),
             };
             if let Some(format) = archive {

@@ -147,6 +147,32 @@ session cookie omitted HttpOnly, Secure and SameSite attributes. The SDK keeps
 that credential outside a browser cookie store and preserves explicit endpoint
 and TLS choices. It does not change the official server's cookie policy.
 
+Call `GuiSession::login_with_outcome()` when handling a failure depends on
+when it occurred. Its `GuiLoginError` identifies the phase and exposes the
+underlying typed cause. An authentication error from the login POST means that
+attempt was refused. The same error during version or identity verification
+occurs after a cookie was received. The server may also have issued a session
+if the login response was interrupted or lacked a usable cookie. In these
+cases, verify the situation at the selected endpoint before choosing whether
+to log in again. A failed attempt returns no session handle and does not
+automatically submit a second login or logout.
+
+```no_run
+use verysync_sidecar::{GuiLoginError, GuiLoginOptions, GuiSession};
+
+async fn login(options: GuiLoginOptions) -> Result<GuiSession, GuiLoginError> {
+    GuiSession::login_with_outcome(options).await.inspect_err(|error| {
+        if error.session_may_have_been_issued() {
+            eprintln!("Reconcile the GUI session before another login ({:?})", error.phase());
+        }
+    })
+}
+```
+
+`GuiSession::login()` retains its existing return type and top-level SDK
+error variants for callers that already match them. Neither entry point
+establishes how long the engine retains an issued session.
+
 `system_status()`, `version()` and `gui_authentication()` perform typed session
 reads. Reading the GUI configuration explicitly makes its API key available as
 a redacted value; callers can separately choose an API-key `Client`. GUI sessions

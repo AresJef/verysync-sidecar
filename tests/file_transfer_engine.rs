@@ -1,4 +1,6 @@
 //! Actual file payloads through public APIs, independent of raw characterization.
+#[path = "common/file_only_download.rs"]
+mod file_only_download;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[path = "common/resource_faults.rs"]

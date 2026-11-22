@@ -177,7 +177,8 @@ pub use gui_listener::{
 };
 pub use gui_preferences::{GuiPreferences, GuiPreferencesPatch, GuiPreferencesUpdate};
 pub use gui_session::{
-    GuiCredentialUpdate, GuiCredentials, GuiLoginOptions, GuiLogoutReceipt, GuiSession,
+    GuiCredentialUpdate, GuiCredentials, GuiLoginError, GuiLoginOptions, GuiLoginPhase,
+    GuiLogoutReceipt, GuiSession,
 };
 pub use hardware::{
     NativeBlockDisk, NativeBlockHardware, NativeBlockPartition, NativeCpuCore, NativeCpuHardware,

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.1-rc.1
+
+- Prevent complete single-file downloads on the fixed engine from falling
+  through to directory archiving. Explicit archive methods remain available
+  and legal ZIP files, empty files and finite ranges retain their receipt
+  semantics.
+- Retain the target-clock precondition and selected-data protections for both
+  archive restore methods. Add a contract test for the final reading before
+  the only write.
+- Reject a Local-API full-folder response whose ID differs from the requested
+  one. Preflight mismatches prevent the write. Readback mismatches preserve
+  the uncertain outcome and its cause.
+- Add `GuiSession::login_with_outcome` for typed failure phases. Existing
+  `GuiSession::login` callers keep their top-level error variants.
+- Report missing source event IDs at any position in a batch before delivering
+  the next available event. The public cursor advances on consumption.
+- Reject dot-segment IDs before typed creation and sharing registration.
+  Existing registrations with these IDs remain readable.
+
 ## 0.1.0
 
 Version 0.1.0 is the first stable public Rust API baseline. The entries below

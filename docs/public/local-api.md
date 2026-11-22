@@ -120,9 +120,12 @@ Writes retain the clone-shared mutation lock through preflight, request and
 readback. Create refuses an already configured ID and, unless explicitly allowed,
 an identical target path string. Independent controllers still need coordination:
 the native POST is an upsert and these separate requests are not an atomic
-transaction. No aliases are resolved on the controller's filesystem. Failed
-post-write reads remain unknown outcomes and are never retried. Native license
-rejection during a full-item preflight prevents that modifying request entirely.
+transaction. No aliases are resolved on the controller's filesystem. A full item
+response must carry the exact requested ID. `FolderIdentityMismatch` exposes
+the two identifiers through explicit inspection and omits the unrelated
+configuration. A preflight mismatch or native license refusal prevents that
+write. A failed readback, including an ID mismatch, leaves the outcome
+unknown. The SDK never retries the write.
 Licensed actual write effects remain pending; synthetic readbacks do not replace
 authorized native acceptance.
 

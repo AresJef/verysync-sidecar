@@ -139,7 +139,11 @@ endpoint.
 
 Gap notifications require the caller to refresh relevant state. They cover ID
 discontinuities, a newest ID behind the cursor, changes in the reported start
-time, unavailable advertised batches and observed transport interruptions. A
+time, unavailable advertised batches and observed transport interruptions.
+Missing IDs in the same source, at the start of a batch or between its events,
+produce a `MissingEvents` notification before the next available event. The
+resume position is that next event's ID minus one. A jump in the optional
+global ID alone does not produce a gap. A
 resumed subscription always reports uncertain continuity before replaying
 available events. The upstream start time has limited precision and is optional;
 it is not a unique generation token. This API cannot prove that an unobserved

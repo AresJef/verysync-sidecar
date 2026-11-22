@@ -279,6 +279,11 @@ the existing single creation request. They never temporarily change the shared
 template. An acknowledged create with invalid selected readback is an unknown
 outcome, without replay. Template policy edits still affect future objects only.
 
+New typed folder creation rejects IDs equal to `.` or `..` before sending a
+registration request. Existing IDs are preserved by `FolderId::parse` and
+remain visible through `folders()` and `folder(id)`. These IDs cannot be
+addressed by the single-item update and unregister routes.
+
 The selected baseline supports initial receive-encrypted registration but
 rejects changing an existing folder to or from that type. Scoped typed edits
 check the existing type and refuse such transitions before PATCH. The library

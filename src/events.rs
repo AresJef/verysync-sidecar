@@ -676,14 +676,14 @@ async fn batch(
             if first.id <= cursor.last_id {
                 return Err(invalid_batch());
             }
-            if first.id != cursor.last_id + 1 {
-                let mut resume = cursor.clone();
-                resume.last_id = first.id - 1;
-                if !gap(sender, EventGapReason::MissingEvents, cursor, &resume).await {
-                    return Ok(false);
-                }
-            }
             for wire in events {
+                if wire.id > cursor.last_id.saturating_add(1) {
+                    let mut resume = cursor.clone();
+                    resume.last_id = wire.id - 1;
+                    if !gap(sender, EventGapReason::MissingEvents, cursor, &resume).await {
+                        return Ok(false);
+                    }
+                }
                 let event = wire.into_event(cursor.clone());
                 let next = event.cursor.clone();
                 if !send(sender, EventStreamItem::Event(event)).await {

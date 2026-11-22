@@ -37,6 +37,12 @@ mod folder_options_contracts;
 mod folder_peer_encryption_contracts;
 #[path = "common/folder_policy_contracts.rs"]
 mod folder_policy_contracts;
+#[path = "common/folder_registration_ids.rs"]
+mod folder_registration_ids;
+#[path = "common/gui_login_outcome.rs"]
+mod gui_login_outcome;
+#[path = "common/review_history_clock.rs"]
+mod review_history_clock;
 
 #[path = "common/auxiliary_maintenance_contracts.rs"]
 mod auxiliary_maintenance_contracts;
@@ -4061,6 +4067,10 @@ impl ScriptedServer {
                     }
                 }
                 tokio::time::sleep(reply.delay).await;
+                if reply.status == 0 {
+                    // Close the connection after reading the request without a reply.
+                    continue;
+                }
                 let head = format!(
                     "HTTP/1.1 {} Test\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
                     reply.status,
@@ -5130,6 +5140,7 @@ async fn resource_download_rejects_wrong_ranges_and_preserves_partial_and_error_
         body(404, KEY.as_bytes(), ""),
         body(206, b"abc", "Content-Range: bytes 0-2/3\r\n"),
         body(200, b"abcd", ""),
+        body(200, b"abc", "Content-Range: bytes 0-2/4\r\n"),
     ];
     let mut replies = vec![
         Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
@@ -5148,7 +5159,7 @@ async fn resource_download_rejects_wrong_ranges_and_preserves_partial_and_error_
         max_bytes: 1024,
         deadline: Duration::from_secs(2),
     };
-    for case in 0..9 {
+    for case in 0..10 {
         let output = root.path().join(format!("result-{case}.bin"));
         let range = if case < 3 {
             Some(ResourceByteRange::new(1, 2)?)
@@ -5174,7 +5185,7 @@ async fn resource_download_rejects_wrong_ranges_and_preserves_partial_and_error_
             let error = result.unwrap_err();
             assert!(!format!("{error:?} {error}").contains(KEY));
             match case {
-                0 | 1 | 2 | 7 | 8 => {
+                0 | 1 | 2 | 7 | 8 | 9 => {
                     assert!(matches!(error, Error::ResourceTransferRejected { .. }))
                 }
                 4 => assert!(matches!(error, Error::Authentication { status: 401 })),
@@ -5198,7 +5209,17 @@ async fn resource_download_rejects_wrong_ranges_and_preserves_partial_and_error_
                 |r| r.starts_with("GET /prefix/rest/f/api/raw/private-volume/literal%20%25.bin ")
             )
             .count(),
-        9
+        3
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with(
+                "GET /prefix/rest/f/api/raw/private-volume/literal%20%25.bin?algo=none "
+            ))
+            .count(),
+        7,
+        "a complete single-file download must disable the native archive branch on its only GET"
     );
     assert_eq!(
         requests

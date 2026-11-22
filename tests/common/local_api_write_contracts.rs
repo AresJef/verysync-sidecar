@@ -110,12 +110,8 @@ async fn local_api_create_serializes_clones_through_readback_and_preserves_expli
 
 #[tokio::test]
 async fn local_api_patch_is_scoped_and_failed_readback_stays_unknown_without_retry() -> TestResult {
-    for valid in [true, false] {
-        let readback = if valid {
-            folder("changed")
-        } else {
-            serde_json::json!({"id":"new-folder"})
-        };
+    for label in [Some("changed"), Some("before"), None] {
+        let readback = label.map_or_else(|| serde_json::json!({"id":"new-folder"}), folder);
         let server = ScriptedServer::start(vec![
             version(),
             identity(),
@@ -134,8 +130,10 @@ async fn local_api_patch_is_scoped_and_failed_readback_stays_unknown_without_ret
                 &FolderPatch::default().label("changed"),
             )
             .await;
-        if valid {
-            assert!(result?.requested_fields_match);
+        if let Some(label) = label {
+            let reply = result?;
+            assert_eq!(reply.configuration.id.as_str(), "new-folder");
+            assert_eq!(reply.requested_fields_match, label == "changed");
         } else {
             assert!(matches!(result, Err(Error::MutationOutcomeUnknown { .. })));
         }
@@ -151,6 +149,146 @@ async fn local_api_patch_is_scoped_and_failed_readback_stays_unknown_without_ret
             requests.iter().filter(|r| r.starts_with("PATCH ")).count(),
             1
         );
+    }
+    Ok(())
+}
+
+fn wrong_folder() -> serde_json::Value {
+    let mut value = folder("changed");
+    value["id"] = "other-folder".into();
+    value
+}
+
+fn assert_wrong_folder_error(error: &Error) {
+    assert!(
+        matches!(
+            error,
+            Error::FolderIdentityMismatch { expected, actual }
+                if expected.as_str() == "new-folder" && actual.as_str() == "other-folder"
+        ),
+        "{error:?}"
+    );
+    let diagnostic = format!("{error} {error:?}");
+    for private in [KEY, "new-folder", "other-folder"] {
+        assert!(!diagnostic.contains(private));
+    }
+}
+
+#[tokio::test]
+async fn local_api_wrong_folder_identity_prevents_item_writes() -> TestResult {
+    let expected = read_configuration(folder("changed")).await?;
+    let id = &expected.id;
+    for method in ["GET", "PATCH", "PUT", "DELETE"] {
+        let server = ScriptedServer::start(vec![
+            version(),
+            identity(),
+            identity(),
+            Reply::json(wrong_folder()),
+        ])
+        .await?;
+        let client = LocalApiClient::connect(options(&server)?).await?;
+        let result = match method {
+            "GET" => client.folder_configuration(id).await.map(|_| ()),
+            "PATCH" => client
+                .update_folder(id, &FolderPatch::default().label("changed"))
+                .await
+                .map(|_| ()),
+            "PUT" => client
+                .replace_folder_configuration(&expected)
+                .await
+                .map(|_| ()),
+            "DELETE" => client.remove_folder_keep_files(id).await.map(|_| ()),
+            _ => unreachable!(),
+        };
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 4);
+        assert!(requests.iter().all(|r| r.starts_with("GET ")));
+        assert!(requests[3].starts_with("GET /prefix/rest/localapi/config/folders/new-folder "));
+        assert_wrong_folder_error(
+            &result.expect_err("a different folder is not the requested object"),
+        );
+        println!("Local-API wrong preflight ID: operation={method} writes=0");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_api_wrong_folder_readback_is_uncertain_after_exactly_one_write() -> TestResult {
+    let expected = read_configuration(folder("changed")).await?;
+    let id = &expected.id;
+    for action in ["POST", "PATCH", "PUT item", "PUT collection"] {
+        let mut replies = vec![version(), identity(), identity()];
+        replies.push(match action {
+            "POST" => projection(false),
+            "PUT collection" => projection(true),
+            _ => Reply::json(folder("before")),
+        });
+        replies.extend([identity(), Reply::json(serde_json::Value::Null), identity()]);
+        if action == "PUT collection" {
+            replies.extend([projection(true), identity()]);
+        }
+        replies.push(Reply::json(wrong_folder()));
+        let server = ScriptedServer::start(replies).await?;
+        let client = LocalApiClient::connect(options(&server)?).await?;
+        let create = CreateFolderOptions::new(id.clone(), expected.path.clone()).label("changed");
+        let result = match action {
+            "POST" => client
+                .create_folder(&defaults()?, &create)
+                .await
+                .map(|_| ()),
+            "PATCH" => client
+                .update_folder(id, &FolderPatch::default().label("changed"))
+                .await
+                .map(|_| ()),
+            "PUT item" => client
+                .replace_folder_configuration(&expected)
+                .await
+                .map(|_| ()),
+            "PUT collection" => client
+                .replace_folder_configurations(std::slice::from_ref(&expected))
+                .await
+                .map(|_| ()),
+            _ => unreachable!(),
+        };
+        let requests = server.finish().await?;
+        let writes: Vec<_> = requests.iter().filter(|r| !r.starts_with("GET ")).collect();
+        assert_eq!(writes.len(), 1);
+        assert!(requests
+            .last()
+            .ok_or("readback absent")?
+            .starts_with("GET /prefix/rest/localapi/config/folders/new-folder "));
+        let (route, body) = match action {
+            "POST" => (
+                "POST /prefix/rest/localapi/config/folders ",
+                serde_json::json!({
+                    "id":"new-folder","label":"changed","path":"/private/new","paused":false,
+                    "rescanIntervalS":600,"fsWatcherEnabled":false,"privateNativeField":KEY
+                }),
+            ),
+            "PATCH" => (
+                "PATCH /prefix/rest/localapi/config/folders/new-folder ",
+                serde_json::json!({"label":"changed"}),
+            ),
+            "PUT item" => (
+                "PUT /prefix/rest/localapi/config/folders/new-folder ",
+                folder("changed"),
+            ),
+            "PUT collection" => (
+                "PUT /prefix/rest/localapi/config/folders ",
+                serde_json::json!([folder("changed")]),
+            ),
+            _ => unreachable!(),
+        };
+        assert!(writes[0].starts_with(route));
+        let sent: serde_json::Value =
+            serde_json::from_str(writes[0].split_once("\r\n\r\n").ok_or("body missing")?.1)?;
+        assert_eq!(sent, body);
+        let error = result.expect_err("a matching field in another folder cannot verify a write");
+        let Error::MutationOutcomeUnknown { source, .. } = error else {
+            return Err(format!("unexpected write outcome: {error:?}").into());
+        };
+        assert_wrong_folder_error(&source);
+        println!("Local-API wrong readback ID: operation={action} writes=1 outcome=unknown");
     }
     Ok(())
 }
