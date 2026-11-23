@@ -1,7 +1,8 @@
 # Changelog
 
-## 0.1.1-rc.6 (unreleased)
+## 0.1.1-rc.7 (unreleased)
 
+- Clarify the capability catalog for event cursors, peer discovery, directory creation, pending device offers, and Windows ARM64 upgrades.
 - Document what the fixed engine returned or changed in the native regression.
   The capability guide distinguishes ordinary account effects, Local-API
   license refusals and file results that were checked separately.

@@ -1,6 +1,8 @@
 name: Quality
 
 on:
+  push:
+    branches: [main, 'ci/formal-candidate/**']
   pull_request:
   workflow_dispatch:
 

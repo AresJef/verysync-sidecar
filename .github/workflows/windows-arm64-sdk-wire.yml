@@ -2,6 +2,11 @@ name: Observe fixed VerySync file traffic on native Windows ARM64
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 'ci/formal-candidate/**'
+      - 'verify/r24/windows-arm64-verysync-wire'
+
 permissions:
   contents: read
 

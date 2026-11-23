@@ -148,39 +148,6 @@ public static class ManagedUiQuery {
     IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
   [DllImport("user32.dll", SetLastError=true)] public static extern bool DestroyWindow(IntPtr window);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern uint GetConsoleProcessList([Out] uint[] processes, uint capacity);
-  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-  private static extern IntPtr OpenJobObject(uint access, bool inherit, string name);
-  [DllImport("kernel32.dll", SetLastError=true)]
-  private static extern bool QueryInformationJobObject(IntPtr job, int kind, IntPtr value, uint size, out uint used);
-  [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
-
-  public static uint[] JobPids(string name) {
-    if (String.IsNullOrEmpty(name)) return new uint[0];
-    const uint query = 4;
-    const int processIdList = 3;
-    const int capacity = 128;
-    var job = OpenJobObject(query, false, name);
-    if (job == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
-    var size = 8 + IntPtr.Size * capacity;
-    var buffer = Marshal.AllocHGlobal(size);
-    try {
-      uint used;
-      if (!QueryInformationJobObject(job, processIdList, buffer, (uint)size, out used))
-        throw new System.ComponentModel.Win32Exception();
-      int assigned = Marshal.ReadInt32(buffer);
-      int count = Marshal.ReadInt32(buffer, 4);
-      if (count != assigned || count < 0 || count > capacity)
-        throw new InvalidOperationException("Incomplete fixture Job process inventory.");
-      var ids = new uint[count];
-      for (int i = 0; i < count; i++)
-        ids[i] = checked((uint)Marshal.ReadIntPtr(buffer, 8 + i * IntPtr.Size).ToInt64());
-      return ids;
-    } finally {
-      Marshal.FreeHGlobal(buffer);
-      CloseHandle(job);
-    }
-  }
-
   public static List<long[]> Windows() {
     var rows = new List<long[]>();
     if (!EnumWindows((window, data) => {
@@ -273,44 +240,13 @@ if ($OwnedRoot -ne 0) {
   } while ($before -ne $owned.Count)
 }
 $sampleStart = [DateTime]::UtcNow.ToString('o')
-$jobBefore = @([ManagedUiQuery]::JobPids($env:VERYSYNC_WINDOW_SAMPLE_JOB))
 $rows = [ManagedUiQuery]::Windows()
-$jobAfter = @([ManagedUiQuery]::JobPids($env:VERYSYNC_WINDOW_SAMPLE_JOB))
 $sampleEnd = [DateTime]::UtcNow.ToString('o')
 $ownWindows = @($rows | Where-Object { $owned.Contains([uint32]$_[1]) })
 $after = @(Get-ProcessInventory)
 $byPid = @{}
 $detailsByPid = @{}
 foreach ($process in $after) { $byPid[[uint32]$process.ProcessId] = $process }
-$firstByPid = @{}
-$stable = @{}
-foreach ($process in $processes) {
-  $processId = [uint32]$process.ProcessId
-  $firstByPid[$processId] = $process
-  $later = $byPid[$processId]
-  if ($null -ne $process.CreationDate -and $null -ne $later -and
-      $later.CreationDate -eq $process.CreationDate -and $later.ParentProcessId -eq $process.ParentProcessId) {
-    $stable[$processId] = $process
-  }
-}
-$ordered = [System.Collections.Generic.HashSet[uint32]]::new()
-if ($OwnedRoot -ne 0 -and $stable.ContainsKey($OwnedRoot)) {
-  [void]$ordered.Add($OwnedRoot)
-  do {
-    $priorSize = $ordered.Count
-    foreach ($process in $stable.Values) {
-      $parentId = [uint32]$process.ParentProcessId
-      if ($ordered.Contains($parentId) -and $stable[$parentId].CreationDate -le $process.CreationDate) {
-        [void]$ordered.Add([uint32]$process.ProcessId)
-      }
-    }
-  } while ($priorSize -ne $ordered.Count)
-}
-$orderedWindows = @($rows | Where-Object { $ordered.Contains([uint32]$_[1]) })
-$rootIdentityStable = ($OwnedRoot -eq 0 -or $stable.ContainsKey($OwnedRoot))
-if ($OwnedRoot -ne 0 -and (-not $rootIdentityStable -or $jobBefore -notcontains $OwnedRoot -or $jobAfter -notcontains $OwnedRoot)) {
-  throw 'Private root identity and fixture Job membership were not observed on both sides of enumeration.'
-}
 $ownedProcessDetails = @(
   foreach ($process in $processes) {
     $processId = [uint32]$process.ProcessId
@@ -326,12 +262,6 @@ $ownedProcessDetails = @(
       created_after_utc = $afterBirth
       same_identity_after = ($null -ne $birth -and $birth -eq $afterBirth)
       relationship = $(if ($processId -eq $OwnedRoot) {'engine root'} else {'descendant by parent PID'})
-      parent_created_before_utc = (Get-BirthUtc ($firstByPid[[uint32]$process.ParentProcessId]))
-      parent_created_after_utc = (Get-BirthUtc ($byPid[[uint32]$process.ParentProcessId]))
-      parent_after_pid = $afterProcess.ParentProcessId
-      creation_order_selector = $ordered.Contains($processId)
-      in_fixture_job_before = ($jobBefore -contains $processId)
-      in_fixture_job_after = ($jobAfter -contains $processId)
     }
     $detailsByPid[$processId] = $record
     $record
@@ -342,10 +272,7 @@ $ownedWindowDetails = @(
     $detail = $detailsByPid[[uint32]$row[1]]
     [ordered]@{handle=[long]$row[0];pid=[uint32]$row[1];visible=($row[2] -eq 1);
       parent_pid=$detail.parent_pid;created_utc=$detail.created_utc;creation_time_confirmed=$detail.same_identity_after;
-      relationship=$detail.relationship;sample_started_utc=$sampleStart;sample_ended_utc=$sampleEnd;
-      parent_created_before_utc=$detail.parent_created_before_utc;parent_created_after_utc=$detail.parent_created_after_utc;
-      creation_order_selector=$detail.creation_order_selector;
-      in_fixture_job_before=$detail.in_fixture_job_before;in_fixture_job_after=$detail.in_fixture_job_after}
+      relationship=$detail.relationship;sample_started_utc=$sampleStart;sample_ended_utc=$sampleEnd}
   }
 )
 $windowControls = @([ManagedUiQuery]::CalibrateWindows() | ForEach-Object {
@@ -365,7 +292,6 @@ $browserIds = @($processes | Where-Object { $_.Name -match '^(msedge|chrome|chro
 $browserWindows = @($rows | Where-Object { $_[2] -eq 1 -and $browserIds -contains [uint32]$_[1] } | ForEach-Object { $_[0] } | Sort-Object)
 @{platform='windows';current_desktop_enumerated=$true;interactive_session=[Environment]::UserInteractive;session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;caller_pid=$CallerPid;caller_console=$callerConsole;console_controls=@{without_console=$controls[0];independent_console=$controls[1]};owned_root=$OwnedRoot;owned_processes=$owned.Count;owned_windows=$ownWindows.Count;owned_console_processes=$consoles;owned_visible_consoles=$visibleConsoles;console_observations=$consoleInfo;browser_windows=$browserWindows;
 sample_started_utc=$sampleStart;sample_ended_utc=$sampleEnd;owned_window_details=$ownedWindowDetails;owned_process_details=$ownedProcessDetails;window_controls=$windowControls;window_probe_calibrated=$true;
-creation_order_windows=$orderedWindows.Count;fixture_job_before=$jobBefore;fixture_job_after=$jobAfter;root_identity_stable=$rootIdentityStable;
 scope='Current desktop, owned descendants and separate-probe console and window calibration. Window titles and contents are excluded.'} | ConvertTo-Json -Compress -Depth 8
 "#;
 

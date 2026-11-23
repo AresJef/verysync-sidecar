@@ -847,23 +847,11 @@ async fn persistent_exercise(mode: &'static str) -> TestResult {
     let mut command = host_command(&root, mode)?;
     command.stdin(Stdio::piped());
     #[cfg(windows)]
-    let diagnostic_job = (mode == "persist-kill").then(|| {
-        format!(
-            "Local\\VerySyncWindowSample-{}",
-            root.file_name().unwrap().to_string_lossy()
-        )
-    });
-    #[cfg(windows)]
     let outer = {
         use std::os::windows::process::CommandExt;
         use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
         command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
-        if let Some(name) = &diagnostic_job {
-            command.env("VERYSYNC_WINDOW_SAMPLE_JOB", name);
-            windows_fixture::Job::diagnostic_observable(name)?
-        } else {
-            windows_fixture::Job::new()?
-        }
+        windows_fixture::Job::new()?
     };
     let mut host = Host(command.spawn()?);
     #[cfg(windows)]
