@@ -123,7 +123,7 @@ if ($Mode -eq 'window') {
 function Read-Control([string]$ControlRole, [Diagnostics.Process]$Owner) {
     $file = Join-Path $Scratch "$ControlRole.json"
     $wait = [Diagnostics.Stopwatch]::StartNew()
-    until (Test-Path -LiteralPath $file -PathType Leaf) {
+    while (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
         if ($Owner.HasExited) { throw "The $ControlRole control exited before reporting its windows." }
         if ($wait.Elapsed.TotalSeconds -ge 45) { throw "The $ControlRole control did not report its windows." }
         Start-Sleep -Milliseconds 30
