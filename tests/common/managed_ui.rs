@@ -5,11 +5,18 @@ use std::path::Path;
 
 type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-pub async fn observe(root_pid: Option<u32>, scratch: &Path) -> TestResult<Value> {
+pub async fn observe(
+    root_pid: Option<u32>,
+    scratch: &Path,
+    phase: &'static str,
+) -> TestResult<Value> {
     let scratch = scratch.to_owned();
     // Native CLI/desktop probes can take seconds. Keep the test runtime's I/O
     // reactor/timers progressing while its management Client remains connected.
-    tokio::task::spawn_blocking(move || observe_blocking(root_pid, &scratch)).await?
+    let mut observation =
+        tokio::task::spawn_blocking(move || observe_blocking(root_pid, &scratch)).await??;
+    observation["observation_phase"] = phase.into();
+    Ok(observation)
 }
 
 #[cfg(target_os = "macos")]
@@ -136,6 +143,10 @@ public static class ManagedUiQuery {
   [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
   [DllImport("kernel32.dll")] public static extern uint GetCurrentProcessId();
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr CreateWindowEx(
+    uint exStyle, string className, string title, uint style, int x, int y, int width, int height,
+    IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
+  [DllImport("user32.dll", SetLastError=true)] public static extern bool DestroyWindow(IntPtr window);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern uint GetConsoleProcessList([Out] uint[] processes, uint capacity);
   public static List<long[]> Windows() {
     var rows = new List<long[]>();
@@ -145,6 +156,32 @@ public static class ManagedUiQuery {
       return true;
     }, IntPtr.Zero)) throw new System.ComponentModel.Win32Exception();
     return rows;
+  }
+  public static List<long[]> CalibrateWindows() {
+    const uint popup = 0x80000000;
+    const uint visible = 0x10000000;
+    var zero = IntPtr.Zero;
+    var hidden = CreateWindowEx(0, "STATIC", null, popup, 0, 0, 12, 12, zero, zero, zero, zero);
+    if (hidden == zero) throw new System.ComponentModel.Win32Exception();
+    IntPtr shown = zero;
+    try {
+      shown = CreateWindowEx(0, "STATIC", null, popup | visible, 0, 0, 12, 12, zero, zero, zero, zero);
+      if (shown == zero) throw new System.ComponentModel.Win32Exception();
+      var rows = Windows();
+      var observedHidden = rows.Find(row => row[0] == hidden.ToInt64());
+      var observedShown = rows.Find(row => row[0] == shown.ToInt64());
+      uint pid = GetCurrentProcessId();
+      if (observedHidden == null || observedShown == null ||
+          observedHidden[1] != pid || observedShown[1] != pid ||
+          observedHidden[2] != 0 || observedShown[2] != 1)
+        throw new InvalidOperationException("The visible and hidden calibration windows were not distinguished.");
+      return new List<long[]> {observedHidden, observedShown};
+    } finally {
+      bool shownDestroyed = shown == zero || DestroyWindow(shown);
+      bool hiddenDestroyed = DestroyWindow(hidden);
+      if (!shownDestroyed || !hiddenDestroyed)
+        throw new System.ComponentModel.Win32Exception();
+    }
   }
   public static long[] CurrentConsoleInfo(uint process) {
       IntPtr window = GetConsoleWindow();
@@ -182,7 +219,15 @@ public static class ManagedUiQuery {
   }
 }
 '@
-$processes = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name)
+function Get-ProcessInventory {
+  return @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate,Name)
+}
+function Get-BirthUtc($Process) {
+  if ($null -ne $Process -and $null -ne $Process.CreationDate) {
+    return $Process.CreationDate.ToUniversalTime().ToString('o')
+  }
+}
+$processes = @(Get-ProcessInventory)
 $owned = [System.Collections.Generic.HashSet[uint32]]::new()
 if ($OwnedRoot -ne 0) {
   if (-not ($processes | Where-Object ProcessId -eq $OwnedRoot)) { throw 'Owned root absent during UI observation' }
@@ -194,8 +239,49 @@ if ($OwnedRoot -ne 0) {
     }
   } while ($before -ne $owned.Count)
 }
+$sampleStart = [DateTime]::UtcNow.ToString('o')
 $rows = [ManagedUiQuery]::Windows()
+$sampleEnd = [DateTime]::UtcNow.ToString('o')
 $ownWindows = @($rows | Where-Object { $owned.Contains([uint32]$_[1]) })
+$after = @(Get-ProcessInventory)
+$byPid = @{}
+$detailsByPid = @{}
+foreach ($process in $after) { $byPid[[uint32]$process.ProcessId] = $process }
+$ownedProcessDetails = @(
+  foreach ($process in $processes) {
+    $processId = [uint32]$process.ProcessId
+    if (-not $owned.Contains($processId)) { continue }
+    $afterProcess = $byPid[$processId]
+    $birth = Get-BirthUtc $process
+    $afterBirth = Get-BirthUtc $afterProcess
+    $record = [ordered]@{
+      pid = $processId
+      image = $process.Name
+      parent_pid = [uint32]$process.ParentProcessId
+      created_utc = $birth
+      created_after_utc = $afterBirth
+      same_identity_after = ($null -ne $birth -and $birth -eq $afterBirth)
+      relationship = $(if ($processId -eq $OwnedRoot) {'engine root'} else {'descendant by parent PID'})
+    }
+    $detailsByPid[$processId] = $record
+    $record
+  }
+)
+$ownedWindowDetails = @(
+  foreach ($row in $ownWindows) {
+    $detail = $detailsByPid[[uint32]$row[1]]
+    [ordered]@{handle=[long]$row[0];pid=[uint32]$row[1];visible=($row[2] -eq 1);
+      parent_pid=$detail.parent_pid;created_utc=$detail.created_utc;creation_time_confirmed=$detail.same_identity_after;
+      relationship=$detail.relationship;sample_started_utc=$sampleStart;sample_ended_utc=$sampleEnd}
+  }
+)
+$windowControls = @([ManagedUiQuery]::CalibrateWindows() | ForEach-Object {
+  [ordered]@{handle=[long]$_[0];pid=[uint32]$_[1];visible=($_[2] -eq 1);
+    created_utc=(Get-BirthUtc ($byPid[[uint32]$_[1]]));inside_selected_tree=$owned.Contains([uint32]$_[1])}
+})
+if ($windowControls.Count -ne 2 -or @($windowControls | Where-Object inside_selected_tree).Count -ne 0) {
+  throw 'Window observation controls could not be distinguished from the selected process tree.'
+}
 $consoleInfo = @()
 foreach ($processId in $owned) { $consoleInfo += ,([ManagedUiQuery]::ConsoleInfo($processId)) }
 $consoles = @($consoleInfo | Where-Object { $_[1] -eq 1 }).Count
@@ -204,7 +290,9 @@ $callerConsole = [ManagedUiQuery]::ConsoleInfo($CallerPid)
 $controls = [ManagedUiQuery]::Calibrate()
 $browserIds = @($processes | Where-Object { $_.Name -match '^(msedge|chrome|chromium|firefox|brave|opera|arc)\.exe$' } | ForEach-Object { [uint32]$_.ProcessId })
 $browserWindows = @($rows | Where-Object { $_[2] -eq 1 -and $browserIds -contains [uint32]$_[1] } | ForEach-Object { $_[0] } | Sort-Object)
-@{platform='windows';current_desktop_enumerated=$true;interactive_session=[Environment]::UserInteractive;session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;caller_pid=$CallerPid;caller_console=$callerConsole;console_controls=@{without_console=$controls[0];independent_console=$controls[1]};owned_root=$OwnedRoot;owned_processes=$owned.Count;owned_windows=$ownWindows.Count;owned_console_processes=$consoles;owned_visible_consoles=$visibleConsoles;console_observations=$consoleInfo;browser_windows=$browserWindows;scope='Current desktop, owned descendants and separate-probe console membership/calibration; no titles collected'} | ConvertTo-Json -Compress -Depth 5
+@{platform='windows';current_desktop_enumerated=$true;interactive_session=[Environment]::UserInteractive;session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;caller_pid=$CallerPid;caller_console=$callerConsole;console_controls=@{without_console=$controls[0];independent_console=$controls[1]};owned_root=$OwnedRoot;owned_processes=$owned.Count;owned_windows=$ownWindows.Count;owned_console_processes=$consoles;owned_visible_consoles=$visibleConsoles;console_observations=$consoleInfo;browser_windows=$browserWindows;
+sample_started_utc=$sampleStart;sample_ended_utc=$sampleEnd;owned_window_details=$ownedWindowDetails;owned_process_details=$ownedProcessDetails;window_controls=$windowControls;window_probe_calibrated=$true;
+scope='Current desktop, owned descendants and separate-probe console and window calibration. Window titles and contents are excluded.'} | ConvertTo-Json -Compress -Depth 8
 "#;
 
 #[cfg(target_os = "linux")]
@@ -249,6 +337,14 @@ pub fn assert_background(baseline: &Value, observed: &Value) -> TestResult<()> {
             );
         }
         if observed["platform"] == "windows" {
+            if observed["window_probe_calibrated"] != true
+                || observed["owned_window_details"]
+                    .as_array()
+                    .map(|rows| rows.len() as u64)
+                    != observed["owned_windows"].as_u64()
+            {
+                return Err("owned window observation or calibration was incomplete".into());
+            }
             if observed["console_probe_calibrated"] != true
                 || observed["owned_additional_consoles"] != 0
             {

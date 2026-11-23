@@ -150,7 +150,7 @@ async fn run_test_host() -> TestResult {
     let environment_before: Vec<_> = environment_names.iter().map(std::env::var_os).collect();
     std::fs::write(root.join("host-stage"), b"native-ui-baseline")?;
     let ui_baseline = if mode == "persist-kill" || (cfg!(windows) && mode == "kill") {
-        Some(managed_ui::observe(None, &root).await?)
+        Some(managed_ui::observe(None, &root, "before persistent start").await?)
     } else {
         None
     };
@@ -220,7 +220,9 @@ async fn run_test_host() -> TestResult {
         let mut ready = ready;
         if let Some(baseline) = ui_baseline {
             std::fs::write(root.join("host-stage"), b"native-ui-after-start")?;
-            let observed = managed_ui::observe(Some(instance.process_id()), &root).await?;
+            let observed =
+                managed_ui::observe(Some(instance.process_id()), &root, "after persistent start")
+                    .await?;
             ready["ui"] = json!({"baseline": baseline, "start": observed});
         }
         ready

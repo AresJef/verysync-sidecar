@@ -475,10 +475,15 @@ fn print_owned_group(_pid: u32) {}
 #[tokio::test]
 async fn restart_preserves_identity_folders_settings_and_samples() -> TestResult {
     let root = lifecycle_root()?;
-    let baseline = managed_ui::observe(None, root.path()).await?;
+    let baseline = managed_ui::observe(None, root.path(), "before managed start").await?;
     let path = root.path().join("state");
     let mut instance = start_checked(options(source()?, &path)?).await?;
-    let started_ui = managed_ui::observe(Some(instance.process_id()), root.path()).await?;
+    let started_ui = managed_ui::observe(
+        Some(instance.process_id()),
+        root.path(),
+        "after managed start",
+    )
+    .await?;
     println!("public managed startup UI observation: {started_ui}");
     managed_ui::assert_background(&baseline, &started_ui)?;
     if let Err(error) = instance.client().system_status().await {
@@ -523,7 +528,12 @@ async fn restart_preserves_identity_folders_settings_and_samples() -> TestResult
     assert_eq!(instance.process_id(), old_pid);
     instance.client().system_status().await?;
     instance.restart(Duration::from_secs(25)).await?;
-    let restarted_ui = managed_ui::observe(Some(instance.process_id()), root.path()).await?;
+    let restarted_ui = managed_ui::observe(
+        Some(instance.process_id()),
+        root.path(),
+        "after managed restart",
+    )
+    .await?;
     managed_ui::assert_background(&baseline, &restarted_ui)?;
     println!(
         "public managed UI observation: {}",
