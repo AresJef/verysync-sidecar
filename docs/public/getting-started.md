@@ -162,9 +162,17 @@ resume/pause configuration and unregisters while retaining files. It reports
 configuration readbacks and does not claim peer-transfer completion. It leaves
 the explicitly chosen engine running.
 
-Native evidence currently covers matched controller/engine macOS, Windows and
-Linux on amd64/arm64 with default TLS-enabled builds, Unix sockets on macOS/Linux
-and loopback HTTP on Windows on the selected modern runners. Other transports,
-minimum OS versions, remote controller/engine pairs and licensed feature effects
-retain their separate validation gates. Owned runtime, events/tasks, P2P control,
-downloads/upgrades and the remaining planned families are still being developed.
+For an SDK-owned process, see [Managed instances](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/managed-instances.md). For
+changes and progress, see [Event subscriptions](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/events.md) and
+[Long-running operations](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/long-running-operations.md). The crate also provides
+explicit [peer and sharing controls](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/sharing.md),
+[file downloads](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/file-transfers.md) and [program upgrades](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/program-upgrades.md).
+The linked guides explain each action for the published 0.1.0 release.
+
+The six standard native profiles for VerySync v2.33.2 include macOS, Linux
+and Windows on AMD64 and ARM64. The tests exercised Unix sockets on macOS
+and Linux, selected loopback HTTP setups, and the fixed engine's native HTTPS
+listener described above. Check [Platform validation](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/platform-validation.md)
+for the tested system builds, controller/engine pairings and additional
+environments. Authorized Local-API writes, Pro features and official enterprise
+control have their own [scope and prerequisites](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/licenses.md).

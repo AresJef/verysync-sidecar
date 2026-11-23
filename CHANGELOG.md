@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.1.1-rc.5 (unreleased)
+## 0.1.1-rc.6 (unreleased)
+
+- Document what the fixed engine returned or changed in the native regression.
+  The capability guide distinguishes ordinary account effects, Local-API
+  license refusals and file results that were checked separately.
+- Update the getting-started links and record the verified FTP, SFTP, SMB and
+  WebDAV recovery cases alongside their earlier test history.
+
+## 0.1.1-rc.5 (review candidate)
 
 - Clarify when a future release can use the historical Intel measurement
   deferral procedure.

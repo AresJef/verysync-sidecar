@@ -448,9 +448,15 @@ explicit new endpoint/preview/run completed all sixteen payloads, stale result
 identities were refused, and owned teardown completed normally. Some backends
 required an explicitly chosen owned force-stop/restart; this is not a normal
 Stop acknowledgement or proof that the old native operation was cancelled.
-The [recorded run](https://github.com/AresJef/verysync-sidecar/actions/runs/43999174938)
-retains unrelated whole-fixture failures. Final current-candidate six-profile
-acceptance is still required.
+The [earlier recovery run](https://github.com/AresJef/verysync-sidecar/actions/runs/43999174938)
+retains its whole-fixture failures. The
+[0.1.1-rc.5 native regression](https://github.com/AresJef/verysync-sidecar/actions/runs/45127332020)
+verified those FTP, SFTP, SMB and WebDAV disconnect-and-recovery cases for
+v2.33.2 on all six standard profiles, including the successful same-commit
+Linux AMD64 rerun. These results cover the fixture endpoints, credentials and
+explicit recovery steps used. Other authentication and trust settings,
+licensed scheduling, and systems outside the six profiles need their own
+evidence.
 
 The Impacket 0.13.1 synthetic SMB peer also needs a correctly structured EOF
 error response for actual remote reads. Its stock READ handler returns a READ
