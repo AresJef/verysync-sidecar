@@ -1,0 +1,62 @@
+name: Windows window ownership controls
+
+on:
+  push:
+    branches: [ci/formal-candidate/review-fixes-20261122]
+    paths: [.github/workflows/windows-ownership-controls.yml, scripts/diagnose-windows-window-attribution.ps1]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-amd64-window-attribution:
+    name: Windows AMD64 window attribution and persistent lifetime
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Record the exact source and Windows host
+        run: |
+          git show -s --format='%H %T %P'
+          powershell.exe -NoProfile -NonInteractive -Command \
+            'Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,OSArchitecture | ConvertTo-Json -Compress'
+      - name: Compare historical and creation-ordered window attribution
+        shell: powershell
+        run: ./scripts/diagnose-windows-window-attribution.ps1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install the fixed native Rust toolchain
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Prepare the fixed engine and older upgrade source
+        run: |
+          python scripts/prepare-test-engine.py prepare --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          python scripts/prepare-test-engine.py prepare --upgrade-source --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Observe the persistent engine in three private trials
+        run: |
+          failed=0
+          for trial in 1 2 3; do
+            printf 'Windows persistent engine window observation trial %s\n' "$trial"
+            if ! python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+              --test-target managed_lifetime --test-filter persistent_core_survives_actual_caller_kill_with_native_ui_observation \
+              --evidence-dir "$RUNNER_TEMP/vs-window-attribution-$trial"; then
+              failed=1
+            fi
+          done
+          exit "$failed"
+      - name: Confirm the exact current program exited
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Confirm the exact older program exited
+        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
