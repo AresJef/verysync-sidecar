@@ -18,6 +18,40 @@ combinations on native hosted runners. Its accepted evidence, current candidate
 results and individual feature conditions must be distinguished. A failed or
 cancelled candidate is not an accepted platform revision.
 
+## Verified release baselines
+
+Release 0.1.0 and the corresponding official VerySync v2.33.2 program passed
+management authentication, real file operations, restart, expected failures and
+exact process cleanup on the following systems. These were the earliest
+verified GitHub standard hosted systems for their OS and CPU combinations
+under the release's R31 support rule. The recorded version and build come
+from the actual jobs.
+
+| System | CPU | Observed version and build | Release evidence |
+| --- | --- | --- | --- |
+| Linux GNU | x64 | Ubuntu 22.04.5 LTS, 6.8.0-1070-azure | [Native job](https://github.com/AresJef/verysync-sidecar/actions/runs/44913798518/job/136874972750) |
+| Linux GNU | ARM64 | Ubuntu 22.04.5 LTS, 6.8.0-1070-azure | [Native job](https://github.com/AresJef/verysync-sidecar/actions/runs/44914019215/job/136875649261) |
+| macOS | Intel x86_64 | macOS 15.7.9, 24G830 | [Native job](https://github.com/AresJef/verysync-sidecar/actions/runs/44694441058/job/136209870439) |
+| macOS | Apple Silicon ARM64 | macOS 15.8.2, 24H232 | [Native job](https://github.com/AresJef/verysync-sidecar/actions/runs/44694441058/job/136209870533) |
+| Windows Server | x64 | Server 2022 Datacenter, 10.0.20348 | [Native job](https://github.com/AresJef/verysync-sidecar/actions/runs/44694441058/job/136209870411) |
+| Windows desktop | ARM64 | Windows 11 Enterprise, 10.0.26200 | [Native job](https://github.com/AresJef/verysync-sidecar/actions/runs/44694441058/job/136209870581) |
+
+Both Ubuntu jobs reported kernel build #78~22.04.1-Ubuntu. The standard
+Windows x86 controller and core also ran through WOW64 on the x64 Server 2022
+host, with management, file, restart and cleanup effects.
+[WOW64 job](https://github.com/AresJef/verysync-sidecar/actions/runs/44694440919/job/136160928736)
+
+The older macOS and Windows systems previously considered for validation
+retain their historical untested status. The x64 Windows result applies to
+the server edition, and the desktop result applies to ARM64.
+
+The 0.1.1-rc.2 native regression used Ubuntu 24.04.5 LTS in the two Linux jobs,
+the listed macOS builds, Windows Server 2022 x64 and Windows 11 ARM64. Use the
+individual candidate jobs to check the actual behavior and exceptions.
+[Candidate native run](https://github.com/AresJef/verysync-sidecar/actions/runs/44998190581)
+
+## Earlier compatibility runs
+
 The [additional-platform run for source 712ea2e](https://github.com/AresJef/verysync-sidecar/actions/runs/43709925411)
 passed all 13 selected jobs with matching fixed archives and controller targets.
 Those logs verify the selected default-TLS management, managed-instance and
@@ -50,8 +84,8 @@ The two runtime cases per target exercised authenticated attachment, folder
 creation and removal with unchanged file digests, and managed persistence
 across example exits. The owned example also verified reconnection to the same
 identity, normal termination and exact process cleanup. Windows 7/8 and
-Server 2008/2012 execution, minimum OS support and full feature validation
-remain pending. [Both legacy program jobs](https://github.com/AresJef/verysync-sidecar/actions/runs/44388241515)
+Server 2008/2012 remain historically untested. Use the release baseline above
+for minimum validated systems. [Both legacy program jobs](https://github.com/AresJef/verysync-sidecar/actions/runs/44388241515)
 
 ## Older Linux guest kernels
 

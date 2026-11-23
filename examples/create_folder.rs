@@ -46,7 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Registered paused folder: {}", configured.id.as_str());
         println!("VerySync reports the folder is paused. Read folder status before checking for synchronization activity.");
     } else {
-        println!("VerySync registered the folder and currently reports it as active. Check the folder settings before continuing.");
+        println!("Registered folder: {}.", configured.id.as_str());
+        println!("VerySync did not confirm that it is paused. Check the folder's status.");
     }
     Ok(())
 }

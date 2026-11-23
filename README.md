@@ -23,8 +23,10 @@ explicit.
 
 The [remote-management API](docs/public/remote-management.md) keeps
 native permissions, explicit tunnel probes and target-identity gateway
-connections separate. Licensed native sessions and cross-network acceptance
-are deferred in this release.
+connections separate. Positive tests of the official Pro management tunnel
+remain deferred. The 0.1.0 release verified peer-to-peer direct connections,
+recovery, discovery, controlled NAT traversal and relays on the tested field
+paths. [Release checks](docs/public/release-checklist.md#field-network-evidence)
 
 The [license API](docs/public/licenses.md) preserves native license
 metadata and separates explicit refresh/trial acknowledgements from actual
@@ -34,7 +36,15 @@ deferred in this release.
 The [official-account API](docs/public/official-accounts.md) separates
 explicit cloud-account login/logout from GUI sessions and licensed entitlements.
 Native acknowledgements, actual account state and upstream rejection codes have
-separate results. Actual cloud-account sessions are deferred in this release.
+separate results. The 0.1.0 release verified ordinary cloud sign-in, wrong
+password rejection, session persistence across restart and sign-out with a
+dedicated account. Positive Pro license, trial and enterprise cases still
+require their own validation.
+
+The [platform guide](docs/public/platform-validation.md#verified-release-baselines)
+lists the systems actually verified with release 0.1.0 and the fixed VerySync
+v2.33.2 program. It also records the separate native candidate tests and
+compatibility results.
 
 The [file transfer APIs](docs/public/file-transfers.md) stream explicit local
 inputs/outputs with finite bounds, inclusive ranges, all seven native archive

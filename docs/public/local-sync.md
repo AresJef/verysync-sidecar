@@ -251,19 +251,17 @@ seconds; the caller's management deadline remains independently enforced.
 
 ## Verification scope
 
-Local macOS effects have been observed through these public methods with
-independent synthetic paths, identities and credentials: actual endpoint probing,
-browsing and nested Unicode/percent directory creation; preview without writes;
-explicit execution and exact bytes; source and destination-only retention;
-result/history readback; scoped configuration preservation; registration deletion
-while retaining data; and normal owned-tree shutdown. Final same-source native
-acceptance on the other modern profiles remains pending.
+The 0.1.1-rc.2 regression exercised these public methods on all six standard
+native profiles with fixed v2.33.2, synthetic paths and independent credentials.
+The tests verified endpoint probes, browsing and nested directory creation,
+preview without writes, explicit execution and matching bytes, preservation of
+source and destination-only files, run results, scoped configuration and
+registration removal while keeping data.
 
-Separate local native FTP/SFTP/SMB/WebDAV cases have also observed incorrect
-password refusal, actual remote probe/browse/mkdir, explicit preview execution,
-exact remote payload/source retention and registration removal preserving data.
-These are bounded modern macOS observations, with independent loopback peers,
-not full protocol/platform acceptance. The SMB test peer corrects two known
+Each profile used independent FTP, SFTP, SMB and WebDAV loopback peers.
+The protocol cases checked wrong-password refusal, actual probes and directory
+effects, transfer of the expected payload, data retention and exact shutdown.
+The SMB test peer corrects two known
 Impacket 0.13.1 wire details: it retains session identity in LOGOFF responses and
 returns a named-object absence error for a missing CREATE/OPEN name. On Windows its
 share-file handles also grant native delete sharing, so server-side rename can
@@ -272,15 +270,13 @@ readiness; the global Python `os` module and SDK behavior are unchanged. Real
 credential validation, logout and filesystem effects remain in the peer; no
 native error is converted into success.
 
-Selected/excluded actions, reverse mirror and two-way newer/larger/manual
-conflicts have separate local native cases. Their final same-source platform
-gates remain pending. In-flight controls and Local Sync events have separate local native data,
-cancellation, reset and actual restart observations; final platform acceptance
-remains pending. Licensed watch/schedule execution, marker/baseline recovery and each of
-FTP/SFTP/SMB/WebDAV require separate native effects and verification. Their GUI
-presence, enum values, stored configuration or a basic endpoint success are not
-support claims. Licensed conditions, old architectures and final cross-network
-acceptance retain their independent project gates.
+The same six-profile run also exercised selected and excluded copies, reverse
+mirror, two-way newer/larger/manual conflict handling, and in-flight pause,
+resume and cancellation. It checked file and event behavior, reset and restart
+continuity, and marker or comparison-baseline recovery with a separate explicit
+run. Licensed watching, fixed intervals and calendar schedules still require
+an authorized positive test. Keep protocol behavior within the tested paths
+and settings. [Native test run](https://github.com/AresJef/verysync-sidecar/actions/runs/44998190581)
 
 ## Test peer environments
 

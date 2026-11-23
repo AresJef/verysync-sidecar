@@ -318,9 +318,12 @@ let inventory = client.folder_version_inventory(folder).await?;
 # Ok(()) }
 ```
 
-The existing real remote-archive/restore case additionally observes the paused
-error, an empty active inventory and two actual retained archives after three
-remote updates. Whole and prefix routes retain the same known archived records,
-and current bytes remain unchanged by the read. Archive creation, retention,
-explicit restore and normal owned exits stay independently asserted. Full
-same-source platform acceptance remains pending.
+The 0.1.1-rc.2 regression exercised ordinary history and archive operations on
+all six standard native profiles with fixed v2.33.2. The remote case observed
+the paused-folder error, an empty active inventory and two retained archives
+after three remote updates. Root and prefix reads returned the same known archive
+records and left current bytes intact. The tests checked the real effects of
+archive retention, explicit restore, refusal to restore an archive from the
+target's current clock second and normal owned shutdown. Positive generation,
+paging and deletion of licensed global audit records remain deferred.
+[Native test run](https://github.com/AresJef/verysync-sidecar/actions/runs/44998190581)

@@ -25,13 +25,22 @@ evidence. The pending positive cases remain available for future validation.
 | Pro license and trial | Effective license reads, refresh, persistence and trial activation | Observed empty, denied and indeterminate results and preserved state |
 | Official Pro remote management | A real official tunnel session, verified target identity and management operations | Explicit caller-configured HTTP(S) management and identity checks |
 
-The first stable release defers three further sets of native cases.
+Positive [Local-API](local-api.md) cases that require an official entitlement
+remain deferred. The 28 typed entries, ordinary native effects and actual
+license refusals retain their separate evidence. Enterprise control is also
+deferred until the official caller contract and a dedicated entitlement are
+available.
 
-| Area | Deferred cases | Checks that remain required |
-| --- | --- | --- |
-| [Pending devices](invitations.md) | Observe a real nonempty device record from an isolated peer, verify its typed identity and dismiss it while retaining unrelated configuration and files | Typed reads, native empty results and missing-record rejection. Pending-folder validation remains separate. |
-| [Official cloud accounts](official-accounts.md) | Real login, account-service rejection of incorrect credentials, session persistence through restart and authenticated logout | Ordinary management authentication, the empty account and empty-session logout, and the observed native upstream rejection. |
-| [Local-API](local-api.md) | Cases that require a corresponding official entitlement on an isolated test instance | The 28 typed entries, applicable ordinary native effects and observed native license refusals. |
+Release 0.1.0 verified live [ordinary cloud account](official-accounts.md)
+sign-in, wrong-password rejection (code 2404), persistence across restart
+and sign-out followed by an empty account state. The native isolated
+blocked-network check returned 5000. Keep those results separate from Pro
+session, trial and license validation.
+
+Generating, reading and dismissing a real nonempty pending-device record was
+outside the final 0.1.0 acceptance scope under R32. Typed reads, native empty
+results and missing-record rejection retain their evidence. Pending-folder
+validation has its own checks. [Invitations](invitations.md)
 
 Verify actual disconnection and retained file bytes for
 `disconnect_and_remove_device()`. For `remove_device()`, verify the single
@@ -39,13 +48,9 @@ DELETE's configuration snapshot and file retention, then verify native
 readmission and a new transfer with the existing shared keys.
 See [device configuration](devices.md).
 
-Enterprise control is deferred from the first stable release. Resume
-implementation and native verification when the official caller contract
-and a dedicated enterprise test entitlement are available.
-
-Use a dedicated, authorized cloud account to resume the account cases. Use a
-fixed isolated test instance with the required entitlement to resume the
-Local-API cases. Record applicable outcomes and gaps with the release evidence.
+Use a fixed isolated test instance with the required entitlement for
+positive licensed cases. Record applicable outcomes and gaps with release
+evidence.
 
 For v2.33.2 on Windows AMD64 and ARM64, the [directory mutation check](file-mutations.md)
 covers the observed native HTTP 500 and partial contents after directory
@@ -57,31 +62,25 @@ The six required native functional profiles cover macOS, Windows and Linux
 on AMD64 and ARM64. Use the [platform index](../platforms.csv) to identify
 additional targets and their actual execution mode.
 
-The following minimum-system runtime cases are deferred for this release.
-The available hosted runners use newer Windows and macOS images. No matching
-authorized older host or guest was available for these cases.
+### Minimum verified systems
 
-| Runtime case | Requirements to resume validation |
-| --- | --- |
-| macOS 11 on Intel and ARM64 | An isolated environment booted into macOS 11 on the corresponding architecture |
-| Windows 10 standard packages on x86, AMD64 and ARM64 | A matching authorized Windows 10 environment and a confirmed minimum build for the target |
-| Windows 7/8 and Server 2008/2012 legacy packages on x86 and AMD64 | Matching authorized environments for the applicable architecture and OS combinations, with the tested build and service pack recorded |
+R31 established minimum verified systems for 0.1.0 and fixed v2.33.2 from
+actual standard hosted runs. These cover Ubuntu 22.04.5 on AMD64 and ARM64,
+macOS 15.7.9 on Intel and 15.8.2 on ARM64, Windows Server 2022 on x64 and
+Windows 11 desktop on ARM64. The Windows x86 standard package has a separate
+WOW64 result on Server 2022 x64. The initially considered older systems
+remain historically untested. Check exact builds, original jobs and scope in
+[Platform validation](platform-validation.md#verified-release-baselines).
 
-A resume run verifies authenticated management, file effects, restart,
-failure handling and exact shutdown with the matching fixed engine. The
-named modern-host and older Linux guest results retain their documented
-scope.
+### Field network evidence
 
-Dedicated field peers on independently controlled networks were unavailable
-for this release. The following field network cases are deferred.
-
-| Field case | Requirements to resume validation |
-| --- | --- |
-| Direct connection | Two dedicated peers on the observed independent networks, with an attributable direct route and matching transferred files |
-| Discovery | Dedicated peers with the relevant discovery service and evidence that discovery leads to an authenticated connection and transfer |
-| NAT traversal | Independently controlled address translation on the relevant path and observed traversal with matching transferred files |
-| Relay | A controlled relay path with attributable relay selection, authenticated peers and matching transferred files |
-| Link loss and recovery | A controlled field-link interruption with observed disconnection, retained data and verified recovery over the restored link |
+Release 0.1.0 completed the five VS-035 field cases with fixed v2.33.2 and
+isolated peers: attributable direct transfer, link-loss recovery with
+retained data, discovery followed by authenticated transfer, controlled
+native QUIC traversal through NAT with matching bytes on both rounds, and a
+selected relay carrying authenticated file traffic. Those results cover the
+observed peers and routes. The Pro official management tunnel retains its
+separate entitlement requirement.
 
 The [controlled network evidence](controlled-network-acceptance.md) retains
 the observed IPv4 and IPv6 routed paths, file effects, recovery and node
@@ -94,13 +93,14 @@ settings 16 and 32, independent capture can also confirm the observed all-zero
 v2.33.2 behavior. Both architectures require the applicable same-link controls,
 persisted settings, actual file effects, authenticated identity and exact cleanup.
 
-macOS Intel formal resource collection and its independent reruns are deferred.
-Both standard Intel labels produced zero qualifying formal samples. Resume
-on a native Intel host that passes the original preparation and sampling gates.
-Intel native functionality is required. Use the frozen resource protocol and
-independent reruns on the five other standard profiles.
-[macOS 15 Intel preparation](https://github.com/AresJef/verysync-sidecar/actions/runs/44321858142/job/134862617712)
-and [macOS 26 Intel preparation](https://github.com/AresJef/verysync-sidecar/actions/runs/44324838496/job/134873243209).
+Release 0.1.0 completed four formal and two independent Intel resource cycles
+on macOS 15.7.9 with the approved per-process resident memory bounds. The
+accepted 24 workloads and the five other standard profiles remain linked to
+their frozen inputs. The later 0.1.1-rc.2 v33 run stopped at input fingerprint
+checks before any sample. Candidate resource claims require measured results
+from the corresponding frozen inputs.
+[Intel release result](https://github.com/AresJef/verysync-sidecar/actions/runs/44906299987/job/136852498144) ·
+[RC2 input checks](https://github.com/AresJef/verysync-sidecar/actions/runs/44998190563)
 
 The final [capability index](../capabilities.csv), platform index and release
 notes record the precise support, conditions and evidence. A deferral contributes

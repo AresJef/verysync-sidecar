@@ -35,9 +35,12 @@ chosen instance; the crate never discovers another running instance.
 Use `ManagementEndpoint::unix_socket(PathBuf)` for an absolute Unix socket, or
 `ManagementEndpoint::http(url)` for an explicit HTTP(S) base URL. Private LAN
 addresses and reverse-proxy base paths are accepted. URL user information,
-queries and fragments are rejected. HTTPS validates certificates normally;
-successful native HTTPS-engine acceptance is outside the currently recorded
-Unix-socket/loopback-HTTP evidence.
+queries and fragments are rejected. HTTPS verifies the server certificate and
+hostname. The 0.1.1-rc.2 tests on all six standard native profiles exercised the
+fixed engine's own HTTPS listener, authenticated takeover with the selected
+certificate, restart and reconnection. A separate fixture covers caller-provided
+reverse proxies. Use the trust configuration for your selected endpoint.
+[Native test run](https://github.com/AresJef/verysync-sidecar/actions/runs/44998190581)
 
 Keep API keys out of command arguments, logs and source. The examples read
 `VERYSYNC_EXAMPLE_API_KEY` from their environment. Set it locally through a hidden

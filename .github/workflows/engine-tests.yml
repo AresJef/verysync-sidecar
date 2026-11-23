@@ -18,51 +18,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  windows-amd64-owned-window-observation:
-    name: Windows AMD64 owned window observations
-    if: github.event_name == 'push' && github.ref == 'refs/heads/ci/formal-candidate/review-fixes-20261122'
-    runs-on: windows-2022
-    timeout-minutes: 25
-    defaults:
-      run:
-        shell: bash
-    env:
-      TEST_TOOLCHAIN: 1.85.0-x86_64-pc-windows-msvc
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
-      - name: Install the fixed native Rust toolchain
-        run: |
-          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
-          rustc +"$TEST_TOOLCHAIN" -vV
-          cargo +"$TEST_TOOLCHAIN" fetch --locked
-      - name: Prepare the fixed Windows program and pinned upgrade source
-        run: |
-          python scripts/prepare-test-engine.py prepare --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
-          python scripts/prepare-test-engine.py prepare --upgrade-source --package windows-amd64-standard --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
-      - name: Observe calibrated windows and persistent shutdown in three isolated trials
-        run: |
-          failed=0
-          for trial in 1 2 3 ; do
-            printf 'Windows window observation trial %s\n' "$trial"
-            if ! python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
-              --test-target managed_lifetime --test-filter persistent_core_survives_actual_caller_kill_with_native_ui_observation \
-              --evidence-dir "$RUNNER_TEMP/vs-window-owned-$trial" ; then
-              failed=1
-            fi
-          done
-          exit "$failed"
-      - name: Confirm the exact current program exited
-        if: always() && env.VERYSYNC_TEST_BINARY != ''
-        run: python scripts/prepare-test-engine.py check-cleanup
-      - name: Confirm the exact upgrade source exited
-        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
-        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
-
   retire-superseded-drafts:
     name: Retire only superseded draft native CI
     if: github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository

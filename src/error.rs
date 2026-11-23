@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+pub(crate) const GRACEFUL_SHUTDOWN_OPERATION: &str = "request graceful owned shutdown";
+
 use crate::{DeviceId, FolderId};
 
 /// The independent state-admission lock that refused an owned operation.
@@ -212,6 +214,9 @@ pub enum Error {
     /// The engine does not match the fixed validated version policy.
     IncompatibleVersion {
         /// The returned version, with any management key occurrence redacted.
+        ///
+        /// Default formatting shows only a short numeric release number.
+        /// Inspect this field directly if a custom build label is needed.
         actual: String,
     },
     /// A transport is unavailable on this platform or feature configuration.
@@ -468,12 +473,10 @@ impl fmt::Display for Error {
                 return explain(formatter, "The supplied device ID cannot be used.", reason),
             Self::IdentityMismatch { .. } => "The connected device did not match the expected device. Verify the endpoint and device ID before making changes.",
             Self::IncompatibleVersion { actual } => {
-                if actual == "event engine is outside the fixed baseline"
-                    || actual.starts_with("[REDACTED")
-                {
-                    return formatter.write_str("The selected VerySync version is outside the verified range. Check which version is running before continuing.");
+                if is_version_number(actual) {
+                    return write!(formatter, "The current version policy has not verified VerySync version {actual}. Check which version is running on the selected instance.");
                 }
-                return write!(formatter, "The current version policy has not verified VerySync version {actual}. Check which version is running on the selected instance.");
+                return formatter.write_str("The selected VerySync version is outside the verified range. Check which version is running before continuing.");
             }
             Self::UnsupportedTransport { transport } => match *transport {
                 "Unix-domain sockets on this platform" | "managed Unix socket" =>
@@ -541,6 +544,22 @@ impl fmt::Display for Error {
     }
 }
 
+fn is_version_number(label: &str) -> bool {
+    if label.len() > 24 {
+        return false;
+    }
+    let mut parts = label.strip_prefix('v').unwrap_or(label).split('.');
+    let numbers = [parts.next(), parts.next(), parts.next()];
+    parts.next().is_none()
+        && numbers.into_iter().all(|part| {
+            part.is_some_and(|part| {
+                !part.is_empty()
+                    && part.bytes().all(|byte| byte.is_ascii_digit())
+                    && (part.len() == 1 || !part.starts_with('0'))
+            })
+        })
+}
+
 fn explain(formatter: &mut fmt::Formatter<'_>, summary: &str, reason: &str) -> fmt::Result {
     formatter.write_str(summary)?;
     let mut chars = reason.chars();
@@ -580,6 +599,8 @@ fn explain_unknown_outcome(formatter: &mut fmt::Formatter<'_>, operation: &str) 
             "The folder may already exist. Check the selected destination on the device before trying again.",
         "restore archived directory versions" | "restore explicit file versions" =>
             "The restore may have written some files. Check the destination on the selected device and preserve any files you still need before trying again.",
+        GRACEFUL_SHUTDOWN_OPERATION =>
+            "VerySync may have stopped. Check whether the selected instance is still running before sending another shutdown request.",
         "request native shutdown" | "request native restart" | "validate native restart acknowledgement" =>
             "VerySync may have stopped or restarted. Check whether the selected instance is running before sending another request.",
         "request server-selected upgrade" | "upload fixed kernel upgrade" | "run kernel CLI upgrade" =>

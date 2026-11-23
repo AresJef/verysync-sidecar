@@ -1,6 +1,19 @@
 # Changelog
 
-## 0.1.1-rc.2 (unreleased)
+## 0.1.1-rc.3 (unreleased)
+
+- The folder example reports whether VerySync confirmed the requested pause
+  setting. It points to folder status when activity still needs checking.
+- A shutdown request with an unknown result asks the caller to check whether
+  the selected instance is still running. The error type, cause and operation
+  identifier remain available to existing callers.
+- Default version errors show a compact numeric release number when one was
+  supplied. Callers can inspect the original version using the existing typed
+  field when they need details about a custom build.
+- The guides and catalogs distinguish verified 0.1.0 release effects, native
+  candidate tests and the remaining positive tests that require entitlement.
+
+## 0.1.1-rc.2 (review candidate)
 
 - The detailed GUI sign-in method reports a confirmed 401 or 403 as a refusal
   even when the diagnostic reply is too long or ends early. Callers that use
