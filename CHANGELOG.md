@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.1.1-rc.3 (unreleased)
+## 0.1.1-rc.4 (unreleased)
+
+- Require the patched URL parser for RUSTSEC-2026-0592.
+
+## 0.1.1-rc.3 (review candidate)
 
 - The folder example reports whether VerySync confirmed the requested pause
   setting. It points to folder status when activity still needs checking.
