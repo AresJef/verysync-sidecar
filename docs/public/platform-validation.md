@@ -48,7 +48,7 @@ the server edition, and the desktop result applies to ARM64.
 The 0.1.1-rc.2 native regression used Ubuntu 24.04.5 LTS in the two Linux jobs,
 the listed macOS builds, Windows Server 2022 x64 and Windows 11 ARM64. Use the
 individual candidate jobs to check the actual behavior and exceptions.
-[Candidate native run](https://github.com/AresJef/verysync-sidecar/actions/runs/44998190581)
+[RC2 native run](https://github.com/AresJef/verysync-sidecar/actions/runs/44998190581)
 
 ## Earlier compatibility runs
 
@@ -67,8 +67,8 @@ management and file effects, startup, cancellation, state reuse and owned host
 exit. The two x86 compatibility jobs also exercised peer lifecycle and
 key-based sharing. The same candidate linked the `connect_existing` and
 `manage_owned` examples for both Win7 targets on Windows Server 2022.
-Execution on older Windows releases and the complete feature matrix remain
-pending.
+That run used selected features on modern hosts. Older Windows releases
+remain historically untested.
 [Candidate additional-platform results](https://github.com/AresJef/verysync-sidecar/actions/runs/44337786187)
 
 ## Windows legacy program examples on a modern runner

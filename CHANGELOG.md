@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.1.1-rc.4 (unreleased)
+## 0.1.1-rc.5 (unreleased)
+
+- Clarify when a future release can use the historical Intel measurement
+  deferral procedure.
+
+## 0.1.1-rc.4 (review candidate)
 
 - Require the patched URL parser for RUSTSEC-2026-0592.
 

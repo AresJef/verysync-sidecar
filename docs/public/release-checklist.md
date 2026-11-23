@@ -93,6 +93,8 @@ settings 16 and 32, independent capture can also confirm the observed all-zero
 v2.33.2 behavior. Both architectures require the applicable same-link controls,
 persisted settings, actual file effects, authenticated identity and exact cleanup.
 
+### Resource measurements
+
 Release 0.1.0 completed four formal and two independent Intel resource cycles
 on macOS 15.7.9 with the approved per-process resident memory bounds. The
 accepted 24 workloads and the five other standard profiles remain linked to
@@ -118,7 +120,6 @@ applicable required outcome remains open.
 - Push the exact candidate to an owned `ci/formal-candidate/*` branch to run
   quality, native engine, additional-platform, formal resource and both Windows
   packet validations on the same commit. You can also dispatch registered workflows on that ref.
-  The scoped Intel resource deferral requires the push described below.
   Record each workflow's numeric run ID and attempt in the private candidate
   metadata under `candidate_runs` with keys `quality`, `engine`,
   `platforms`, `resources`, `windows_amd64_packets` and `windows_arm64_packets`. Each entry
@@ -128,7 +129,8 @@ applicable required outcome remains open.
   and tree, registered workflow identities, exact run attempts, complete job
   listings and required acceptance steps. Each native diagnostic in the catalog
   at the candidate commit must have a matching job with its execution and cleanup steps.
-  For the Intel formal-resource deferral above, push the exact candidate to
+  Use the historical Intel-deferral procedure only if a future release has
+  an explicit approval for that exception. Push that exact candidate to
   `ci/formal-candidate/r23-intel-deferred/<candidate>` in this repository.
   Set the top-level metadata field
   `"deferred_formal_resource_profile": "macos-amd64-standard"`.
