@@ -27,9 +27,6 @@ on:
       - scripts/tests/test_resource_*.py
       - .github/workflows/resource-collection.yml
   workflow_dispatch:
-  push:
-    branches: ['ci/formal-candidate/**']
-
 permissions:
   contents: read
 

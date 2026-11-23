@@ -14,7 +14,8 @@ use std::ptr;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    GetHandleInformation, LocalFree, ERROR_NO_MORE_FILES, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+    GetHandleInformation, LocalFree, ERROR_ALREADY_EXISTS, ERROR_NO_MORE_FILES,
+    HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
@@ -156,14 +157,28 @@ impl Job {
     }
 
     pub(super) fn new_with_kill_on_close(kill_on_close: bool) -> io::Result<Self> {
-        // SAFETY: Null security attributes/name create a fresh unnamed,
-        // noninheritable handle. Check it before transferring unique ownership.
-        let raw = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+        Self::new_with_name(kill_on_close, None)
+    }
+
+    pub(super) fn diagnostic_observable(name: &str) -> io::Result<Self> {
+        Self::new_with_name(true, Some(name))
+    }
+
+    fn new_with_name(kill_on_close: bool, name: Option<&str>) -> io::Result<Self> {
+        let wide = name.map(|name| name.encode_utf16().chain(Some(0)).collect::<Vec<_>>());
+        let name_ptr = wide.as_ref().map_or(ptr::null(), |wide| wide.as_ptr());
+        // SAFETY: The optional UTF-16 name lives through the call. Null
+        // security attributes retain the default ACL and noninheritability.
+        let raw = unsafe { CreateJobObjectW(ptr::null(), name_ptr) };
+        let status = io::Error::last_os_error();
         if raw.is_null() {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: CreateJobObjectW returned a newly owned valid handle.
         let job = Self(unsafe { OwnedHandle::from_raw_handle(raw) });
+        if name.is_some() && status.raw_os_error() == Some(ERROR_ALREADY_EXISTS as i32) {
+            return Err(status);
+        }
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = if kill_on_close {
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE

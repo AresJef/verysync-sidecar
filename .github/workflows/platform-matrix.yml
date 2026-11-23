@@ -4,9 +4,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
-  push:
-    branches: ['ci/formal-candidate/**']
-
 permissions:
   contents: read
 
