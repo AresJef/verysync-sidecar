@@ -69,6 +69,10 @@ def run(payload, ending):
             child.stdin.close()
         result=take(child,55)
         elapsed=time.monotonic()-start
+        print("R33_GATEWAY_TARGET_TERMINAL "+json.dumps({
+            "expected":ending,"actual":result.get("reason"),"elapsed_s":round(elapsed,3),
+            "native_receipt":result.get("native"),"cleanup_status":result.get("native_cleanup"),
+            "exit_code":result.get("exit_code")},sort_keys=True),flush=True)
         assert result.get("reason")==ending, result.get("reason")
         assert result["native"]=={"event":"owned-target-exit","normal":True}
         assert result["exit_code"]==0 and result["dedicated_connection_count"]==0
