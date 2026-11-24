@@ -1,0 +1,25 @@
+name: R33 Local-API synthetic loopback boundary
+
+on:
+  push:
+    branches:
+      - ci/r33-synthetic-20261124
+    paths:
+      - .github/workflows/r33-local-api-private-loopback.yml
+      - scripts/r33/local-api-private-loopback.py
+
+permissions:
+  contents: read
+
+jobs:
+  private-loopback:
+    name: Synthetic Linux private loopback
+    runs-on: ubuntu-22.04
+    timeout-minutes: 4
+    steps:
+      - name: Check out the exact synthetic fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify local HTTP isolation and owned exit
+        run: /usr/bin/python3 -B scripts/r33/local-api-private-loopback.py
