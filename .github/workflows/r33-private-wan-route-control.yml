@@ -1,0 +1,26 @@
+name: R33 private gateway route control
+
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths:
+      - .github/workflows/r33-private-wan-route-control.yml
+      - tests/r33-private-wan-route/**
+
+permissions:
+  contents: read
+
+jobs:
+  private-route:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Exercise the route inside a disposable outer Linux network
+        run: |
+          sudo /usr/bin/unshare --net --mount --propagation private -- +            /bin/bash -euc '
+              /usr/sbin/sysctl -w net.ipv4.ip_forward=1
+              /usr/bin/python3 -B tests/r33-private-wan-route/check-wan-route.py
+            '
