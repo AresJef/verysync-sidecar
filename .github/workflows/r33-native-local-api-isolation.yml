@@ -1,0 +1,28 @@
+name: R33 signed-out native Local-API inside Linux isolation
+
+on:
+  push:
+    branches:
+      - ci/r33-synthetic-20261124
+    paths:
+      - .github/workflows/r33-native-local-api-isolation.yml
+      - scripts/r33/run-linux-native-local-api.py
+      - scripts/r33/linux-native-local-api-probe.rs
+
+permissions:
+  contents: read
+
+jobs:
+  private-native-read:
+    name: Signed-out native Local-API on private loopback
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    steps:
+      - name: Check out the exact native evidence fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install the fixed Rust toolchain if needed
+        run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
+      - name: Test the signed-out fixed native core without a public listener
+        run: /usr/bin/python3 -B scripts/r33/run-linux-native-local-api.py --test-source scripts/r33/linux-native-local-api-probe.rs
