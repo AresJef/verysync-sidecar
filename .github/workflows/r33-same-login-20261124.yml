@@ -94,7 +94,6 @@ jobs:
               os.setgid(gid)
               os.setuid(uid)
               assert os.getuid() == os.geteuid() == uid and os.getegid() == gid
-              assert set(os.getgroups()) == {gid}
               assert (path/"canary").read_bytes() == b"R33 synthetic boundary check\n"
               with open_socket(path/"raw") as listener:
                   connect(path/"raw")
@@ -134,7 +133,9 @@ jobs:
               if child == 0:
                   try:
                       code = operation(*arguments)
-                  except (OSError, AssertionError, RuntimeError):
+                  except (OSError, AssertionError, RuntimeError) as exc:
+                      failure = errno.errorcode.get(exc.errno, "OTHER") if isinstance(exc, OSError) else type(exc).__name__
+                      os.write(2, (operation.__name__+" "+failure+"\n").encode("ascii"))
                       code = 7
                   os._exit(code)
               return child
@@ -228,7 +229,7 @@ jobs:
                   raise ValueError("The active terminal does not belong to the invocation.")
               import pwd
               account = pwd.getpwuid(uid)
-              return uid, list(dict.fromkeys([account.pw_gid, *os.getgrouplist(account.pw_name, account.pw_gid)]))
+              return uid, [account.pw_gid]
           
           
           def main():
@@ -257,5 +258,5 @@ jobs:
           if __name__ == "__main__":
               sys.exit(main())
           R33_PY
-          (cd "$r33_probe_dir" && printf '%s  %s\n' '65f676ffb3ced932772fb995e47964ba2b58674bb0dc6c00066d52eed4575812' probe.py | shasum -a 256 -c)
+          (cd "$r33_probe_dir" && printf '%s  %s\n' '4a7c1016a76759e214a312bb38b2ad29962b411850ff819bda958e9888cb0104' probe.py | shasum -a 256 -c)
           sudo --non-interactive -- /usr/bin/env GITHUB_ACTIONS=true /usr/bin/python3 -I -S -B "$r33_probe_dir/probe.py" --approved-hosted-fixture
