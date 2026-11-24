@@ -39,9 +39,9 @@ def validate_host(value):
         return value
 
 
-def verify_host_key(public_key, fingerprint):
-    if type(public_key) is not str or type(fingerprint) is not str or len(public_key) > 2048:
-        raise SSHConfigurationError("A public key and its confirmed fingerprint are required.")
+def host_key_identity(public_key):
+    if type(public_key) is not str or len(public_key) > 2048:
+        raise SSHConfigurationError("A valid SSH public host key is required.")
     atoms = public_key.split()
     if len(atoms) != 2 or atoms[0] not in HOST_KEY_TYPES:
         raise SSHConfigurationError("Enter the two fields of the server's public host key.")
@@ -56,17 +56,17 @@ def verify_host_key(public_key, fingerprint):
     if base64.b64encode(wire).decode("ascii") != contents:
         raise SSHConfigurationError("The server public key is invalid.")
     actual = "SHA256:" + base64.b64encode(hashlib.sha256(wire).digest()).decode("ascii").rstrip("=")
+    return f"{algorithm} {contents}", actual
+
+
+def verify_host_key(public_key, fingerprint):
+    key, actual = host_key_identity(public_key)
     if actual != fingerprint:
         raise SSHConfigurationError("The SSH host key does not match the confirmed fingerprint.")
-    return f"{algorithm} {contents}"
+    return key
 
 
-def discover_pinned_key(host, port, fingerprint):
-    if not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", fingerprint):
-        raise SSHConfigurationError("Enter the SHA256 host key fingerprint from the trusted console.")
-    host = validate_host(host)
-    if type(port) is not int or not 1 <= port <= 65535:
-        raise SSHConfigurationError("Choose an existing valid SSH port.")
+def presented_host_keys(host, port):
     try:
         result = subprocess.run(
             ["/usr/bin/ssh-keyscan", "-T", "5", "-p", str(port),
@@ -81,10 +81,79 @@ def discover_pinned_key(host, port, fingerprint):
         fields = line.split()
         if len(fields) == 3:
             try:
-                return verify_host_key(" ".join(fields[1:]), fingerprint)
+                yield host_key_identity(" ".join(fields[1:]))
             except SSHConfigurationError:
                 pass
+
+
+def lookup_target(host, port):
+    host = validate_host(host)
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise SSHConfigurationError("Choose an existing valid SSH port.")
+    return host
+
+
+def discover_pinned_key(host, port, fingerprint):
+    if not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", fingerprint):
+        raise SSHConfigurationError("Enter the SHA256 host key fingerprint from the trusted console.")
+    host = lookup_target(host, port)
+    for key, actual in presented_host_keys(host, port):
+        if actual == fingerprint:
+            return key
     raise SSHConfigurationError("The server did not present the confirmed SSH host key.")
+
+
+def saved_host_pin(host, port):
+    canonical = lookup_target(host, port)
+    candidates = set()
+    authority_record = False
+    # Keep OpenSSH's handling of hashed host names, aliases, and port-specific entries.
+    for name in dict.fromkeys((host, canonical)):
+        target = name if port == 22 else f"[{name}]:{port}"
+        for source in (Path.home()/".ssh"/"known_hosts", Path.home()/".ssh"/"known_hosts2"):
+            if not source.is_file():
+                continue
+            try:
+                result = subprocess.run(
+                    ["/usr/bin/ssh-keygen", "-F", target, "-f", str(source)],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    encoding="ascii", errors="replace", timeout=4,
+                    env={"PATH":"/usr/bin:/bin","LANG":"C"},
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise SSHConfigurationError("The saved SSH host keys could not be checked.") from error
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                if not fields or fields[0].startswith("#"):
+                    continue
+                if fields[0] == "@revoked":
+                    raise SSHConfigurationError("The saved SSH identity for this target has been revoked.")
+                if fields[0] == "@cert-authority":
+                    authority_record = True
+                if len(fields) < 3 or fields[0].startswith("@"):
+                    continue
+                try:
+                    candidates.add(host_key_identity(" ".join(fields[1:3])))
+                except SSHConfigurationError:
+                    pass
+    if authority_record and not candidates:
+        raise SSHConfigurationError("This server uses a saved SSH certificate authority. A raw-key handoff is unavailable.")
+    if len(candidates) < 2:
+        return next(iter(candidates), None)
+    for identity in presented_host_keys(canonical, port):
+        if identity in candidates:
+            return identity
+    raise SSHConfigurationError("The server's SSH host key no longer matches the saved identities.")
+
+
+def first_host_pin(host, port):
+    canonical = lookup_target(host, port)
+    choices = dict(presented_host_keys(canonical, port))
+    for algorithm in ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-rsa"):
+        for key, fingerprint in choices.items():
+            if key.startswith(algorithm + " "):
+                return key, fingerprint
+    raise SSHConfigurationError("The SSH server did not present a supported host key. Check the address and port.")
 
 
 def private_identity(path):
@@ -103,19 +172,23 @@ class Destination:
     user: str
     public_key: str
     fingerprint: str
+    trust_source: str = "explicit-pin"
 
     @classmethod
     def parse(cls, data, *, allow_root=False):
         allowed = {"host", "port", "user", "public_key", "fingerprint"}
-        if type(data) is not dict or set(data) != allowed:
+        if type(data) is not dict or not allowed <= set(data) <= allowed | {"trust_source"}:
             raise SSHConfigurationError("The SSH destination has unexpected fields.")
         port, user = data["port"], data["user"]
         if type(port) is not int or not 1 <= port <= 65535:
             raise SSHConfigurationError("Choose an existing valid SSH port.")
         if type(user) is not str or not USER.fullmatch(user) or (user == "root" and not allow_root):
             raise SSHConfigurationError("This foreground scope does not accept the SSH login name.")
+        source = data.get("trust_source", "explicit-pin")
+        if source not in ("explicit-pin", "saved", "first-use"):
+            raise SSHConfigurationError("The SSH identity approval mode is invalid.")
         return cls(validate_host(data["host"]), port, user,
-                   verify_host_key(data["public_key"], data["fingerprint"]), data["fingerprint"])
+                   verify_host_key(data["public_key"], data["fingerprint"]), data["fingerprint"],source)
 
     def command(self, runtime, identity=None, *, remote_entry=REMOTE_ENTRY):
         if self.user == "root" and (identity is not None or remote_entry == REMOTE_ENTRY):

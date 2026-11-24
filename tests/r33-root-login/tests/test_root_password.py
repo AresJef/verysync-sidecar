@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from unittest.mock import patch
 
 
 TESTS = Path(__file__).resolve().parent
@@ -20,7 +21,7 @@ sys.path[:0] = [str(RUNTIME), str(TESTS / "prior")]
 
 from r33_protocol import DENIED
 from r33_ssh import SSHConfigurationError, discover_pinned_key
-from r33_single import LINUX_ALLOWED
+from r33_single import LINUX_ALLOWED, linux_destination
 import test_terminal
 from test_terminal import Terminal, connect, request
 
@@ -113,8 +114,21 @@ def local_operator(base):
 
 def exercise(base,destination,password,mode):
     assert os.getuid()>0
+    host, port = destination["host"], destination["port"]
+    if mode == "STOP":
+        trust = base/".ssh"
+        trust.mkdir(mode=0o700)
+        saved = trust/"known_hosts"
+        saved.write_text(f"[{host}]:{port} {destination['public_key']}\n")
+        subprocess.run(["/usr/bin/ssh-keygen","-q","-H","-f",str(saved)],check=True,
+                       stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        assert saved.read_text().startswith("|1|")
+    with patch("builtins.input",side_effect=[host,str(port),"root"]) as prompts:
+        selected = linux_destination()
+    source = "saved" if mode == "STOP" else "first-use"
+    assert prompts.call_count == 3 and selected == destination | {"trust_source":source}
     profile = base / "profile.json"
-    profile.write_text(json.dumps({"linux":{"connection":destination,"allow":sorted(LINUX_ALLOWED)}}))
+    profile.write_text(json.dumps({"linux":{"connection":selected,"allow":sorted(LINUX_ALLOWED)}}))
     tape = base / "tape.jsonl"
     user = Terminal(["start","--synthetic","--executor-uid",str(os.getuid()),"--profile",str(profile),
                      "--evidence",str(tape),"--expires-at",str(int(time.time()) + 150)])
@@ -181,7 +195,8 @@ def exercise(base,destination,password,mode):
                 "same_connection_cycles":2,"renewals_observed":status["renewals"],
                 "sample_lengths":samples,"old_request_refused_ms":observed_ms,
                 "zero_worker_and_owned_directory":True,"non_secret_logs":True,
-                "isolated_container":True,"incorrect_host_fingerprint_refused":True}
+                "isolated_container":True,"incorrect_host_fingerprint_refused":True,
+                "visible_linux_values":3,"trust_source":source}
     except Exception:
         no_secret = user.observed.replace(password,b"[redacted]")
         print("R33_ROOT_FIXTURE_TERMINAL " + json.dumps(no_secret[-1500:].decode(errors="replace")),

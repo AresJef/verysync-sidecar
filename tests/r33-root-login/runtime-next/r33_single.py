@@ -6,7 +6,7 @@ import re
 import time
 
 from r33_cases import TWO_CORE_SCOPES
-from r33_ssh import Destination, SSHConfigurationError, discover_pinned_key
+from r33_ssh import Destination, SSHConfigurationError, USER, first_host_pin, saved_host_pin
 
 
 CRATE = "1d1e7d0d3ef4ac4dcf063b8e4d3ac336bd823fd056e5aae84c5dbaaf24d6cbfe"
@@ -30,13 +30,17 @@ def linux_destination():
     port = input("Existing SSH port [22]: ").strip() or "22"
     if not re.fullmatch(r"[0-9]{1,5}", port):
         raise ValueError("Use the existing SSH port as a number.")
-    fingerprint = input("Confirmed server host key fingerprint (SHA256:…): ").strip()
+    user = input("Linux SSH account [root]: ").strip() or "root"
+    if not USER.fullmatch(user):
+        raise ValueError("Enter a valid SSH account name.")
     try:
-        key = discover_pinned_key(host, int(port), fingerprint)
+        pin = saved_host_pin(host, int(port))
+        key, fingerprint = pin if pin else first_host_pin(host, int(port))
     except SSHConfigurationError as error:
         print(str(error), flush=True)
         raise
-    data = {"host":host,"port":int(port),"user":"root","public_key":key,"fingerprint":fingerprint}
+    data = {"host":host,"port":int(port),"user":user,"public_key":key,"fingerprint":fingerprint,
+            "trust_source":"saved" if pin else "first-use"}
     Destination.parse(data, allow_root=True)
     return data
 
@@ -59,12 +63,16 @@ def show_confirmation(run, deadline, profile, tool_digest=None, *, synthetic=Fal
         destination = Destination.parse({key: value for key, value in settings.items() if key != "identity"},
                                         allow_root=True)
         print(f"Linux {destination.user}@{destination.host}, SSH port {destination.port}, "
-              f"confirmed key {destination.fingerprint}.", flush=True)
+              f"SSH identity {destination.fingerprint}.", flush=True)
+        if destination.trust_source == "saved":
+            print("This Mac already saved this server identity. OpenSSH will check it at login.", flush=True)
+        if destination.trust_source == "first-use":
+            print("First connection to this address and port. START also accepts the displayed new "
+                  "server identity for this session. Proceed if you recognize this server.", flush=True)
         print("Keep this connection ready for the named test tasks. They use a private test directory "
               "and do not open a public listener.", flush=True)
-        if destination.user == "root":
-            print("OpenSSH will ask once for the root password. The fixed test worker runs without "
-                  "administrator access.", flush=True)
+        print("OpenSSH will ask for the Linux password first. Next, enter the VerySync account and "
+              "password in the hidden prompts. The fixed remote test worker uses ordinary permissions.", flush=True)
         print("A native data-port test requires its separately listed target, lease and cleanup scope.",
               flush=True)
     else:
@@ -80,7 +88,7 @@ def update_profile(path, destination):
     if set(data["pro"]["allow"]) != ({"observe", "refresh-paid"} | TWO_CORE_SCOPES["pro-cases"].keys()):
         raise ValueError("The native operation list differs from the verified grant.")
     if destination is not None:
-        data["linux"] = {"allow": sorted(LINUX_ALLOWED), "connection": destination}
+        data = {"linux": {"allow": sorted(LINUX_ALLOWED), "connection": destination}, **data}
         temporary = path.with_suffix(".new")
         with temporary.open("x", encoding="ascii") as output:
             json.dump(data, output, indent=2)
