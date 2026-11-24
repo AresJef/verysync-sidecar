@@ -49,22 +49,33 @@ def save_object(path, value):
     os.replace(pending, path)
 
 
-def readback(directory, identifier):
+def readback(directory, identifier, *, existing):
     if type(identifier) is not str or not REQUEST_ID.fullmatch(identifier):
         return DENIED
+    receipt = directory/f"readback-{identifier}"
+    if existing:
+        try:
+            data = json.loads(receipt.read_bytes())
+        except FileNotFoundError:
+            return {"ok":False,"code":"no-stored-readback"}
+        except ValueError:
+            return {"ok":False,"code":"readback-pending"}
+        return data
     try:
-        with (directory/f"readback-{identifier}").open("xb"):
-            pass
+        with receipt.open("xb") as audit_file:
+            sample = directory/f"sample-{identifier}"
+            observation = None
+            if sample.is_file():
+                data = sample.read_bytes()
+                observation = {"operation":"write-sample","sample_present":True,
+                               "length":len(data),"sha256":hashlib.sha256(data).hexdigest()}
+            result = {"ok":True,"observed":observation}
+            audit_file.write(encode_frame(result))
+            audit_file.flush()
+            os.fsync(audit_file.fileno())
+            return result
     except FileExistsError:
         return DENIED
-    sample = directory/f"sample-{identifier}"
-    if not sample.is_file():
-        return {"ok": True, "observed": None}
-    data = sample.read_bytes()
-    return {"ok": True, "observed": {
-        "operation": "write-sample", "sample_present": True,
-        "length": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-    }}
 
 
 def secure_initial(line):
@@ -140,9 +151,12 @@ class Guardian:
         if kind == "stop" and set(request) == {"kind"}:
             await self.stop("operator")
             return self.receipt()
-        if kind == "readback" and set(request) == {"kind", "id"}:
-            observed = readback(self.directory, request["id"])
-            save_object(self.directory/"receipt.json", self.receipt())
+        if kind in ("readback","stored-readback") and set(request) == {"kind", "id"}:
+            if self.finished is None:
+                return DENIED
+            observed = readback(self.directory, request["id"], existing=kind=="stored-readback")
+            if kind=="readback":
+                save_object(self.directory/"receipt.json", self.receipt())
             return observed
         if recover or self.closed.is_set() or not self.lease.permits(time.monotonic()):
             return DENIED
@@ -281,8 +295,8 @@ def transport(root):
                         request = decode_frame(line)
                         if request == {"kind": "stop"} or request == {"kind": "status"}:
                             response = report | {"readbacks": sum(1 for _ in directory.glob("readback-*"))}
-                        elif request.get("kind") == "readback" and set(request) == {"kind","id"}:
-                            response = readback(directory, request["id"])
+                        elif request.get("kind") in ("readback","stored-readback") and set(request) == {"kind","id"}:
+                            response = readback(directory, request["id"], existing=request["kind"]=="stored-readback")
                         else:
                             response = DENIED
                         sys.stdout.buffer.write(encode_frame(response))

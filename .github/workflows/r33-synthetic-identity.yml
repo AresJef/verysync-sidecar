@@ -23,3 +23,8 @@ jobs:
         run: |
           cd tools/r33-synthetic
           PYTHONPATH="$PWD" /usr/bin/python3 -B tests/test_identity_boundary.py "$RUNNER_TEMP/r33-identity.json"
+      - name: Run the real no-secret identity challenge
+        shell: bash
+        run: |
+          cd tools/r33-synthetic
+          PYTHONPATH="$PWD" /usr/bin/python3 -B tests/test_operator_identity_probe.py

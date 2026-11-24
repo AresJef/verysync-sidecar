@@ -23,12 +23,12 @@ TMP = Path("/private/tmp") if sys.platform == "darwin" else Path("/tmp")
 
 
 class Terminal:
-    def __init__(self, arguments):
+    def __init__(self, arguments, script="r33_handoff.py"):
         self.buffer = b""
         self.observed = b""
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
-            os.execv(sys.executable,[sys.executable,"-B",str(BUNDLE/"r33_handoff.py"),*arguments])
+            os.execv(sys.executable,[sys.executable,"-B",str(BUNDLE/script),*arguments])
         self.exit = None
 
     def response(self, prefix, timeout=10):

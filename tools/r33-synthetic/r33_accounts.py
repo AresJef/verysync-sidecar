@@ -187,6 +187,9 @@ class SyntheticAccount:
 async def open_backend(target, profile, runtime, run, synthetic, stopped):
     if target == "pro" and synthetic:
         return await SyntheticAccount.open(profile, run, stopped)
+    if target == "github" and synthetic:
+        from r33_actions import SyntheticActions
+        return await SyntheticActions.open(profile)
     raise ValueError("The requested private service has not been prepared.")
 
 

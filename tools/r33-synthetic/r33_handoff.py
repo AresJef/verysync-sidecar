@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 import json
 import os
+import resource
 from pathlib import Path
 import secrets
 import signal
@@ -16,7 +17,7 @@ import tempfile
 import time
 
 from r33_protocol import (
-    DENIED, FRAME_MAX, HEARTBEAT_SECONDS, RUN, OperatorCancelled, ProtocolError, Request, decode_frame,
+    DENIED, FRAME_MAX, HEARTBEAT_SECONDS, RUN, BackendStartupError, OperatorCancelled, ProtocolError, Request, decode_frame,
     encode_frame, peer_uid,
 )
 from r33_ssh import Destination
@@ -57,6 +58,25 @@ class Journal:
         with path.open("xb"):
             pass
 
+    @classmethod
+    def restore(cls, path, run):
+        parts = private_file(path).read_bytes().splitlines(keepends=True)
+        rows = [decode_frame(part) for part in parts]
+        if not rows or any(row.get("run")!=run for row in rows):
+            raise ValueError("Use the private journal for this exact run.")
+        pending = set()
+        for row in rows:
+            if row.get("target")!="linux" or type(row.get("request")) is not str:
+                continue
+            if row.get("event")=="write-submitted":
+                pending.add(row["request"])
+            if row.get("event")=="write-acknowledged" or (row.get("event")=="write-readback"
+                                                         and row.get("verified") is True):
+                pending.discard(row["request"])
+        instance = cls.__new__(cls)
+        instance.path,instance.run = path,run
+        return instance, sorted(pending)
+
     def record(self, event, **data):
         receipt = {"run": self.run, "event": event, "monotonic": time.monotonic(), **data}
         with self.path.open("ab", buffering=0) as log:
@@ -85,10 +105,10 @@ class Channel:
                 self.broken = True
                 raise
 
-    async def close(self):
+    async def close(self, grace=2):
         self.process.stdin.close()
         try:
-            await asyncio.wait_for(self.process.wait(), 2)
+            await asyncio.wait_for(self.process.wait(), grace)
         except asyncio.TimeoutError:
             try:
                 self.process.terminate()
@@ -109,7 +129,7 @@ class Linux:
         self.channel = channel
 
     @classmethod
-    async def open(cls, profile, runtime, run, mode="start"):
+    async def open(cls, profile, runtime, run, mode="start", stopped=None):
         data = profile.copy()
         identity = data.pop("identity", None)
         command = Destination.parse(data).command(runtime, Path(identity) if identity else None)
@@ -121,13 +141,27 @@ class Linux:
             limit=FRAME_MAX, env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home())},
         )
         channel = Channel(child)
+        handshake = asyncio.create_task(channel.call({"kind": mode, "run": run}, deadline=80))
+        withdrawal = asyncio.create_task(stopped.wait()) if stopped is not None else None
         try:
-            reply = await channel.call({"kind": mode, "run": run}, deadline=80)
+            if withdrawal:
+                await asyncio.wait((handshake,withdrawal),return_when=asyncio.FIRST_COMPLETED)
+                if stopped.is_set() and not handshake.done():
+                    # SSH may have received the initial frame. No feature operation
+                    # has been sent and the remote lease still limits the lifetime.
+                    handshake.cancel()
+                    await asyncio.gather(handshake,return_exceptions=True)
+                    raise BackendStartupError({"state":"pending-confirmation","work_requested":False})
+            reply = await handshake
             if reply.get("ok") is not True or reply.get("state") not in ("active", "revoked"):
                 raise ConnectionError("The fixed SSH peer did not accept the session.")
         except BaseException:
             await channel.close()
             raise
+        finally:
+            if withdrawal:
+                withdrawal.cancel()
+                await asyncio.gather(withdrawal,return_exceptions=True)
         return cls(channel)
 
     async def execute(self, work, before_send):
@@ -163,13 +197,21 @@ class Linux:
             terminal = self.redact(await self.channel.call({"kind": "stop"}, deadline=5))
             if terminal.get("state") != "revoked" or terminal.get("tasks") != 0 or not terminal.get("stopped"):
                 return {"state": "pending-confirmation"}
+            unresolved = []
             for identifier in unknown:
-                result = await self.channel.call({"kind": "readback", "id": identifier}, deadline=5)
+                result = await self.channel.call({"kind":"stored-readback","id":identifier},deadline=5)
+                if result.get("code") == "no-stored-readback":
+                    result = await self.channel.call({"kind":"readback","id":identifier},deadline=5)
                 observed = result.get("observed")
-                journal.record("write-readback", target="linux", request=identifier,
-                               verified=result.get("ok") is True, sample_present=(
-                                   type(observed) is dict and observed.get("sample_present") is True))
-            return {"state": "stopped", "writes": terminal["writes"]}
+                journal.record("write-readback",target="linux",request=identifier,
+                               verified=result.get("ok") is True,
+                               sample_present=type(observed) is dict and observed.get("sample_present") is True)
+                if result.get("ok") is not True:
+                    unresolved.append(identifier)
+            stopped = {"state":"stopped","writes":terminal["writes"]}
+            if unresolved:
+                stopped["unverified_write_ids"]=unresolved
+            return stopped
         except (OSError, ValueError, asyncio.TimeoutError):
             return {"state": "pending-confirmation"}
         finally:
@@ -259,7 +301,7 @@ class Scope:
     async def finish(self):
         self.withdraw()
         try:
-            await asyncio.wait_for(self.ended.wait(), 18)
+            await asyncio.wait_for(self.ended.wait(), getattr(self.backend, "drain_seconds", 18))
             self.final = await self.backend.stop(sorted(self.possible_writes), self.journal)
         except (OSError, ValueError, asyncio.TimeoutError):
             self.final = {"state": "pending-confirmation"}
@@ -275,13 +317,17 @@ class Supervisor:
         self.done = asyncio.Event()
         self.clients = set()
         self.stopping = {}
+        self.startup_outcomes = {}
 
     def snapshot(self):
         result = {"ok": True, "local": self.status}
         for name in PUBLIC_OPERATIONS:
             scope = self.scopes.get(name)
-            result[name] = scope.final if scope and scope.final else {
-                "state": "revoked" if scope.revoked else "active"} if scope else {"state": "not-enabled"}
+            if name in self.startup_outcomes:
+                result[name] = self.startup_outcomes[name]
+            else:
+                result[name] = scope.final if scope and scope.final else {
+                    "state": "revoked" if scope.revoked else "active"} if scope else {"state": "not-enabled"}
         return result
 
     def revoke(self, reason):
@@ -416,13 +462,32 @@ def watch_operator_terminal(supervisor):
     return lambda: loop.remove_reader(fd)
 
 
+def validated_operator_bundle():
+    bundle_dir = BUNDLE.stat()
+    if bundle_dir.st_uid!=os.getuid() or bundle_dir.st_mode & 0o022:
+        raise ValueError("Run a verified copy that only the operator can change.")
+    files = (
+        "r33_handoff.py","r33_protocol.py","r33_isolation.py","r33_accounts.py","r33_native.py",
+        "r33_official_proxy.py","r33_ssh.py","r33_ssh_exec.py",
+    )
+    for name in files:
+        code = BUNDLE/name
+        info = code.lstat()
+        if code.resolve()!=code or info.st_uid!=os.getuid() or info.st_mode & 0o022 or not stat.S_ISREG(info.st_mode):
+            raise ValueError("The private operator copy does not have the expected file ownership.")
+
+
 async def start(args):
     if not sys.stdin.isatty() or not sys.stderr.isatty():
         raise ValueError("Start the handoff in a private operator terminal.")
     if not 0 < args.executor_uid < 2**32 or os.getuid() == 0:
         raise ValueError("Use unprivileged operator and executor system accounts.")
-    if not args.synthetic and args.executor_uid == os.getuid():
-        raise ValueError("Use separate unprivileged operator and executor system accounts.")
+    if not args.synthetic:
+        if args.executor_uid == os.getuid() or args.isolation_record is None:
+            raise ValueError("Verify separate unprivileged operator and executor accounts before starting.")
+        validated_operator_bundle()
+        from r33_isolation import read_proof
+        read_proof(args.isolation_record, args.executor_uid)
     profile = run_profile(args.profile, args.synthetic)
     print(f"VerySync R33 acceptance. Access expires after {args.minutes} minutes.", flush=True)
     for name, (allowed, connection) in profile.items():
@@ -448,11 +513,20 @@ async def start(args):
             for name, (allowed, connection) in profile.items():
                 if supervisor.status != "active":
                     break
-                if name == "linux":
-                    backend = await Linux.open(connection, runtime, run)
-                else:
-                    from r33_accounts import open_backend
-                    backend = await open_backend(name, connection, runtime, run, args.synthetic, supervisor.done)
+                try:
+                    if name == "linux":
+                        backend = await Linux.open(connection, runtime, run, stopped=supervisor.done)
+                    elif name == "pro" and not args.synthetic:
+                        from r33_native import NativeAccount
+                        backend = await NativeAccount.open(connection, runtime, run, supervisor.done)
+                    else:
+                        from r33_accounts import open_backend
+                        backend = await open_backend(name, connection, runtime, run, args.synthetic, supervisor.done)
+                except BackendStartupError as error:
+                    supervisor.startup_outcomes[name] = error.receipt
+                    journal.record("startup-result", target=name, result=error.receipt)
+                    print("The initial handoff needs to be checked. Review the private receipt.",file=sys.stderr)
+                    return 1
                 scope = Scope(name, backend, allowed, journal)
                 supervisor.scopes[name] = scope
                 if supervisor.status != "active":
@@ -464,6 +538,7 @@ async def start(args):
             socket_path.chmod(0o666)
             entrance.chmod(0o711)
             journal.record("local-ready")
+            print("Type STOP or press Ctrl+C to end this foreground access.",flush=True)
             print("R33_READY "+json.dumps({"run":run, "socket":str(socket_path)}), flush=True)
             renewal = asyncio.create_task(supervisor.renew_linux())
             expiry = loop.call_later(args.minutes*60, supervisor.revoke, "authorization-expired")
@@ -486,7 +561,8 @@ async def start(args):
                 await server.wait_closed()
             for connection in supervisor.clients:
                 connection.close()
-            final = supervisor.snapshot()
+            final = supervisor.snapshot() | {"run":run}
+            print("Local access has been revoked. Each target's state is recorded below.",flush=True)
             print("R33_STOPPED "+json.dumps(final), flush=True)
             journal.record("terminal", result=final)
     return 0
@@ -507,10 +583,20 @@ async def recover(args):
     if args.target == "pro" and args.synthetic:
         from r33_accounts import recover_synthetic_account
         outcome = await recover_synthetic_account(connection, args.run)
+    elif args.target == "pro":
+        validated_operator_bundle()
+        from r33_native import NativeAccount
+        with tempfile.TemporaryDirectory(prefix="r33-recover-", dir=TMP) as directory:
+            outcome = await NativeAccount.recover(connection, Path(directory).resolve(), args.run)
     elif args.target == "linux":
+        journal, pending = Journal.restore(args.evidence,args.run) if args.evidence else (None,())
         with tempfile.TemporaryDirectory(prefix="r33-recover-", dir=TMP) as directory:
             backend = await Linux.open(connection, Path(directory).resolve(), args.run, mode="recover")
-            outcome = await backend.stop((), None)
+            outcome = await backend.stop(pending, journal)
+        if journal:
+            journal.record("recovery-terminal",target="linux",result=outcome)
+        else:
+            outcome["previous_writes_checked"]=False
     else:
         raise ValueError("The requested private recovery service has not been prepared.")
     response = {"local": "no-new-grant", args.target: outcome}
@@ -527,6 +613,7 @@ def main():
     handle.add_argument("--minutes", type=int, required=True)
     handle.add_argument("--evidence", type=Path, required=True)
     handle.add_argument("--synthetic", action="store_true")
+    handle.add_argument("--isolation-record", type=Path)
     for name in ("status", "stop", "request", "withdraw"):
         action = commands.add_parser(name)
         action.add_argument("--socket", type=Path, required=True)
@@ -540,8 +627,10 @@ def main():
     restore.add_argument("--run", required=True)
     restore.add_argument("--target", choices=("pro", "linux"), required=True)
     restore.add_argument("--synthetic", action="store_true")
+    restore.add_argument("--evidence", type=Path)
     args = parser.parse_args()
     os.umask(0o077)
+    resource.setrlimit(resource.RLIMIT_CORE, (0,0))
     try:
         if args.command == "start":
             if not 1 <= args.minutes <= 2880:

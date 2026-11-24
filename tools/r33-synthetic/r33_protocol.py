@@ -28,6 +28,14 @@ class OperatorCancelled(Exception):
     """The operator stopped before a new private request was submitted."""
 
 
+class BackendStartupError(Exception):
+    """Startup submitted a request whose result needs to be reported."""
+
+    def __init__(self, receipt):
+        super().__init__("The private handoff could not confirm startup.")
+        self.receipt = receipt
+
+
 def unique_object(pairs):
     result = {}
     for name, value in pairs:
