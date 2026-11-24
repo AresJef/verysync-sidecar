@@ -129,6 +129,15 @@ def terminal(root,destination,credentials, *, seconds=280):
         user.feed(ssh_password+b"\n")
         ready = user.response(b"R33_READY ",12)
         run = ready["run"]
+        with connect(Path(ready["socket"])) as check:
+            status = request(check,run,"handoff","status")
+            if status["linux"].get("state")!="active":
+                allowed = (username,password,ssh_password)
+                text = b"\n".join(user.observed.splitlines()[-10:])
+                if any(secret in text for secret in allowed):
+                    raise AssertionError("A synthetic secret was visible in the startup terminal.")
+                raise AssertionError(f"The owned SSH worker failed startup: {status['linux']}; "
+                                     f"synthetic terminal: {text.decode(errors='replace')}")
         token = (storage/run/"session").read_bytes()
         markers = (username,password,ssh_password,token)
         verify_argv(markers, (user.pid,))
@@ -339,6 +348,7 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix="r33-one-") as folder:
             root=Path(folder).resolve()
+            root.chmod(0o711)
             local,ssh=root/"local",root/"ssh"
             local.mkdir()
             ssh.mkdir()

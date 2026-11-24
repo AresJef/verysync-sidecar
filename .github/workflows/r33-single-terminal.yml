@@ -38,3 +38,27 @@ jobs:
           /usr/bin/python3 -B "$r33_scratch/unpacked/tests/test_rules.py"
           /usr/bin/python3 -B "$r33_scratch/unpacked/tests/test_single_terminal.py" --mode "$R33_MODE"
 
+  isolation:
+    name: Current login proof (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 6
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, ubuntu-22.04]
+    steps:
+      - name: Check out the fixed synthetic fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify automatic handoff in a private temporary group
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          r33_scratch="$(mktemp -d)"
+          trap 'rm -r -- "$r33_scratch"' EXIT
+          mkdir "$r33_scratch/unpacked"
+          /usr/bin/python3 -B tests/r33-single-terminal/freeze-tests.py tests/r33-single-terminal "$r33_scratch/source.zip" "$r33_scratch/unpacked"
+          /usr/bin/python3 -B "$r33_scratch/unpacked/tests/test_rendezvous.py"
+
