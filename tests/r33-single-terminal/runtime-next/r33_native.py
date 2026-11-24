@@ -140,7 +140,7 @@ class NativeAccount:
                 "/usr/bin/sandbox-exec","-f",str(confinement),str(settings.driver),"serve",
                 str(settings.engine),str(root),run,env=env,
                 stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL, limit=FRAME_MAX,
+                stderr=asyncio.subprocess.DEVNULL,limit=FRAME_MAX,start_new_session=True,
             )
             channel = Channel(child)
             initial = decode_frame(await asyncio.wait_for(child.stdout.readline(),25))

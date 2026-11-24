@@ -67,7 +67,7 @@ def run_native(exchange, config, engine, driver, source):
         terminal=tty.response(b"R33_STOPPED ",18)
         assert terminal["run"]==run and terminal["cause"]=="SIGINT" and terminal["local"]=="revoked"
         native=terminal["pro"]
-        assert native["state"]=="stopped-before-login" and native["normal_owned_exit"]
+        assert native["state"]=="stopped-before-login" and native["normal_owned_exit"],native
         assert native["official_network"]["permitted"]==0
         assert tty.wait(12) in (0,1) and not vault.exists()
         assert str(running) not in {line.strip() for line in subprocess.check_output(ps,text=True).splitlines()}
