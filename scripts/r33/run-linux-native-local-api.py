@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 from queue import Empty, Queue
+import runpy
 import shutil
 import socket
 import subprocess
@@ -76,14 +77,10 @@ def materialize(root, source):
                   and row.get("target", {}).get("name") == "authentication_engine" and row.get("executable"))
     if library != {str(file.relative_to(crate)): sha256(file) for file in (crate / "src").rglob("*") if file.is_file()}:
         raise ValueError("Library source bytes changed during the private test build.")
-    program = root / "fixed-native-core"
-    with tarfile.open(native, "r:gz") as package:
-        candidates = [entry for entry in package.getmembers() if Path(entry.name).name == "verysync"]
-        if len(candidates) != 1 or not candidates[0].isfile():
-            raise ValueError("Cannot identify the executable member in the fixed native archive.")
-        with package.extractfile(candidates[0]) as source_bytes, program.open("xb") as output:
-            shutil.copyfileobj(source_bytes, output)
-    program.chmod(0o700)
+    preparation = runpy.run_path(str(crate / "scripts" / "prepare-test-engine.py"))
+    program = preparation["extract_executable"](
+        native, root, "verysync-linux-amd64-v2.33.2", "verysync", "tar.gz",
+    )
     return binary, program
 
 
