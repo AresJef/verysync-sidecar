@@ -1,0 +1,26 @@
+name: R33 current-login foreground handoff
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths:
+      - .github/workflows/r33-same-login-foreground-20261124.yml
+      - tests/r33-same-login-synthetic/**
+
+permissions:
+  contents: read
+
+jobs:
+  foreground:
+    runs-on: macos-15
+    timeout-minutes: 4
+    steps:
+      - name: Check out the exact synthetic fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check the new foreground boundary with fake account input
+        shell: bash
+        run: |
+          set -eu
+          cd tests/r33-same-login-synthetic
+          /usr/bin/python3 -I -S -B broker-ci.py
