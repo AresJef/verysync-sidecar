@@ -1,0 +1,31 @@
+name: R33 verify cancellation of one synthetic job
+
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths:
+      - .github/workflows/r33-single-terminal-cancel.yml
+      - tests/r33-single-terminal/tests/verify-own-cancel.py
+
+permissions:
+  contents: read
+
+jobs:
+  self-cancel:
+    name: Cancel and verify this exact synthetic runner
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Check out the fixed cancellation fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Request cancellation and record owned exit
+        shell: bash
+        env:
+          R33_OWN_RUN_CANCEL_TOKEN: ${{ github.token }}
+        run: exec /usr/bin/python3 -B tests/r33-single-terminal/tests/verify-own-cancel.py
+

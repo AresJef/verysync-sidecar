@@ -39,13 +39,9 @@ jobs:
           /usr/bin/python3 -B "$r33_scratch/unpacked/tests/test_single_terminal.py" --mode "$R33_MODE"
 
   isolation:
-    name: Current login proof (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
+    name: Current macOS login proof
+    runs-on: macos-15
     timeout-minutes: 6
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15, ubuntu-22.04]
     steps:
       - name: Check out the fixed synthetic fixture
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -87,11 +83,11 @@ jobs:
           printf '%s  %s\n' '1d1e7d0d3ef4ac4dcf063b8e4d3ac336bd823fd056e5aae84c5dbaaf24d6cbfe' "$r33_work/stable.crate" | shasum -a 256 -c -
           printf '%s  %s\n' '7921321d2df082a03647388cd50e30f187d37f7af4439246797118f4f05478f4' "$r33_work/engine.zip" | shasum -a 256 -c -
           /usr/bin/tar -xzf "$r33_work/stable.crate" -C "$r33_work/release"
-          if ! "$HOME/.cargo/bin/rustup" run 1.85.0 cargo --version; then
-            "$HOME/.cargo/bin/rustup" toolchain install 1.85.0 --profile minimal
+          if ! rustup run 1.85.0 cargo --version; then
+            rustup toolchain install 1.85.0 --profile minimal
           fi
           cp -R tests/r33-single-terminal/native-driver "$r33_work/driver"
-          CARGO_TARGET_DIR="$r33_work/build" "$HOME/.cargo/bin/cargo" +1.85.0 \
+          CARGO_TARGET_DIR="$r33_work/build" rustup run 1.85.0 cargo \
             --config "patch.crates-io.verysync-sidecar.path='$r33_work/release/verysync-sidecar-0.1.0'" \
             build --locked --manifest-path "$r33_work/driver/Cargo.toml"
       - name: Verify actual native isolation before the first hidden prompt

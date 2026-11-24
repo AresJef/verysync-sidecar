@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import secrets
 import shlex
 import shutil
@@ -178,13 +179,26 @@ def cases(endpoint,run,storage):
         return observed
 
 
-def cycle_linux(endpoint,run,peer_sha):
+def kernel_test_listeners(home):
+    uid = home.stat().st_uid
+    active = subprocess.check_output(["/usr/bin/ps","-U",str(uid),"-o","pid="],text=True)
+    owners = {int(item.strip()) for item in active.splitlines() if item.strip()}
+    assert owners, "The disposable SSH user must still have an owned process."
+    utility = shutil.which("ss")
+    assert utility, "The independent kernel listener observer is unavailable."
+    sockets = sudo(utility,"-H","-lntup",capture_output=True).stdout
+    shown = {int(value) for value in re.findall(rb"pid=(\d+)",sockets)}
+    return len(owners & shown)
+
+
+def cycle_linux(endpoint,run,peer_sha,home):
     with connect(endpoint) as client:
         def observation():
             return request(client,run,"linux","observe")
         start = observation()
         assert start["standby"] and not start["tasks"] and start["native_test_listeners"]==0
         assert start["peer_payload_sha256"]==peer_sha
+        kernel = [kernel_test_listeners(home)]
         deadline = time.monotonic() + 36
         next_probe = start
         while next_probe["renewals"] < 2 and time.monotonic() < deadline:
@@ -193,6 +207,7 @@ def cycle_linux(endpoint,run,peer_sha):
             assert next_probe.get("ok") is True, next_probe
         assert next_probe["renewals"] >= 2, next_probe
         assert next_probe["standby"] and next_probe["native_test_listeners"]==0
+        kernel.append(kernel_test_listeners(home))
         cycles = []
         for _ in range(2):
             assert request(client,run,"linux","start-observer")["running"]
@@ -203,7 +218,9 @@ def cycle_linux(endpoint,run,peer_sha):
             assert result["normal_task_exit"] and result["sample_sha256"]==hashlib.sha256(actual).hexdigest()
             assert observation()["standby"] and observation()["tasks"]==0
             cycles.append(result)
-        return {"two_renewals_in_standby":next_probe,"cycles":cycles}
+            kernel.append(kernel_test_listeners(home))
+        assert not any(kernel),kernel
+        return {"two_renewals_in_standby":next_probe,"cycles":cycles,"kernel_owned_tcp_udp_listeners":kernel}
 
 
 def unexpected_targets(client, run):
@@ -216,7 +233,7 @@ def run_stop(root,destination,credentials,mode,home,gates,peer_sha):
     user, endpoint, run, journal, markers = terminal(root,destination,credentials)
     try:
         scenarios = cases(endpoint,run,credentials[1])
-        linux = cycle_linux(endpoint,run,peer_sha) if mode=="STOP" else None
+        linux = cycle_linux(endpoint,run,peer_sha,home) if mode=="STOP" else None
         with connect(endpoint) as previous:
             unexpected_targets(previous,run)
             if mode=="STOP":
@@ -300,7 +317,12 @@ def loss(root,destination,credentials,home,kind):
     try:
         with connect(endpoint) as client:
             assert request(client,run,"linux","start-observer")["running"]
-            assert request(client,run,"linux","observe")["tasks"]==1
+            last = request(client,run,"linux","observe")
+            limit = time.monotonic() + 19
+            while last["renewals"] < 1 and time.monotonic() < limit:
+                time.sleep(.5)
+                last = request(client,run,"linux","observe")
+            assert last["tasks"]==1 and last["renewals"]>=1,last
             if kind=="ssh-loss":
                 lines=subprocess.check_output(["/usr/bin/ps","--ppid",str(user.pid),"-o","pid=,args="],
                                               text=True)
@@ -314,7 +336,7 @@ def loss(root,destination,credentials,home,kind):
                 assert user.wait(3)==-signal.SIGKILL
         lasted=until(observed,timeout=TTL+2)
         elapsed=lasted["stopped"]-lasted["renewed"]
-        assert 89 <= elapsed <= TTL and lasted["normal_task_exit"], (elapsed,lasted)
+        assert 89 <= elapsed <= TTL and lasted["normal_task_exit"] and lasted["renewals"]>=1, (elapsed,lasted)
         if kind=="ssh-loss":
             user.feed(b"STOP\n")
             receipt=user.response(b"R33_STOPPED ",12)
@@ -330,7 +352,7 @@ def loss(root,destination,credentials,home,kind):
                 assert found["pro"]["state"]=="synthetic-session-closed" and recovery.wait()==0
             finally:
                 recovery.close()
-        return {"fault":kind,"time_from_last_renewal":elapsed,"remote_cleanup":lasted,"terminal":receipt}
+        return {"fault":kind,"confirmed_renewals_before_disconnect":last["renewals"],"time_from_last_renewal":elapsed,"remote_cleanup":lasted,"terminal":receipt}
     finally:
         user.close()
         if endpoint.exists() and kind=="foreground-kill":
