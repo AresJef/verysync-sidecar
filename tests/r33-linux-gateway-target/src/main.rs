@@ -68,6 +68,39 @@ fn fixture_port(raw: &str) -> Check<u16> {
     Ok(port)
 }
 
+#[cfg(target_os = "linux")]
+fn live_data_address(value: &str) -> Check<SocketAddr> {
+    use std::net::SocketAddrV4;
+    use std::os::unix::fs::MetadataExt;
+    let data: SocketAddrV4 = value.parse()?;
+    let before = env::var("R33_OUTER_NETWORK_INODE")?.parse::<u64>()?;
+    let namespace = fs::metadata("/proc/self/ns/net")?;
+    let uid = fs::metadata("/proc/self")?.uid();
+    let interfaces = fs::read_to_string("/proc/net/dev")?;
+    let names = interfaces
+        .lines()
+        .skip(2)
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, _)| name.trim())
+        .collect::<std::collections::BTreeSet<_>>();
+    let [first, second, _, _] = data.ip().octets();
+    if data.port() != 58611
+        || first != 198
+        || ![18, 19].contains(&second)
+        || before == namespace.ino()
+        || uid == 0
+        || names != ["lo", "r33-data"].into_iter().collect()
+    {
+        return Err("The target is outside the dedicated non-root P2P network.".into());
+    }
+    Ok(SocketAddr::V4(data))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn live_data_address(_value: &str) -> Check<SocketAddr> {
+    Err("The cross-network target needs the isolated AMD64 Linux runtime.".into())
+}
+
 async fn pin(core: &mut ManagedInstance, data: SocketAddr, auxiliary: u16) -> Check {
     let identity = core.client().instance().device_id.clone();
     let own = format!("tcp://{data}");
@@ -248,7 +281,8 @@ async fn run(
     let endpoint = ManagementEndpoint::http(&format!("http://127.0.0.1:{gui}/"))?;
     let settings = ManagedOptions::new(program, root.join("state"), endpoint)?
         .startup_timeout(Duration::from_secs(20))?
-        .management_request_timeout(Duration::from_secs(8))?;
+        .management_request_timeout(Duration::from_secs(8))?
+        .local_api_enabled(false)?;
     let mut core = ManagedInstance::start(settings)
         .await
         .map_err(|error| format!("start the private core: {error:?}"))?;
@@ -325,14 +359,18 @@ async fn main() {
         };
         if run_id.len() != 32
             || !run_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-            || scope != "sealed-loopback-control"
+            || !["sealed-loopback-control", "sealed-network-target"].contains(&scope.as_str())
         {
             return Err("Use the sealed synthetic target scope.".into());
         }
         let gui = fixture_port(gui)?;
-        let data = fixture_port(data)?;
+        let data = if scope == "sealed-loopback-control" {
+            SocketAddr::from(([127, 0, 0, 1], fixture_port(data)?))
+        } else {
+            live_data_address(data)?
+        };
         let auxiliary = fixture_port(auxiliary)?;
-        if gui == data || auxiliary == gui || auxiliary == data {
+        if gui == data.port() || auxiliary == gui || auxiliary == data.port() {
             return Err("The fixture listeners must be distinct.".into());
         }
         run(
@@ -340,7 +378,7 @@ async fn main() {
             Path::new(root),
             run_id,
             gui,
-            SocketAddr::from(([127, 0, 0, 1], data)),
+            data,
             auxiliary,
         )
         .await

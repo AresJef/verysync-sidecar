@@ -121,6 +121,13 @@ def main(evidence):
                         __file__,"--inside",str(native),str(binary),workspace,str(os.getuid()),
                         str(os.getgid()),str(FILES["namespace"]())],
                        cwd=folder,check=True,timeout=100)
+        subprocess.run(
+            ["/usr/bin/sudo","-n","/usr/bin/unshare","--net","--mount","--propagation","private","--",
+             "/bin/bash","-euc",
+             '/usr/sbin/sysctl -w net.ipv4.ip_forward=1 && exec /usr/bin/python3 -B "$@"',
+             "isolated native target",str(HERE/"check-target-staging.py"),str(native),str(binary),
+             str(folder/"staging-proof.zip")],
+            cwd=folder,check=True,timeout=220)
         (evidence/"verysync-r33-operator").write_bytes(binary.read_bytes())
     assert not folder.exists()
     print("R33_LINUX_GATEWAY_TARGET_CLEANUP "+json.dumps({"exact_fixture_removed":True}))
