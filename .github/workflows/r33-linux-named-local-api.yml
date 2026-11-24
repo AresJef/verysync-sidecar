@@ -1,0 +1,36 @@
+name: R33 named Local-API qualification on Linux
+
+on:
+  push:
+    branches:
+      - ci/r33-synthetic-20261124
+    paths:
+      - .github/workflows/r33-linux-named-local-api.yml
+      - tests/r33-linux-named-local-api/**
+
+permissions:
+  contents: read
+
+jobs:
+  signed-out:
+    name: Signed-out scope and private network
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Select the fixed Rust toolchain
+        run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
+      - name: Build and check the isolated signed-out driver
+        run: >
+          /usr/bin/python3 -B tests/r33-linux-named-local-api/check-linux-qualification.py
+          --source tests/r33-linux-named-local-api/driver
+          --evidence "${RUNNER_TEMP}/named-local-api-evidence"
+      - name: Preserve the signed-out receipt and project test driver
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: r33-linux-named-local-api
+          path: "${{ runner.temp }}/named-local-api-evidence"
+          if-no-files-found: error
+          retention-days: 7
