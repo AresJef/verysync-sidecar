@@ -1,0 +1,261 @@
+name: R33 same-login kernel group probe
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths: [.github/workflows/r33-same-login-20261124.yml]
+
+permissions: {}
+
+jobs:
+  synthetic:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 3
+    steps:
+      - name: Verify that the same UID cannot cross a temporary kernel group
+        shell: bash
+        run: |
+          set -eu
+          /usr/bin/uname -s -m
+          /usr/bin/id -u
+          r33_probe_dir="$(/usr/bin/mktemp -d)"
+          trap 'rm -f "$r33_probe_dir/probe.py"; rmdir "$r33_probe_dir"' EXIT
+          cat <<'R33_PY' > "$r33_probe_dir/probe.py"
+          #!/usr/bin/python3
+          """Validate a temporary kernel group for the same macOS login with fake inputs only."""
+          
+          import argparse
+          import errno
+          import grp
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import select
+          import shutil
+          import signal
+          import socket
+          import stat
+          import sys
+          import tempfile
+          import time
+          
+          
+          TMP = Path("/private/tmp" if sys.platform == "darwin" else "/tmp")
+          DENIED = {"EACCES", "EPERM"}
+          
+          
+          def unassigned_group():
+              for candidate in range(280073, 280133):
+                  try:
+                      grp.getgrgid(candidate)
+                  except KeyError:
+                      return candidate
+              raise RuntimeError("No temporary group number was available.")
+          
+          
+          def write_owned(canary, uid, gid):
+              with canary.open("xb") as output:
+                  os.fchown(output.fileno(), uid, gid)
+                  output.write(b"R33 synthetic boundary check\n")
+          
+          
+          def open_socket(path):
+              conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+              try:
+                  conn.bind(str(path))
+                  conn.listen()
+                  conn.settimeout(24)
+                  return conn
+              except BaseException:
+                  conn.close()
+                  raise
+          
+          
+          def attempt(operation):
+              try:
+                  operation()
+              except OSError as error:
+                  return errno.errorcode.get(error.errno, "UNKNOWN")
+              return "allowed"
+          
+          
+          def connect(endpoint):
+              with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+                  conn.settimeout(2)
+                  conn.connect(str(endpoint))
+          
+          
+          def holding_process(path, uid, gid, notification, lifetime):
+              os.setgroups([gid])
+              os.setgid(gid)
+              os.setuid(uid)
+              assert os.getuid() == os.geteuid() == uid and os.getegid() == gid
+              assert set(os.getgroups()) == {gid}
+              assert (path/"canary").read_bytes() == b"R33 synthetic boundary check\n"
+              with open_socket(path/"raw") as listener:
+                  connect(path/"raw")
+                  client, _ = listener.accept()
+                  client.close()
+                  os.write(notification, b"1")
+                  listener.settimeout(lifetime)
+                  try:
+                      client, _ = listener.accept()
+                  except socket.timeout:
+                      return 0
+                  else:
+                      client.close()
+                      return 3
+          
+          
+          def ordinary_process(path, uid, gids):
+              os.setgroups(gids)
+              os.setgid(gids[0])
+              os.setuid(uid)
+              file = path/"canary"
+              result = {
+                  "operator_uid": uid, "probe_uid": os.geteuid(),
+                  "private_read": attempt(file.read_bytes),
+                  "private_open_for_write": attempt(lambda: os.close(os.open(str(file), os.O_WRONLY))),
+                  "private_unix_connect": attempt(lambda: connect(path/"raw")),
+                  "ordinary_group_missing": path.parent.stat().st_gid not in os.getgroups(),
+              }
+              print(json.dumps(result, sort_keys=True), flush=True)
+              return 0 if result["ordinary_group_missing"] and all(
+                  result[key] in DENIED for key in ("private_read", "private_open_for_write", "private_unix_connect")
+              ) else 4
+          
+          
+          def spawn(operation, *arguments):
+              child = os.fork()
+              if child == 0:
+                  try:
+                      code = operation(*arguments)
+                  except (OSError, AssertionError, RuntimeError):
+                      code = 7
+                  os._exit(code)
+              return child
+          
+          
+          def receive(child, limit):
+              deadline = time.monotonic() + limit
+              while time.monotonic() < deadline:
+                  pid, status = os.waitpid(child, os.WNOHANG)
+                  if pid == child:
+                      return os.waitstatus_to_exitcode(status)
+                  time.sleep(.05)
+              raise TimeoutError("The synthetic process did not exit.")
+          
+          
+          def expose_live_challenge(base, uid):
+              with tempfile.TemporaryDirectory(prefix="r33-group-check-", dir=TMP) as directory:
+                  public = Path(directory)
+                  challenge = public/"challenge.json"
+                  with challenge.open("x", encoding="ascii") as output:
+                      json.dump({"type":"r33-same-login-canary-v1",
+                                 "operator_uid":uid,
+                                 "private_dir":str(base/"owned"),
+                                 "expires":int(time.time()+150)}, output)
+                  challenge.chmod(0o644)
+                  public.chmod(0o711)
+                  print("R33_ISOLATION " + str(challenge), flush=True)
+                  print("Share only the R33_ISOLATION line. Leave this no-secret check open until it exits.", flush=True)
+                  time.sleep(150)
+          
+          
+          def probe(uid, groups, share=False):
+              if os.geteuid() != 0 or uid <= 0 or not groups:
+                  raise ValueError("Use the original macOS login to authorize this no-secret check.")
+              gid = unassigned_group()
+              if gid in groups:
+                  raise ValueError("The temporary group was present in the login credentials.")
+              base = Path(tempfile.mkdtemp(prefix="r33-group-", dir=TMP))
+              private = base/"owned"
+              waiting = None
+              observer = None
+              readable, writable = os.pipe()
+              summary = {"synthetic_only": True, "same_login_uid": uid, "temporary_group": gid}
+              try:
+                  private.mkdir(mode=0o700)
+                  os.chown(base, 0, gid)
+                  os.chown(private, uid, gid)
+                  write_owned(private/"canary", uid, gid)
+                  base.chmod(0o710)
+          
+                  waiting = spawn(holding_process, private, uid, gid, writable, 170 if share else 25)
+                  os.close(writable)
+                  writable = -1
+                  fds, _, _ = select.select([readable], [], [], 8)
+                  if not fds or os.read(readable, 1) != b"1":
+                      raise RuntimeError("The protected same-login process was not ready.")
+                  summary["owner_read_and_socket_control_passed"] = True
+                  observer = spawn(ordinary_process, private, uid, groups)
+                  summary["ordinary_process_exit"] = receive(observer, 7)
+                  observer = None
+                  summary["isolation_passed"] = summary["ordinary_process_exit"] == 0
+                  if share and summary["isolation_passed"]:
+                      expose_live_challenge(base, uid)
+              finally:
+                  for child in (waiting, observer):
+                      if child is not None:
+                          try:
+                              os.kill(child, signal.SIGTERM)
+                              os.waitpid(child, 0)
+                          except ProcessLookupError:
+                              pass
+                  for descriptor in (readable, writable):
+                      if descriptor >= 0:
+                          os.close(descriptor)
+                  assert base.parent == TMP and base.name.startswith("r33-group-")
+                  assert stat.S_ISDIR(base.lstat().st_mode)
+                  shutil.rmtree(base)
+              summary["fixture_removed"] = not base.exists()
+              print(json.dumps(summary, sort_keys=True), flush=True)
+              return 0 if summary["isolation_passed"] else 1
+          
+          
+          def local_login():
+              if not sys.stdin.isatty() or not sys.stderr.isatty() or os.ttyname(0)!=os.ttyname(2):
+                  raise ValueError("Run this check in your own interactive terminal.")
+              raw = os.environ.get("SUDO_UID", "")
+              if not re.fullmatch(r"[1-9][0-9]{0,8}", raw):
+                  raise ValueError("The local authorization did not identify the original login.")
+              uid = int(raw)
+              if os.fstat(0).st_uid not in {0, uid}:
+                  raise ValueError("The active terminal does not belong to the invocation.")
+              import pwd
+              account = pwd.getpwuid(uid)
+              return uid, list(dict.fromkeys([account.pw_gid, *os.getgrouplist(account.pw_name, account.pw_gid)]))
+          
+          
+          def main():
+              os.umask(0o077)
+              parser = argparse.ArgumentParser(description=__doc__)
+              parser.add_argument("--approved-hosted-fixture", action="store_true")
+              args = parser.parse_args()
+              try:
+                  if args.approved_hosted_fixture:
+                      if os.environ.get("GITHUB_ACTIONS") != "true":
+                          raise ValueError("Use the synthetic mode only on the isolated hosted fixture.")
+                      import pwd
+                      account = pwd.getpwuid(int(os.environ["SUDO_UID"]))
+                      uid, groups = account.pw_uid, [account.pw_gid]
+                  else:
+                      uid, groups = local_login()
+                  return probe(uid, groups, share=not args.approved_hosted_fixture)
+              except KeyboardInterrupt:
+                  print("The no-secret check stopped.", file=sys.stderr)
+                  return 130
+              except (KeyError, OSError, RuntimeError, ValueError) as error:
+                  print("The no-secret current-user isolation check did not complete: " + str(error), file=sys.stderr)
+                  return 2
+          
+          
+          if __name__ == "__main__":
+              sys.exit(main())
+          R33_PY
+          (cd "$r33_probe_dir" && printf '%s  %s\n' '65f676ffb3ced932772fb995e47964ba2b58674bb0dc6c00066d52eed4575812' probe.py | shasum -a 256 -c)
+          sudo --non-interactive -- /usr/bin/env GITHUB_ACTIONS=true /usr/bin/python3 -I -S -B "$r33_probe_dir/probe.py" --approved-hosted-fixture
