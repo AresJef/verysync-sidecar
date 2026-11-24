@@ -232,6 +232,7 @@ async def supervisor(engine, driver, run, expires, synthetic):
             and namespace_peer_allowed(stream, expectation["net"], account.pw_uid),
         )
         child = None
+        ready = False
         try:
             os.chown(operator_socket, 0, account.pw_gid)
             operator_socket.chmod(0o660)
@@ -256,13 +257,20 @@ async def supervisor(engine, driver, run, expires, synthetic):
                 expectation["net"] = actual["network_namespace"]
                 initial = await observe(child, 25)
                 if initial.get("account") != "logged-out" or initial.get("pro_observations") != []:
+                    if synthetic:
+                        print("Signed-out startup reply: " + json.dumps(initial), file=sys.stderr)
                     raise ValueError("The new isolation instance is not signed out.")
+                ready = True
                 probe = subprocess.run(
-                    ["/usr/bin/setpriv","--reuid",str(account.pw_uid),"--regid",str(account.pw_gid),
-                     "--clear-groups","/usr/bin/python3","-B",str(HERE.with_name("check_worker_boundary.py")),
-                     "--outside",str(base),str(port)],
-                    capture_output=True, check=True, timeout=8,
+                    ["/usr/bin/python3","-B",str(HERE.with_name("check_worker_boundary.py")),
+                     "--drop-observer",str(base),str(port),str(account.pw_uid),str(account.pw_gid)],
+                    capture_output=True, timeout=8,
                 )
+                if probe.returncode:
+                    if synthetic:
+                        print("Outside observer failure: " + probe.stderr.decode(errors="replace"),
+                              file=sys.stderr)
+                    raise ValueError("The ordinary identity could not complete the isolation check.")
                 outside = json.loads(probe.stdout)
                 if (outside["same_runtime_uid"] != account.pw_uid or not outside["loopback_port_refused"]
                         or not outside["authorization_socket_refused"] or outside["state_read"] not in ("EACCES","ENOENT")):
@@ -270,6 +278,11 @@ async def supervisor(engine, driver, run, expires, synthetic):
             good = await enveloped_requests(child, proxy, synthetic, expires, run,
                                             {"isolation":entry,"outside_check":outside,"instance":initial})
         finally:
+            if ready and child and child.returncode is None:
+                with suppress(OSError, ValueError, asyncio.TimeoutError, ProcessLookupError):
+                    child.send_signal(signal.SIGUSR1)
+                    await send(child, {"kind":"end"})
+                    await observe(child,8)
             proxy.close()
             if child and child.returncode is None:
                 with suppress(ProcessLookupError):
@@ -301,6 +314,8 @@ if __name__ == "__main__":
         if not all((args.engine,args.driver,args.run,args.expires)):
             cli.error("Supply the verified executable pair and one bounded grant.")
         raise SystemExit(asyncio.run(supervisor(args.engine,args.driver,args.run,args.expires,args.synthetic)))
-    except (OSError, ValueError, asyncio.TimeoutError, subprocess.SubprocessError):
+    except (OSError, ValueError, asyncio.TimeoutError, subprocess.SubprocessError) as error:
+        if args.synthetic:
+            print(f"Synthetic scope fixture failed: {type(error).__name__}: {error}", file=sys.stderr)
         publish({"ok":False,"code":"owned-local-api-start-or-cleanup-unconfirmed"})
         raise SystemExit(2) from None

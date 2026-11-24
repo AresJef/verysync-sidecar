@@ -37,7 +37,7 @@ def request(child, run, operation, identifier=None, args=None):
 
 def prepared(child, run):
     ready = take(child,45)
-    assert ready["event"] == "local-api-foreground-ready" and ready["run"] == run
+    assert ready.get("event") == "local-api-foreground-ready" and ready["run"] == run, ready
     assert ready["isolation"]["boundary"]["only_loopback"]
     assert ready["isolation"]["boundary"]["volatile_private_state"]
     assert ready["outside_check"]["authorization_socket_refused"]

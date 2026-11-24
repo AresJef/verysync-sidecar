@@ -158,6 +158,9 @@ if __name__ == "__main__":
         protected_worker(*args[1:])
     elif len(args) == 3 and args[0] == "--outside":
         outside_observer(*args[1:])
+    elif len(args) == 5 and args[0] == "--drop-observer" and os.getuid() == 0:
+        relinquish_admin(int(args[3]),int(args[4]))
+        outside_observer(*args[1:3])
     elif len(args) == 3 and args[0] == "--synthetic-hosted" and os.getuid() == 0:
         verify(*map(int,args[1:]))
     else:
