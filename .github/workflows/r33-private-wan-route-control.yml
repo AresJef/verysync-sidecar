@@ -20,7 +20,7 @@ jobs:
           persist-credentials: false
       - name: Exercise the route inside a disposable outer Linux network
         run: |
-          sudo /usr/bin/unshare --net --mount --propagation private -- +            /bin/bash -euc '
+          sudo /usr/bin/unshare --net --mount --propagation private -- /bin/bash -euc '
               /usr/sbin/sysctl -w net.ipv4.ip_forward=1
               /usr/bin/python3 -B tests/r33-private-wan-route/check-wan-route.py
             '
