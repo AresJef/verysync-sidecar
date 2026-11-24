@@ -44,7 +44,7 @@ with socket.socket() as sock:
 def start(scope, address, port):
     child=subprocess.Popen(scope.inside(sys.executable,"-B","-c",ACCEPT,str(address),str(port)),
                            stdout=subprocess.PIPE,text=True)
-    if not select.select([child.stdout],[],6)[0] or child.stdout.readline().strip()!="ready":
+    if not select.select([child.stdout],[],[],6)[0] or child.stdout.readline().strip()!="ready":
         child.terminate()
         child.wait(timeout=4)
         raise RuntimeError("The test listener did not become ready.")
@@ -88,7 +88,7 @@ def verify():
             assert dial("192.0.2.3",route.ingress,PORT)==4
             assert dial(route.source,route.target,48612)==4
             assert dial(route.source,route.ingress,PORT)==0
-            assert select.select([data.stdout],[],3)[0]
+            assert select.select([data.stdout],[],[],3)[0]
             received=json.loads(data.stdout.readline())
             assert received=={"address":"192.0.2.2","bytes":22}
             assert data.wait(timeout=4)==0
