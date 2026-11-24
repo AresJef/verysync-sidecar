@@ -617,7 +617,9 @@ async def start(args):
         supervisor = Supervisor(run, args.executor_uid, journal, boundary.group if boundary else None,
                                 executor_group=proof.get("executor_group") if proof else None,
                                 expires_at=args.expires_at)
-        journal.record("owner-transport-paths", private=str(runtime), public=str(entrance))
+        address = entrance.stat()
+        journal.record("owner-transport-paths", private=str(runtime), public=str(entrance),
+                       public_device=address.st_dev, public_inode=address.st_ino)
         loop = asyncio.get_running_loop()
         expiry = loop.call_later(duration, supervisor.revoke, "authorization-expired")
         for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):

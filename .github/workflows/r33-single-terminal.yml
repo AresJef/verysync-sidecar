@@ -62,3 +62,52 @@ jobs:
           /usr/bin/python3 -B tests/r33-single-terminal/freeze-tests.py tests/r33-single-terminal "$r33_scratch/source.zip" "$r33_scratch/unpacked"
           /usr/bin/python3 -B "$r33_scratch/unpacked/tests/test_rendezvous.py"
 
+          /usr/bin/python3 -B "$r33_scratch/unpacked/tests/test_controls.py"
+
+  native-preflight:
+    name: Fixed native Mac before login
+    runs-on: macos-15
+    timeout-minutes: 16
+    steps:
+      - name: Check out the fixed synthetic fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build the fixed account preflight driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(uname -m)" = arm64
+          r33_work="$RUNNER_TEMP/private-r33-native"
+          mkdir -m 0700 "$r33_work" "$r33_work/release" "$r33_work/unpacked"
+          printf 'R33_NATIVE_ROOT=%s\n' "$r33_work" >> "$GITHUB_ENV"
+          curl -fsSL --max-time 120 'https://static.crates.io/crates/verysync-sidecar/verysync-sidecar-0.1.0.crate' -o "$r33_work/stable.crate"
+          curl -fsSL --max-time 180 'https://dl-cn.verysync.com/releases/v2.33.2/verysync-macos-arm64-v2.33.2.zip' -o "$r33_work/engine.zip"
+          printf '%s  %s\n' '1d1e7d0d3ef4ac4dcf063b8e4d3ac336bd823fd056e5aae84c5dbaaf24d6cbfe' "$r33_work/stable.crate" | shasum -a 256 -c -
+          printf '%s  %s\n' '7921321d2df082a03647388cd50e30f187d37f7af4439246797118f4f05478f4' "$r33_work/engine.zip" | shasum -a 256 -c -
+          /usr/bin/tar -xzf "$r33_work/stable.crate" -C "$r33_work/release"
+          if ! "$HOME/.cargo/bin/rustup" run 1.85.0 cargo --version; then
+            "$HOME/.cargo/bin/rustup" toolchain install 1.85.0 --profile minimal
+          fi
+          cp -R tests/r33-single-terminal/native-driver "$r33_work/driver"
+          CARGO_TARGET_DIR="$r33_work/build" "$HOME/.cargo/bin/cargo" +1.85.0 \
+            --config "patch.crates-io.verysync-sidecar.path='$r33_work/release/verysync-sidecar-0.1.0'" \
+            build --locked --manifest-path "$r33_work/driver/Cargo.toml"
+      - name: Verify actual native isolation before the first hidden prompt
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/python3 -B tests/r33-single-terminal/freeze-tests.py tests/r33-single-terminal "$R33_NATIVE_ROOT/source.zip" "$R33_NATIVE_ROOT/unpacked"
+          /usr/bin/python3 -B "$R33_NATIVE_ROOT/unpacked/tests/test_rendezvous.py" \
+            --native "$R33_NATIVE_ROOT/engine.zip" "$R33_NATIVE_ROOT/build/debug/verysync-r33-operator" "$R33_NATIVE_ROOT/source.zip"
+      - name: Clean the private native build
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test "${R33_NATIVE_ROOT:-}" = "$RUNNER_TEMP/private-r33-native"; then
+            rm -r -- "$R33_NATIVE_ROOT"
+            test ! -e "$R33_NATIVE_ROOT"
+          fi

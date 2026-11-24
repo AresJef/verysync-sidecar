@@ -1,0 +1,12 @@
+[package]
+name = "verysync-r33-operator"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sha2 = "=0.10.9"
+tokio = { version = "=1.54.1", features = ["macros", "rt", "sync"] }
+verysync-sidecar = "=0.1.0"

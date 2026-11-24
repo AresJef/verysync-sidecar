@@ -46,6 +46,22 @@ async def isolate(uid, boundary, run, exchange, app):
         raw.unlink()
 
 
+def native_prepare(owner, uid, exchange, app, native):
+    source, binary = Path(native["engine"]),Path(native["driver"])
+    engine, driver = app/"engine.zip", app/"bin/verysync-r33-operator"
+    driver.parent.mkdir()
+    for original, target in ((source,engine),(binary,driver)):
+        shutil.copyfile(original,target)
+    (app/"foreground-scope.txt").write_text("pro-cases\n")
+    digest = hashlib.sha256(driver.read_bytes()).hexdigest()
+    command = [sys.executable,"-B",str(app/"r33_prepare.py"),
+               "--group-private",str(owner),"--executor-uid",str(uid),
+               "--engine-archive",str(engine),"--driver-sha256",digest,
+               "--expires-at",str(int(time.time())+190),"--exchange",str(exchange),
+               "--bundle-sha256",native["suite_digest"]]
+    os.execve(command[0], command, {"PATH":"/usr/bin:/bin","LANG":"C"})
+
+
 def child(owner, uid, exchange, fixed):
     gid = os.getegid()
     boundary = GroupBoundary.current(owner)
@@ -53,6 +69,8 @@ def child(owner, uid, exchange, fixed):
     app.mkdir()
     for source in RUNTIME.glob("*.py"):
         shutil.copyfile(source, app/source.name)
+    if "native" in fixed:
+        return native_prepare(owner,uid,exchange,app,fixed["native"])
     run = os.urandom(16).hex()
     environment = {"PATH":"/usr/bin:/bin","PYTHONPATH":str(app),"LANG":"C"}
     with (app/"fixture-domain.json").open("x") as stream:
@@ -92,11 +110,11 @@ def main():
     uid = int(os.environ["SUDO_UID"])
     exchange, config = map(Path,sys.argv[1:])
     fixed = json.loads(config.read_bytes())
-    assert set(fixed)=={"expected","scope"}
+    assert set(fixed) in ({"expected","scope"},{"native","scope"})
     loader = runpy.run_path(str(ROOT/"group-launch.py"))
     terminal = loader["private_terminal"]
     if sys.platform.startswith("linux"):
-        terminal.__globals__["TTY"] = re.compile(r"/dev/pts/[0-9]+\Z")
+        terminal.__wrapped__.__globals__["TTY"] = re.compile(r"/dev/pts/[0-9]+\Z")
     gid = loader["next_group"]()
     with tempfile.TemporaryDirectory(prefix="r33-session-",dir=TMP) as work:
         vault=Path(work).resolve()

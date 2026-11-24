@@ -179,7 +179,11 @@ class NativeAccount:
                 if (root/"login-submitted").exists():
                     finish = await account.stop((),None)
                     raise BackendStartupError(finish) from error
-                await account.end_owned()
+                normal = await account.end_owned()
+                if isinstance(error, OperatorCancelled):
+                    raise BackendStartupError({"state":"stopped-before-login",
+                                               "normal_owned_exit":normal,
+                                               "official_network":account.guard.receipt()}) from error
             else:
                 if child is not None and child.returncode is None:
                     await Channel(child).close(grace=40)

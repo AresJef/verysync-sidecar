@@ -154,6 +154,48 @@ def unfinished(base):
             and (p/"login-submitted").is_file() and not (p/"native-signed-out").is_file()]
 
 
+
+def cleanup_closed_socket(owner, uid):
+    """Reclaim only the recorded public socket after the protected worker has exited."""
+    receipt = owner / "kit" / "operator-receipt.jsonl"
+    try:
+        fd = os.open(receipt, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_size > 2**24:
+            raise ValueError("The closed worker's redacted transport record did not verify.")
+        first = stream.readline(4097)
+    try:
+        record = json.loads(first)
+    except (ValueError, UnicodeError):
+        return
+    if record.get("event") != "owner-transport-paths" or not RUN.fullmatch(record.get("run","")):
+        return
+    address = Path(record["public"])
+    if address.parent != TMP or not re.fullmatch(r"r33-client-[a-z0-9_]{8}",address.name):
+        raise ValueError("The closed handoff has an unexpected public address.")
+    try:
+        fd = os.open(address,os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return
+    try:
+        owned = os.fstat(fd)
+        if (owned.st_uid!=uid or owned.st_dev!=record["public_device"] or owned.st_ino!=record["public_inode"]):
+            raise ValueError("The closed handoff's socket directory has changed.")
+        try:
+            endpoint = os.stat("b.sock",dir_fd=fd,follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISSOCK(endpoint.st_mode) or endpoint.st_uid!=uid:
+                raise ValueError("The closed handoff's socket has changed.")
+            os.unlink("b.sock",dir_fd=fd)
+        address.rmdir()
+    finally:
+        os.close(fd)
+
 def verified_child(account, owner, gid, bootstrap, digest, arguments):
     """Drop the user and group permanently before executing any app code."""
     child = os.fork()
@@ -243,6 +285,10 @@ def main():
         return code if code>=0 else 128-code
     finally:
         if acquired:
+            try:
+                cleanup_closed_socket(base/"owner",operator.pw_uid)
+            except (OSError,ValueError,TypeError,KeyError):
+                print("The revoked local endpoint needs an ownership check before cleanup.",file=sys.stderr)
             if unfinished(base):
                 print("The local native sign-out still needs confirmation.",flush=True)
                 print("R33_RECOVER_LOCAL "+str(base),flush=True)
