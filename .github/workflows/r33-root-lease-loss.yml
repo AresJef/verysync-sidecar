@@ -1,0 +1,45 @@
+name: R33 root SSH lost-connection lease
+
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths:
+      - '.github/workflows/r33-root-lease-loss.yml'
+      - 'tests/r33-root-lease-loss.py'
+
+permissions:
+  contents: read
+
+jobs:
+  lease:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [ssh-loss, foreground-kill]
+    env:
+      R33_LOSS_MODE: ${{ matrix.mode }}
+    steps:
+      - name: Check out the isolated test
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Observe release using the genuine lease interval
+        shell: bash
+        run: |
+          set -euo pipefail
+          r33_dir="$(mktemp -d)"
+          r33_image="r33-loss-fixture:${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          trap 'docker image rm "$r33_image" >/dev/null 2>&1 || true; rm -r -- "$r33_dir"' EXIT
+          mkdir "$r33_dir/fixture"
+          cp -R "$GITHUB_WORKSPACE/tests/r33-root-login/." "$r33_dir/fixture"
+          cp "$GITHUB_WORKSPACE/tests/r33-root-lease-loss.py" "$r33_dir/fixture/tests/test_root_lease_loss.py"
+          cat > "$r33_dir/Dockerfile" <<'DOCKER'
+          FROM ubuntu:24.04
+          RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends openssh-server python3 && rm -rf /var/lib/apt/lists/*
+          DOCKER
+          docker build --quiet -t "$r33_image" "$r33_dir"
+          docker run --rm --network none --env R33_DISPOSABLE_ROOT_PROBE=local-synthetic-container \
+            --mount "type=bind,src=$r33_dir/fixture,dst=/fixture,readonly" \
+            "$r33_image" /usr/bin/python3 -B /fixture/tests/test_root_lease_loss.py "$R33_LOSS_MODE"
