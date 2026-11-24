@@ -1,0 +1,40 @@
+name: R33 one-terminal synthetic acceptance
+
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths:
+      - .github/workflows/r33-single-terminal.yml
+      - tests/r33-single-terminal/**
+
+permissions:
+  contents: read
+
+jobs:
+  terminal:
+    name: One terminal (${{ matrix.mode }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 6
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [STOP, interrupt, ssh-loss, foreground-kill]
+    env:
+      R33_MODE: ${{ matrix.mode }}
+    steps:
+      - name: Check out the fixed synthetic fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Freeze, extract and execute in a private directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          r33_scratch="$(mktemp -d)"
+          trap 'rm -r -- "$r33_scratch"' EXIT
+          mkdir "$r33_scratch/unpacked"
+          /usr/bin/python3 -B tests/r33-single-terminal/freeze-tests.py tests/r33-single-terminal "$r33_scratch/source.zip" "$r33_scratch/unpacked"
+          /usr/bin/python3 -B "$r33_scratch/unpacked/tests/test_rules.py"
+          /usr/bin/python3 -B "$r33_scratch/unpacked/tests/test_single_terminal.py" --mode "$R33_MODE"
+
