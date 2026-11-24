@@ -50,15 +50,39 @@ def check(root):
     try:
         return exercise(root,home,fixture)
     finally:
-        sudo("/usr/sbin/userdel",fixture)
+        uid=pwd.getpwnam(fixture).pw_uid
         try:
-            pwd.getpwnam(fixture)
-        except KeyError:
-            pass
-        else:
-            raise AssertionError("The fixture login survived its cleanup.")
-        sudo("/bin/chown","-R",str(os.getuid()),str(home))
-        home.chmod(0o700)
+            terminate_only_fixture_uid(uid)
+            sudo("/usr/sbin/userdel",fixture)
+            try:
+                pwd.getpwnam(fixture)
+            except KeyError:
+                pass
+            else:
+                raise AssertionError("The fixture login survived its cleanup.")
+        finally:
+            sudo("/bin/chown","-R",str(os.getuid()),str(home))
+            home.chmod(0o700)
+
+
+def terminate_only_fixture_uid(uid):
+    def fixture_processes():
+        process = subprocess.run(["/usr/bin/ps","-U",str(uid),"-o","pid=,state="],
+                                 capture_output=True,text=True,timeout=3)
+        return [int(pid) for pid,state in (line.split() for line in process.stdout.splitlines())
+                if state!="Z"]
+
+    # The account was just created solely for this test in the disposable VM.
+    for pid in fixture_processes():
+        try:
+            info=(Path("/proc")/str(pid)/"status").read_text()
+        except FileNotFoundError:
+            continue
+        identity=next(row for row in info.splitlines() if row.startswith("Uid:"))
+        if int(identity.split()[1])==uid:
+            subprocess.run(["/usr/bin/sudo","-n","/bin/kill","-TERM",str(pid)],
+                           check=False,capture_output=True,timeout=4)
+    until(lambda:not fixture_processes(),timeout=7)
 
 
 def exercise(root,home,fixture):
@@ -126,7 +150,9 @@ def terminal(root,state,fixture,port,key,fingerprint,password):
             assert request(client,run,"linux","write-sample")["committed"]
         user.feed(b"\x03")
         end=user.response(b"R33_STOPPED ",12)
-        assert user.wait(6)==0 and end["linux"]=={"state":"stopped","writes":1}
+        exit_status=user.wait(6)
+        assert password not in user.observed and password not in journal.read_bytes()
+        assert exit_status==0 and end["linux"]=={"state":"stopped","writes":1}, (exit_status,end)
         assert password not in user.observed and password not in journal.read_bytes()
         assert password not in (root/"sshd.out").read_bytes()
         persisted=sudo("/bin/cat",str(state/run/"receipt.json"),capture_output=True).stdout
