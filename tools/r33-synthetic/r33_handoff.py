@@ -30,6 +30,12 @@ PUBLIC_OPERATIONS = {
     "pro": frozenset(("observe",)),
     "github": frozenset(("observe",)),
 }
+REAL_OPERATIONS = {
+    "linux": frozenset(("observe",)),
+    "pro": frozenset(("observe","refresh-paid","restart-observation")),
+    "github": frozenset(),
+}
+MUTATION_OPERATIONS = frozenset(("write-sample","refresh-paid","restart-observation"))
 PENDING = {"ok": False, "code": "result-pending"}
 UNAVAILABLE = {"ok": False, "code": "unavailable"}
 
@@ -234,6 +240,7 @@ class Scope:
         self.revoked = False
         self.queue = asyncio.Queue(maxsize=8)
         self.seen = set()
+        self.device_observed = False
         self.possible_writes = set()
         self.worker = asyncio.create_task(self.execute())
         self.ended = asyncio.Event()
@@ -244,7 +251,7 @@ class Scope:
             raise Withdrawn
         work.dispatched = True
         ident = work.request.request
-        if work.request.operation == "write-sample":
+        if work.request.operation in MUTATION_OPERATIONS:
             self.possible_writes.add(ident)
             self.journal.record("write-submitted", target=self.name, request=ident)
 
@@ -259,6 +266,8 @@ class Scope:
                     if self.revoked:
                         raise Withdrawn
                     result = await self.backend.execute(work, lambda: self.guard(work))
+                    if request.operation=="observe" and result.get("ok") is True:
+                        self.device_observed = result.get("account")=="logged-in" and not self.revoked
                     if request.request in self.possible_writes:
                         if self.revoked:
                             result = PENDING
@@ -275,6 +284,8 @@ class Scope:
             self.ended.set()
 
     async def submit(self, request):
+        if request.operation in ("refresh-paid","restart-observation") and not self.device_observed:
+            return DENIED
         if self.revoked or request.operation not in self.allowed or request.request in self.seen:
             return DENIED
         if self.queue.full() or len(self.seen) >= 256:
@@ -434,7 +445,7 @@ def run_profile(path, synthetic):
         allowed = data["allow"]
         if type(allowed) is not list or not allowed or any(type(a) is not str for a in allowed):
             raise ValueError("Choose named operations for the target.")
-        expected = PUBLIC_OPERATIONS[name] if synthetic else frozenset(("observe",))
+        expected = PUBLIC_OPERATIONS[name] if synthetic else REAL_OPERATIONS[name]
         if not set(allowed) <= expected:
             raise ValueError("The target profile contains an unapproved operation.")
         result[name] = frozenset(allowed), data["connection"]
@@ -525,13 +536,18 @@ async def start(args):
                 except BackendStartupError as error:
                     supervisor.startup_outcomes[name] = error.receipt
                     journal.record("startup-result", target=name, result=error.receipt)
-                    print("The initial handoff needs to be checked. Review the private receipt.",file=sys.stderr)
-                    return 1
+                    print(f"Check the private {name} handoff receipt before continuing with that target.",file=sys.stderr)
+                    continue
+                except (OSError,ValueError,asyncio.TimeoutError):
+                    supervisor.startup_outcomes[name]={"state":"start-failed"}
+                    journal.record("scope-start-failed",target=name)
+                    print(f"The private {name} connector could not start.",file=sys.stderr)
+                    continue
                 scope = Scope(name, backend, allowed, journal)
                 supervisor.scopes[name] = scope
                 if supervisor.status != "active":
                     supervisor.stop_scope(name, scope)
-            if supervisor.status != "active":
+            if supervisor.status != "active" or not supervisor.scopes:
                 return 1
             server = await asyncio.start_unix_server(supervisor.connection, str(socket_path),
                                                       limit=FRAME_MAX, backlog=16)

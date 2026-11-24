@@ -33,7 +33,7 @@ def main():
             code=public/name
             shutil.copyfile(BUNDLE/name,code)
             code.chmod(0o444)
-        public.chmod(0o711)
+        public.chmod(0o755)
         proof=private/"verified.json"
         watcher=Terminal(["operator","--executor-uid",str(executor),"--record",str(proof)],"r33_isolation.py")
         try:
@@ -44,9 +44,9 @@ def main():
             path=Path(watcher.buffer[offset:].splitlines()[0].decode().strip())
             assert path.exists()
             denied=probe(other,public/"r33_isolation.py",path)
-            assert denied.returncode==2 and not proof.exists(),denied.stdout
+            assert denied.returncode==2 and not proof.exists(),(denied.returncode,denied.stdout,denied.stderr)
             allowed=probe(account,public/"r33_isolation.py",path)
-            assert allowed.returncode==0,(allowed.returncode,allowed.stdout)
+            assert allowed.returncode==0,(allowed.returncode,allowed.stdout,allowed.stderr)
             assert watcher.wait(5)==0
             result=read_proof(proof,executor)
             assert result["private_file_unreadable"] and result["private_socket_denied"]
