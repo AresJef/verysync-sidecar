@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   signed-out:
@@ -22,6 +23,13 @@ jobs:
           persist-credentials: false
       - name: Select the fixed Rust toolchain
         run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
+      - name: Fetch the verified signed-out test driver
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: r33-linux-named-local-api
+          path: "${{ runner.temp }}/r33-frozen-linux-driver"
+          run-id: 45430633247
+          github-token: "${{ github.token }}"
       - name: Verify the private state and account connector with a closed provider window
         run: >
           sudo -n /usr/bin/python3 -B tests/r33-linux-named-local-api/private-boundary/check_worker_boundary.py
@@ -31,6 +39,7 @@ jobs:
           /usr/bin/python3 -B tests/r33-linux-named-local-api/check-linux-qualification.py
           --source tests/r33-linux-named-local-api/driver
           --evidence "${RUNNER_TEMP}/named-local-api-evidence"
+          --scope-driver "${RUNNER_TEMP}/r33-frozen-linux-driver/verysync-r33-operator"
       - name: Preserve the signed-out receipt and project test driver
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:

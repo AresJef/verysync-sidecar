@@ -127,7 +127,7 @@ def check_boundary(shell, root, program, driver, evidence):
             "duplicate_and_refresh_refused":True,"normal_exit":stopped}
 
 
-def verification(driver_source, evidence):
+def verification(driver_source, evidence, scope_driver):
     if os.geteuid() == 0 or os.uname().machine != "x86_64" or os.environ.get("GITHUB_ACTIONS") != "true":
         raise ValueError("This case requires the opted-in standard AMD64 Linux job.")
     evidence.mkdir(mode=0o700)
@@ -161,6 +161,13 @@ def verification(driver_source, evidence):
         subprocess.run(command, cwd=selected, check=True, timeout=300)
         driver = target / "debug" / "verysync-r33-operator"
         record = check_boundary(["/usr/bin/sudo","-n"], root, program, driver, evidence)
+        if scope_driver:
+            phases = driver_source.parent / "private-boundary" / "check_scope_lifetimes.py"
+            subprocess.run(
+                ["/usr/bin/python3","-B",str(phases),"--engine",str(program),
+                 "--driver",str(scope_driver.resolve(strict=True))],
+                check=True, timeout=200,
+            )
         record.update({"crate_sha256":CRATE_SHA,"native_binary_sha256":NATIVE_SHA,
                        "driver_sha256":digest(driver),"lock_sha256":digest(selected / "Cargo.lock")})
         shutil.copy2(driver, evidence / driver.name)
@@ -175,8 +182,9 @@ if __name__ == "__main__":
     parser.add_argument("--inside",nargs=7)
     parser.add_argument("--source",type=Path)
     parser.add_argument("--evidence",type=Path)
+    parser.add_argument("--scope-driver",type=Path)
     args = parser.parse_args()
     if args.inside:
         enter(*args.inside)
     else:
-        verification(args.source.resolve(strict=True), args.evidence.resolve())
+        verification(args.source.resolve(strict=True), args.evidence.resolve(), args.scope_driver)
