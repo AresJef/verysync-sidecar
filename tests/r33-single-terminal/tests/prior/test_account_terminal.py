@@ -21,12 +21,17 @@ from test_terminal import TMP, Terminal, connect, request
 @contextmanager
 def provider(folder):
     fixture = Path(__file__).with_name("fake_vendor.py")
+    fixture_env = dict(os.environ)
+    runtime = fixture.parents[2] / "runtime-next"
+    if runtime.is_dir():
+        fixture_env["PYTHONPATH"] = str(runtime)
     with subprocess.Popen([sys.executable, "-B", str(fixture), str(folder)],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          stdin=subprocess.DEVNULL) as service:
+                          stdin=subprocess.DEVNULL, env=fixture_env) as service:
         try:
             assert select.select([service.stdout], [], [], 4)[0]
-            assert service.stdout.readline() == b"ACCOUNT_FIXTURE_READY\n"
+            if service.stdout.readline() != b"ACCOUNT_FIXTURE_READY\n":
+                raise RuntimeError(f"The synthetic account process did not start. Exit {service.poll()}.")
             yield service
         finally:
             if service.poll() is None:
