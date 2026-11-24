@@ -1,6 +1,7 @@
 """Exercise the password-only root login in a disposable Linux container."""
 
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -147,12 +148,16 @@ def exercise(base,destination,password,mode):
             for _ in range(2):
                 assert call("start-observer")["running"]
                 assert call("observe")["tasks"] == 1
+                time.sleep(.45)
                 result = call("finish-observer")
-                assert result["standby"] and result["normal_task_exit"]
-                assert result["sample_bytes"] > 0 and len(result["sample_sha256"]) == 64
+                assert result.get("standby") and result["normal_task_exit"], result
+                size = result["sample_bytes"]
+                assert size > 0 and size % 5 == 0
+                assert result["sample_sha256"] == hashlib.sha256(b"tick\n" * (size//5)).hexdigest()
                 assert call("observe")["standby"]
                 samples.append(result["sample_bytes"])
             assert call("start-observer")["running"]
+            time.sleep(.45)
             begin = time.monotonic()
             user.feed(b"STOP\n" if mode == "STOP" else b"\x03")
             while request(active,run,"handoff","status")["local"] == "active":
