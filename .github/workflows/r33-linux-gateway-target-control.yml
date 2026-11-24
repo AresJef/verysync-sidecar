@@ -1,0 +1,31 @@
+name: R33 isolated native gateway target control
+
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths:
+      - .github/workflows/r33-linux-gateway-target-control.yml
+      - tests/r33-linux-gateway-target/**
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-target:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Select the release crate toolchain
+        run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
+      - name: Verify isolated native target behavior
+        run: /usr/bin/python3 -B tests/r33-linux-gateway-target/check_linux.py "${RUNNER_TEMP}/gateway-target-control"
+      - name: Preserve the isolated test driver
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: r33-linux-gateway-target-control
+          path: "${{ runner.temp }}/gateway-target-control"
+          retention-days: 7
+          if-no-files-found: error
