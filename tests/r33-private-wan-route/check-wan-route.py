@@ -42,7 +42,7 @@ with socket.socket() as sock:
 
 
 def start(scope, address, port):
-    child=subprocess.Popen([*scope.inside(sys.executable,"-B","-c",ACCEPT,str(address),str(port)],
+    child=subprocess.Popen(scope.inside(sys.executable,"-B","-c",ACCEPT,str(address),str(port)),
                            stdout=subprocess.PIPE,text=True)
     if not select.select([child.stdout],[],6)[0] or child.stdout.readline().strip()!="ready":
         child.terminate()
