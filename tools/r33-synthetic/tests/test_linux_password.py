@@ -146,10 +146,18 @@ def main():
             and os.environ.get("GITHUB_REPOSITORY")=="AresJef/verysync-sidecar"):
         raise SystemExit("Use only the designated disposable GitHub-hosted Linux runner.")
     os.umask(0o077)
-    with tempfile.TemporaryDirectory(prefix="r33-pw-",dir="/tmp") as raw:
-        root=Path(raw).resolve()
-        result=check(root)
-    result["owned_temporary_paths_removed"]=not root.exists()
+    privilege=Path("/run/sshd")
+    created=not privilege.exists()
+    if created:
+        sudo("/usr/bin/install","-d","-m","0755",str(privilege))
+    try:
+        with tempfile.TemporaryDirectory(prefix="r33-pw-",dir="/tmp") as raw:
+            root=Path(raw).resolve()
+            result=check(root)
+    finally:
+        if created:
+            sudo("/usr/bin/rmdir",str(privilege))
+    result["owned_temporary_paths_removed"]=not root.exists() and (not created or not privilege.exists())
     print(json.dumps(result),flush=True)
 
 
