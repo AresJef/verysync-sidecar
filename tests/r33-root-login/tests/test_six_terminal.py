@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import socket
 import tempfile
 import time
 from unittest.mock import patch
@@ -31,6 +32,11 @@ def exercise(base, destination, ssh_password):
     del data["pro"]["connection"]["two_core_scope"]  # The synthetic signer uses a Unix endpoint.
     profile.write_text(json.dumps(data))
     journal = base/"terminal.jsonl"
+    linux_intro = b"Linux SSH password for root at 127.0.0.1"
+    linux_password_prompt = b"root@127.0.0.1's password:"
+    linux_ready = b"Linux SSH is ready. VerySync sign-in is next."
+    pro_account_prompt = b"VerySync account (hidden) "
+    pro_password_prompt = b"VerySync password (hidden) "
     with provider(folder):
         terminal = Terminal(["start", "--synthetic", "--executor-uid", str(os.getuid()),
                              "--profile", str(profile), "--evidence", str(journal),
@@ -38,12 +44,15 @@ def exercise(base, destination, ssh_password):
         try:
             terminal.prompt(b"Type START to grant these operations.", timeout=12)
             terminal.feed(b"START\n")
-            terminal.prompt(b"'s password:", timeout=12)
+            terminal.prompt(linux_intro, timeout=12)
+            terminal.prompt(linux_password_prompt, timeout=12)
+            assert pro_account_prompt not in terminal.observed
             terminal.feed(ssh_password + b"\n")
-            terminal.prompt(b"VerySync account (hidden) ", timeout=12)
+            terminal.prompt(linux_ready, timeout=12)
+            terminal.prompt(pro_account_prompt, timeout=12)
             time.sleep(16)  # Observe a real renewal while waiting on the second sign-in.
             terminal.feed(account + b"\n")
-            terminal.prompt(b"VerySync password (hidden) ", timeout=8)
+            terminal.prompt(pro_password_prompt, timeout=8)
             terminal.feed(password + b"\n")
             ready = terminal.response(b"R33_READY ", 12)
             run, socket_path = ready["run"], Path(ready["socket"])
@@ -53,10 +62,10 @@ def exercise(base, destination, ssh_password):
                 pro_status = request(probe, run, "pro", "observe")
                 assert peer["standby"] and peer["native_test_listeners"] == 0
                 assert peer["renewals"] >= 1 and pro_status["ok"] and pro_status["account"] == "logged-in"
-            prompts = [b"'s password:", b"VerySync account (hidden) ", b"VerySync password (hidden) "]
+            prompts = [linux_intro, linux_password_prompt, linux_ready, pro_account_prompt, pro_password_prompt]
+            positions = [terminal.observed.index(prompt) for prompt in prompts]
             assert all(terminal.observed.count(prompt) == 1 for prompt in prompts)
-            assert [terminal.observed.index(prompt) for prompt in prompts] == sorted(
-                terminal.observed.index(prompt) for prompt in prompts)
+            assert positions == sorted(positions)
             markers = (ssh_password, account, password, token)
             assert all(marker not in terminal.observed and marker not in journal.read_bytes() for marker in markers)
             terminal.feed(b"\x03")
@@ -66,11 +75,32 @@ def exercise(base, destination, ssh_password):
             assert stopped["pro"]["state"] == "synthetic-session-closed"
             assert terminal.wait(8) == 0 and not socket_path.exists()
             assert not (storage/run/"session").exists()
-            return {"visible_linux_values":fields.call_count, "hidden_prompts":3,
-                    "one_start":True,"linux_before_verysync":True, "ssh_renewals":peer["renewals"],
-                    "ctrl_c_closed_both":True,"secrets_absent_from_transcripts":True}
+            report = {"visible_linux_values":fields.call_count, "hidden_prompts":3,
+                      "one_start":True,"linux_before_verysync":True,"linux_prompt_uses_address":True,
+                      "ssh_renewals":peer["renewals"],"ctrl_c_closed_both":True,
+                      "secrets_absent_from_transcripts":True}
         finally:
             terminal.close()
+        with socket.socket() as refused:
+            refused.bind(("127.0.0.1", 0))
+            data["linux"]["connection"]["port"] = refused.getsockname()[1]
+            profile.write_text(json.dumps(data))
+            failure = Terminal(["start", "--synthetic", "--executor-uid", str(os.getuid()),
+                                "--profile", str(profile), "--evidence", str(base/"refused.jsonl"),
+                                "--expires-at", str(int(time.time()) + 60)])
+            try:
+                failure.prompt(b"Type START to grant these operations.", timeout=12)
+                failure.feed(b"START\n")
+                stop = failure.response(b"R33_STOPPED ", 18)
+                assert stop["local"] == "revoked" and stop["cause"] == "linux-start-failed"
+                assert stop["linux"]["state"] == "start-failed" and stop["pro"]["state"] == "not-enabled"
+                assert all(marker not in failure.observed for marker in (linux_ready, pro_account_prompt,
+                                                                         pro_password_prompt, b"R33_READY "))
+                assert failure.wait(8) == 1
+            finally:
+                failure.close()
+        report["refused_ssh_never_asks_for_verysync"] = True
+        return report
 
 
 def main():

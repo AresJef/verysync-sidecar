@@ -656,6 +656,9 @@ async def start(args):
                     break
                 try:
                     if name == "linux":
+                        if unified:
+                            print(f"Linux SSH password for {connection['user']} at "
+                                  f"{connection['host']} (port {connection['port']}).", flush=True)
                         backend = await Linux.open(connection, runtime, run, stopped=supervisor.done,
                                                    deadline=args.expires_at)
                     elif name == "pro" and not args.synthetic:
@@ -674,17 +677,27 @@ async def start(args):
                 except BackendStartupError as error:
                     supervisor.startup_outcomes[name] = error.receipt
                     journal.record("startup-result", target=name, result=error.receipt)
-                    print(f"Check the private {name} handoff receipt before continuing with that target.",file=sys.stderr)
-                    continue
                 except (OSError,ValueError,asyncio.TimeoutError):
                     supervisor.startup_outcomes[name]={"state":"start-failed"}
                     journal.record("scope-start-failed",target=name)
-                    print(f"The private {name} connector could not start.",file=sys.stderr)
+                if name in supervisor.startup_outcomes:
+                    if name == "linux" and unified:
+                        if supervisor.status == "active":
+                            print("Linux SSH setup failed. Check the address, port, and Linux account.",
+                                  file=sys.stderr, flush=True)
+                            supervisor.revoke("linux-start-failed")
+                        break
+                    print(f"The private {name} connector could not start. Check its private receipt.",
+                          file=sys.stderr, flush=True)
                     continue
                 scope = Scope(name, backend, allowed, journal)
                 supervisor.scopes[name] = scope
                 if name == "linux":
                     renewal = asyncio.create_task(supervisor.renew_linux())
+                    if unified and supervisor.status == "active":
+                        message = ("Linux SSH is ready. VerySync sign-in is next."
+                                   if "pro" in profile else "Linux SSH is ready.")
+                        print(message, flush=True)
                 if supervisor.status != "active":
                     supervisor.stop_scope(name, scope)
             if supervisor.status != "active" or not supervisor.scopes:
@@ -698,8 +711,6 @@ async def start(args):
             if args.exchange:
                 from r33_rendezvous import publish
                 publish(args.exchange, "ready", ready)
-            if "linux" in supervisor.scopes and unified:
-                print("SSH is ready. No public test listener is open.", flush=True)
             print("Type STOP or press Ctrl+C to end this foreground access.", flush=True)
             print("R33_READY " + json.dumps(ready), flush=True)
             stop_watching = watch_operator_terminal(supervisor)

@@ -17,7 +17,6 @@ REMOTE_ENTRY = (
     'exec /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin '
     '/usr/bin/python3 -B "$HOME/.local/share/verysync-r33/r33_linux_worker.py" stdio'
 )
-HOST_ALIAS = "verysync-r33-designated-peer"
 HOST_KEY_TYPES = {"ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256",
                   "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"}
 USER = re.compile(r"[a-z_][a-z0-9_.-]{0,31}\Z", re.ASCII)
@@ -194,14 +193,14 @@ class Destination:
         if self.user == "root" and (identity is not None or remote_entry == REMOTE_ENTRY):
             raise SSHConfigurationError("The root login requires the fixed password-only foreground bootstrap.")
         host_file = runtime/"pinned-host-key"
+        target = self.host if self.port == 22 else f"[{self.host}]:{self.port}"
         with host_file.open("x", encoding="ascii") as stream:
-            stream.write(f"{HOST_ALIAS} {self.public_key}\n")
+            stream.write(f"{target} {self.public_key}\n")
         options = {
             "BatchMode": "yes" if identity else "no",
             "StrictHostKeyChecking": "yes",
             "UserKnownHostsFile": str(host_file),
             "GlobalKnownHostsFile": "/dev/null",
-            "HostKeyAlias": HOST_ALIAS,
             "UpdateHostKeys": "no",
             "ControlMaster": "no",
             "ControlPersist": "no",

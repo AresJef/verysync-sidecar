@@ -64,7 +64,8 @@ class SixInputs(unittest.TestCase):
         self.assertIn("StrictHostKeyChecking=yes",argv)
         self.assertIn("NumberOfPasswordPrompts=1",argv)
         self.assertIn("PreferredAuthentications=password",argv)
-        self.assertIn(self.key,(self.base/"pinned-host-key").read_text())
+        self.assertFalse(any(value.startswith("HostKeyAlias=") for value in argv))
+        self.assertEqual((self.base/"pinned-host-key").read_text(), f"127.0.0.1 {self.key}\n")
 
     def test_revoked_entry_refused_before_contact(self):
         self.known.write_text(f"@revoked 127.0.0.1 {self.key}\n")
