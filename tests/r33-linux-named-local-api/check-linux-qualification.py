@@ -168,6 +168,11 @@ def verification(driver_source, evidence, scope_driver):
                  "--driver",str(scope_driver.resolve(strict=True))],
                 check=True, timeout=200,
             )
+            staged = phases.with_name("check_staging.py")
+            subprocess.run(
+                ["/usr/bin/python3","-B",str(staged),str(program),str(scope_driver.resolve(strict=True))],
+                check=True, timeout=125,
+            )
         record.update({"crate_sha256":CRATE_SHA,"native_binary_sha256":NATIVE_SHA,
                        "driver_sha256":digest(driver),"lock_sha256":digest(selected / "Cargo.lock")})
         shutil.copy2(driver, evidence / driver.name)
