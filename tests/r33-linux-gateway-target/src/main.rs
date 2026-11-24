@@ -273,7 +273,7 @@ async fn run(
     {
         return Err("Use a new isolated target directory.".into());
     }
-    let Some(init): Option<Setup> = take()? else {
+    let Some(init) = tokio::task::spawn_blocking(take::<Setup>).await?? else {
         return Ok(());
     };
     let key = ApiKey::new(&init.synthetic_target_key)?;
@@ -309,7 +309,8 @@ async fn run(
         let mut allowed = false;
         let work: Check =
             async {
-                while let Some(command) = take()? {
+                // An idle controller must not stall the native client's I/O reactor.
+                while let Some(command) = tokio::task::spawn_blocking(take::<Command>).await?? {
                     let result = match command {
                         Command::Register { peer } => match DeviceId::parse(&peer) {
                             Ok(peer) => witness.register(client, peer).await,
