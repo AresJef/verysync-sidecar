@@ -117,7 +117,7 @@ def main():
                     os.environ["R33_OBSERVER_GID"]=str(fixed["scope"]["gid"])
                     result=child(owner,uid,exchange,fixed)
                 except BaseException as exc:
-                    print(f"The protected fixture stopped at {type(exc).__name__}.",file=sys.stderr,flush=True)
+                    print(f"The protected fixture stopped at {type(exc).__name__}: {exc}",file=sys.stderr,flush=True)
                     os._exit(2)
                 os._exit(result)
             with loader["owned_signals"](pid):

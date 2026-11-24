@@ -19,7 +19,7 @@ sys.path.insert(0, str(SOURCE))
 
 from r33_cases import TWO_CORE_SCOPES
 from r33_handoff import Journal, Scope, Supervisor
-from r33_linux_worker import Guardian, secure_initial
+from r33_linux_worker import Guardian, TASK_PROGRAM, secure_initial
 from r33_protocol import DENIED, ProtocolError, Request, encode_frame
 from r33_remote_peer import bundle
 from r33_simulated_cases import SimulatedCases
@@ -32,6 +32,9 @@ class Routing(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name).resolve()
         self.run = secrets.token_hex(16)
+
+    def test_owned_sample_process_program_compiles(self):
+        compile(TASK_PROGRAM, "<owned remote sample fixture>", "exec")
 
     def test_peer_archive_is_reproducible(self):
         command, digest, wire = bundle(SOURCE)

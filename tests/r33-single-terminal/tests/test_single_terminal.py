@@ -185,7 +185,13 @@ def cycle_linux(endpoint,run,peer_sha):
         start = observation()
         assert start["standby"] and not start["tasks"] and start["native_test_listeners"]==0
         assert start["peer_payload_sha256"]==peer_sha
-        next_probe = until(lambda: (value if (value:=observation())["renewals"]>=2 else None),timeout=36)
+        deadline = time.monotonic() + 36
+        next_probe = start
+        while next_probe["renewals"] < 2 and time.monotonic() < deadline:
+            time.sleep(1)
+            next_probe = observation()
+            assert next_probe.get("ok") is True, next_probe
+        assert next_probe["renewals"] >= 2, next_probe
         assert next_probe["standby"] and next_probe["native_test_listeners"]==0
         cycles = []
         for _ in range(2):
@@ -308,7 +314,7 @@ def loss(root,destination,credentials,home,kind):
                 assert user.wait(3)==-signal.SIGKILL
         lasted=until(observed,timeout=TTL+2)
         elapsed=lasted["stopped"]-lasted["renewed"]
-        assert 89 <= elapsed <= TTL and lasted["normal_task_exit"]
+        assert 89 <= elapsed <= TTL and lasted["normal_task_exit"], (elapsed,lasted)
         if kind=="ssh-loss":
             user.feed(b"STOP\n")
             receipt=user.response(b"R33_STOPPED ",12)

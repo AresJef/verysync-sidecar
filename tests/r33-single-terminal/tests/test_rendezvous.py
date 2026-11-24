@@ -50,7 +50,16 @@ def run():
             vault=Path(tty.response(b"R33_PROTECTED_VAULT ")["private"])
             with ThreadPoolExecutor(max_workers=1) as observer:
                 ready=observer.submit(watch,exchange,35,True)
-                tty.prompt(b"Type START to grant these operations.",timeout=14)
+                try:
+                    tty.prompt(b"Type START to grant these operations.",timeout=14)
+                except (AssertionError,OSError) as exc:
+                    if ready.done():
+                        self_error=ready.exception()
+                    else:
+                        self_error=None
+                    message=tty.observed.decode(errors="replace").splitlines()[-9:]
+                    raise AssertionError(f"Protected terminal startup failed. Observer: {self_error}; "
+                                         f"no-secret terminal: {message}") from exc
                 assert b"R33_ISOLATION " not in tty.observed
                 assert (exchange/"native.json").exists()
                 tty.feed(b"START\n")
@@ -76,7 +85,12 @@ def run():
                 tty.feed(b"STOP\n")
                 stop=await_notice(exchange,"stopped",remaining)
                 assert stop["run"]==run and stop["pro"]["state"]=="synthetic-session-closed"
-                assert tty.wait(5)==0 and not vault.exists() and not Path(bound["socket"]).exists()
+                printed=tty.response(b"R33_STOPPED ",10)
+                assert printed==stop
+                status=tty.wait(12)
+                detail={"exit":status,"vault_still_present":vault.exists(),
+                        "socket_still_present":Path(bound["socket"]).exists()}
+                assert detail=={"exit":0,"vault_still_present":False,"socket_still_present":False}, detail
         finally:
             tty.close()
         assert all(credential not in tty.observed for credential in (username,password))

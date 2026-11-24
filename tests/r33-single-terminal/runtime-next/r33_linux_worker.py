@@ -20,13 +20,21 @@ import time
 from r33_protocol import DENIED, FRAME_MAX, Lease, ProtocolError, REQUEST_ID, RUN, decode_frame, encode_frame
 
 
-TASK_PROGRAM = """from pathlib import Path
+TASK_PROGRAM = r"""from pathlib import Path
+import signal
 import sys
 import time
+
+stopped = False
+def stop(_number, _frame):
+    global stopped
+    stopped = True
+
+signal.signal(signal.SIGTERM, stop)
 target = Path(sys.argv[1])
-while True:
+while not stopped:
     with target.open("ab") as sample:
-        sample.write(b"tick\\n")
+        sample.write(b"tick\n")
     time.sleep(.20)
 """
 ROOT = Path.home()/".local/share/verysync-r33/sessions"
