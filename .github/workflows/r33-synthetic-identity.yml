@@ -1,0 +1,25 @@
+name: R33 synthetic isolation
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths: ['tools/r33-synthetic/**', '.github/workflows/r33-synthetic-identity.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: Synthetic isolation (${{ matrix.runner }})
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check the actual operator, delegated and unrelated OS identities
+        shell: bash
+        run: |
+          cd tools/r33-synthetic
+          PYTHONPATH="$PWD" /usr/bin/python3 -B tests/test_identity_boundary.py "$RUNNER_TEMP/r33-identity.json"

@@ -1,0 +1,19 @@
+name: R33 synthetic cancellation
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths: ['tools/r33-synthetic/tests/hosted_worker.py', '.github/workflows/r33-synthetic-cancel.yml']
+permissions:
+  contents: read
+jobs:
+  worker:
+    name: Disposable worker
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run the owned synthetic worker
+        shell: bash
+        run: exec /usr/bin/python3 -B tools/r33-synthetic/tests/hosted_worker.py
