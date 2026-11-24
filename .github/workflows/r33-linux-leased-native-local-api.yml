@@ -1,0 +1,30 @@
+name: R33 signed-out Local-API over a leased Linux scope
+
+on:
+  push:
+    branches:
+      - ci/r33-synthetic-20261124
+    paths:
+      - .github/workflows/r33-linux-leased-native-local-api.yml
+      - tests/r33-linux-native-lease/**
+
+permissions:
+  contents: read
+
+jobs:
+  private-native-lease:
+    name: Native qualification, SSH withdrawal and lease expiry
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    steps:
+      - name: Check out the exact synthetic fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install the fixed Rust toolchain if needed
+        run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
+      - name: Verify the native signed-out fixture with scoped SSH
+        run: >
+          /usr/bin/python3 -B tests/r33-linux-native-lease/run-linux-native-lease.py
+          --test-source tests/r33-linux-native-lease/linux-native-local-api-probe.rs
+          --handoff tests/r33-linux-native-lease/handoff
