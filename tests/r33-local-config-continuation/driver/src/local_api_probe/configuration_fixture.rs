@@ -5,7 +5,7 @@ use std::{
     io::{BufRead, BufReader, Read},
     net::{TcpListener, TcpStream},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
@@ -18,8 +18,11 @@ const PREFIX: &str = "/rest/localapi/";
 #[derive(Default)]
 struct State {
     folders: BTreeMap<String, Value>,
+    reads: Vec<String>,
     writes: Vec<String>,
     substituted_identity: bool,
+    missing_folder_status: Option<u16>,
+    alias_missing_folder: bool,
     uncertain_patch: bool,
     revoke_after_create: Option<PathBuf>,
 }
@@ -59,8 +62,14 @@ impl State {
                 let id = &item["config/folders/".len()..];
                 match verb {
                     "GET" => {
-                        let Some(mut config) = self.folders.get(id).cloned() else {
-                            return (404, Value::Null);
+                        self.reads.push(id.to_owned());
+                        let config = self.folders.get(id).or_else(|| {
+                            self.alias_missing_folder
+                                .then(|| self.folders.get(FIRST_ID))
+                                .flatten()
+                        });
+                        let Some(mut config) = config.cloned() else {
+                            return (self.missing_folder_status.unwrap_or(404), Value::Null);
                         };
                         if self.substituted_identity {
                             config["id"] = json!("wrong-readback");
@@ -146,11 +155,16 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
+        static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
         let marker = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("r33-cfg-{}-{marker}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "r33-cfg-{}-{marker}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir(&root).unwrap();
         let original = FolderTarget::new(FIRST_ID, root.join("original")).unwrap();
         let selected = FolderTarget::new(SECOND_ID, root.join("selected")).unwrap();
@@ -219,6 +233,49 @@ impl Drop for Fixture {
             deleted.unwrap();
         }
     }
+}
+
+#[tokio::test]
+async fn qualified_folder_and_wrong_id_are_read_independently_without_writes() {
+    let fixture = Fixture::start();
+    let local = fixture.client().await;
+    let absent = FolderId::parse("r33-local-api-absent-qualification").unwrap();
+    let exact = super::super::folder_qualification(
+        &local,
+        &fixture.original.id,
+        &TargetPath::local(&fixture.original.path),
+    )
+    .await;
+    let negative = super::super::missing_folder_control(&local, &absent).await;
+    assert_eq!(exact["state"], "exact-folder-readback");
+    assert_eq!(negative["state"], "not-found");
+    assert_eq!(negative["http"], 404);
+    let state = fixture.state.lock().unwrap();
+    assert_eq!(state.reads, [FIRST_ID, absent.as_str()]);
+    assert!(state.writes.is_empty());
+    assert_eq!(state.folders.len(), 1);
+}
+
+#[tokio::test]
+async fn wrong_id_returning_another_configuration_or_unavailable_is_unconfirmed() {
+    let fixture = Fixture::start();
+    let local = fixture.client().await;
+    let absent = FolderId::parse("r33-local-api-absent-qualification").unwrap();
+    fixture.state.lock().unwrap().alias_missing_folder = true;
+    let alias = super::super::missing_folder_control(&local, &absent).await;
+    assert_eq!(alias["state"], "unexpected-configuration");
+    assert_eq!(alias["returned_requested_id"], false);
+    {
+        let mut state = fixture.state.lock().unwrap();
+        state.alias_missing_folder = false;
+        state.missing_folder_status = Some(503);
+    }
+    let unavailable = super::super::missing_folder_control(&local, &absent).await;
+    assert_eq!(unavailable["state"], "http-failure");
+    assert_eq!(unavailable["http"], 503);
+    let state = fixture.state.lock().unwrap();
+    assert_eq!(state.reads, [absent.as_str(), absent.as_str()]);
+    assert!(state.writes.is_empty());
 }
 
 #[tokio::test]

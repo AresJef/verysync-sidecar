@@ -52,9 +52,11 @@ def ask(child, request=None):
     return json.loads(child.stdout.readline(8193))
 
 
-def enter(outer, identity, group, program, driver, root, port):
+def enter(outer, identity, group, program, driver, root, port, mode):
     if os.geteuid() != 0 or namespace() == int(outer) or int(identity) <= 0:
         raise ValueError("The signed-out check requires a separate Linux network.")
+    if mode not in ("serve-local-api", "check-local-api-scope"):
+        raise ValueError("The disposable Linux fixture received an unexpected mode.")
     subprocess.run(["/usr/sbin/ip", "link", "set", "lo", "up"], check=True, timeout=5)
     if {name for _, name in socket.if_nameindex()} != {"lo"}:
         raise ValueError("An unexpected interface exists in this fixture.")
@@ -66,7 +68,7 @@ def enter(outer, identity, group, program, driver, root, port):
     environment = {"HOME": root, "TMPDIR": root, "PATH": "/usr/bin:/bin",
                    "R33_LOCAL_API_PORT": port, "R33_OUTER_NETWORK_INODE": outer}
     print(json.dumps({"namespace":namespace(),"uid":os.getuid(),"loopback_only":True}), flush=True)
-    os.execve(driver, [driver, "serve-local-api", program, root, "bafc891375a940a5aebb306728499dfd"],
+    os.execve(driver, [driver, mode, program, root, "bafc891375a940a5aebb306728499dfd"],
               environment)
 
 
@@ -86,7 +88,8 @@ def check_boundary(shell, root, program, driver, evidence):
     with (evidence / "driver.stderr").open("xb") as stderr:
         child = subprocess.Popen(
             [*shell, "/usr/bin/unshare", "--net", "/usr/bin/python3", "-B", __file__,
-             "--inside", *map(str, (outer, os.getuid(), os.getgid(), program, driver, root, port))],
+             "--inside", *map(str, (outer, os.getuid(), os.getgid(), program, driver, root, port)),
+             "serve-local-api"],
             cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
             start_new_session=True, bufsize=0,
         )
@@ -98,6 +101,9 @@ def check_boundary(shell, root, program, driver, evidence):
             assert first["account"] == "logged-out" and first["pro_observations"] == []
             locked = {"ok":False,"reason":"operation-outside-the-licensed-local-api-scope"}
             assert ask(child, "local-api-config-verify") == locked
+            assert ask(child, "local-api-file-verify") == {
+                "ok": False, "reason": "local-api-exact-qualification-required",
+            }
             with socket.socket() as observer:
                 observer.settimeout(3)
                 try:
@@ -128,6 +134,53 @@ def check_boundary(shell, root, program, driver, evidence):
             "before":first,"after":last,"first_qualification":refusal,
             "duplicate_and_refresh_refused":True,"configuration_refused_without_qualification":True,
             "normal_exit":stopped}
+
+
+def check_files(shell, stage, program, driver, evidence):
+    root = stage / "file-effect"
+    root.mkdir(mode=0o700)
+    with socket.socket() as hold:
+        hold.bind(("127.0.0.1", 0))
+        port = hold.getsockname()[1]
+    assert port != 18886
+    outer = namespace()
+    with (evidence / "file-driver.stderr").open("xb") as stderr:
+        child = subprocess.Popen(
+            [*shell, "/usr/bin/unshare", "--net", "/usr/bin/python3", "-B", __file__,
+             "--inside", *map(str, (outer, os.getuid(), os.getgid(), program, driver, root, port)),
+             "check-local-api-scope"],
+            cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
+            start_new_session=True, bufsize=0,
+        )
+        try:
+            isolated = ask(child)
+            assert isolated["loopback_only"] and isolated["uid"] == os.getuid()
+            assert isolated["namespace"] != outer
+            initial = ask(child)
+            assert initial["account"] == "logged-out" and initial["pro_observations"] == []
+            files = ask(child, "local-api-file-verify")
+            assert files["ok"] and files["device"] == initial["device"], files
+            assert files["fixture_unregistered"] and files["checks"]["SYM-090"]["state"] == "observed", files
+            assert files["checks"]["SYM-090"]["outside_subpath_still_unindexed"], files
+            for route in ("SYM-048", "LA-008", "LA-018"):
+                assert files["checks"][route]["code"] == 3001, files
+            sample = root / "local-api-file-check" / "indexed" / "nested" / "sample.bin"
+            assert sample.read_bytes() == b"R33 Local-API indexed sample bafc891375a940a5aebb306728499dfd\n"
+            assert files["sample_after_unregistration"] == {
+                "bytes": sample.stat().st_size, "sha256": digest(sample),
+            }
+            assert ask(child, "local-api-file-verify") == {
+                "ok": False, "reason": "operation-outside-the-licensed-local-api-scope",
+            }
+            end = ask(child, "end")
+            child.stdin.close()
+            assert end["normal_owned_exit"] and child.wait(timeout=15) == 0
+        finally:
+            if child.poll() is None:
+                subprocess.run([*shell, "/bin/kill", "-TERM", "--", f"-{child.pid}"],
+                               check=False, timeout=5)
+                child.wait(timeout=12)
+    return {"source": "signed-out", "isolation": isolated, "file_effects": files, "normal_exit": end}
 
 
 def verification(driver_source, evidence):
@@ -166,6 +219,7 @@ def verification(driver_source, evidence):
         subprocess.run([*cargo, "test", *inputs], cwd=selected, check=True, timeout=65)
         driver = target / "debug" / "verysync-r33-operator"
         record = check_boundary(["/usr/bin/sudo","-n"], root, program, driver, evidence)
+        record["file_case"] = check_files(["/usr/bin/sudo", "-n"], root, program, driver, evidence)
         record.update({"crate_sha256":CRATE_SHA,"native_binary_sha256":NATIVE_SHA,
                        "driver_sha256":digest(driver),"lock_sha256":digest(selected / "Cargo.lock")})
         shutil.copy2(driver, evidence / driver.name)
@@ -177,7 +231,7 @@ def verification(driver_source, evidence):
 if __name__ == "__main__":
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--inside",nargs=7)
+    parser.add_argument("--inside",nargs=8)
     parser.add_argument("--source",type=Path)
     parser.add_argument("--evidence",type=Path)
     args = parser.parse_args()

@@ -19,8 +19,11 @@ use verysync_sidecar::{
 };
 
 mod configuration;
+mod file_effects;
 #[path = "r33_local_api_qualification.rs"]
 mod qualification;
+
+const ABSENT_FOLDER_ID: &str = "r33-local-api-absent-qualification";
 
 async fn folder_qualification(
     local: &LocalApiClient,
@@ -45,6 +48,24 @@ async fn folder_qualification(
             json!({"route":"LA-012","state":"http-failure","http":http})
         }
         Qualification::Unconfirmed => json!({"route":"LA-012","state":"typed-read-failed"}),
+    }
+}
+
+async fn missing_folder_control(local: &LocalApiClient, absent: &FolderId) -> Value {
+    match local.folder_configuration(absent).await {
+        Ok(config) => {
+            json!({"state":"unexpected-configuration","returned_requested_id":config.id == *absent})
+        }
+        Err(Error::Http { response }) if response.status() == 404 => {
+            json!({"state":"not-found","http":404})
+        }
+        Err(Error::LicenseRequired { code, response }) => {
+            json!({"state":"license-required","code":code,"http":response.status()})
+        }
+        Err(Error::AccessDenied { response } | Error::Http { response }) => {
+            json!({"state":"http-failure","http":response.status()})
+        }
+        Err(_) => json!({"state":"typed-read-failed"}),
     }
 }
 
@@ -153,17 +174,36 @@ async fn qualify(
     }
     check_authorization(root)?;
     let primary = folder_qualification(&local, &folder, &TargetPath::local(&selected)).await;
+    let wrong_id = if primary["state"] == "exact-folder-readback" {
+        check_authorization(root)?;
+        let absent =
+            FolderId::parse(ABSENT_FOLDER_ID).map_err(|_| "local-api-wrong-id-control-invalid")?;
+        let observed = missing_folder_control(&local, &absent).await;
+        let registered = managed
+            .folders()
+            .await
+            .map_err(|_| "local-api-registry-after-wrong-id-unavailable")?;
+        if registered.len() != 1 || registered[0].id != folder {
+            return Err("local-api-wrong-id-control-changed-registrations");
+        }
+        observed
+    } else {
+        json!({"state":"exact-read-required"})
+    };
     let after_account = paid_native_permission(core, run).await?;
     let after = snapshot()?;
     if before != after {
         return Err("local-api-read-qualification-affected-sample-data");
     }
     let same_device = account["device"] == after_account["device"];
-    let config_device =
-        (same_device && primary["state"] == "exact-folder-readback").then_some(expected);
+    let config_device = (same_device
+        && primary["state"] == "exact-folder-readback"
+        && wrong_id["state"] != "unexpected-configuration")
+        .then_some(expected);
     Ok((
         json!({"ok":true,"fixed_native_account_observation":account,
               "ordinary_status_and_folder_projection":true,"protected_read_routes":[primary],
+              "wrong_id_control":wrong_id,
               "original_files":before,"files_after_actual_reads":after,"protected_writes":0,
               "same_paid_device_after_read":same_device}),
         config_device,
@@ -218,6 +258,7 @@ pub(crate) async fn serve_qualification(
         let mut incoming = private_input();
         let mut login_submitted = false;
         let mut operation_consumed = false;
+        let mut file_attempted = false;
         let mut config_device = None;
         let mut native_logout = None;
         while let Some(request) = incoming.recv().await {
@@ -252,6 +293,20 @@ pub(crate) async fn serve_qualification(
                         config_device = device;
                         receipt
                     })
+                }
+                Request::LocalApiFileVerify if !file_attempted && native_logout.is_none() => {
+                    file_attempted = true;
+                    async {
+                        let device = if control {
+                            core.client().instance().device_id.clone()
+                        } else {
+                            let device = config_device.clone()
+                                .ok_or("local-api-exact-qualification-required")?;
+                            paid_native_permission(&core, run).await?;
+                            device
+                        };
+                        file_effects::verify(root, &core, endpoint.clone(), &device, run).await
+                    }.await
                 }
                 Request::LocalApiConfigVerify if !control && login_submitted && native_logout.is_none() => {
                     match config_device.take() {

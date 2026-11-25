@@ -90,7 +90,7 @@ fn label_applied(folder: &FolderConfig, label: &str) -> Stage<()> {
     Ok(())
 }
 
-fn same_configuration(observed: &FolderConfig, expected: &FolderConfig) -> bool {
+pub(super) fn same_configuration(observed: &FolderConfig, expected: &FolderConfig) -> bool {
     observed.id == expected.id
         && matches!(
             (observed.path.to_protocol(), expected.path.to_protocol()),
