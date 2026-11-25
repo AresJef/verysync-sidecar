@@ -58,6 +58,12 @@ jobs:
         continue-on-error: true
         run: >-
           cargo +"$TEST_TOOLCHAIN" test --locked --offline --lib managed:: -- --nocapture
+      - name: Record actual Windows service and ordinary owner outcomes
+        if: runner.os == 'Windows'
+        id: permissions
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/run-windows-managed-permissions.ps1 -Toolchain $env:TEST_TOOLCHAIN
       - name: Prepare fixed core and its pinned earlier upgrade source
         run: |
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
@@ -77,5 +83,11 @@ jobs:
         if: always()
         env:
           CONTROLS: ${{ steps.controls.outcome }}
+          PERMISSIONS: ${{ steps.permissions.outcome }}
           LIFECYCLE: ${{ steps.lifecycle.outcome }}
-        run: test "$CONTROLS" = success && test "$LIFECYCLE" = success
+        run: |
+          test "$CONTROLS" = success
+          test "$LIFECYCLE" = success
+          if [ "$RUNNER_OS" = Windows ]; then
+            test "$PERMISSIONS" = success
+          fi
