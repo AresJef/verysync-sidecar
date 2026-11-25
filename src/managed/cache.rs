@@ -447,3 +447,43 @@ async fn owner<T: Send + 'static>(
     rx.await
         .map_err(|_| rejected("cache owner ended without a result"))?
 }
+
+#[cfg(all(test, windows))]
+#[test]
+#[ignore = "requires a disposable Windows LocalSystem test context"]
+fn windows_system_creates_and_reopens_the_real_cache_lease() -> Result<()> {
+    let temp = tempfile::tempdir().map_err(|cause| io("create cache test root", cause))?;
+    let root = temp.path().join("controlled-cache");
+    let asset = crate::official_programs()?
+        .into_iter()
+        .find(|entry| {
+            entry.target().os() == crate::ProgramOs::Windows
+                && entry.target().variant() == crate::BuildVariant::Standard
+                && matches!(
+                    (std::env::consts::ARCH, entry.target().architecture()),
+                    ("x86_64", crate::ProgramArchitecture::Amd64)
+                        | ("aarch64", crate::ProgramArchitecture::Arm64)
+                )
+        })
+        .ok_or_else(|| rejected("the native Windows test asset is unavailable"))?;
+    for _ in 0..2 {
+        let result = lookup(
+            &root,
+            &asset,
+            CachePolicy::DownloadMissing,
+            Arc::new(AtomicBool::new(false)),
+            Instant::now() + Duration::from_secs(5),
+        )?;
+        let Lookup::Prepare(lease) = result else {
+            return Err(rejected(
+                "empty Windows cache did not yield a preparation lease",
+            ));
+        };
+        assert!(lease
+            .directory
+            .join(format!("{}.lock", hex(&asset.archive_sha256())))
+            .is_file());
+    }
+    println!("Windows cache evidence: the real cache prepared and reopened its native private root and lock.");
+    Ok(())
+}

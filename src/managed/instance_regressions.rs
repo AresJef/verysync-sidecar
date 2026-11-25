@@ -130,13 +130,18 @@ async fn deep_repair_force_wait_distinguishes_normal_forced_and_missing() -> Tes
 }
 
 async fn rejects_stale_owner(old: &mut ManagedInstance, destination: &Path) -> TestResult {
-    assert!(matches!(
-        old.backup_state(StateBackupOptions::new(destination)?)
-            .await,
-        Err(Error::ManagedFailure {
-            reason: "private state does not match this stopped owner and program"
-        })
-    ));
+    let refused = old
+        .backup_state(StateBackupOptions::new(destination)?)
+        .await;
+    assert!(
+        matches!(
+            refused,
+            Err(Error::StateBackupRejected {
+                reason: "state no longer matches this normally stopped owner and program"
+            })
+        ),
+        "{refused:?}"
+    );
     assert!(!destination.exists());
     assert!(matches!(
         old.run_database_command(DatabaseCommand::Statistics, Duration::from_secs(5))

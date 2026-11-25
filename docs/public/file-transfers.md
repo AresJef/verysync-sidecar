@@ -82,8 +82,10 @@ URI is escaped before the whole comma-separated query value, preserving literal
 commas, percent signs, Unicode and Unix control filenames. Native archive member
 layout can retain volume-relative directory prefixes, including on Windows;
 no fixed directory-relative layout is promised.
-Adding `algo` to a single regular file does not make that file an archive;
-archive methods require the expected native archive media type.
+Archive methods check the requested directory before streaming and require
+the expected native archive media type. A regular archive file can use that
+same media type. If another writer can replace the source after the directory
+check, keep the source stable while exporting and verify the received entries.
 
 `ResourceTransferOptions` defaults to a one-GiB payload bound and a five-minute
 complete-operation deadline. The deadline includes identity checks and local
@@ -161,4 +163,4 @@ including a dangling Windows volume mount point whose target no longer exists.
 Unknown siblings still cause a cleanup failure; cleanup never recursively walks
 a mounted filesystem. Native provisioning failures retain bounded diagnostics.
 
-The `disk_full_engine` case requires a real native disk-full local I/O error while streaming a 64 MiB resource to that filesystem. It verifies the nonempty retained prefix, source bytes, configuration, identity, and volume sentinel. Only the caller explicitly removes its partial output; a new 1 MiB download must then complete and match its hash. Engine state and source data remain outside the bounded filesystem. Native results on all six standard platform profiles are pending; compilation and fixture guard tests do not establish disk-full acceptance.
+The `disk_full_engine` case requires a real native disk-full local I/O error while streaming a 64 MiB resource to that filesystem. It verifies the nonempty retained prefix, source bytes, configuration, identity, and volume sentinel. Only the caller explicitly removes its partial output; a new 1 MiB download must then complete and match its hash. Engine state and source data remain outside the bounded filesystem. Both architectures of macOS, Linux and Windows passed this isolated test with VerySync v2.33.2. See the [six native platform results](https://github.com/AresJef/verysync-sidecar/actions/runs/45216803374).

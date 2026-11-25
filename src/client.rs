@@ -880,10 +880,12 @@ impl Client {
     ///
     /// Only the configuration DELETE is sent, with no file-deletion parameter
     /// or body. The target and identity must still exist before the write.
-    /// Inspect `configuration_absent` on the returned snapshot; another writer
-    /// can change the ID again. The controller does not inspect or remove local
-    /// paths. Unknown outcomes and cancellation require reconciliation before
-    /// retrying; no modifying request is retried automatically.
+    /// Inspect `configuration_absent` on the returned snapshot. Identity checks
+    /// on each side of the read can detect a changed endpoint. Each check uses
+    /// a separate request, so deployments that replace instances must coordinate
+    /// the change with callers. The controller leaves local paths untouched.
+    /// If readback fails, check the folder list on the intended instance before
+    /// removing another registration. The client sends DELETE once.
     pub async fn remove_folder_keep_files(&self, id: &FolderId) -> Result<FolderRemoval> {
         let url = self.connection.folder_url(id)?;
         let _guard = self.connection.mutation_lock.lock().await;
@@ -898,8 +900,13 @@ impl Client {
                 true,
             )
             .await?;
-        let configured = self
-            .folders()
+        let readback = async {
+            self.system_status().await?;
+            let configured = self.folders().await?;
+            self.system_status().await?;
+            Ok::<_, Error>(configured)
+        };
+        let configured = readback
             .await
             .map_err(|source| Error::MutationOutcomeUnknown {
                 operation: "read back unregistered folder",

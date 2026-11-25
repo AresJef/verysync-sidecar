@@ -243,7 +243,8 @@ impl Client {
     }
 }
 impl LocalSyncEventSubscription {
-    /// Last consumed event/gap position, never an unconsumed batch tail.
+    /// Position of the last delivered event or gap. Empty polls keep the
+    /// entire cursor unchanged, including the observed engine start time.
     pub fn cursor(&self) -> &LocalSyncEventCursor {
         &self.cursor
     }
@@ -322,12 +323,13 @@ impl LocalSyncEventSubscription {
                 self.gap(EventGapReason::ObservationChanged, observed);
                 continue;
             }
-            if self.cursor.engine_started_at.is_some() && self.cursor.engine_started_at != after {
+            let previous_position =
+                self.cursor.last_sequence != 0 || self.cursor.engine_started_at.is_some();
+            if previous_position && self.cursor.engine_started_at != after {
                 observed.last_sequence = 0;
                 self.gap(EventGapReason::EngineStartTimeChanged, observed);
                 continue;
             }
-            self.cursor.engine_started_at = after;
             if batch.events.len() > self.options.max_events
                 || batch.events.iter().any(|e| {
                     e.sequence == 0
@@ -354,9 +356,9 @@ impl LocalSyncEventSubscription {
                 continue;
             }
             let skipped = first.is_some_and(|first| first > sequence.saturating_add(1));
-            let mut queued_cursor = self.cursor.clone();
+            let mut queued_cursor = observed.clone();
             if reset || batch.missed || skipped {
-                let mut resume = self.cursor.clone();
+                let mut resume = observed.clone();
                 resume.last_sequence = first.map_or(batch.cursor, |first| first - 1);
                 queued_cursor = resume.clone();
                 self.gap(
@@ -382,7 +384,7 @@ impl LocalSyncEventSubscription {
                             resume_from: resume,
                         })));
                 }
-                let mut cursor = self.cursor.clone();
+                let mut cursor = observed.clone();
                 cursor.last_sequence = event.sequence;
                 queued_cursor = cursor.clone();
                 self.pending

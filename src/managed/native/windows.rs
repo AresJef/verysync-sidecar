@@ -476,12 +476,11 @@ mod tests {
         let mut observed = Vec::new();
         std::io::Read::read_to_end(&mut reopened, &mut observed)?;
         assert_eq!(observed, content);
-        let cache_root = fixture.path().join("cache");
-        create_directory(&cache_root)?;
-        drop(retain_private_directory(&cache_root)?);
-        let cache_control = cache_root.join(".cache-test-control");
-        drop(create_private(&cache_control)?);
-        drop(open_private(&cache_control, true)?);
+        let leased_state = fixture.path().join("leased-state");
+        use crate::managed::state::StateLease;
+        let acquire = || StateLease::acquire(&leased_state).map_err(io::Error::other);
+        drop(acquire()?);
+        drop(acquire()?);
         let extra = fixture.path().join("extra-grant");
         let grants: String = allowed_principals(&caller)
             .map(|sid| format!("(A;OICI;FA;;;{sid})"))
@@ -492,10 +491,37 @@ mod tests {
             io::ErrorKind::PermissionDenied
         );
         println!(
-            "Windows native ACL evidence: caller_is_system={}, expected_principals={}, private state, cache and controls reopened, extra ACL rejected",
+            "Windows native ACL evidence: caller_is_system={}, expected_principals={}, private state, lease and controls reopened, extra ACL rejected",
             caller == SYSTEM,
             allowed_principals(&caller).count()
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a disposable Windows service-owned ACL fixture"]
+    fn windows_rejects_the_foreign_owner_before_mutating_directory_or_file() -> io::Result<()> {
+        let root = std::env::var_os("VSS_WINDOWS_FOREIGN_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| io::Error::other("an isolated foreign-owner fixture is required"))?;
+        let directory = root.join("foreign-state");
+        let error = retain_private_directory(&directory).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error
+            .to_string()
+            .contains("the state has a different owner"));
+        let file = root.join("foreign-control.bin");
+        let error = open_private(&file, false).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error
+            .to_string()
+            .contains("the state has a different owner"));
+        assert_eq!(std::fs::read(file)?, b"synthetic foreign control");
+        assert_eq!(
+            std::fs::read(directory.join("sample.bin"))?,
+            b"synthetic foreign state"
+        );
+        println!("Windows owner evidence: opened foreign-owned state and control were refused before writing; both canaries are unchanged.");
         Ok(())
     }
 
