@@ -167,6 +167,14 @@ def check_files(shell, stage, program, driver, evidence):
             assert files["checks"]["SYM-090"]["outside_subpath_still_unindexed"], files
             for route in ("SYM-048", "LA-008", "LA-018"):
                 assert files["checks"][route]["code"] == 3001, files
+            for route in ("LA-026", "LA-027"):
+                assert files["checks"][route]["code"] == 3001, files
+            assert files["checks"]["LA-027"]["read_only_control"]["code"] == 3001, files
+            assert files["checks"]["LA-003"]["state"], files
+            tmp = files["checks"]["LA-028"]
+            kept = b"Owned ordinary file within the native temporary directory"
+            assert tmp["state"] == "observed" and tmp["temporary_file_removed"] and tmp["session_directory_removed"], files
+            assert tmp["ordinary_file"] == {"bytes":len(kept),"sha256":hashlib.sha256(kept).hexdigest()}, files
             sample = root / "local-api-file-check" / "indexed" / "nested" / "sample.bin"
             assert sample.read_bytes() == b"R33 Local-API indexed sample bafc891375a940a5aebb306728499dfd\n"
             assert files["sample_after_unregistration"] == {

@@ -3,11 +3,11 @@
 use crate::{check_authorization, device_alias, Stage};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path, time::Duration};
+use std::{fs, io::Write, path::Path, time::Duration};
 use verysync_sidecar::{
     Client, CreateFolderOptions, DeviceId, Error, FolderId, FolderPatch, FolderScanPatch,
     FolderState, LocalApiClient, LocalApiConnectOptions, ManagedInstance, ManagementEndpoint,
-    SelectiveScope, SelectiveTree, TargetPath,
+    SelectiveScope, SelectiveTree, SharePermission, TargetPath,
 };
 
 const FOLDER_ID: &str = "r33-local-api-index";
@@ -76,6 +76,113 @@ async fn browse(local: &LocalApiClient, id: &FolderId, nested: &Path, size: u64)
         }
         Ok(_) => json!({"state":"fixture-file-not-observed"}),
         Err(error) => unavailable(&error),
+    }
+}
+
+async fn sharing_receipts(
+    root: &Path,
+    managed: &Client,
+    local: &LocalApiClient,
+) -> Stage<(Value, Value)> {
+    check_authorization(root)?;
+    let (keys, generation_refusal) = match local.generate_share().await {
+        Ok(keys) => (keys, None),
+        Err(error @ Error::LicenseRequired { code: 3001, .. }) => {
+            check_authorization(root)?;
+            let owned = managed
+                .generate_share()
+                .await
+                .map_err(|_| "local-api-test-share-control-unavailable")?;
+            (owned, Some(unavailable(&error)))
+        }
+        Err(error) => return Ok((unavailable(&error), json!({"state":"test-key-unavailable"}))),
+    };
+    check_authorization(root)?;
+    let write = local.validate_share_key(&keys.read_write_key).await;
+    check_authorization(root)?;
+    let read = local.validate_share_key(&keys.read_only_key).await;
+    let valid = match (write, read) {
+        (Ok(write), Ok(read))
+            if write.permission() == &SharePermission::ReadWrite
+                && read.permission() == &SharePermission::ReadOnly
+                && write.read_write_key() == Some(&keys.read_write_key)
+                && read.read_write_key().is_none()
+                && write.read_only_key() == &keys.read_only_key
+                && read.read_only_key() == &keys.read_only_key
+                && write.device_id() == &managed.instance().device_id
+                && read.device_id() == &managed.instance().device_id =>
+        {
+            json!({"state":"observed","separate_read_only_and_read_write":true,
+                   "read_only_key_does_not_match_write_scope":true})
+        }
+        (Err(write), Err(read)) => {
+            let mut result = unavailable(&write);
+            result["read_only_control"] = unavailable(&read);
+            result
+        }
+        (Err(error), _) | (_, Err(error)) => unavailable(&error),
+        (Ok(_), Ok(_)) => json!({"state":"share-identity-or-permission-mismatch"}),
+    };
+    let generation = generation_refusal.unwrap_or_else(|| {
+        if keys.read_only_key != keys.read_write_key && valid["state"] == "observed" {
+            json!({"state":"observed","generated_distinct_scopes":true})
+        } else {
+            json!({"state":"generated-scope-unconfirmed"})
+        }
+    });
+    Ok((generation, valid))
+}
+
+async fn cleanup_owned_temporary(
+    root: &Path,
+    local: &LocalApiClient,
+    id: &FolderId,
+    folder: &Path,
+) -> Stage<Value> {
+    const KEEP: &[u8] = b"Owned ordinary file within the native temporary directory";
+    check_authorization(root)?;
+    let parent = folder.join(".verysync");
+    if fs::symlink_metadata(&parent).is_ok_and(|metadata| !metadata.is_dir()) {
+        return Err("local-api-owned-temporary-directory-is-not-regular");
+    }
+    let session = parent.join("r33-owned.sess");
+    let temporary = parent.join("r33-owned.tmp");
+    let ordinary = parent.join("r33-keep.dat");
+    fs::create_dir_all(&parent)
+        .and_then(|()| fs::create_dir(&session))
+        .map_err(|_| "local-api-owned-temporary-fixture-unavailable")?;
+    for (path, bytes) in [
+        (
+            session.join("nested.bin"),
+            b"Owned session payload".as_slice(),
+        ),
+        (temporary.clone(), b"Owned temporary payload".as_slice()),
+        (ordinary.clone(), KEEP),
+    ] {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .and_then(|mut file| file.write_all(bytes))
+            .map_err(|_| "local-api-owned-temporary-sample-unavailable")?;
+    }
+    check_authorization(root)?;
+    let request = local.request_folder_temporary_cleanup(id).await;
+    let retained = file_fingerprint(&ordinary, KEEP)?;
+    let gone = |path: &Path| matches!(fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+    let placeholders_removed = gone(&temporary) && gone(&session);
+    match request {
+        Ok(_) if placeholders_removed => Ok(json!({
+            "state":"observed","temporary_file_removed":true,"session_directory_removed":true,
+            "ordinary_file":retained,
+        })),
+        Ok(_) => Ok(json!({"state":"temporary-objects-still-present","ordinary_file":retained})),
+        Err(error) => {
+            let mut result = unavailable(&error);
+            result["physical_placeholders_removed"] = json!(placeholders_removed);
+            result["ordinary_file"] = retained;
+            Ok(result)
+        }
     }
 }
 
@@ -201,12 +308,30 @@ async fn measure(
         Ok(_) => json!({"state":"folder-scan-statistic-not-observed"}),
         Err(error) => unavailable(&error),
     };
+    let hardware = match local.hardware().await {
+        Ok(snapshot) if snapshot.cpu.total_threads > 0 && snapshot.cpu.total_cores > 0 => json!({
+            "state":"observed","processor_counts_present":true,
+            "physical_memory_reported":snapshot.memory.total_physical_bytes > 0,
+            "network_inventory_reported":snapshot.network.nics.is_some(),
+        }),
+        Ok(_) => json!({"state":"native-hardware-snapshot-has-no-processor-count"}),
+        Err(Error::Api { response, .. }) => {
+            json!({"state":"native-hardware-snapshot-incomplete","http":response.status()})
+        }
+        Err(error) => unavailable(&error),
+    };
+    let (generation, validation) = sharing_receipts(root, managed, local).await?;
+    let temp_cleanup = cleanup_owned_temporary(root, local, id, directory).await?;
     Ok(json!({
         "SYM-090":{"state":"observed","http":request.response.status(),"indexed_bytes":bytes,
                    "previously_absent":true,"outside_subpath_still_unindexed":true},
         "SYM-048":browse(local, id, nested, bytes).await,
         "LA-008":summary,
         "LA-018":stats,
+        "LA-003":hardware,
+        "LA-026":generation,
+        "LA-027":validation,
+        "LA-028":temp_cleanup,
     }))
 }
 
