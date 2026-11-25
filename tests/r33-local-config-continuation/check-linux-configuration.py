@@ -124,8 +124,11 @@ def check_boundary(shell, root, program, driver, evidence):
             assert last["device"] == first["device"] and last["account"] == "logged-out"
             stopped = ask(child, "end")
             child.stdin.close()
-            assert stopped == {"ok":True,"login_submitted":False,"native_logout":None,
-                               "qualification_consumed":True,"normal_owned_exit":True}
+            assert {k:v for k,v in stopped.items() if k != "LA-023"} == {
+                "ok":True,"login_submitted":False,"native_logout":None,
+                "qualification_consumed":True,"normal_owned_exit":True,
+            }, stopped
+            assert stopped["LA-023"]["state"] == "observed", stopped
             assert child.wait(timeout=15) == 0
         finally:
             if child.poll() is None:
@@ -165,6 +168,11 @@ def check_files(shell, stage, program, driver, evidence):
             assert files["ok"] and files["device"] == initial["device"], files
             assert files["fixture_unregistered"] and files["checks"]["SYM-090"]["state"] == "observed", files
             assert files["checks"]["SYM-090"]["outside_subpath_still_unindexed"], files
+            assert files["audit_settings_restored"], files
+            assert files["checks"]["LA-009"]["before"]["matching_records"] == 0, files
+            assert files["checks"]["LA-009"]["after"]["matching_records"] == 0, files
+            for stream in files["checks"]["LA-025"].values():
+                assert stream == {"state":"license-required","http":200,"code":3001}, files
             for route in ("SYM-048", "LA-008", "LA-018"):
                 assert files["checks"][route]["code"] == 3001, files
             for route in ("LA-026", "LA-027"):
@@ -191,6 +199,9 @@ def check_files(shell, stage, program, driver, evidence):
             assert peers["actual_pending_file"] and peers["actual_incomplete_then_completed_peer"], peers
             for route in ("SYM-049", "LA-016", "LA-017", "LA-019"):
                 assert peers["local_api"][route]["code"] == 3001, peers
+            selection = peers["local_api"]["SYM-091"]
+            assert selection["code"] == 3001 and selection["source_file_unchanged"], peers
+            assert not selection["target_file_present_after_error"] and selection["unselected_witness_absent"], peers
             for direction in ("incoming", "outgoing"):
                 shared = root / "local-api-peer-check"
                 primary = shared / "primary-files" / (direction + ".bin")
@@ -203,6 +214,11 @@ def check_files(shell, stage, program, driver, evidence):
             end = ask(child, "end")
             child.stdin.close()
             assert end["normal_owned_exit"] and child.wait(timeout=15) == 0
+            assert end["LA-023"] == {
+                "state":"observed","request":{"state":"acknowledged","http":200},
+                "exit_code":0,"owned_tree_stopped":True,"state_released":True,
+            }, end
+            assert files["sample_after_unregistration"]["sha256"] == digest(sample), files
         finally:
             if child.poll() is None:
                 subprocess.run([*shell, "/bin/kill", "-TERM", "--", f"-{child.pid}"],

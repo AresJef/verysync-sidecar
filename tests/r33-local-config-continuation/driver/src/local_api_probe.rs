@@ -2,7 +2,7 @@
 
 use crate::{
     check_authorization, end, inspect, logout, paid_native_permission, private_input, record,
-    refresh_paid, Request, Stage, ENGINE_HASH, START,
+    refresh_paid, Request, Stage, ENGINE_HASH, START, STOP,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -14,8 +14,8 @@ use std::{
 };
 use verysync_sidecar::{
     CreateFolderOptions, DeviceId, Error, FolderId, LocalApiClient, LocalApiConnectOptions,
-    LocalProgram, ManagedInstance, ManagedOptions, ManagementEndpoint, OfficialAccountCredentials,
-    TargetPath,
+    LocalApiExitAction, LocalProgram, ManagedInstance, ManagedOptions, ManagementEndpoint,
+    OfficialAccountCredentials, TargetPath,
 };
 
 mod configuration;
@@ -112,6 +112,59 @@ async fn start_at(
     ManagedInstance::start(settings)
         .await
         .map_err(|_| "local-api-owned-start-failed")
+}
+
+async fn stop_owned_local_api(
+    core: &mut ManagedInstance,
+    endpoint: ManagementEndpoint,
+) -> (bool, Value) {
+    let device = core.client().instance().device_id.clone();
+    let options =
+        LocalApiConnectOptions::new(endpoint).map(|options| options.expected_device_id(device));
+    let local = match options {
+        Ok(options) => LocalApiClient::connect(options).await,
+        Err(error) => Err(error),
+    };
+    let local = match local {
+        Ok(local) => local,
+        Err(error) => return (end(core).await, file_effects::unavailable(&error)),
+    };
+    let request = local.request_shutdown().await;
+    let acknowledgment = match &request {
+        Ok(reply) if reply.action == LocalApiExitAction::Shutdown => {
+            json!({"state":"acknowledged","http":reply.response.status()})
+        }
+        Ok(_) => json!({"state":"unexpected-shutdown-acknowledgment"}),
+        Err(error) => file_effects::unavailable(error),
+    };
+    // An uncertain write is followed by a tree-exit observation, not another request.
+    let terminated = tokio::time::timeout(Duration::from_secs(15), core.wait_for_exit()).await;
+    match terminated {
+        Ok(Ok(report)) => {
+            let normal = report.code == Some(0)
+                && !report.forced
+                && report.tree_stopped
+                && report.state_released;
+            let state = if normal && acknowledgment["state"] == "acknowledged" {
+                "observed"
+            } else {
+                "unconfirmed"
+            };
+            (
+                normal,
+                json!({"state":state,"request":acknowledgment,"exit_code":report.code,
+                            "owned_tree_stopped":report.tree_stopped,"state_released":report.state_released}),
+            )
+        }
+        _ => {
+            let forced = core.force_stop(STOP).await;
+            (
+                false,
+                json!({"state":"normal-exit-unconfirmed","request":acknowledgment,
+                           "owned_tree_stopped":forced.is_ok_and(|report| report.tree_stopped && report.state_released)}),
+            )
+        }
+    }
 }
 
 async fn case_device(
@@ -366,12 +419,13 @@ pub(crate) async fn serve_qualification(
         )
     }
     .await;
-    let stopped = end(&mut core).await;
+    let (stopped, native_shutdown) = stop_owned_local_api(&mut core, endpoint).await;
     if !stopped {
         return Err("local-api-normal-owned-exit-unconfirmed");
     }
     let mut result = processing?;
     result["ok"] = json!(true);
     result["normal_owned_exit"] = json!(true);
+    result["LA-023"] = native_shutdown;
     record(result)
 }

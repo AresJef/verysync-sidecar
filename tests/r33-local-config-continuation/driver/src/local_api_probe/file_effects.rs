@@ -5,9 +5,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Write, path::Path, time::Duration};
 use verysync_sidecar::{
-    Client, CreateFolderOptions, DeviceId, Error, FolderId, FolderPatch, FolderScanPatch,
-    FolderState, LocalApiClient, LocalApiConnectOptions, ManagedInstance, ManagementEndpoint,
-    SelectiveScope, SelectiveTree, SharePermission, TargetPath,
+    AuditHistorySettings, Client, CreateFolderOptions, DeviceId, Error, EventFilter, EventKind,
+    EventOptions, EventStreamItem, EventSubscription, FolderId, FolderPatch, FolderScanPatch,
+    FolderState, ListPage, LocalApiClient, LocalApiConnectOptions, LocalApiHistoryFilter,
+    ManagedInstance, ManagementEndpoint, SelectiveScope, SelectiveTree, SharePermission,
+    TargetPath,
 };
 
 const FOLDER_ID: &str = "r33-local-api-index";
@@ -16,6 +18,7 @@ const CONTROL: &[u8] = b"R33 file outside the requested scan subpath";
 const OUTSIDE: &[u8] = b"R33 file outside the registered folder";
 const POLL: Duration = Duration::from_millis(40);
 const WINDOW: Duration = Duration::from_secs(14);
+const INDEX_EVENT: &str = "LocalIndexUpdated";
 
 pub(super) fn unavailable(error: &Error) -> Value {
     match error {
@@ -186,6 +189,77 @@ async fn cleanup_owned_temporary(
     }
 }
 
+async fn audit_matches(local: &LocalApiClient, id: &FolderId, relative: &str) -> Stage<Value> {
+    let page = ListPage::new(1, 100).map_err(|_| "local-api-audit-page-invalid")?;
+    let filter = LocalApiHistoryFilter {
+        folder: Some(id.clone()),
+        ..Default::default()
+    };
+    Ok(match local.folder_history(page, &filter).await {
+        Ok(snapshot) => {
+            let matches = snapshot
+                .records
+                .iter()
+                .flatten()
+                .filter(|row| {
+                    row.folder_id.as_deref() == Some(id.as_str())
+                        && row.name.as_deref() == Some(relative)
+                        && row.action.as_ref().is_some_and(|value| !value.is_empty())
+                        && row.event_time.is_some()
+                })
+                .count();
+            json!({"state":"read","total":snapshot.total,"matching_records":matches})
+        }
+        Err(error) => unavailable(&error),
+    })
+}
+
+async fn observe_index(
+    root: &Path,
+    source: Result<EventSubscription, Error>,
+    id: &FolderId,
+) -> Value {
+    let mut stream = match source {
+        Ok(stream) => stream,
+        Err(error) => return unavailable(&error),
+    };
+    let baseline = stream.cursor().last_id;
+    let result = tokio::time::timeout(Duration::from_secs(6), async {
+        while check_authorization(root).is_ok() {
+            match stream.next().await {
+                Some(Ok(EventStreamItem::Event(event)))
+                    if event.cursor.last_id > baseline
+                        && event.kind == EventKind::Unknown(INDEX_EVENT.into())
+                        && event.data().get("folder").and_then(Value::as_str)
+                            == Some(id.as_str())
+                        && event
+                            .data()
+                            .get("items")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|count| count > 0) =>
+                {
+                    return json!({"state":"observed","cursor_before_scan":baseline,
+                                  "cursor_at_index_update":event.cursor.last_id,
+                                  "same_test_folder":true,"nonempty_index_update":true});
+                }
+                Some(Ok(EventStreamItem::Gap(_))) => {
+                    return json!({"state":"event-continuity-unconfirmed"});
+                }
+                Some(Ok(_)) => {}
+                Some(Err(error)) => return unavailable(&error),
+                None => return json!({"state":"index-stream-ended"}),
+            }
+        }
+        json!({"state":"authorization-withdrawn"})
+    })
+    .await
+    .unwrap_or_else(|_| json!({"state":"owned-index-event-not-observed"}));
+    if stream.close().await.is_err() {
+        return json!({"state":"index-stream-close-unconfirmed","observation":result});
+    }
+    result
+}
+
 async fn measure(
     root: &Path,
     managed: &Client,
@@ -193,6 +267,7 @@ async fn measure(
     id: &FolderId,
     directory: &Path,
     payload: &[u8],
+    recording_enabled: bool,
 ) -> Stage<Value> {
     check_authorization(root)?;
     let configured = managed
@@ -242,6 +317,8 @@ async fn measure(
         .to_protocol()
         .map_err(|_| "local-api-index-relative-path-invalid")?;
     let bytes = payload.len() as u64;
+    let before_history = audit_matches(local, id, &relative_string).await?;
+    let default_events = local.subscribe_index_events(EventOptions::default()).await;
     check_authorization(root)?;
     fs::write(&sample, payload)
         .and_then(|()| fs::write(&control, CONTROL))
@@ -275,6 +352,32 @@ async fn measure(
     if !index_absent(managed, id, &native_control).await? {
         return Err("local-api-index-scan-expanded-beyond-selected-path");
     }
+    let default_event = observe_index(root, default_events, id).await;
+    let history = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            check_authorization(root)?;
+            let after = audit_matches(local, id, &relative_string).await?;
+            if before_history["matching_records"] == 0
+                && after["matching_records"]
+                    .as_u64()
+                    .is_some_and(|count| count > 0)
+            {
+                return Ok::<Value, &'static str>(
+                    json!({"state":"observed","before":before_history,"after":after,
+                                 "same_folder_and_indexed_path":true}),
+                );
+            }
+            if !recording_enabled || after["state"] != "read" {
+                return Ok(json!({"state":"record-unconfirmed","before":before_history,
+                                 "after":after,"recording_enabled":recording_enabled}));
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Ok(json!({"state":"owned-audit-record-not-observed","before":before_history}))
+    })?;
     let expected_index_bytes = (BASE.len() + payload.len()) as u64;
     let summary = match local.folder_summaries().await {
         Ok(rows)
@@ -308,6 +411,41 @@ async fn measure(
         Ok(_) => json!({"state":"folder-scan-statistic-not-observed"}),
         Err(error) => unavailable(&error),
     };
+    let filter = EventFilter::new([EventKind::Unknown(INDEX_EVENT.into())])
+        .map_err(|_| "local-api-index-event-filter-invalid")?;
+    let filtered_event = match local
+        .subscribe_filtered_index_events(filter, EventOptions::default())
+        .await
+    {
+        Ok(stream) => {
+            check_authorization(root)?;
+            if !index_absent(managed, id, &native_control).await? {
+                return Err("local-api-filtered-index-control-already-present");
+            }
+            check_authorization(root)?;
+            managed
+                .request_scan_subpaths(id, std::slice::from_ref(&native_control))
+                .await
+                .map_err(|_| "local-api-filtered-index-control-scan-unconfirmed")?;
+            let mut event = observe_index(root, Ok(stream), id).await;
+            let control_indexed = managed
+                .index_file_info(id, &native_control)
+                .await
+                .is_ok_and(|file| {
+                    native_control
+                        .to_protocol()
+                        .as_ref()
+                        .is_ok_and(|name| *name == file.local.name)
+                        && file.local.size == CONTROL.len() as u64
+                });
+            event["separate_control_file_indexed"] = json!(control_indexed);
+            if !control_indexed && event["state"] == "observed" {
+                event["state"] = json!("filtered-index-file-effect-unconfirmed");
+            }
+            event
+        }
+        Err(error) => unavailable(&error),
+    };
     let hardware = match local.hardware().await {
         Ok(snapshot) if snapshot.cpu.total_threads > 0 && snapshot.cpu.total_cores > 0 => json!({
             "state":"observed","processor_counts_present":true,
@@ -327,8 +465,10 @@ async fn measure(
                    "previously_absent":true,"outside_subpath_still_unindexed":true},
         "SYM-048":browse(local, id, nested, bytes).await,
         "LA-008":summary,
+        "LA-009":history,
         "LA-018":stats,
         "LA-003":hardware,
+        "LA-025":{"default":default_event,"filtered":filtered_event},
         "LA-026":generation,
         "LA-027":validation,
         "LA-028":temp_cleanup,
@@ -383,10 +523,46 @@ pub(super) async fn verify(
         return Err("local-api-file-fixture-configuration-mismatch");
     }
     let payload = format!("R33 Local-API indexed sample {run}\n");
-    let measured = measure(root, managed, &local, &id, &directory, payload.as_bytes()).await;
+    let initial_audit = managed.audit_history_settings().await.ok();
+    check_authorization(root)?;
+    if let Some(previous) = initial_audit.filter(|settings| !settings.enabled) {
+        let _ = managed
+            .set_audit_history_settings(AuditHistorySettings {
+                enabled: true,
+                ..previous
+            })
+            .await;
+    }
+    let recording_enabled = managed
+        .audit_history_settings()
+        .await
+        .is_ok_and(|state| state.enabled);
+    let measured = measure(
+        root,
+        managed,
+        &local,
+        &id,
+        &directory,
+        payload.as_bytes(),
+        recording_enabled,
+    )
+    .await;
 
     // If permission was withdrawn, the wrapper stops the instance and removes the owned root.
     check_authorization(root)?;
+    let audit_restored = if let Some(previous) = initial_audit {
+        let current = managed.audit_history_settings().await;
+        if current.as_ref().is_ok_and(|settings| *settings != previous) {
+            check_authorization(root)?;
+            let _ = managed.set_audit_history_settings(previous).await;
+        }
+        managed
+            .audit_history_settings()
+            .await
+            .is_ok_and(|settings| settings == previous)
+    } else {
+        true
+    };
     let sample_path = nested.join("sample.bin");
     let control_path = directory.join("untouched-while-scanning.bin");
     let before_sample = optional_fingerprint(&sample_path, payload.as_bytes())?;
@@ -426,7 +602,8 @@ pub(super) async fn verify(
     {
         return Err("local-api-index-unregistration-changed-owned-data");
     }
-    let mut receipt = json!({"ok":measured.is_ok(),"device":device_alias(core, run),"fixture_unregistered":true,
+    let mut receipt = json!({"ok":measured.is_ok() && audit_restored,"device":device_alias(core, run),"fixture_unregistered":true,
+                            "audit_settings_restored":audit_restored,
                             "sample_after_unregistration":sample,"outside_file":outside});
     match measured {
         Ok(checks) => receipt["checks"] = checks,

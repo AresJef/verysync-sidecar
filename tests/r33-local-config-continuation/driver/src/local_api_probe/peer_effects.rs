@@ -14,7 +14,8 @@ use verysync_sidecar::{
     BandwidthPatch, Client, CompletionSnapshot, CreateDeviceOptions, DeviceId, DevicePatch,
     DeviceTransport, Error, FileDownloadProgress, FolderAdvancedPatch, FolderId, JoinFolderOptions,
     ListPage, LocalApiClient, LocalApiConnectOptions, ManagedInstance, ManagementEndpoint,
-    NeedPage, NetworkPatch, SyncFileKind, TargetPath,
+    NeedPage, NetworkPatch, SelectiveAction, SelectiveBrowseOptions, SelectiveScope, SyncFileKind,
+    TargetPath,
 };
 
 const INCOMING: &str = "incoming.bin";
@@ -366,6 +367,106 @@ async fn wait_completion(
     .map_err(|_| "local-api-pair-completion-timed-out")?
 }
 
+async fn selection(
+    root: &Path,
+    pair: &Pair,
+    primary: &Client,
+    secondary: &Client,
+    local: &LocalApiClient,
+    seed: u64,
+) -> Stage<Value> {
+    const SAMPLE: &str = "selection-sample.bin";
+    const WITNESS: &str = "selection-witness.bin";
+    check_authorization(root)?;
+    let mode = primary
+        .set_folder_selective_enabled(&pair.primary_folder, true)
+        .await
+        .map_err(|_| "local-api-selective-mode-unconfirmed")?;
+    if !mode.requested_mode_match {
+        return Err("local-api-selective-mode-mismatch");
+    }
+    let source = pair.secondary_files.join(SAMPLE);
+    let witness = pair.secondary_files.join(WITNESS);
+    let target = pair.primary_files.join(SAMPLE);
+    let unselected = pair.primary_files.join(WITNESS);
+    check_authorization(root)?;
+    fs::write(&source, format!("R33 selected sample {seed:016x}\n"))
+        .and_then(|()| fs::write(&witness, b"R33 independently unselected file"))
+        .map_err(|_| "local-api-selective-source-write-unavailable")?;
+    let sent = fingerprint(&source)?;
+    let preserved = fingerprint(&witness)?;
+    check_authorization(root)?;
+    secondary
+        .request_scan(&pair.secondary_folder)
+        .await
+        .map_err(|_| "local-api-selective-source-scan-unconfirmed")?;
+    let browse = SelectiveBrowseOptions::new(SelectiveScope::FolderRoot);
+    tokio::time::timeout(WAIT, async {
+        loop {
+            check_authorization(root)?;
+            let tree = primary
+                .browse_selective(&pair.primary_folder, &browse)
+                .await
+                .map_err(|_| "local-api-selective-published-tree-unavailable")?;
+            if [SAMPLE, WITNESS].iter().all(|name| {
+                tree.entries
+                    .get(*name)
+                    .is_some_and(|entry| !entry.selected && !entry.exists_locally)
+            }) {
+                return Ok::<(), &'static str>(());
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    })
+    .await
+    .map_err(|_| "local-api-selective-unselected-tree-timed-out")??;
+    if target.exists() || unselected.exists() {
+        return Err("local-api-selective-file-present-before-selection");
+    }
+    let scope = SelectiveScope::Path(TargetPath::local(SAMPLE));
+    check_authorization(root)?;
+    if let Err(error) = local
+        .request_selection(&pair.primary_folder, &scope, SelectiveAction::Select)
+        .await
+    {
+        let mut result = unavailable(&error);
+        result["target_file_present_after_error"] = json!(target.exists());
+        result["unselected_witness_absent"] = json!(!unselected.exists());
+        result["source_file_unchanged"] = json!(fingerprint(&source)? == sent);
+        return Ok(result);
+    }
+    let received = wait_file(root, &target, &sent).await?;
+    if unselected.exists() || fingerprint(&witness)? != preserved {
+        return Err("local-api-selective-witness-changed");
+    }
+    check_authorization(root)?;
+    if let Err(error) = local
+        .request_selection(&pair.primary_folder, &scope, SelectiveAction::Deselect)
+        .await
+    {
+        let mut result = unavailable(&error);
+        result["received_file"] = received;
+        result["deselection_target_still_present"] = json!(target.exists());
+        return Ok(result);
+    }
+    tokio::time::timeout(WAIT, async {
+        while target.exists() {
+            check_authorization(root)?;
+            tokio::time::sleep(POLL).await;
+        }
+        Ok::<(), &'static str>(())
+    })
+    .await
+    .map_err(|_| "local-api-selective-receiving-file-still-present")??;
+    if fingerprint(&source)? != sent || fingerprint(&witness)? != preserved || unselected.exists() {
+        return Err("local-api-selective-source-or-witness-changed");
+    }
+    Ok(
+        json!({"state":"observed","received_file":received,"receiving_file_removed":true,
+              "source_file_preserved":true,"unselected_witness_preserved_on_source_only":true}),
+    )
+}
+
 async fn measure(
     root: &Path,
     pair: &Pair,
@@ -524,12 +625,13 @@ async fn measure(
         Ok(_) => json!({"state":"incomplete-peer-not-observed"}),
         Err(error) => unavailable(&error),
     };
+    let selective = selection(root, pair, primary, secondary, local, seed).await?;
     Ok(json!({
         "actual_pending_file":true, "actual_partial_block_progress":true,
         "actual_incomplete_then_completed_peer":true, "ordinary_partial":partial,
         "ordinary_completion":{"before":before,"after":after},
         "files":{"incoming":incoming,"outgoing":outgoing},
-        "local_api":{"LA-002":device_inventory,"SYM-049":protected_need,"LA-016":protected_progress,
+        "local_api":{"LA-002":device_inventory,"SYM-049":protected_need,"SYM-091":selective,"LA-016":protected_progress,
                      "LA-017":protected_completion,"LA-019":primary_transport},
     }))
 }
