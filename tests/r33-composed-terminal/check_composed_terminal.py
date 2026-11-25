@@ -87,13 +87,11 @@ for line in sys.stdin:
 '''
 
 
-async def worker(root, spec):
+async def worker(root, spec, exchange):
     run = secrets.token_hex(16)
     expires = int(time.time()) + 105
     payload = root / "payload"
-    exchange = root / "exchange"
     payload.mkdir(mode=0o700)
-    exchange.mkdir(mode=0o700)
     shutil.copyfile(root / "synthetic-stage.zip", payload / "linux-scope.zip")
     shutil.copyfile(HERE.with_name("r33_linux_qualification_bootstrap.py"),
                     payload / "r33_linux_qualification_bootstrap.py")
@@ -176,10 +174,11 @@ async def worker(root, spec):
     (root/"standby-receipt.json").write_text(json.dumps(standby))
 
 
-def drive(root, spec, ssh_password, stop_command):
+def drive(root, spec, ssh_password, stop_command, exchange):
     pid, descriptor = pty.fork()
     if pid == 0:
-        os.execv(sys.executable, [sys.executable, "-B", str(HERE), "--fixture", str(root), json.dumps(spec)])
+        os.execv(sys.executable, [sys.executable, "-B", str(HERE), "--fixture",
+                                  str(root), json.dumps(spec), str(exchange)])
     history = bytearray()
     reaped = False
     secrets_under_test = (ssh_password, USERNAME, PASSWORD)
@@ -214,8 +213,8 @@ def drive(root, spec, ssh_password, stop_command):
         wait_for(PRO_PASSWORD)
         os.write(descriptor, PASSWORD+b"\n")
         wait_for(READY, 24)
-        ready = json.loads((root/"exchange/ready.json").read_text())
-        assert (root/"exchange/cross-network.json").is_file() and not (root/"exchange/stopped.json").exists()
+        ready = json.loads((exchange/"ready.json").read_text())
+        assert (exchange/"cross-network.json").is_file() and not (exchange/"stopped.json").exists()
         asyncio.run(exercise_named_cases(ready))
         began = time.monotonic()
         os.write(descriptor, stop_command)
@@ -242,20 +241,23 @@ def drive(root, spec, ssh_password, stop_command):
 
 def check():
     for command in (b"STOP\n", b"\x03"):
-        with TemporaryDirectory(prefix="r33-password-composed-") as directory:
+        with (
+            TemporaryDirectory(prefix="r33-password-composed-") as directory,
+            TemporaryDirectory(prefix="r33-exchange-", dir=entry.TMP) as exchange,
+        ):
             with (
                 patch.object(ssh_fixture, "ROLE_PROGRAM", fixture_role()),
                 patch.object(ssh_fixture, "drive_terminal",
-                             lambda root, spec, password: drive(root, spec, password, command)),
+                             lambda root, spec, password: drive(root, spec, password, command, Path(exchange))),
             ):
                 result = ssh_fixture.check(Path(directory))
-        assert not Path(directory).exists()
+        assert not Path(directory).exists() and not Path(exchange).exists()
         print("R33_COMPOSED_TERMINAL "+json.dumps(result | {"fixture_root_removed":True}, sort_keys=True),flush=True)
 
 
 if __name__ == "__main__":
     os.umask(0o077)
     if sys.argv[1:2] == ["--fixture"]:
-        asyncio.run(worker(Path(sys.argv[2]), json.loads(sys.argv[3])))
+        asyncio.run(worker(Path(sys.argv[2]), json.loads(sys.argv[3]), Path(sys.argv[4])))
     else:
         check()
