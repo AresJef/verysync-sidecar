@@ -7,8 +7,9 @@ import json
 from pathlib import Path
 import secrets
 import shlex
+import time
 
-from r33_protocol import FRAME_MAX, decode_frame, encode_frame
+from r33_protocol import FRAME_MAX, HEARTBEAT_SECONDS, decode_frame, encode_frame
 from r33_ssh import Destination
 
 
@@ -22,6 +23,8 @@ class LinuxQualification:
         self.foreground=foreground
         self.sender=asyncio.Lock()
         self.heartbeat=None
+        self.stopping=False
+        self.interrupted_request=None
 
     @classmethod
     async def open(cls, destination, staging: Path, bootstrap: Path, payload: Path,
@@ -58,8 +61,10 @@ class LinuxQualification:
                 await session.close_unconfirmed()
                 raise
 
-    async def write(self,value):
+    async def write(self,value,operator_stop=None):
         async with self.sender:
+            if operator_stop is not None and operator_stop.is_set():
+                raise ValueError("The Linux work was stopped before transmission.")
             self.child.stdin.write(encode_frame(value))
             await self.child.stdin.drain()
 
@@ -71,11 +76,18 @@ class LinuxQualification:
             await self.write({"kind":"renew","run":self.run})
             await asyncio.sleep(10)
 
-    async def execute(self,operation,fields=None,timeout=50):
+    async def execute(self,operation,fields=None,timeout=50,*,operator_stop=None):
+        if self.stopping:
+            raise ValueError("The Linux role is stopping.")
         identifier=secrets.token_hex(16)
         await self.write({"kind":"execute","run":self.run,"request":identifier,
-                          "operation":operation,"input":{"kind":operation,**(fields or {})}})
-        result=await self.read(timeout)
+                          "operation":operation,"input":{"kind":operation,**(fields or {})}},operator_stop)
+        if operator_stop is None:
+            result=await self.read(timeout)
+        else:
+            result=await self.read_while_active(identifier,timeout,operator_stop)
+        if result is None:
+            return {"state":"operator-stopped","request_transmitted":True}
         if result.get("request")!=identifier:
             raise ValueError("The Linux response did not confirm the named operation.")
         if result.get("event")!="operation-observed":
@@ -87,6 +99,35 @@ class LinuxQualification:
                         "provider_network":result.get("provider_network",{})}
             raise ValueError("The Linux response did not confirm the named operation.")
         return result["native"]
+
+    async def read_while_active(self,identifier,timeout,operator_stop):
+        read=asyncio.create_task(self.read(timeout))
+        stopped=asyncio.create_task(operator_stop.wait())
+        try:
+            await asyncio.wait((read,stopped),return_when=asyncio.FIRST_COMPLETED)
+            if operator_stop.is_set():
+                self.interrupted_request=identifier
+                read.cancel()
+                await asyncio.gather(read,return_exceptions=True)
+                await self.request_stop()
+                return None
+            return read.result()
+        except asyncio.TimeoutError:
+            self.interrupted_request=identifier
+            raise
+        finally:
+            read.cancel()
+            stopped.cancel()
+            await asyncio.gather(read,stopped,return_exceptions=True)
+
+    async def request_stop(self):
+        if self.stopping:
+            return
+        self.stopping=True
+        if self.heartbeat:
+            self.heartbeat.cancel()
+            await asyncio.gather(self.heartbeat,return_exceptions=True)
+        await self.write({"kind":"stop","run":self.run})
 
     async def close_unconfirmed(self):
         if self.heartbeat:
@@ -115,20 +156,24 @@ class LinuxQualification:
         return staging
 
     async def stop(self):
-        if self.heartbeat:
-            self.heartbeat.cancel()
-            await asyncio.gather(self.heartbeat,return_exceptions=True)
         try:
-            await self.write({"kind":"stop","run":self.run})
+            await self.request_stop()
             stop=await self.read(52)
+            observation=None
+            if self.interrupted_request is not None and stop.get("request")==self.interrupted_request:
+                observation={key:stop[key] for key in ("event","code") if isinstance(stop.get(key),str)}
+                stop=await self.read(52)
             cleanup=await self.read(8)
             if (stop.get("event")!="local-api-foreground-stopped" or stop.get("run")!=self.run
                     or cleanup.get("event")!="local-api-cleanup" or cleanup.get("run")!=self.run
                     or cleanup.get("private_state_removed") is not True):
                 raise ValueError("The Linux shutdown response needs a readback.")
             staging=await self.finish_staging()
-            return {"native_scope":stop,"cleanup":cleanup,"staging":staging,
+            result={"native_scope":stop,"cleanup":cleanup,"staging":staging,
                     "ssh_exit":self.child.returncode}
+            if observation is not None:
+                result["interrupted_observation"]=observation
+            return result
         except (OSError,ValueError,asyncio.TimeoutError):
             await self.close_unconfirmed()
             return {"ssh_closed":self.child.returncode is not None,"native_cleanup":"unconfirmed"}
@@ -142,6 +187,10 @@ class LinuxForeground:
         self.expires=expires
         self.active=None
         self.used=set()
+        self.transitions=asyncio.Lock()
+        self.idle_renewals=0
+        self.transport_lost=False
+        self.idle_task=asyncio.create_task(self.maintain_standby())
 
     @classmethod
     async def open(cls, destination, staging, bootstrap, payload, digest, run, expires):
@@ -149,47 +198,74 @@ class LinuxForeground:
         return cls(wire, expires), ready
 
     async def begin(self, worker, stop):
-        if stop.is_set():
-            return None
-        if self.active or worker.live_scope in self.used or self.session.child.returncode is not None:
-            raise ValueError("The selected Linux role is unavailable on this SSH session.")
-        self.used.add(worker.live_scope)
-        self.active=worker(self.session.child,self.session.run,self)
+        async with self.transitions:
+            if stop.is_set():
+                return None
+            if (self.active or worker.live_scope in self.used or self.transport_lost
+                    or self.session.child.returncode is not None or time.time()>=self.expires):
+                raise ValueError("The selected Linux role is unavailable on this SSH session.")
+            self.used.add(worker.live_scope)
+            self.active=worker(self.session.child,self.session.run,self)
+            try:
+                await self.session.write({"kind":"start-role","run":self.session.run,"role":worker.live_scope})
+                initial=await self.session.read(85)
+                if initial.get("ok") is False:
+                    finished=await self.session.read(8)
+                    if (finished.get("event")=="linux-role-finished"
+                            and finished.get("run")==self.session.run and finished.get("role")==worker.live_scope
+                            and type(finished.get("exit_code")) is int and finished["exit_code"]!=0):
+                        self.active=None
+                        return None
+                if (initial.get("event")!=worker.ready_event or initial.get("run")!=self.session.run
+                        or initial.get("deadline")!=self.expires):
+                    raise ValueError("The selected Linux role did not confirm readiness.")
+                self.active.heartbeat=asyncio.create_task(self.active.renew())
+                return self.active, initial
+            except BaseException:
+                self.transport_lost=True
+                await self.session.close_unconfirmed()
+                raise
+
+    async def maintain_standby(self):
         try:
-            await self.session.write({"kind":"start-role","run":self.session.run,"role":worker.live_scope})
-            initial=await self.session.read(85)
-            if initial.get("ok") is False:
-                finished=await self.session.read(8)
-                if (finished.get("event")=="linux-role-finished"
-                        and finished.get("run")==self.session.run and finished.get("role")==worker.live_scope
-                        and type(finished.get("exit_code")) is int and finished["exit_code"]!=0):
-                    self.active=None
-                    return None
-            if (initial.get("event")!=worker.ready_event or initial.get("run")!=self.session.run
-                    or initial.get("deadline")!=self.expires):
-                raise ValueError("The selected Linux role did not confirm readiness.")
-            self.active.heartbeat=asyncio.create_task(self.active.renew())
-            return self.active, initial
-        except BaseException:
+            while True:
+                await asyncio.sleep(HEARTBEAT_SECONDS)
+                async with self.transitions:
+                    if (self.transport_lost or self.session.child.returncode is not None
+                            or time.time()>=self.expires):
+                        return
+                    if self.active is not None:
+                        continue
+                    await self.session.write({"kind":"renew-idle","run":self.session.run})
+                    receipt=await self.session.read(8)
+                    if receipt!={"event":"linux-idle-renewed","run":self.session.run,"deadline":self.expires}:
+                        raise ValueError("The Linux standby renewal did not confirm the selected session.")
+                    self.idle_renewals+=1
+        except (OSError,ValueError,asyncio.TimeoutError):
+            self.transport_lost=True
             await self.session.close_unconfirmed()
-            raise
 
     async def stop(self):
-        if self.active is not None:
-            await self.active.stop()
-        try:
-            if self.active is not None or self.session.child.returncode is not None:
-                raise ValueError("The final SSH cleanup reply is unavailable.")
-            await self.session.write({"kind":"close-foreground","run":self.session.run})
-            staging=await self.session.read(8)
-            await asyncio.wait_for(self.session.child.wait(),8)
-            if (staging!={"event":"linux-staging-cleaned","temporary_programs_removed":True}
-                    or self.session.child.returncode!=0):
-                raise ValueError("The final SSH cleanup reply did not match.")
-            return {"staging":staging,"ssh_exit":0,"one_authenticated_channel":True}
-        except (OSError,ValueError,asyncio.TimeoutError):
-            await self.session.close_unconfirmed()
-            return {"ssh_closed":self.session.child.returncode is not None,"staging":"unconfirmed"}
+        async with self.transitions:
+            self.idle_task.cancel()
+            await asyncio.gather(self.idle_task,return_exceptions=True)
+            if self.active is not None:
+                await self.active.stop()
+            try:
+                if self.active is not None or self.transport_lost:
+                    raise ValueError("The final SSH cleanup reply is unavailable.")
+                if self.session.child.returncode is None and time.time()<self.expires:
+                    await self.session.write({"kind":"close-foreground","run":self.session.run})
+                staging=await self.session.read(8)
+                await asyncio.wait_for(self.session.child.wait(),8)
+                if (staging!={"event":"linux-staging-cleaned","temporary_programs_removed":True}
+                        or self.session.child.returncode!=0):
+                    raise ValueError("The final SSH cleanup reply did not match.")
+                return {"staging":staging,"ssh_exit":0,"one_authenticated_channel":True,
+                        "idle_renewals":self.idle_renewals}
+            except (OSError,ValueError,asyncio.TimeoutError):
+                await self.session.close_unconfirmed()
+                return {"ssh_closed":self.session.child.returncode is not None,"staging":"unconfirmed"}
 
 
 class LinuxBrokerSession(LinuxQualification):

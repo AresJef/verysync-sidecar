@@ -27,6 +27,7 @@ GATEWAY_FILES=frozenset((
     "r33_wan_route.py","linux_private_boundary.py","r33_protocol.py",
 ))
 MAX_TRANSFER = 104 * 1024 * 1024
+IDLE_LEASE_SECONDS = 90
 ROLE_FILES = {"live": ("local-api", FILES), "native-target": ("gateway", GATEWAY_FILES)}
 
 
@@ -123,12 +124,12 @@ def announce(value):
     sys.stdout.buffer.flush()
 
 
-def idle_command(expires):
+def idle_command(expires, lease_deadline):
     # An active role owns stdin until its process exits. The caller waits for
     # the role-finished frame before sending the next broker-level request.
     line=bytearray()
     while len(line)<256:
-        remaining=expires-time.time()
+        remaining=min(expires-time.time(), lease_deadline-time.monotonic())
         if remaining<=0 or not select.select([0],[],[],remaining)[0]:
             return None
         value=os.read(0,1)
@@ -143,17 +144,24 @@ def idle_command(expires):
 def serve_roles(root, run, expires, launch=run_role):
     cutoff=int(expires)
     close=frame({"kind":"close-foreground","run":run})
+    renew=frame({"kind":"renew-idle","run":run})
     pending={frame({"kind":"start-role","run":run,"role":role}): (role, folder)
              for role,(folder,_) in ROLE_FILES.items()}
     announce({"event":"linux-foreground-ready","run":run,"deadline":cutoff})
+    lease_deadline=time.monotonic()+IDLE_LEASE_SECONDS
     while True:
-        request=idle_command(cutoff)
-        if request in (None,close) or time.time()>=cutoff:
+        request=idle_command(cutoff,lease_deadline)
+        if request in (None,close) or time.time()>=cutoff or time.monotonic()>=lease_deadline:
             return 0
+        if request==renew:
+            lease_deadline=time.monotonic()+IDLE_LEASE_SECONDS
+            announce({"event":"linux-idle-renewed","run":run,"deadline":cutoff})
+            continue
         if request not in pending:
             raise ValueError("The command is outside the selected Linux roles.")
         role,folder=pending.pop(request)
         code=launch(root/folder,run,expires,role)
+        lease_deadline=time.monotonic()+IDLE_LEASE_SECONDS
         announce({"event":"linux-role-finished","run":run,"role":role,"exit_code":code})
 
 

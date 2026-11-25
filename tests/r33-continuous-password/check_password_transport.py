@@ -66,17 +66,41 @@ class FixtureGateway(LinuxQualification):
     live_scope = "native-target"
 
 
+def listening_endpoints():
+    result = set()
+    for table in ("tcp", "tcp6", "udp", "udp6"):
+        path = Path("/proc/net") / table
+        if not path.is_file():
+            continue
+        for line in path.read_text().splitlines()[1:]:
+            fields = line.split()
+            if table.startswith("udp") or fields[3] == "0A":
+                result.add((table, fields[1], fields[9]))
+    return result
+
+
 async def through_password(root, spec):
     run = secrets.token_hex(16)
     source = root / "synthetic-stage.zip"
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    expires = int(time.time()) + 45
+    expires = int(time.time()) + 75
     foreground, _ = await LinuxForeground.open(
         spec, root, HERE.with_name("r33_linux_qualification_bootstrap.py"), source, digest, run, expires,
     )
     stop = asyncio.Event()
     pids = []
     try:
+        before = listening_endpoints()
+        assert any(row[0] == "tcp" and row[1].endswith(f":{spec['port']:04X}") for row in before)
+        start = time.monotonic()
+        snapshots = 0
+        while foreground.idle_renewals < 2:
+            assert listening_endpoints() == before and foreground.active is None
+            assert foreground.session.child.returncode is None and time.monotonic() - start < 39
+            snapshots += 1
+            await asyncio.sleep(.25)
+        standby_seconds = time.monotonic() - start
+        assert standby_seconds >= 29 and snapshots >= 60
         # The exact root bootstrap reads both children from the prepared ZIP.
         for worker in (LinuxQualification, FixtureGateway):
             child, ready = await foreground.begin(worker, stop)
@@ -86,7 +110,8 @@ async def through_password(root, spec):
             assert child.child is foreground.session.child
             ended = await child.stop()
             assert ended["cleanup"]["private_state_removed"]
-            assert foreground.session.child.returncode is None
+            assert foreground.session.child.returncode is None and foreground.active is None
+            assert listening_endpoints() == before
         assert len(set(pids)) == 2
         print("Both staged roles used the same SSH connection.", flush=True)
         if input().strip() != "STOP":
@@ -94,6 +119,12 @@ async def through_password(root, spec):
     finally:
         cleanup = await foreground.stop()
     assert cleanup["ssh_exit"] == 0 and cleanup["staging"]["temporary_programs_removed"]
+    assert cleanup["idle_renewals"] == 2
+    (root / "standby-receipt.json").write_text(json.dumps({
+        "idle_renewals": cleanup["idle_renewals"], "standby_seconds": round(standby_seconds, 6),
+        "kernel_socket_census_checks": snapshots, "added_standby_listeners": 0,
+        "both_roles_returned_to_standby": True, "fixed_bootstrap_verified": True,
+    }))
     print("R33_SYNTHETIC_PASSWORD_STOPPED", flush=True)
 
 
@@ -119,8 +150,8 @@ def drive_terminal(root, spec, password):
     history = bytearray()
     reaped = False
 
-    def wait_for(marker):
-        deadline = time.monotonic() + 12
+    def wait_for(marker, seconds=12):
+        deadline = time.monotonic() + seconds
         while marker not in history:
             if not select.select([descriptor], [], [], max(0, deadline - time.monotonic()))[0]:
                 raise ValueError(f"Missing the fixture terminal marker {marker!r}.")
@@ -138,7 +169,7 @@ def drive_terminal(root, spec, password):
     try:
         wait_for(b"'s password:")
         os.write(descriptor, password + b"\n")
-        wait_for(b"Both staged roles used the same SSH connection.")
+        wait_for(b"Both staged roles used the same SSH connection.", 52)
         os.write(descriptor, b"STOP\n")
         wait_for(b"R33_SYNTHETIC_PASSWORD_STOPPED")
         _, status = os.waitpid(pid, 0)
@@ -195,10 +226,11 @@ def check(root):
     accepted = len(re.findall(rb"Accepted password for root from 127\.0\.0\.1 port ", log_path.read_bytes()))
     assert accepted == 1
     assert set(Path("/tmp").glob("r33-la-staging-*")) == contents_before
+    standby = json.loads((root / "standby-receipt.json").read_text())
     return {"fixture": "Linux AMD64 disposable container", "open_ssh_password_authentications": accepted,
             "password_prompts": 1, "password_echoes": 0, "both_roles_used_one_connection": True,
             "remote_staging_removed": True, "ssh_daemon_stopped": True,
-            "official_account_calls": 0, "native_engine_used": False}
+            "official_account_calls": 0, "native_engine_used": False, **standby}
 
 
 if __name__ == "__main__":
