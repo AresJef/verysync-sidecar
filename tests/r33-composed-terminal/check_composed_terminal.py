@@ -183,23 +183,29 @@ def drive(root, spec, ssh_password, stop_command, exchange):
     reaped = False
     secrets_under_test = (ssh_password, USERNAME, PASSWORD)
 
+    def redacted():
+        safe = bytes(history)
+        for secret in secrets_under_test:
+            safe = safe.replace(secret, b"[redacted]")
+        return safe[-3300:]
+
+    def collect():
+        try:
+            block = os.read(descriptor, 4096)
+        except OSError as error:
+            if error.errno != errno.EIO:
+                raise
+            return False
+        history.extend(block)
+        return bool(block)
+
     def wait_for(marker, seconds=14):
         until = time.monotonic() + seconds
         while marker not in history:
             if not select.select([descriptor], [], [], max(0, until-time.monotonic()))[0]:
                 raise AssertionError(f"The terminal did not reach {marker!r}.")
-            try:
-                block = os.read(descriptor, 4096)
-            except OSError as error:
-                if error.errno != errno.EIO:
-                    raise
-                block = b""
-            if not block:
-                safe = bytes(history)
-                for secret in secrets_under_test:
-                    safe = safe.replace(secret, b"[redacted]")
-                raise AssertionError(f"The terminal exited before {marker!r}: {safe[-1800:]!r}.")
-            history.extend(block)
+            if not collect():
+                raise AssertionError(f"The terminal exited before {marker!r}: {redacted()!r}.")
 
     try:
         wait_for(START)
@@ -219,9 +225,20 @@ def drive(root, spec, ssh_password, stop_command, exchange):
         began = time.monotonic()
         os.write(descriptor, stop_command)
         wait_for(STOPPED)
-        _, status = os.waitpid(pid, 0)
-        reaped = True
-        assert os.waitstatus_to_exitcode(status) == 0
+        until = time.monotonic() + 14
+        while True:
+            if select.select([descriptor], [], [], .08)[0]:
+                collect()
+            finished, status = os.waitpid(pid, os.WNOHANG)
+            if finished:
+                reaped = True
+                break
+            if time.monotonic() >= until:
+                raise AssertionError(f"The foreground remained open after {stop_command!r}: {redacted()!r}.")
+        while select.select([descriptor], [], [], 0)[0] and collect():
+            pass
+        exit_code = os.waitstatus_to_exitcode(status)
+        assert exit_code == 0, (stop_command, exit_code, redacted())
         elapsed = time.monotonic() - began
         assert not Path(ready["socket"]).parent.exists()
         assert all(history.count(marker) == 1 for marker in (START, SSH_PASSWORD, PRO_ACCOUNT, PRO_PASSWORD, READY))
