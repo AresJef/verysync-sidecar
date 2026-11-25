@@ -16,22 +16,24 @@ pub(in crate::managed) use launch::Child;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+    ConvertStringSidToSidW, GetSecurityInfo, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
     EqualSid, GetAce, GetSecurityDescriptorControl, GetTokenInformation, IsValidSid, TokenUser,
-    ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, SECURITY_ATTRIBUTES, SE_DACL_PROTECTED,
-    TOKEN_QUERY, TOKEN_USER,
+    ACCESS_ALLOWED_ACE, ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE,
+    NO_PROPAGATE_INHERIT_ACE, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION, SECURITY_ATTRIBUTES,
+    SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateDirectoryW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
-    FILE_SHARE_WRITE,
+    CreateDirectoryW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    READ_CONTROL,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
-    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-    TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    CreateJobObjectW, JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken, ResumeThread};
 
@@ -78,6 +80,26 @@ pub(in crate::managed) fn spawn(
     lifetime: crate::managed::ManagedLifetime,
     io: crate::managed::process::ProcessIo,
 ) -> io::Result<(Child, ProcessGuard)> {
+    let guard = private_job(helper || lifetime == crate::managed::ManagedLifetime::CallerOwned)?;
+    if !helper {
+        // The SDK owns monitoring/restart for this fixed baseline. Select the
+        // direct core so suspended creation and private Job ownership apply to
+        // that core, without another upstream monitoring generation.
+        command.env("VSMONITORED", "yes");
+    }
+    let (mut child, thread) = launch::create(&command, io, &guard.0)?;
+    // SAFETY: The exact initial thread returned by CreateProcess remains owned
+    // and suspended, after the process joined its private Job.
+    if unsafe { ResumeThread(thread.as_raw_handle()) } != 1 {
+        let error = io::Error::other("unexpected initial suspend count");
+        let _ = guard.stop(&mut child);
+        let _ = child.wait();
+        return Err(error);
+    }
+    Ok((child, guard))
+}
+
+fn private_job(caller_owned: bool) -> io::Result<ProcessGuard> {
     // SAFETY: Null attributes/name create an unnamed noninheritable private Job.
     let raw = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
     if raw.is_null() {
@@ -86,12 +108,9 @@ pub(in crate::managed) fn spawn(
     // SAFETY: Successful API returned one newly owned handle.
     let guard = ProcessGuard(unsafe { OwnedHandle::from_raw_handle(raw) });
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags =
-        if helper || lifetime == crate::managed::ManagedLifetime::CallerOwned {
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        } else {
-            0
-        };
+    if caller_owned {
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    }
     // SAFETY: Live Job and correctly typed initialized native structure/length.
     if unsafe {
         SetInformationJobObject(
@@ -104,30 +123,7 @@ pub(in crate::managed) fn spawn(
     {
         return Err(io::Error::last_os_error());
     }
-    if !helper {
-        // The SDK owns monitoring/restart for this fixed baseline. Select the
-        // direct core so suspended creation and private Job ownership apply to
-        // that core, without another upstream monitoring generation.
-        command.env("VSMONITORED", "yes");
-    }
-    let (mut child, thread) = launch::create(&command, io)?;
-    // SAFETY: The exact child is suspended and both handles remain live. It
-    // cannot create any descendants before joining the private Job.
-    if unsafe { AssignProcessToJobObject(guard.0.as_raw_handle(), child.as_raw_handle()) } == 0 {
-        let error = io::Error::last_os_error();
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(error);
-    }
-    // SAFETY: The exact initial thread returned by CreateProcess remains owned
-    // and suspended, after the process joined its private Job.
-    if unsafe { ResumeThread(thread.as_raw_handle()) } != 1 {
-        let error = io::Error::other("unexpected initial suspend count");
-        let _ = guard.stop(&mut child);
-        let _ = child.wait();
-        return Err(error);
-    }
-    Ok((child, guard))
+    Ok(guard)
 }
 
 impl ProcessGuard {
@@ -238,17 +234,24 @@ fn sid(text: &str) -> io::Result<LocalAllocation> {
     Ok(LocalAllocation(result))
 }
 
-fn private_acl(path: &Path, protected: bool) -> io::Result<()> {
-    let wide: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+const SYSTEM: &str = "S-1-5-18";
+const ADMINISTRATORS: &str = "S-1-5-32-544";
+
+fn allowed_principals(caller: &str) -> impl Iterator<Item = &str> {
+    std::iter::once(caller).chain((caller != SYSTEM).then_some(SYSTEM))
+}
+
+fn private_acl(file: &File, directory: bool) -> io::Result<()> {
+    let mut owner = ptr::null_mut();
     let mut acl: *mut ACL = ptr::null_mut();
     let mut descriptor = ptr::null_mut();
-    // SAFETY: Native NUL-terminated path and correctly typed writable outputs.
+    // SAFETY: A live opened file handle and correctly typed writable outputs.
     let error = unsafe {
-        GetNamedSecurityInfoW(
-            wide.as_ptr(),
+        GetSecurityInfo(
+            file.as_raw_handle(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            ptr::null_mut(),
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
             ptr::null_mut(),
             &mut acl,
             ptr::null_mut(),
@@ -259,8 +262,28 @@ fn private_acl(path: &Path, protected: bool) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(error as i32));
     }
     let _allocation = LocalAllocation(descriptor);
-    if descriptor.is_null() || acl.is_null() {
-        return Err(io::Error::other("state DACL is missing"));
+    if descriptor.is_null() || owner.is_null() || acl.is_null() {
+        return Err(io::Error::other("state owner or DACL is missing"));
+    }
+    let caller = owner_sid()?;
+    let principals = allowed_principals(&caller)
+        .map(sid)
+        .collect::<io::Result<Vec<_>>>()?;
+    let administrators = sid(ADMINISTRATORS)?;
+    // Elevated native files can have the built-in Administrators default owner.
+    // This group is already inside the machine administrator trust boundary.
+    // It receives no DACL grant here.
+    // SAFETY: All SIDs are live in checked native allocations.
+    let trusted_owner = unsafe {
+        IsValidSid(owner) != 0
+            && (EqualSid(owner, administrators.0) != 0
+                || principals.iter().any(|known| EqualSid(owner, known.0) != 0))
+    };
+    if !trusted_owner {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the state has a different owner. Use a new private directory or ask an administrator to review ownership before migrating",
+        ));
     }
     let mut control = 0;
     let mut revision = 0;
@@ -269,73 +292,87 @@ fn private_acl(path: &Path, protected: bool) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: Valid OS-returned ACL inside the owned descriptor.
-    if (protected && control & SE_DACL_PROTECTED == 0) || unsafe { (*acl).AceCount } != 2 {
+    if (directory && control & SE_DACL_PROTECTED == 0)
+        || usize::from(unsafe { (*acl).AceCount }) != principals.len()
+    {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "state DACL is not exclusively private",
         ));
     }
-    let owner = sid(&owner_sid()?)?;
-    let system = sid("S-1-5-18")?;
-    let mut seen = [false; 2];
-    for index in 0..2 {
+    let mut seen = vec![false; principals.len()];
+    for index in 0..principals.len() {
         let mut raw = ptr::null_mut();
         // SAFETY: Index is within the checked ACL count, with writable output.
-        if unsafe { GetAce(acl, index, &mut raw) } == 0 {
+        if unsafe { GetAce(acl, index as u32, &mut raw) } == 0 {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: The OS returned an aligned ACE. Check its header before payload.
         let header = unsafe { &*raw.cast::<windows_sys::Win32::Security::ACE_HEADER>() };
-        if header.AceType != 0 || usize::from(header.AceSize) < size_of::<ACCESS_ALLOWED_ACE>() {
+        let flags = u32::from(header.AceFlags);
+        let inheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+        if header.AceType != 0
+            || usize::from(header.AceSize) < size_of::<ACCESS_ALLOWED_ACE>()
+            || flags & (INHERIT_ONLY_ACE | NO_PROPAGATE_INHERIT_ACE) != 0
+            || (directory && flags & inheritance != inheritance)
+        {
             return Err(io::Error::other("unexpected state ACE"));
         }
         // SAFETY: Checked allowed-ACE type and size in a valid OS descriptor.
         let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
         let principal = ptr::from_ref(&ace.SidStart).cast_mut().cast();
         // SAFETY: ACE SID validated before comparison to independently owned SIDs.
-        if ace.Mask != 0x001f_01ff || unsafe { IsValidSid(principal) } == 0 {
+        if ace.Mask != FILE_ALL_ACCESS || unsafe { IsValidSid(principal) } == 0 {
             return Err(io::Error::other("invalid state ACE"));
         }
-        if unsafe { EqualSid(principal, owner.0) } != 0 {
-            seen[0] = true;
-        } else if unsafe { EqualSid(principal, system.0) } != 0 {
-            seen[1] = true;
-        } else {
+        let Some(matched) = principals
+            .iter()
+            .position(|known| unsafe { EqualSid(principal, known.0) } != 0)
+        else {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "unexpected state principal",
             ));
+        };
+        if seen[matched] {
+            return Err(io::Error::other("duplicate state principal"));
         }
-    }
-    if !seen.into_iter().all(|value| value) {
-        return Err(io::Error::other("state DACL principals differ"));
+        seen[matched] = true;
     }
     Ok(())
 }
 
-pub(in crate::managed) fn private_directory(path: &Path, metadata: &Metadata) -> io::Result<()> {
-    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(io::Error::other("state reparse points are forbidden"));
-    }
-    private_acl(path, true)
+pub(in crate::managed) fn private_directory(path: &Path, _metadata: &Metadata) -> io::Result<()> {
+    retain_private_directory(path).map(drop)
 }
 
-#[cfg(feature = "download")]
 pub(in crate::managed) fn retain_private_directory(path: &Path) -> io::Result<File> {
-    let file = OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-        .custom_flags(
-            FILE_FLAG_OPEN_REPARSE_POINT
-                | windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS,
-        )
+    let file = options()
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)?;
-    private_directory(path, &file.metadata()?)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::other(
+            "state directory must not be a reparse point",
+        ));
+    }
+    private_acl(&file, true)?;
     Ok(file)
 }
 
 pub(in crate::managed) fn create_directory(path: &Path) -> io::Result<()> {
-    let sddl = format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{})", owner_sid()?);
+    let caller = owner_sid()?;
+    let mut sddl = format!("O:{caller}D:P");
+    for principal in allowed_principals(&caller) {
+        use std::fmt::Write;
+        write!(sddl, "(A;OICI;FA;;;{principal})").expect("writing to a String cannot fail");
+    }
+    create_directory_with_sddl(path, &sddl)?;
+    retain_private_directory(path).map(drop)
+}
+
+fn create_directory_with_sddl(path: &Path, sddl: &str) -> io::Result<()> {
     let sddl: Vec<_> = sddl.encode_utf16().chain(Some(0)).collect();
     let wide: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut descriptor = ptr::null_mut();
@@ -380,22 +417,27 @@ pub(in crate::managed) fn open_private(path: &Path, read_only: bool) -> io::Resu
         options.write(true).create(true);
     }
     let file = options.open(path)?;
-    validate_control_file(path, file)
+    validate_control_file(file)
 }
 
-fn validate_control_file(path: &Path, file: File) -> io::Result<File> {
+fn validate_control_file(file: File) -> io::Result<File> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(io::Error::other(
             "control file must be regular and not a reparse point",
         ));
     }
-    private_acl(path, false)?;
+    private_acl(&file, false)?;
     Ok(file)
 }
 
 pub(in crate::managed) fn create_private(path: &Path) -> io::Result<File> {
-    options().read(true).write(true).create_new(true).open(path)
+    let file = options()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    validate_control_file(file)
 }
 
 pub(in crate::managed) fn protect_generated(path: &Path) -> io::Result<()> {
@@ -406,9 +448,105 @@ pub(in crate::managed) fn open_owned_lock(path: &Path) -> io::Result<File> {
     // This is an observation of an existing upstream resource, not admission
     // that may create the library's own private control files.
     let file = options().read(true).write(true).open(path)?;
-    validate_control_file(path, file)
+    validate_control_file(file)
 }
 
 pub(in crate::managed) fn open_snapshot_input(path: &Path) -> io::Result<File> {
     open_private(path, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_private_directories_and_controls_reopen_for_the_actual_caller() -> io::Result<()> {
+        let caller = owner_sid()?;
+        if std::env::var_os("VSS_WINDOWS_REQUIRE_SYSTEM").is_some() {
+            assert_eq!(caller, SYSTEM);
+        }
+        let fixture = tempfile::tempdir()?;
+        let path = fixture.path().join("state");
+        create_directory(&path)?;
+        drop(retain_private_directory(&path)?);
+        let control = path.join("private-test-control");
+        let content = b"synthetic file";
+        std::io::Write::write_all(&mut create_private(&control)?, content)?;
+        let mut reopened = open_private(&control, true)?;
+        let mut observed = Vec::new();
+        std::io::Read::read_to_end(&mut reopened, &mut observed)?;
+        assert_eq!(observed, content);
+        let cache_root = fixture.path().join("cache");
+        create_directory(&cache_root)?;
+        drop(retain_private_directory(&cache_root)?);
+        let cache_control = cache_root.join(".cache-test-control");
+        drop(create_private(&cache_control)?);
+        drop(open_private(&cache_control, true)?);
+        let extra = fixture.path().join("extra-grant");
+        let grants: String = allowed_principals(&caller)
+            .map(|sid| format!("(A;OICI;FA;;;{sid})"))
+            .collect();
+        create_directory_with_sddl(&extra, &format!("O:{caller}D:P{grants}(A;OICI;FR;;;WD)"))?;
+        assert_eq!(
+            retain_private_directory(&extra).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        println!(
+            "Windows native ACL evidence: caller_is_system={}, expected_principals={}, private state, cache and controls reopened, extra ACL rejected",
+            caller == SYSTEM,
+            allowed_principals(&caller).count()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn windows_job_contains_child_before_the_first_resume() -> io::Result<()> {
+        use windows_sys::Win32::Foundation::{FILETIME, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+        use windows_sys::Win32::System::Threading::{GetProcessTimes, WaitForSingleObject};
+
+        let guard = private_job(true)?;
+        let mut command = Command::new(std::env::current_exe()?);
+        command.arg("--list").env_clear().envs(std::env::vars_os());
+        let io = crate::managed::process::ProcessIo {
+            stdin_pipe: false,
+            stdout: None,
+            stderr: None,
+        };
+        let (mut child, thread) = launch::create(&command, io, &guard.0)?;
+        let job = guard.0.as_raw_handle();
+        let mut child_member = 0;
+        let mut host_member = 0;
+        let mut created = FILETIME::default();
+        let mut exited = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        // SAFETY: The private Job, child, initial thread and host handles are
+        // live, and each native query has separate writable output.
+        let measured = unsafe {
+            IsProcessInJob(child.as_raw_handle(), job, &mut child_member) != 0
+                && IsProcessInJob(GetCurrentProcess(), job, &mut host_member) != 0
+                && GetProcessTimes(
+                    child.as_raw_handle(),
+                    &mut created,
+                    &mut exited,
+                    &mut kernel,
+                    &mut user,
+                ) != 0
+        };
+        let born = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+        let pid = child.id();
+        assert!(child.try_wait()?.is_none());
+        drop(guard);
+        // SAFETY: Wait only on the exact still-unresumed process with a bound.
+        let closed = unsafe { WaitForSingleObject(child.as_raw_handle(), 10_000) } == WAIT_OBJECT_0;
+        if !closed {
+            child.kill()?;
+            child.wait()?;
+        }
+        drop(thread);
+        assert!(measured && born != 0 && child_member != 0 && host_member == 0 && closed);
+        println!("Windows native Job evidence: exact_pid={pid}, creation_filetime={born}, child_member_before_resume=true, unrelated_host_member=false, reaped_on_last_job_handle_close=true");
+        Ok(())
+    }
 }

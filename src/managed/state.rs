@@ -1,7 +1,7 @@
 //! Private-directory admission and cross-process state leases.
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -15,12 +15,42 @@ pub(super) const LEASE: &str = ".verysync-sidecar-lease";
 pub(super) const FORMAT: &[u8] = b"verysync-sidecar private state v1\n";
 pub(super) const RESTORE_INCOMPLETE: &str = ".verysync-sidecar-restore-incomplete";
 
+pub(super) const GENERATION: &str = ".verysync-sidecar-generation";
+const GENERATION_FORMAT: &[u8] = b"verysync-sidecar generation v1\n";
+pub(super) type Generation = [u8; 32];
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct GenerationRecord {
+    generation: Generation,
+    stopped_program: Option<[u8; 32]>,
+    clean_stop: bool,
+}
+
 fn require_complete(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path.join(RESTORE_INCOMPLETE)) {
         Ok(_) => Err(Error::UnmanagedState),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error("inspect state restore completion", error)),
     }
+}
+
+fn present(path: &Path, operation: &'static str) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(io_error(operation, error)),
+    }
+}
+
+fn unmarked_has_other_entries(path: &Path) -> Result<bool> {
+    for entry in fs::read_dir(path).map_err(|e| io_error("inspect unmarked state", e))? {
+        let entry = entry.map_err(|e| io_error("read unmarked state entry", e))?;
+        if entry.file_name() != LEASE {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Admit existing private state for reads only, without creating files or leases.
@@ -49,6 +79,8 @@ pub(super) fn existing(path: &Path) -> Result<PathBuf> {
 pub(super) struct StateLease {
     path: PathBuf,
     _file: File,
+    #[cfg(windows)]
+    _directory: File,
     engine_lock: Option<File>,
     owner_process: u32,
 }
@@ -69,31 +101,49 @@ impl Drop for StateLease {
 
 impl StateLease {
     pub(super) fn acquire(path: &Path) -> Result<Self> {
-        match fs::symlink_metadata(path) {
-            Ok(metadata) => {
-                if !metadata.is_dir() || metadata.file_type().is_symlink() {
-                    return Err(Error::UnmanagedState);
-                }
-                native::private_directory(path, &metadata)
-                    .map_err(|e| io_error("check state privacy", e))?;
-                if !path.join(MARKER).exists()
-                    && fs::read_dir(path)
-                        .map_err(|e| io_error("inspect state", e))?
-                        .next()
-                        .is_some()
-                {
-                    return Err(Error::UnmanagedState);
-                }
-            }
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                native::create_directory(path).map_err(|e| io_error("create private state", e))?;
+                if let Err(error) = native::create_directory(path) {
+                    if error.kind() != io::ErrorKind::AlreadyExists {
+                        return Err(io_error("create private state", error));
+                    }
+                }
+                fs::symlink_metadata(path).map_err(|e| io_error("inspect created state", e))?
             }
             Err(error) => return Err(io_error("inspect state", error)),
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(Error::UnmanagedState);
         }
+        native::private_directory(path, &metadata)
+            .map_err(|e| io_error("check state privacy", e))?;
         let path = canonical(path).map_err(|e| io_error("resolve private state", e))?;
+        #[cfg(windows)]
+        let directory = native::retain_private_directory(&path)
+            .map_err(|e| io_error("retain private state", e))?;
         require_complete(&path)?;
+
+        let marker = path.join(MARKER);
+        // The first owner creates the lease before writing the state marker.
+        // Admit this transition to the lock check only with library control
+        // names. Re-read the marker if the other owner made progress while
+        // this directory was being inspected.
+        let marker_present = || present(&marker, "inspect state marker");
+        if !marker_present()? && unmarked_has_other_entries(&path)? && !marker_present()? {
+            return Err(Error::UnmanagedState);
+        }
         let file = native::open_private(&path.join(LEASE), false)
             .map_err(|e| io_error("open state lease", e))?;
+        if !marker_present()?
+            && file
+                .metadata()
+                .map_err(|e| io_error("inspect initializing state lease", e))?
+                .len()
+                != 0
+        {
+            return Err(Error::UnmanagedState);
+        }
         file.try_lock_exclusive().map_err(|error| {
             if error.kind() == io::ErrorKind::WouldBlock || error.raw_os_error() == Some(33) {
                 Error::ManagedStateInUse {
@@ -103,11 +153,7 @@ impl StateLease {
                 io_error("lock private state", error)
             }
         })?;
-        let marker = path.join(MARKER);
-        if marker
-            .try_exists()
-            .map_err(|e| io_error("inspect state marker", e))?
-        {
+        if marker_present()? {
             let mut input = native::open_private(&marker, true)
                 .map_err(|e| io_error("open state marker", e))?;
             let mut bytes = Vec::new();
@@ -119,10 +165,7 @@ impl StateLease {
                 return Err(Error::UnmanagedState);
             }
         } else {
-            if fs::read_dir(&path)
-                .map_err(|e| io_error("inspect new state", e))?
-                .any(|entry| entry.map_or(true, |entry| entry.file_name() != LEASE))
-            {
+            if unmarked_has_other_entries(&path)? {
                 return Err(Error::UnmanagedState);
             }
             let mut output =
@@ -159,9 +202,100 @@ impl StateLease {
         Ok(Self {
             path,
             _file: file,
+            #[cfg(windows)]
+            _directory: directory,
             engine_lock,
             owner_process: std::process::id(),
         })
+    }
+
+    pub(super) fn begin_generation(&self) -> Result<Generation> {
+        let mut generation = [0; 32];
+        getrandom::fill(&mut generation).map_err(|_| Error::ManagedFailure {
+            reason: "could not create a unique state run identifier",
+        })?;
+        self.write_generation(&GenerationRecord {
+            generation,
+            stopped_program: None,
+            clean_stop: false,
+        })?;
+        Ok(generation)
+    }
+
+    pub(super) fn record_stop(
+        &self,
+        generation: Generation,
+        program: [u8; 32],
+        clean_stop: bool,
+    ) -> Result<()> {
+        if self.read_generation()?.generation != generation {
+            return Err(Error::ManagedFailure {
+                reason: "private state belongs to a different run",
+            });
+        }
+        self.write_generation(&GenerationRecord {
+            generation,
+            stopped_program: Some(program),
+            clean_stop,
+        })
+    }
+
+    pub(super) fn require_stopped_generation(
+        &self,
+        generation: Generation,
+        program: [u8; 32],
+        clean_required: bool,
+    ) -> Result<()> {
+        let record = self.read_generation()?;
+        if record.generation != generation
+            || record.stopped_program != Some(program)
+            || (clean_required && !record.clean_stop)
+        {
+            return Err(Error::ManagedFailure {
+                reason: "private state does not match this stopped owner and program",
+            });
+        }
+        Ok(())
+    }
+
+    fn read_generation(&self) -> Result<GenerationRecord> {
+        let file = native::open_private(&self.path.join(GENERATION), true)
+            .map_err(|e| io_error("open stopped state record", e))?;
+        let mut bytes = Vec::new();
+        file.take(1025)
+            .read_to_end(&mut bytes)
+            .map_err(|e| io_error("read stopped state record", e))?;
+        let body = bytes
+            .strip_prefix(GENERATION_FORMAT)
+            .filter(|_| bytes.len() <= 1024)
+            .ok_or(Error::UnmanagedState)?;
+        serde_json::from_slice(body).map_err(|_| Error::ManagedFailure {
+            reason: "private state has no complete stopped run record",
+        })
+    }
+
+    fn write_generation(&self, record: &GenerationRecord) -> Result<()> {
+        let mut file = native::open_private(&self.path.join(GENERATION), false)
+            .map_err(|e| io_error("open private run record", e))?;
+        let mut present = Vec::new();
+        Read::by_ref(&mut file)
+            .take(GENERATION_FORMAT.len() as u64)
+            .read_to_end(&mut present)
+            .map_err(|e| io_error("check private run record format", e))?;
+        if !GENERATION_FORMAT.starts_with(&present) {
+            return Err(Error::UnmanagedState);
+        }
+        let body = serde_json::to_vec(record).map_err(|_| Error::ManagedFailure {
+            reason: "could not encode private run record",
+        })?;
+        // The private lease is still held. A partial body cannot certify a
+        // stopped run. Keep the format prefix intact across interrupted updates.
+        file.write_all(&GENERATION_FORMAT[present.len()..])
+            .and_then(|_| file.set_len(GENERATION_FORMAT.len() as u64))
+            .and_then(|_| file.seek(SeekFrom::Start(GENERATION_FORMAT.len() as u64)))
+            .and_then(|_| file.write_all(&body))
+            .and_then(|_| file.sync_all())
+            .map_err(|e| io_error("persist private run record", e))
     }
 
     pub(super) fn path(&self) -> &Path {
@@ -218,6 +352,132 @@ fn canonical(path: &Path) -> std::io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn first_owner_and_contender_observe_an_initializing_lease() -> Result<()> {
+        let fixture = tempfile::tempdir().map_err(|e| io_error("make owned test root", e))?;
+        let path = fixture.path().join("state");
+        native::create_directory(&path).map_err(|e| io_error("make owned test state", e))?;
+        let file = native::open_private(&path.join(LEASE), false)
+            .map_err(|e| io_error("make the initializing lease", e))?;
+        file.try_lock_exclusive()
+            .map_err(|e| io_error("hold the initializing lease", e))?;
+        assert!(matches!(
+            StateLease::acquire(&path),
+            Err(Error::ManagedStateInUse {
+                lock: crate::ManagedStateLock::LibraryLease
+            })
+        ));
+        assert!(!path.join(MARKER).exists());
+        FileExt::unlock(&file).map_err(|e| io_error("release the initializing lease", e))?;
+        drop(file);
+        let first = StateLease::acquire(&path)?;
+        assert!(matches!(
+            StateLease::acquire(&path),
+            Err(Error::ManagedStateInUse {
+                lock: crate::ManagedStateLock::LibraryLease
+            })
+        ));
+        drop(first);
+        StateLease::acquire(&path)?;
+        println!(
+            "initialization evidence: locked before marker, locked after marker, and reopened"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn simultaneous_fresh_owners_have_one_winner() -> Result<()> {
+        let fixture = tempfile::tempdir().map_err(|e| io_error("make owned test root", e))?;
+        let path = fixture.path().join("state");
+        let rendezvous = std::sync::Barrier::new(2);
+        let start = || {
+            rendezvous.wait();
+            let result = StateLease::acquire(&path);
+            rendezvous.wait();
+            result
+        };
+        let results = std::thread::scope(|scope| {
+            let second = scope.spawn(&start);
+            let first = start();
+            (first, second.join().unwrap())
+        });
+        match results {
+            (Ok(lease), Err(Error::ManagedStateInUse { .. }))
+            | (Err(Error::ManagedStateInUse { .. }), Ok(lease)) => drop(lease),
+            _ => panic!("two callers must observe one owner and one in-use result"),
+        }
+        assert_eq!(
+            fs::read(path.join(MARKER)).map_err(|e| io_error("read state marker", e))?,
+            FORMAT
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stopped_run_records_follow_the_latest_lease_and_program() -> Result<()> {
+        let root = tempfile::tempdir().map_err(|e| io_error("create run fixture", e))?;
+        let state = root.path().join("private");
+        let a = StateLease::acquire(&state)?;
+        let old = a.begin_generation()?;
+        let first_program = [11; 32];
+        let next_program = [22; 32];
+        assert!(a
+            .require_stopped_generation(old, first_program, true)
+            .is_err());
+        a.record_stop(old, first_program, true)?;
+        a.require_stopped_generation(old, first_program, true)?;
+        a.require_stopped_generation(old, first_program, true)?;
+        assert!(a
+            .require_stopped_generation(old, next_program, true)
+            .is_err());
+        drop(a);
+
+        let b = StateLease::acquire(&state)?;
+        let current = b.begin_generation()?;
+        assert_ne!(old, current);
+        assert!(b
+            .require_stopped_generation(old, first_program, true)
+            .is_err());
+        b.record_stop(current, next_program, false)?;
+        assert!(b
+            .require_stopped_generation(old, first_program, false)
+            .is_err());
+        assert!(b
+            .require_stopped_generation(current, next_program, true)
+            .is_err());
+        b.require_stopped_generation(current, next_program, false)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pending_and_incomplete_run_records_never_certify_a_stopped_run() -> Result<()> {
+        let root = tempfile::tempdir().map_err(|e| io_error("create incomplete run fixture", e))?;
+        let lease = StateLease::acquire(&root.path().join("private"))?;
+        let old = lease.begin_generation()?;
+        let program = [11; 32];
+        lease.record_stop(old, program, true)?;
+        let marker = lease.path().join(GENERATION);
+        let file = native::open_private(&marker, false)
+            .map_err(|e| io_error("open fixture run record", e))?;
+        file.set_len(GENERATION_FORMAT.len() as u64 + 1)
+            .map_err(|e| io_error("truncate fixture run record", e))?;
+        drop(file);
+        assert!(lease
+            .require_stopped_generation(old, program, false)
+            .is_err());
+        let new = lease.begin_generation()?;
+        assert!(lease
+            .require_stopped_generation(old, program, false)
+            .is_err());
+        assert!(lease
+            .require_stopped_generation(new, program, false)
+            .is_err());
+        lease.record_stop(new, program, true)?;
+        lease.require_stopped_generation(new, program, true)?;
+        Ok(())
+    }
+
     use super::*;
 
     #[cfg(unix)]

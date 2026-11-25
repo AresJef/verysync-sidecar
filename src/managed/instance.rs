@@ -54,10 +54,13 @@ pub struct ManagedInstance {
     pid: u32,
     _owner: Sender<()>,
     exit: watch::Receiver<Option<ManagedExit>>,
+    pub(super) shutdown_admission: Arc<super::ShutdownAdmission>,
     pub(super) state_ready_for_backup: bool,
+    pub(super) generation: super::state::Generation,
 }
 
 struct ReadyContext {
+    generation: super::state::Generation,
     info: ProgramInfo,
     key: ApiKey,
     identity: DeviceId,
@@ -104,6 +107,8 @@ impl ManagedInstance {
         let worker_options = options.clone();
         let committed = Arc::new(AtomicBool::new(false));
         let worker_committed = committed.clone();
+        let shutdown_admission = Arc::new(super::ShutdownAdmission::default());
+        let worker_admission = Arc::clone(&shutdown_admission);
         std::thread::Builder::new()
             .name("verysync-sidecar-owner".to_owned())
             .spawn(move || {
@@ -114,6 +119,7 @@ impl ManagedInstance {
                     exit_sender,
                     deadline,
                     worker_committed,
+                    worker_admission,
                 )
             })
             .map_err(|e| io_error("create private owner thread", e))?;
@@ -163,7 +169,9 @@ impl ManagedInstance {
                 pid: context.pid,
                 _owner: owner,
                 exit,
+                shutdown_admission,
                 state_ready_for_backup: true,
+                generation: context.generation,
             })
         };
         tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), startup)
@@ -327,8 +335,13 @@ impl ManagedInstance {
     /// This does not send a shutdown request. Place a caller-selected timeout
     /// around this future if needed; cancelling the wait does not stop the owner.
     pub async fn wait_for_exit(&mut self) -> Result<ManagedExit> {
+        self.observe_exit().await
+    }
+
+    pub(super) async fn observe_exit(&self) -> Result<ManagedExit> {
+        let mut exit = self.exit.clone();
         loop {
-            if let Some(report) = self.exit.borrow().as_ref().cloned() {
+            if let Some(report) = exit.borrow().as_ref().cloned() {
                 if !report.tree_stopped || !report.state_released {
                     return Err(Error::ManagedFailure {
                         reason: "owned process-tree or state cleanup could not be confirmed",
@@ -336,12 +349,9 @@ impl ManagedInstance {
                 }
                 return Ok(report);
             }
-            self.exit
-                .changed()
-                .await
-                .map_err(|_| Error::ManagedFailure {
-                    reason: "owner ended without an exit report",
-                })?;
+            exit.changed().await.map_err(|_| Error::ManagedFailure {
+                reason: "owner ended without an exit report",
+            })?;
         }
     }
 }
@@ -363,6 +373,7 @@ fn owner_thread(
     exit: watch::Sender<Option<ManagedExit>>,
     deadline: Instant,
     committed: Arc<AtomicBool>,
+    shutdown_admission: Arc<super::ShutdownAdmission>,
 ) {
     let mut prepared = match bootstrap::prepare(&options, &cancel, deadline) {
         Ok(prepared) => prepared,
@@ -388,7 +399,10 @@ fn owner_thread(
             return;
         }
     };
+    let generation = prepared.generation;
+    let program_digest = prepared.info.sha256;
     let context = ReadyContext {
+        generation,
         info: prepared.info,
         key: prepared.key,
         identity: prepared.identity,
@@ -438,6 +452,7 @@ fn owner_thread(
             }
         }
     };
+    shutdown_admission.retire();
     // Process status and upstream resource release are separate observations.
     // Use the same final five-second cleanup window rather than extending it.
     let cleanup_deadline = Instant::now() + Duration::from_secs(5);
@@ -458,6 +473,16 @@ fn owner_thread(
         diagnostic: ProcessDiagnostic::new(diagnostic),
     };
     drop(process);
+    shutdown_admission.wait_for_dispatch();
+    if state_released && committed.load(Ordering::Acquire) {
+        // A failed write leaves the prior pending record or an invalid body.
+        // Readers cannot certify either as a stopped generation.
+        let _ = lease.record_stop(
+            generation,
+            program_digest,
+            !forced && report.code == Some(0),
+        );
+    }
     drop(lease);
     // Publish only after releasing the diagnostic handle as well. On Windows
     // this private handle denies rename/delete while it remains open.
@@ -539,3 +564,7 @@ fn exit_signal(status: Option<&ExitStatus>) -> Option<i32> {
         None
     }
 }
+
+#[cfg(all(test, feature = "engine-tests"))]
+#[path = "instance_regressions.rs"]
+mod instance_regressions;

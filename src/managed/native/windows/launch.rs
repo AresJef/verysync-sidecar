@@ -4,6 +4,7 @@
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::marker::PhantomData;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
@@ -19,10 +20,10 @@ use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-    EXTENDED_STARTUPINFO_PRESENT, INFINITE, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
+    INFINITE, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 
 pub(in crate::managed) struct Child {
@@ -72,9 +73,13 @@ impl Child {
         self.status = Some(status);
         Ok(status)
     }
+    #[cfg(test)]
     pub(in crate::managed) fn kill(&mut self) -> io::Result<()> {
         // SAFETY: Only this retained exact child is terminated on creation errors.
-        if unsafe { TerminateProcess(self.as_raw_handle(), 1) } == 0 {
+        if unsafe {
+            windows_sys::Win32::System::Threading::TerminateProcess(self.as_raw_handle(), 1)
+        } == 0
+        {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -171,13 +176,16 @@ fn stdin(pipe: bool) -> io::Result<(OwnedHandle, Option<File>)> {
     Ok((read, Some(write)))
 }
 
-struct Attributes(Vec<usize>);
-impl Attributes {
-    fn new(handles: &[HANDLE]) -> io::Result<Self> {
+struct Attributes<'values> {
+    memory: Vec<usize>,
+    _values: PhantomData<&'values [HANDLE]>,
+}
+impl<'values> Attributes<'values> {
+    fn new(handles: &'values [HANDLE], jobs: &'values [HANDLE]) -> io::Result<Self> {
         let mut bytes = 0;
         // SAFETY: The documented sizing call writes only the required length.
         unsafe {
-            InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut bytes);
+            InitializeProcThreadAttributeList(ptr::null_mut(), 2, 0, &mut bytes);
         }
         if bytes == 0 || bytes > 1024 * 1024 {
             return Err(io::Error::other("invalid native attribute allocation size"));
@@ -185,21 +193,30 @@ impl Attributes {
         let mut memory = vec![0usize; bytes.div_ceil(size_of::<usize>())];
         // SAFETY: Initialized pointer-aligned allocation has at least bytes bytes.
         if unsafe {
-            InitializeProcThreadAttributeList(memory.as_mut_ptr().cast(), 1, 0, &mut bytes)
+            InitializeProcThreadAttributeList(memory.as_mut_ptr().cast(), 2, 0, &mut bytes)
         } == 0
         {
             return Err(io::Error::last_os_error());
         }
-        let mut result = Self(memory);
-        // SAFETY: Live initialized list, exactly three live inheritable handles;
-        // the handle slice remains alive until CreateProcess returns below.
+        let mut result = Self {
+            memory,
+            _values: PhantomData,
+        };
+        result.set(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles)?;
+        result.set(PROC_THREAD_ATTRIBUTE_JOB_LIST, jobs)?;
+        Ok(result)
+    }
+
+    fn set(&mut self, attribute: u32, values: &'values [HANDLE]) -> io::Result<()> {
+        // SAFETY: The initialized list and the live handle arrays remain
+        // available until the list is destroyed after process creation.
         if unsafe {
             UpdateProcThreadAttribute(
-                result.0.as_mut_ptr().cast(),
+                self.memory.as_mut_ptr().cast(),
                 0,
-                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                handles.as_ptr().cast(),
-                std::mem::size_of_val(handles),
+                attribute as usize,
+                values.as_ptr().cast(),
+                std::mem::size_of_val(values),
                 ptr::null_mut(),
                 ptr::null(),
             )
@@ -207,14 +224,14 @@ impl Attributes {
         {
             return Err(io::Error::last_os_error());
         }
-        Ok(result)
+        Ok(())
     }
 }
-impl Drop for Attributes {
+impl Drop for Attributes<'_> {
     fn drop(&mut self) {
         // SAFETY: This owner is constructed only after successful initialization.
         unsafe {
-            DeleteProcThreadAttributeList(self.0.as_mut_ptr().cast());
+            DeleteProcThreadAttributeList(self.memory.as_mut_ptr().cast());
         }
     }
 }
@@ -222,6 +239,7 @@ impl Drop for Attributes {
 pub(super) fn create(
     command: &Command,
     io: crate::managed::process::ProcessIo,
+    job: &OwnedHandle,
 ) -> io::Result<(Child, OwnedHandle)> {
     let program = wide(command.get_program())?;
     let mut line = Vec::new();
@@ -265,19 +283,21 @@ pub(super) fn create(
         output.as_raw_handle(),
         error.as_raw_handle(),
     ];
-    let mut attributes = Attributes::new(&handles)?;
+    let jobs = [job.as_raw_handle()];
+    let mut attributes = Attributes::new(&handles, &jobs)?;
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.StartupInfo.hStdInput = handles[0];
     startup.StartupInfo.hStdOutput = handles[1];
     startup.StartupInfo.hStdError = handles[2];
-    startup.lpAttributeList = attributes.0.as_mut_ptr().cast();
+    startup.lpAttributeList = attributes.memory.as_mut_ptr().cast();
     let mut created = PROCESS_INFORMATION::default();
     // SAFETY: All native strings are NUL terminated, line is writable, the
     // environment is double-NUL terminated, and structures/selected handles and
     // attribute storage stay live. The exact child starts suspended, without a
-    // new console, inheriting only the explicitly listed private stdio handles.
+    // new console, inheriting only the listed stdio handles. Windows assigns
+    // the child to the private Job as part of the same creation operation.
     if unsafe {
         CreateProcessW(
             program.as_ptr(),

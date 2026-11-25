@@ -46,6 +46,7 @@ impl ManagedInstance {
             })?;
         let source = self.selected_program().path().to_owned();
         let expected = self.program_info().sha256;
+        let generation = self.generation;
         let state = self.state_directory().to_owned();
         let management_socket = self
             .options
@@ -61,6 +62,11 @@ impl ManagedInstance {
                 let result = (|| {
                     let state = state::existing(&state)?;
                     let mut lease = state::StateLease::acquire(&state)?;
+                    lease.require_stopped_generation(
+                        generation,
+                        expected,
+                        plan.clean_stop_required,
+                    )?;
                     if plan.arguments.first().is_some_and(|s| {
                         matches!(
                             s.as_str(),
@@ -77,50 +83,16 @@ impl ManagedInstance {
                             deadline,
                         )?;
                     }
-                    #[cfg(windows)]
-                    let source = dunce::canonicalize(&source);
-                    #[cfg(not(windows))]
-                    let source = std::fs::canonicalize(&source);
-                    let source = source.map_err(|e| io_error("resolve selected CLI program", e))?;
-                    // Executables are public artifacts, not private state files.
-                    // Refuse special files and swapped final-component aliases without requiring
-                    // a private state-file ACL on a caller-supplied program.
-                    let mut open = std::fs::OpenOptions::new();
-                    open.read(true);
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::OpenOptionsExt;
-                        open.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
-                    }
-                    #[cfg(windows)]
-                    {
-                        use std::os::windows::fs::OpenOptionsExt;
-                        open.custom_flags(
-                            windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
-                        );
-                    }
-                    let mut file = open
-                        .open(&source)
-                        .map_err(|e| io_error("open selected CLI program", e))?;
-                    let metadata = file
+                    let (source, mut file) = bootstrap::open_selected_program(&source)?;
+                    if file
                         .metadata()
-                        .map_err(|e| io_error("inspect selected CLI program", e))?;
-                    if !metadata.is_file() || metadata.len() > 256 * 1024 * 1024 {
-                        return Err(Error::ProgramRejected {
-                            reason: "CLI program is not a bounded regular file",
-                        });
-                    }
-                    #[cfg(windows)]
+                        .map_err(|e| io_error("inspect selected CLI program", e))?
+                        .len()
+                        > 256 * 1024 * 1024
                     {
-                        use std::os::windows::fs::MetadataExt;
-                        if metadata.file_attributes()
-                            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-                            != 0
-                        {
-                            return Err(Error::ProgramRejected {
-                                reason: "CLI program is a reparse point",
-                            });
-                        }
+                        return Err(Error::ProgramRejected {
+                            reason: "the stopped-state CLI executable exceeds 256 MiB",
+                        });
                     }
                     let mut hash = Sha256::new();
                     let mut buffer = [0; 65536];
@@ -152,6 +124,9 @@ impl ManagedInstance {
                         .iter()
                         .map(String::as_str)
                         .collect::<Vec<_>>();
+                    if plan.may_modify {
+                        lease.record_stop(generation, expected, false)?;
+                    }
                     lease.release_engine_lock_for_spawn();
                     let outcome = bootstrap::cli_capture_positional(
                         &source,

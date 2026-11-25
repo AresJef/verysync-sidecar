@@ -11,6 +11,10 @@ use std::process::{Child, Command, Stdio};
 use std::ptr;
 
 #[cfg(target_os = "macos")]
+#[path = "macos_acl.rs"]
+mod macos_acl;
+
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     // Darwin exports this reentrant function, but libc 0.2.191 does not declare it.
     fn ptsname_r(fd: libc::c_int, buffer: *mut libc::c_char, length: libc::size_t) -> libc::c_int;
@@ -280,9 +284,12 @@ fn macos_group_stopped(group: libc::pid_t) -> io::Result<bool> {
     Ok(true)
 }
 
-pub(in crate::managed) fn private_directory(_path: &Path, metadata: &Metadata) -> io::Result<()> {
+fn check_directory_metadata(metadata: &Metadata) -> io::Result<()> {
     // SAFETY: geteuid has no pointer arguments and only reads the caller's ID.
-    if metadata.mode() & 0o077 != 0 || metadata.uid() != unsafe { libc::geteuid() } {
+    if !metadata.is_dir()
+        || metadata.mode() & 0o077 != 0
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "state must belong exclusively to the current user",
@@ -291,17 +298,56 @@ pub(in crate::managed) fn private_directory(_path: &Path, metadata: &Metadata) -
     Ok(())
 }
 
+#[cfg(any(feature = "download", target_os = "macos"))]
+fn open_directory(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+}
+
+fn check_file_acl(_file: &File, _metadata: &Metadata) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    macos_acl::check(_file, _metadata.uid())?;
+    Ok(())
+}
+
+pub(in crate::managed) fn private_directory(_path: &Path, metadata: &Metadata) -> io::Result<()> {
+    check_directory_metadata(metadata)?;
+    #[cfg(target_os = "macos")]
+    {
+        let opened = open_directory(_path)?;
+        let actual = opened.metadata()?;
+        if (actual.dev(), actual.ino()) != (metadata.dev(), metadata.ino()) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "private directory changed while checking its access",
+            ));
+        }
+        check_directory_metadata(&actual)?;
+        check_file_acl(&opened, &actual)?;
+    }
+    Ok(())
+}
+
 pub(in crate::managed) fn create_directory(path: &Path) -> io::Result<()> {
-    fs::DirBuilder::new().mode(0o700).create(path)
+    fs::DirBuilder::new().mode(0o700).create(path)?;
+    #[cfg(target_os = "macos")]
+    {
+        let opened = open_directory(path)?;
+        let metadata = opened.metadata()?;
+        check_directory_metadata(&metadata)?;
+        check_file_acl(&opened, &metadata)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "download")]
 pub(in crate::managed) fn retain_private_directory(path: &Path) -> io::Result<File> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)?;
-    private_directory(path, &file.metadata()?)?;
+    let file = open_directory(path)?;
+    let metadata = file.metadata()?;
+    check_directory_metadata(&metadata)?;
+    check_file_acl(&file, &metadata)?;
     Ok(file)
 }
 
@@ -315,14 +361,9 @@ fn options() -> OpenOptions {
     options
 }
 
-pub(in crate::managed) fn open_private(path: &Path, read_only: bool) -> io::Result<File> {
-    let mut options = options();
-    options.read(true);
-    if !read_only {
-        options.write(true).create(true);
-    }
-    let file = options.open(path)?;
+fn check_private_control(file: &File) -> io::Result<()> {
     let metadata = file.metadata()?;
+    // SAFETY: geteuid only reads the caller's effective identity.
     if !metadata.is_file()
         || metadata.permissions().mode() & 0o077 != 0
         || metadata.uid() != unsafe { libc::geteuid() }
@@ -332,18 +373,37 @@ pub(in crate::managed) fn open_private(path: &Path, read_only: bool) -> io::Resu
             "control file must be private and regular",
         ));
     }
+    check_file_acl(file, &metadata)
+}
+
+pub(in crate::managed) fn open_private(path: &Path, read_only: bool) -> io::Result<File> {
+    let mut options = options();
+    options.read(true);
+    if !read_only {
+        options.write(true).create(true);
+    }
+    let file = options.open(path)?;
+    check_private_control(&file)?;
     Ok(file)
 }
 
 pub(in crate::managed) fn create_private(path: &Path) -> io::Result<File> {
-    options().write(true).read(true).create_new(true).open(path)
+    let file = options()
+        .write(true)
+        .read(true)
+        .create_new(true)
+        .open(path)?;
+    check_private_control(&file)?;
+    Ok(file)
 }
 
 pub(in crate::managed) fn protect_generated(path: &Path) -> io::Result<()> {
     let file = options().read(true).write(true).open(path)?;
-    if !file.metadata()?.is_file() {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
         return Err(io::Error::other("generated resource is not regular"));
     }
+    check_file_acl(&file, &metadata)?;
     file.set_permissions(fs::Permissions::from_mode(0o600))
 }
 
@@ -357,6 +417,7 @@ pub(in crate::managed) fn open_owned_lock(path: &Path) -> io::Result<File> {
             "upstream lock is not an owned regular file",
         ));
     }
+    check_file_acl(&file, &metadata)?;
     Ok(file)
 }
 
@@ -369,5 +430,82 @@ pub(in crate::managed) fn open_snapshot_input(path: &Path) -> io::Result<File> {
             "snapshot input must be an owned regular file",
         ));
     }
+    check_file_acl(&file, &metadata)?;
     Ok(file)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod acl_tests {
+    use super::*;
+
+    /// Only ACL metadata on a disposable object is examined here.
+    fn chmod(path: &Path, flags: &[&str]) {
+        let status = Command::new("/bin/chmod")
+            .args(flags)
+            .arg(path)
+            .status()
+            .expect("invoke synthetic ACL control");
+        assert!(status.success());
+    }
+
+    #[test]
+    fn macos_private_acl_admits_plain_and_deny_only_objects() -> io::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("private");
+        create_directory(&path)?;
+        private_directory(&path, &fs::symlink_metadata(&path)?)?;
+        chmod(&path, &["+a", "everyone deny delete"]);
+        let result = private_directory(&path, &fs::symlink_metadata(&path)?);
+        chmod(&path, &["-N"]);
+        result?;
+        let control = path.join("control");
+        let file = create_private(&control)?;
+        drop(file);
+        chmod(&control, &["+a", "everyone deny delete"]);
+        let result = open_private(&control, true);
+        chmod(&control, &["-N"]);
+        result?;
+        Ok(())
+    }
+
+    #[test]
+    fn macos_private_acl_rejects_effective_or_inheritable_grants_before_data() -> io::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().join("synthetic-parent");
+        create_directory(&root)?;
+        let control = root.join("control");
+        chmod(
+            &root,
+            &[
+                "+a",
+                "everyone allow list,read,directory_inherit,file_inherit",
+            ],
+        );
+        let original_mode = fs::metadata(&root)?.mode();
+        let original_inode = fs::metadata(&root)?.ino();
+        assert_eq!(
+            private_directory(&root, &fs::symlink_metadata(&root)?)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let child = root.join("backup");
+        assert_eq!(
+            create_directory(&child).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            create_private(&control).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(fs::metadata(&control)?.len(), 0);
+        assert_eq!(fs::read_dir(&child)?.count(), 0);
+        assert_eq!(fs::metadata(&root)?.mode(), original_mode);
+        assert_eq!(fs::metadata(&root)?.ino(), original_inode);
+        assert_eq!(
+            open_private(&control, true).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        Ok(())
+    }
 }

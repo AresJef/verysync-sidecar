@@ -183,8 +183,9 @@ impl ManagedInstance {
         let source = self.state_directory().to_owned();
         let device = self.client().instance().device_id.clone();
         let program = self.program_info().clone();
+        let generation = self.generation;
         worker(options.timeout, move |control| {
-            capture(&source, device, program, options, control)
+            capture(&source, device, program, generation, options, control)
         })
         .await
     }
@@ -589,12 +590,16 @@ fn capture(
     source: &Path,
     device: DeviceId,
     program: ProgramInfo,
+    generation: state::Generation,
     options: StateBackupOptions,
     control: &Control,
 ) -> Result<StateBackup> {
     control.check()?;
     let source = state::existing(source)?;
-    let _lease = state::StateLease::acquire(&source)?;
+    let lease = state::StateLease::acquire(&source)?;
+    lease
+        .require_stopped_generation(generation, program.sha256, true)
+        .map_err(|_| rejected("state no longer matches this normally stopped owner and program"))?;
     if identity(&source)? != device {
         return Err(rejected("source state identity differs"));
     }
@@ -656,9 +661,15 @@ fn collect(
         control.check()?;
         let item = item.map_err(|e| io_error("read offline state entry", e))?;
         if path.as_os_str().is_empty()
-            && [state::LEASE, "verysync.lock", "gui.sock", "tmp"]
-                .iter()
-                .any(|name| item.file_name() == *name)
+            && [
+                state::LEASE,
+                state::GENERATION,
+                "verysync.lock",
+                "gui.sock",
+                "tmp",
+            ]
+            .iter()
+            .any(|name| item.file_name() == *name)
         {
             continue;
         }

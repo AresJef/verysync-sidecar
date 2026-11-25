@@ -34,6 +34,7 @@ pub use browser::{NativeBrowserExit, NativeBrowserOutcome};
 mod restart;
 pub use restart::ProgramTransition;
 mod shutdown;
+pub(crate) use shutdown::ShutdownAdmission;
 mod state;
 mod upgrade;
 pub use upgrade::{KernelUpgradeCommand, KernelUpgradeExit};

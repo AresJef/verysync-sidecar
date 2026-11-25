@@ -15,6 +15,7 @@ use crate::{ApiKey, DeviceId, Error, ProgramInfo, Result, VersionPolicy, BASELIN
 
 pub(super) struct Prepared {
     pub(super) lease: StateLease,
+    pub(super) generation: super::state::Generation,
     pub(super) binary: PathBuf,
     pub(super) info: ProgramInfo,
     pub(super) key: ApiKey,
@@ -136,6 +137,50 @@ fn prepare_app_settings(state: &Path, local_api: Option<bool>) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn open_selected_program(path: &Path) -> Result<(PathBuf, File)> {
+    #[cfg(windows)]
+    let resolved = dunce::canonicalize(path);
+    #[cfg(not(windows))]
+    let resolved = fs::canonicalize(path);
+    let path = resolved.map_err(|e| io_error("resolve selected executable", e))?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(&path)
+        .map_err(|e| io_error("open selected executable", e))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| io_error("inspect selected executable", e))?;
+    if !metadata.is_file() {
+        return Err(Error::ProgramRejected {
+            reason: "executable must be a regular file",
+        });
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
+            return Err(Error::ProgramRejected {
+                reason: "executable cannot be a reparse point",
+            });
+        }
+    }
+    Ok((path, file))
+}
+
 pub(super) fn prepare(
     options: &ManagedOptions,
     cancel: &Receiver<()>,
@@ -143,6 +188,7 @@ pub(super) fn prepare(
 ) -> Result<Prepared> {
     check_active(cancel, deadline)?;
     let lease = StateLease::acquire(&options.state)?;
+    let generation = lease.begin_generation()?;
     let state = lease.path();
     let key_exists = persisted_file(state, "key.pem")?;
     let cert_exists = persisted_file(state, "cert.pem")?;
@@ -185,21 +231,7 @@ pub(super) fn prepare(
         }
     }
     prepare_app_settings(state, options.local_api_enabled)?;
-    #[cfg(windows)]
-    let resolved = dunce::canonicalize(&options.program.path);
-    #[cfg(not(windows))]
-    let resolved = fs::canonicalize(&options.program.path);
-    let binary = resolved.map_err(|e| io_error("resolve selected executable", e))?;
-    let mut input = File::open(&binary).map_err(|e| io_error("open selected executable", e))?;
-    if !input
-        .metadata()
-        .map_err(|e| io_error("inspect executable", e))?
-        .is_file()
-    {
-        return Err(Error::ProgramRejected {
-            reason: "executable must be a regular file",
-        });
-    }
+    let (binary, mut input) = open_selected_program(&options.program.path)?;
     let mut digest = Sha256::new();
     let mut buffer = [0; 64 * 1024];
     loop {
@@ -323,6 +355,7 @@ pub(super) fn prepare(
     check_active(cancel, deadline)?;
     Ok(Prepared {
         lease,
+        generation,
         binary,
         info: ProgramInfo {
             sha256,
@@ -545,6 +578,11 @@ fn read_configuration(state: &Path) -> Result<Value> {
         });
     }
     Ok(root)
+}
+
+#[cfg(all(test, feature = "engine-tests"))]
+pub(super) fn test_persisted_key(state: &Path) -> Result<ApiKey> {
+    persisted_key(&read_configuration(state)?)
 }
 
 fn persisted_key(root: &Value) -> Result<ApiKey> {

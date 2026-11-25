@@ -206,6 +206,8 @@ struct Connection<Authorization = ApiKey> {
     key: Authorization,
     response_limit: usize,
     mutation_lock: Arc<tokio::sync::Mutex<()>>,
+    #[cfg(all(test, feature = "engine-tests"))]
+    shutdown_calls: std::sync::atomic::AtomicUsize,
     endpoint_kind: crate::EndpointKind,
     endpoint: ManagementEndpoint,
     timeout: Duration,
@@ -474,6 +476,57 @@ impl Client {
     pub async fn request_shutdown(&self) -> Result<()> {
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
+        self.send_shutdown().await
+    }
+
+    pub(crate) async fn request_owned_shutdown(
+        &self,
+        admission: std::sync::Arc<crate::managed::ShutdownAdmission>,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        let write = self.connection.mutation_lock.clone().lock_owned().await;
+        let Some(dispatch) = admission.admit().await else {
+            return Ok(());
+        };
+        self.system_status().await?;
+        let client = self.clone();
+        // After admission and identity read, keep both guards with the single
+        // write until the transport is done, even if the caller stops waiting.
+        tokio::spawn(async move {
+            let (_write, _dispatch) = (write, dispatch);
+            if admission.is_retired() {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(Error::Timeout {
+                    operation: "gracefully stop owned program",
+                });
+            }
+            client.send_shutdown().await
+        })
+        .await
+        .map_err(|_| Error::ManagedFailure {
+            reason: "owned shutdown request ended without a result",
+        })?
+    }
+
+    #[cfg(all(test, feature = "engine-tests"))]
+    pub(crate) async fn test_hold_write_gate(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.connection.mutation_lock.clone().lock_owned().await
+    }
+
+    #[cfg(all(test, feature = "engine-tests"))]
+    pub(crate) fn test_shutdown_calls(&self) -> usize {
+        self.connection
+            .shutdown_calls
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    async fn send_shutdown(&self) -> Result<()> {
+        #[cfg(all(test, feature = "engine-tests"))]
+        self.connection
+            .shutdown_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.connection
             .request_bytes(
                 crate::error::GRACEFUL_SHUTDOWN_OPERATION,
@@ -545,6 +598,8 @@ impl Client {
             key: options.api_key,
             response_limit: options.response_limit,
             mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(all(test, feature = "engine-tests"))]
+            shutdown_calls: std::sync::atomic::AtomicUsize::new(0),
             endpoint_kind,
             endpoint: options.endpoint,
             timeout: options.timeout,
