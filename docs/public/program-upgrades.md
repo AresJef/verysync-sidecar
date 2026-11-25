@@ -43,10 +43,11 @@ assert!(transition.previous_exit.tree_stopped);
 # }
 ```
 
-A snapshot requires a known, normally stopped owned generation. Failed or
-cancelled startup and a CLI-upgrade attempt invalidate that clean-generation
-claim. A private worker holds the SDK lease and checks the upstream lock while
-copying. Normal startup cannot overlap that copy through this library's lease.
+Take the snapshot from the latest owner after its normal exit. The SDK checks
+the recorded run and executable hash while holding the state lease. Even a
+failed or cancelled newer startup can invalidate an earlier owner's backup
+eligibility. Start the intended program and let it exit normally before taking
+a new snapshot. The SDK also checks the upstream lock while copying.
 It copies regular state files with 64-KiB buffers, file sizes, SHA-256, file
 modification times and owner executable bits. It skips runtime lock files,
 `gui.sock` and `tmp`, and rejects symbolic links, Windows reparse points and

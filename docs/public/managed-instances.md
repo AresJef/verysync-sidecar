@@ -45,9 +45,19 @@ UTF-8 configuration protocol; local filesystem operations retain native paths.
 Startup acquires an exclusive library lease and checks an existing official
 `verysync.lock` before writing configuration. An ordinary existing application
 directory, symlink/reparse control resource, unprotected state or busy lease is
-rejected. The new directory is private from creation: owner-only on Unix, and a
-protected owner/SYSTEM DACL on Windows. The program's identity, GUI/API credential,
-folders and unrelated settings persist across subsequent starts. Fresh state
+rejected. The new directory uses owner-only access on Unix. On macOS the SDK
+also checks extended permissions on the opened directory or file, including
+entries inherited from a parent. If an entry grants access to another identity,
+choose a private parent before starting or creating a backup.
+
+On Windows, the protected access list grants access to the caller and SYSTEM.
+Under LocalSystem there is one entry because the caller is SYSTEM. The SDK reads
+the actual owner of each opened private object. It accepts the caller, SYSTEM
+and the built-in Administrators group as owners. An object with a different
+owner needs a new private directory or an administrator-reviewed migration.
+
+The program's identity, GUI/API credential, folders and unrelated settings
+persist across subsequent starts. Fresh state
 disables discovery, trackers, relays, NAT, TCP punching, automatic upgrades and tray/browser
 startup; explicitly configured later networking settings are retained.
 The creating process explicitly unlocks its library lease when ownership ends.
@@ -73,11 +83,12 @@ replacement; malformed or partial identity/configuration is not silently reset.
 The private owner thread retains the native child/containment and state lease.
 Unix uses a separate session and private PTY whose master/slave descriptors are
 close-on-exec at allocation, without an open-then-fcntl inheritance interval.
-Windows creates a suspended hidden child with an explicit inherited-handle list
-containing only its three private standard I/O handles, then assigns its
-noninheritable kill-on-close Job before resuming the exact initial thread. Native
-creation retains UTF-16 arguments/environment and does not change caller handle
-flags. Helpers use the same restricted creation path. Direct
+Windows creates a suspended child inside its private Job. Creation inherits
+only the three selected standard I/O handles, and the SDK then resumes the
+initial thread. Helpers and caller-owned cores use a Job that closes remaining
+processes when its last handle closes. The explicit persistent policy keeps its
+separate behavior. The Windows program receives native UTF-16 arguments and
+environment values. Direct
 inner-process mode on Linux/Windows is specific to the fixed program baseline.
 There is no production supervisor executable, installed service, caller-global logger,
 signal handler or exit hook. Dedicated startup helpers are temporary invocations
@@ -94,9 +105,11 @@ conditions share the existing final five-second cleanup window; no second startu
 is attempted and no startup request is retried. If resource release cannot be
 confirmed, the exit wait reports cleanup failure. Lock availability is a point in
 time observation, not exclusion against unrelated launchers after lease release.
-A timeout around that wait leaves the owner intact. Dropping
-the owner requests exact cleanup; a cloned management Client does not keep it
-alive. Await an explicit exit observation when completion matters.
+A timeout while waiting leaves the owner intact. A shutdown request that is
+already in flight holds the lease until the request finishes. If an owner exits
+while its shutdown request is still waiting to be sent, that call returns the
+original owner's exit result. Await that result before starting the next owner
+on the same state.
 
 Do not independently launch or modify the same state while its library owner is
 active. The library lease coordinates SDK owners; handing the official lock back
@@ -170,9 +183,9 @@ can interrupt work; use explicit normal shutdown when the caller can cooperate.
 
 ## Windows caller lifetime
 
-The caller owns an unnamed, noninheritable Job handle. The library assigns its
-suspended core to that Job before allowing execution; the Job terminates its
-remaining processes when its last handle closes. Dedicated test hosts exercise
+The caller owns an unnamed, noninheritable Job handle. Windows places the
+suspended core in that Job during creation. When the last Job handle closes,
+the operating system terminates its remaining processes. Dedicated test hosts exercise
 ordinary return, exit without destructors and actual forced termination inside
 an existing caller Job. The observer retains that outer Job while confirming
 the SDK's core has exited, so observer cleanup cannot supply the passing result.

@@ -160,8 +160,10 @@ configuration/identity/key/certificate and original file hashes. A separate
 stopped-program CLI oracle checks the actual database; the paused HTTP status
 already reports zero before reset and is not used as removal evidence.
 
-Those oracle commands are independent test instrumentation. Final same-source
-native acceptance for the reset API remains pending.
+Both architectures of macOS, Linux and Windows passed the index reset test
+with VerySync v2.33.2. The test confirmed the database changes while the core
+was stopped and authenticated again after an explicit restart. See the
+[six native platform results](https://github.com/AresJef/verysync-sidecar/actions/runs/45216803374).
 
 ## Explicit stopped-owner database commands
 
@@ -188,7 +190,8 @@ including the fixed Windows executable's `verysync.exe` error prefix.
 Statistics and file metadata remain explicit native text; the SDK invents no
 units or undocumented metadata schema. Default `Debug` omits selectors and output.
 
-Each call holds the existing private-state lease through process cleanup and
+Use the owner that most recently stopped this state. Each call matches the
+recorded run and executable hash and holds the private-state lease through process cleanup and
 uses the caller's positive deadline for admission, program hashing and native
 execution. Output is limited to 64 KiB. Before a database command, a bounded
 metadata walk rejects symbolic links, reparse points and special entries in the stopped state without

@@ -138,6 +138,19 @@ jobs:
           --package "${{ matrix.package }}"
           --parent "${{ runner.temp }}"
           --github-env "${{ github.env }}"
+      - name: Verify local account, System account and foreign owner handling
+        id: native_windows_managed_permissions
+        if: startsWith(matrix.package, 'windows-')
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/run-windows-managed-permissions.ps1 -Toolchain $env:TEST_TOOLCHAIN
+      - name: Verify owned shutdown, stopped generations and private state admission
+        id: native_managed_repair
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --managed-repair-regressions
+          --evidence-dir "${{ runner.temp }}/vs-managed-repair-proxy"
       - name: Check explicit preparation and bounded archive contracts
         run: cargo +"$TEST_TOOLCHAIN" test --features download --lib --test download --test cache --locked
       - name: Build public examples explicitly

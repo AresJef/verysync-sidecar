@@ -4792,7 +4792,9 @@ async fn folder_remove_keep_files_checks_identity_existence_and_absence_readback
         Reply::json(serde_json::json!({"myID":ID})),
         Reply::json(serde_json::json!({"folders":[target,other.clone()]})),
         Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"myID":ID})),
         Reply::json(serde_json::json!({"folders":[other.clone()]})),
+        Reply::json(serde_json::json!({"myID":ID})),
         Reply::json(serde_json::json!({"myID":ID})),
         Reply::json(serde_json::json!({"folders":[other]})),
         Reply::json(serde_json::json!({"myID":different})),
@@ -4843,7 +4845,9 @@ async fn unregister_acknowledgment_does_not_invent_absence_when_id_is_still_visi
         Reply::json(serde_json::json!({"myID":ID})),
         Reply::json(serde_json::json!({"folders":[target.clone()]})),
         Reply::json(serde_json::json!({})),
+        Reply::json(serde_json::json!({"myID":ID})),
         Reply::json(serde_json::json!({"folders":[target]})),
+        Reply::json(serde_json::json!({"myID":ID})),
     ])
     .await?;
     let client = Client::connect(server.options()?).await?;
@@ -4857,6 +4861,132 @@ async fn unregister_acknowledgment_does_not_invent_absence_when_id_is_still_visi
             .await?
             .iter()
             .filter(|r| r.starts_with("DELETE "))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unregister_reports_unknown_when_either_readback_identity_check_finds_a_replacement(
+) -> TestResult {
+    use verysync_sidecar::{DeviceId, FolderId};
+    const REPLACEMENT: &str = "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB";
+    let id = FolderId::parse("retained")?;
+    let data = tempfile::tempdir()?;
+    let sample = data.path().join("sample.bin");
+    std::fs::write(&sample, b"synthetic file that stays local")?;
+    let folder = serde_json::json!({"id":id.as_str(),"label":"Retained","path":"/synthetic/target","paused":true});
+    let same = || Reply::json(serde_json::json!({"myID":ID}));
+    for replace_after_snapshot in [false, true] {
+        let mut old_replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            same(),
+            same(),
+            Reply::json(serde_json::json!({"folders":[folder.clone()]})),
+            Reply::json(serde_json::json!({})),
+        ];
+        if replace_after_snapshot {
+            old_replies.push(same());
+            old_replies.push(Reply::json(serde_json::json!({"folders":[]})));
+        }
+        let before_replacement = old_replies.len();
+        let old = ScriptedServer::start(old_replies).await?;
+        let replacement =
+            ScriptedServer::start(vec![Reply::json(serde_json::json!({"myID":REPLACEMENT}))])
+                .await?;
+        let backend = |base: &str| -> TestResult<std::net::SocketAddr> {
+            Ok(base
+                .trim_start_matches("http://")
+                .split('/')
+                .next()
+                .ok_or("missing endpoint")?
+                .parse()?)
+        };
+        let original_address = backend(&old.base)?;
+        let next_address = backend(&replacement.base)?;
+        let front = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let endpoint = ManagementEndpoint::http(&format!("http://{}/prefix", front.local_addr()?))?;
+        let bridge = tokio::spawn(async move {
+            for index in 0..=before_replacement {
+                let (mut caller, _) =
+                    tokio::time::timeout(Duration::from_secs(5), front.accept()).await??;
+                let address = if index < before_replacement {
+                    original_address
+                } else {
+                    next_address
+                };
+                let mut peer = tokio::net::TcpStream::connect(address).await?;
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tokio::io::copy_bidirectional(&mut caller, &mut peer),
+                )
+                .await??;
+            }
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        });
+        let client = Client::connect(ConnectOptions::new(endpoint, ApiKey::new(KEY)?)).await?;
+        let error = client.remove_folder_keep_files(&id).await.unwrap_err();
+        let Error::MutationOutcomeUnknown {
+            operation: "read back unregistered folder",
+            source,
+        } = error
+        else {
+            return Err("changed readback identity must remain an unknown mutation".into());
+        };
+        assert!(matches!(*source,
+            Error::IdentityMismatch { expected, actual }
+            if expected == DeviceId::parse(ID)? && actual == DeviceId::parse(REPLACEMENT)?
+        ));
+        bridge.await??;
+        let sent = old.finish().await?;
+        let received = replacement.finish().await?;
+        assert_eq!(
+            sent.iter()
+                .filter(|line| line.starts_with("DELETE "))
+                .count(),
+            1
+        );
+        assert_eq!(received.len(), 1);
+        assert!(received[0].starts_with("GET /prefix/rest/system/status "));
+        assert!(received[0]
+            .to_ascii_lowercase()
+            .contains(&format!("x-api-key: {KEY}")));
+        assert_eq!(std::fs::read(&sample)?, b"synthetic file that stays local");
+        println!("Folder unregister evidence: replacement after_snapshot={replace_after_snapshot}, original DELETE count=1, replacement DELETE count=0, readback unknown, sample preserved.");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unregister_readback_failure_remains_unknown_without_a_second_delete() -> TestResult {
+    let same = || Reply::json(serde_json::json!({"myID":ID}));
+    let folder = serde_json::json!({"id":"retained","label":"Retained","path":"/synthetic/target","paused":true});
+    let mut unavailable = Reply::json(serde_json::json!({"error":"unavailable"}));
+    unavailable.status = 503;
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        same(),
+        same(),
+        Reply::json(serde_json::json!({"folders":[folder]})),
+        Reply::json(serde_json::json!({})),
+        same(),
+        unavailable,
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let error = client
+        .remove_folder_keep_files(&verysync_sidecar::FolderId::parse("retained")?)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::MutationOutcomeUnknown { source, .. }
+        if matches!(source.as_ref(), Error::Http { response } if response.status() == 503)));
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|line| line.starts_with("DELETE "))
             .count(),
         1
     );
@@ -5929,6 +6059,104 @@ async fn local_sync_events_report_internal_sequence_holes_without_consuming_queu
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn local_sync_empty_poll_and_cancellation_keep_the_full_consumed_cursor() -> TestResult {
+    use verysync_sidecar::LocalSyncEventOptions;
+    let status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-observed"}));
+    let (new_poll, observed) = tokio::sync::oneshot::channel();
+    let server = ScriptedServer::with_signal(
+        vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            status(),
+            status(),
+            status(),
+            Reply::json(serde_json::json!({"events":[],"cursor":0,"reset":false,"missed":false})),
+            status(),
+            status(),
+        ],
+        Some((7, new_poll)),
+    )
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut stream =
+        client.subscribe_local_sync_events(LocalSyncEventOptions::default().wait_seconds(0)?)?;
+    let before = stream.cursor().clone();
+    let cancellation = stream.cancellation_handle();
+    let cancel = tokio::spawn(async move {
+        observed.await?;
+        cancellation.cancel();
+        Ok::<_, tokio::sync::oneshot::error::RecvError>(())
+    });
+    assert!(stream.next().await.is_none());
+    cancel.await??;
+    assert_eq!(stream.cursor().device_id, before.device_id);
+    assert_eq!(stream.cursor().engine_started_at, before.engine_started_at);
+    assert_eq!(stream.cursor().last_sequence, before.last_sequence);
+    assert_eq!(stream.buffered_items(), 0);
+    assert_eq!(server.finish().await?.len(), 7);
+    println!("Local Sync consumption evidence: the empty poll was processed and the whole cursor remained unchanged after cancellation.");
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_sync_new_start_time_warns_before_resuming_after_delivered_unknown_events(
+) -> TestResult {
+    use verysync_sidecar::{EventGapReason, LocalSyncEventOptions, LocalSyncEventStreamItem};
+    let unknown = || Reply::json(serde_json::json!({"myID":ID}));
+    let known = || Reply::json(serde_json::json!({"myID":ID,"startTime":"boot-known"}));
+    let batch = |sequence, kind| {
+        Reply::json(serde_json::json!({
+            "events":[{"sequence":sequence,"jobId":"","type":kind,"time":"native-time"}],
+            "cursor":sequence,"reset":false,"missed":false
+        }))
+    };
+    let server = ScriptedServer::start(vec![
+        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+        unknown(),
+        unknown(),
+        unknown(),
+        batch(1, "initial-event"),
+        unknown(),
+        known(),
+        known(),
+        batch(2, "discard-without-known-continuity"),
+        known(),
+        known(),
+        known(),
+        batch(1, "first-event-on-observed-engine"),
+        known(),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let mut stream =
+        client.subscribe_local_sync_events(LocalSyncEventOptions::default().wait_seconds(0)?)?;
+    assert!(matches!(stream.next().await,
+        Some(Ok(LocalSyncEventStreamItem::Event { event, .. })) if event.kind == "initial-event"
+    ));
+    let previous = stream.cursor().clone();
+    assert_eq!(previous.last_sequence, 1);
+    assert!(previous.engine_started_at.is_none());
+    assert!(
+        matches!(stream.next().await, Some(Ok(LocalSyncEventStreamItem::Gap(g)))
+            if g.reason == EventGapReason::EngineStartTimeChanged
+            && g.previous.device_id == previous.device_id
+            && g.previous.engine_started_at == previous.engine_started_at
+            && g.previous.last_sequence == previous.last_sequence
+            && g.resume_from.last_sequence == 0
+            && g.resume_from.engine_started_at.as_deref() == Some("boot-known")
+        )
+    );
+    assert!(matches!(stream.next().await,
+        Some(Ok(LocalSyncEventStreamItem::Event { event, cursor }))
+        if event.kind == "first-event-on-observed-engine" && cursor.last_sequence == 1
+        && cursor.engine_started_at.as_deref() == Some("boot-known")
+    ));
+    assert_eq!(server.finish().await?.len(), 14);
+    println!("Local Sync consumption evidence: unknown generation event, continuity gap, then the new generation's first event.");
+    Ok(())
+}
+
 #[tokio::test]
 async fn local_sync_event_schema_failure_reports_gap_then_terminal_error_without_retry(
 ) -> TestResult {

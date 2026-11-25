@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-COMMON = frozenset(['native_files_engine', 'native_file_mutation_engine', 'native_local_sync_engine', 'native_local_sync_protocol_engine', 'native_local_sync_protocol_advanced_engine', 'native_local_sync_advanced_engine', 'native_local_sync_runtime_engine', 'native_local_sync_automation_engine', 'native_local_sync_repair_engine', 'native_local_sync_configuration_engine', 'native_configuration_engine', 'native_authentication_engine', 'native_ldap_trusted_ca_engine', 'storage_environment', 'native_file_transfer_engine', 'native_disk_full_engine', 'native_file_history_engine', 'native_maintenance_engine', 'native_managed_lifetime', 'native_managed_instance', 'native_p2p_isolation', 'native_devices', 'native_invitations', 'native_network', 'native_sync_observation', 'native_p2p_three_nodes', 'native_upgrade_engine', 'native_engine_control', 'native_host_watch_limit', 'native_wallpaper_denied', 'native_wallpaper_resource', 'native_events', 'native_example_control', 'native_operations', 'native_sharing', 'native_download_engine', 'native_cache_engine', 'native_cleanup_baseline', 'native_cleanup_upgrade'])
+COMMON = frozenset(['native_files_engine', 'native_file_mutation_engine', 'native_local_sync_engine', 'native_local_sync_protocol_engine', 'native_local_sync_protocol_advanced_engine', 'native_local_sync_advanced_engine', 'native_local_sync_runtime_engine', 'native_local_sync_automation_engine', 'native_local_sync_repair_engine', 'native_local_sync_configuration_engine', 'native_configuration_engine', 'native_authentication_engine', 'native_ldap_trusted_ca_engine', 'storage_environment', 'native_file_transfer_engine', 'native_disk_full_engine', 'native_file_history_engine', 'native_maintenance_engine', 'native_managed_lifetime', 'native_managed_instance', 'native_managed_repair', 'native_p2p_isolation', 'native_devices', 'native_invitations', 'native_network', 'native_sync_observation', 'native_p2p_three_nodes', 'native_upgrade_engine', 'native_engine_control', 'native_host_watch_limit', 'native_wallpaper_denied', 'native_wallpaper_resource', 'native_events', 'native_example_control', 'native_operations', 'native_sharing', 'native_download_engine', 'native_cache_engine', 'native_cleanup_baseline', 'native_cleanup_upgrade'])
 
 
 def failures(package, steps):
@@ -15,13 +15,13 @@ def failures(package, steps):
     required = set(COMMON)
     required.add("native_mechanism_" + family)
     if family == "windows":
-        required.add("native_windows_ui")
+        required.update({"native_windows_ui", "native_windows_managed_permissions"})
     if family in {"macos", "linux"}:
         required.add("native_browser_engine")
     # New native steps are required too, except explicitly inapplicable ones.
     inapplicable = {"native_mechanism_" + other for other in {"macos", "linux", "windows"} if other != family}
     if family != "windows":
-        inapplicable.add("native_windows_ui")
+        inapplicable.update({"native_windows_ui", "native_windows_managed_permissions"})
     if family not in {"macos", "linux"}:
         inapplicable.add("native_browser_engine")
     if package == "windows-amd64-standard":

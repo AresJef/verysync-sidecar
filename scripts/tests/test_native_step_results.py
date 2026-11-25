@@ -15,6 +15,7 @@ class NativeStepContracts(unittest.TestCase):
         steps["native_mechanism_" + family] = {"outcome": "success"}
         if family == "windows":
             steps["native_windows_ui"] = {"outcome": "success"}
+            steps["native_windows_managed_permissions"] = {"outcome": "success"}
         return steps
 
     def test_macos_browser_must_exist_and_really_pass(self):
@@ -57,6 +58,17 @@ class NativeStepContracts(unittest.TestCase):
         self.assertEqual(HELPER.failures("windows-arm64-standard", steps), [])
         steps["native_windows_gui_lost_reply"] = {"outcome": "skipped"}
         self.assertEqual(HELPER.failures("windows-arm64-standard", steps), [])
+
+    def test_managed_repair_and_windows_permissions_cannot_be_skipped(self):
+        for family in ("linux", "macos", "windows"):
+            package = family + "-arm64-standard"
+            for key in ("native_managed_repair", "native_windows_managed_permissions"):
+                if key.endswith("permissions") and family != "windows":
+                    continue
+                with self.subTest(package=package, step=key):
+                    steps = self.successful_steps(family)
+                    steps[key] = {"outcome": "skipped"}
+                    self.assertIn(key, HELPER.failures(package, steps))
 
     def test_unknown_new_native_failure_remains_required(self):
         steps = self.successful_steps("linux")

@@ -51,7 +51,6 @@ impl fmt::Debug for LocalApiFolder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalApiFolder")
             .field("id", &self.id)
-            .field("path", &self.path)
             .field("paused", &self.paused)
             .field("extra_field_count", &self.extra.len())
             .finish_non_exhaustive()
@@ -278,6 +277,7 @@ impl LocalApiClient {
     /// Request one root/subpath scan through the registered native wrapper.
     /// A `scanning` acknowledgement is not a correlated completion event. The
     /// request is never retried, and paused folders are refused before posting.
+    /// Clones of this client share the lock from the folder check through the request.
     ///
     /// ```no_run
     /// # async fn example(client: &verysync_sidecar::LocalApiClient,
@@ -301,11 +301,12 @@ impl LocalApiClient {
             scope,
             RequestEffect::MayModify,
         )?;
+        let guard = self.connection.mutation_lock.lock().await;
         if self.folder(folder).await?.paused {
             return Err(Error::ScanNotIdle);
         }
         let response = self
-            .control_response(request, "request Local-API scan")
+            .control_response_locked(request, "request Local-API scan", &guard)
             .await?;
         let acknowledgement: serde_json::Value =
             serde_json::from_slice(&response.body).map_err(|_| invalid_scan(&response))?;
@@ -323,7 +324,8 @@ impl LocalApiClient {
 
     /// Submit one explicit Local-API selection request. Commercial rejection
     /// code3001 is distinct from GUI-key rejection and the separate Pro code3000.
-    /// A native acknowledgement does not establish file retention or transfer.
+    /// Observe file retention and transfer separately. Clones of this client
+    /// share the lock from the folder check through the request.
     pub async fn request_selection(
         &self,
         folder: &FolderId,
@@ -354,9 +356,10 @@ impl LocalApiClient {
                     "false"
                 },
             );
+        let guard = self.connection.mutation_lock.lock().await;
         self.folder(folder).await?;
         let response = self
-            .control_response(request, "request Local-API selection")
+            .control_response_locked(request, "request Local-API selection", &guard)
             .await?;
         Ok(SelectiveAcknowledgement {
             response: ResponseDiagnostic::new(response.status, response.body),

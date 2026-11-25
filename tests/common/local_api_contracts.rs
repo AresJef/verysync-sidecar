@@ -203,7 +203,16 @@ async fn local_api_typed_folder_projection_does_not_invent_a_gui_label_or_expose
     assert_eq!(folders[0].path.to_protocol()?, "/private/target");
     assert!(folders[0].path.local_path().is_none());
     assert_eq!(folders[0].extra["readWriteSecret"], KEY);
-    assert!(!format!("{:?}", folders[0]).contains(KEY));
+    for debug in [
+        format!("{:?}", folders[0]),
+        format!("{:#?}", folders[0]),
+        format!("{folders:?}"),
+        format!("{folders:#?}"),
+    ] {
+        assert!(!debug.contains(KEY));
+        assert!(!debug.contains("/private/target"));
+        assert!(!debug.contains("readWriteSecret"));
+    }
     assert!(!folders[0].extra.contains_key("label"));
     no_ambient_auth(&server.finish().await?);
     Ok(())
@@ -368,5 +377,116 @@ async fn local_api_plain_http_denial_and_future_envelopes_do_not_invent_entitlem
         assert!(!format!("{error:?} {error}").contains(KEY));
         assert_eq!(server.finish().await?.len(), 6);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_api_scan_and_selection_wait_for_the_shared_write_before_preflight() -> TestResult {
+    use std::future::{poll_fn, Future};
+    use std::task::Poll;
+    use verysync_sidecar::{FolderId, SelectiveAction, SelectiveScope};
+
+    for selection in [false, true] {
+        let (body_started, start) = tokio::sync::oneshot::channel();
+        let (competing_polled, polled) = tokio::sync::oneshot::channel();
+        let new_projection = if selection {
+            Reply::json(serde_json::json!([]))
+        } else {
+            local_folders(true)
+        };
+        let server = ScriptedServer::with_controls(
+            vec![
+                local_version(),
+                identity(),
+                identity(),
+                Reply::json(serde_json::json!({"ok":"applied"})),
+                identity(),
+                new_projection,
+            ],
+            None,
+            Some((4, body_started, polled)),
+        )
+        .await?;
+        let client = LocalApiClient::connect(options(&server)?).await?;
+        let changing = client.clone();
+        let method = if selection {
+            RawMethod::Delete
+        } else {
+            RawMethod::Patch
+        };
+        let task = tokio::spawn(async move {
+            let request = RawRequest::new(
+                method,
+                ["config", "folders", "local-folder"],
+                RequestEffect::MayModify,
+            )?;
+            let request = if selection {
+                request
+            } else {
+                request.json_body(&serde_json::json!({"paused":true}))?
+            };
+            changing.raw(request).await
+        });
+        start.await?;
+        let id = FolderId::parse("local-folder")?;
+        let mut followup = std::pin::pin!(async {
+            if selection {
+                client
+                    .request_selection(&id, &SelectiveScope::FolderRoot, SelectiveAction::Select)
+                    .await
+                    .map(drop)
+            } else {
+                client
+                    .request_scan(&id, &SelectiveScope::FolderRoot)
+                    .await
+                    .map(drop)
+            }
+        });
+        assert!(poll_fn(|cx| Poll::Ready(followup.as_mut().poll(cx).is_pending())).await);
+        competing_polled
+            .send(())
+            .map_err(|_| "fixture closed before the competing poll")?;
+        assert_eq!(task.await??.status(), 200);
+        let error = followup.await.unwrap_err();
+        if selection {
+            assert!(matches!(error, Error::FolderNotFound { .. }));
+        } else {
+            assert!(matches!(error, Error::ScanNotIdle));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), 6);
+        assert!(requests[3].starts_with(if selection { "DELETE " } else { "PATCH " }));
+        assert!(requests[5].starts_with("GET /prefix/rest/localapi/config/folders "));
+        assert!(!requests.iter().any(|request| request.starts_with("POST ")));
+    }
+
+    let server = ScriptedServer::start(vec![
+        local_version(),
+        identity(),
+        identity(),
+        local_folders(false),
+        identity(),
+        Reply::json(serde_json::json!({"ok":"selected"})),
+    ])
+    .await?;
+    let client = LocalApiClient::connect(options(&server)?).await?;
+    let selected = client
+        .request_selection(
+            &FolderId::parse("local-folder")?,
+            &SelectiveScope::FolderRoot,
+            SelectiveAction::Select,
+        )
+        .await?;
+    assert_eq!(selected.response.status(), 200);
+    assert_eq!(
+        server
+            .finish()
+            .await?
+            .iter()
+            .filter(|request| request.starts_with("POST "))
+            .count(),
+        1
+    );
+    println!("Local-API clone ordering evidence: paused scan and removed selection sent zero POSTs; eligible selection sent one.");
     Ok(())
 }
