@@ -102,6 +102,35 @@ class LinuxRole:
 
 
 class ForegroundRegression(unittest.IsolatedAsyncioTestCase):
+    async def test_operator_stop_cancels_ssh_while_authentication_is_pending(self):
+        entered = asyncio.Event()
+        stopped = asyncio.Event()
+        closed = asyncio.Event()
+
+        async def opening():
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                closed.set()
+
+        attempt = asyncio.create_task(entry.open_until_stopped(opening(), stopped))
+        await entered.wait()
+        stopped.set()
+        self.assertIsNone(await attempt)
+        self.assertTrue(closed.is_set())
+
+    async def test_operator_stop_closes_a_connection_that_just_completed(self):
+        stopped = asyncio.Event()
+        session = SimpleNamespace(stop=AsyncMock())
+
+        async def opening():
+            stopped.set()
+            return session, {}
+
+        self.assertIsNone(await entry.open_until_stopped(opening(), stopped))
+        session.stop.assert_awaited_once()
+
     async def exercise_foreground(self, qualification=None, unconfirmed=False, ssh_available=True,
                                   file_uncertain=False, peer_uncertain=False):
         trace = []

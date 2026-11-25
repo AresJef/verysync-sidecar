@@ -13,9 +13,17 @@ from r33_protocol import FRAME_MAX, HEARTBEAT_SECONDS, decode_frame, encode_fram
 from r33_ssh import Destination
 
 
+SSH_WITH_OPERATOR_INTERRUPT = (
+    "import os, signal, sys\n"
+    "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})\n"
+    "os.execv(sys.argv[1], sys.argv[1:])\n"
+)
+
+
 class LinuxQualification:
     ready_event = "local-api-foreground-ready"
     live_scope = "live"
+    keeps_operator_interrupt = False
 
     def __init__(self, child, run, foreground=None):
         self.child=child
@@ -43,6 +51,11 @@ class LinuxQualification:
                                 bootstrap.read_text(encoding="utf-8"),run,str(expires),digest,
                                 "control" if synthetic else cls.live_scope])
             external=selected.command(staging,remote_entry=command)
+            if cls.keeps_operator_interrupt:
+                # OpenSSH still owns the password prompt in this terminal.
+                # The supervisor handles Ctrl+C before closing the same connection.
+                external = ["/usr/bin/python3", "-I", "-B", "-S", "-c",
+                            SSH_WITH_OPERATOR_INTERRUPT, *external]
             child=await asyncio.create_subprocess_exec(*external,stdin=asyncio.subprocess.PIPE,
                                                        stdout=asyncio.subprocess.PIPE,limit=FRAME_MAX)
             session=cls(child,run)
@@ -57,6 +70,11 @@ class LinuxQualification:
                     raise ValueError("The Linux preflight did not confirm the selected session.")
                 session.heartbeat=asyncio.create_task(session.renew())
                 return session,initial
+            except asyncio.CancelledError:
+                with suppress(ProcessLookupError):
+                    child.terminate()
+                await session.close_unconfirmed()
+                raise
             except BaseException:
                 await session.close_unconfirmed()
                 raise
@@ -271,6 +289,7 @@ class LinuxForeground:
 class LinuxBrokerSession(LinuxQualification):
     live_scope="combined"
     ready_event="linux-foreground-ready"
+    keeps_operator_interrupt = True
 
     async def renew(self):
         # The native role owns its lease while active. The broker reads idle

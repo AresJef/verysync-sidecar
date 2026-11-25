@@ -208,6 +208,24 @@ async def guarded(coro,default):
         return default
 
 
+async def open_until_stopped(opening, stopped):
+    attempt = asyncio.create_task(opening)
+    withdrawal = asyncio.create_task(stopped.wait())
+    try:
+        await asyncio.wait((attempt, withdrawal), return_when=asyncio.FIRST_COMPLETED)
+        if not stopped.is_set():
+            return attempt.result()
+    finally:
+        withdrawal.cancel()
+        if stopped.is_set() or not attempt.done():
+            attempt.cancel()
+            result, = await asyncio.gather(attempt, return_exceptions=True)
+            if isinstance(result, tuple):
+                session, _ = result
+                await session.stop()
+        await asyncio.gather(withdrawal, return_exceptions=True)
+
+
 async def merged_qualifications(mac, linux, linux_initial, stopped, values, mac_operation):
     try:
         mac_login=await guarded(mac.execute("login",values),{}) if not stopped.is_set() else {}
@@ -382,8 +400,10 @@ async def execute(args,boundary,engine,driver,run,destination,ordinary_gid,*,lin
             if payload and (linux_payload_digest is None or payload==linux_payload_digest) and not stop.is_set():
                 print("Enter the Linux SSH password at the OpenSSH prompt.",flush=True)
                 opened=await guarded(
-                    LinuxForeground.open(destination,home,APP/"r33_linux_qualification_bootstrap.py",
-                                         descriptor,payload,run,args.expires_at),
+                    open_until_stopped(
+                        LinuxForeground.open(destination,home,APP/"r33_linux_qualification_bootstrap.py",
+                                             descriptor,payload,run,args.expires_at),stop
+                    ),
                     None,
                 )
             if opened:
