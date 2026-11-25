@@ -40,6 +40,7 @@ enum Request {
     RefreshPaid,
     LocalApiQualify,
     LocalApiFileVerify,
+    LocalApiPeerVerify,
     LocalApiConfigVerify,
     Logout,
     End,

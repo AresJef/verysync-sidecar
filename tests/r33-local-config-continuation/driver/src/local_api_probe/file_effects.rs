@@ -17,7 +17,7 @@ const OUTSIDE: &[u8] = b"R33 file outside the registered folder";
 const POLL: Duration = Duration::from_millis(40);
 const WINDOW: Duration = Duration::from_secs(14);
 
-fn unavailable(error: &Error) -> Value {
+pub(super) fn unavailable(error: &Error) -> Value {
     match error {
         Error::LicenseRequired { code, response } => {
             json!({"state":"license-required","code":code,"http":response.status()})

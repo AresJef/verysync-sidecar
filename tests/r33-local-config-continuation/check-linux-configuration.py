@@ -43,11 +43,11 @@ def namespace():
     return os.stat("/proc/self/ns/net").st_ino
 
 
-def ask(child, request=None):
+def ask(child, request=None, timeout=30):
     if request:
         child.stdin.write(json.dumps({"kind":request}).encode("ascii") + b"\n")
         child.stdin.flush()
-    if not select.select([child.stdout], [], [], 30)[0]:
+    if not select.select([child.stdout], [], [], timeout)[0]:
         raise TimeoutError("The owned worker did not return a bounded response.")
     return json.loads(child.stdout.readline(8193))
 
@@ -102,6 +102,9 @@ def check_boundary(shell, root, program, driver, evidence):
             locked = {"ok":False,"reason":"operation-outside-the-licensed-local-api-scope"}
             assert ask(child, "local-api-config-verify") == locked
             assert ask(child, "local-api-file-verify") == {
+                "ok": False, "reason": "local-api-exact-qualification-required",
+            }
+            assert ask(child, "local-api-peer-verify") == {
                 "ok": False, "reason": "local-api-exact-qualification-required",
             }
             with socket.socket() as observer:
@@ -172,6 +175,23 @@ def check_files(shell, stage, program, driver, evidence):
             assert ask(child, "local-api-file-verify") == {
                 "ok": False, "reason": "operation-outside-the-licensed-local-api-scope",
             }
+            peers = ask(child, "local-api-peer-verify", timeout=155)
+            assert peers["ok"] and peers["device"] == initial["device"], peers
+            assert peers["fixture_unregistered"] and peers["secondary_normal_owned_exit"], peers
+            assert peers["local_api"]["LA-002"]["matches_both_owned_identities"], peers
+            assert peers["device_restored"] and peers["actual_partial_block_progress"], peers
+            assert peers["actual_pending_file"] and peers["actual_incomplete_then_completed_peer"], peers
+            for route in ("SYM-049", "LA-016", "LA-017", "LA-019"):
+                assert peers["local_api"][route]["code"] == 3001, peers
+            for direction in ("incoming", "outgoing"):
+                shared = root / "local-api-peer-check"
+                primary = shared / "primary-files" / (direction + ".bin")
+                secondary = shared / "secondary-files" / (direction + ".bin")
+                assert primary.stat().st_size == secondary.stat().st_size == 4 * 1024 * 1024
+                assert peers["files"][direction]["sha256"] == digest(primary) == digest(secondary)
+            assert ask(child, "local-api-peer-verify") == {
+                "ok": False, "reason": "operation-outside-the-licensed-local-api-scope",
+            }
             end = ask(child, "end")
             child.stdin.close()
             assert end["normal_owned_exit"] and child.wait(timeout=15) == 0
@@ -180,7 +200,8 @@ def check_files(shell, stage, program, driver, evidence):
                 subprocess.run([*shell, "/bin/kill", "-TERM", "--", f"-{child.pid}"],
                                check=False, timeout=5)
                 child.wait(timeout=12)
-    return {"source": "signed-out", "isolation": isolated, "file_effects": files, "normal_exit": end}
+    return {"source": "signed-out", "isolation": isolated, "file_effects": files,
+            "peer_effects": peers, "normal_exit": end}
 
 
 def verification(driver_source, evidence):

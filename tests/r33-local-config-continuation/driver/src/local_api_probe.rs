@@ -20,6 +20,7 @@ use verysync_sidecar::{
 
 mod configuration;
 mod file_effects;
+mod peer_effects;
 #[path = "r33_local_api_qualification.rs"]
 mod qualification;
 
@@ -75,6 +76,10 @@ pub(crate) fn owned_endpoint() -> Stage<ManagementEndpoint> {
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|&port| port >= 1024 && port != 18886)
         .ok_or("local-api-needs-an-explicit-owned-loopback-port")?;
+    loopback_endpoint(port)
+}
+
+fn loopback_endpoint(port: u16) -> Stage<ManagementEndpoint> {
     ManagementEndpoint::http(&format!(
         "http://{}/",
         SocketAddr::from((Ipv4Addr::LOCALHOST, port))
@@ -87,18 +92,40 @@ pub(crate) async fn start(
     root: &Path,
 ) -> Stage<(ManagedInstance, ManagementEndpoint)> {
     let endpoint = owned_endpoint()?;
+    let core = start_at(engine, root, endpoint.clone()).await?;
+    Ok((core, endpoint))
+}
+
+async fn start_at(
+    engine: &Path,
+    root: &Path,
+    endpoint: ManagementEndpoint,
+) -> Stage<ManagedInstance> {
     let program = LocalProgram::new(engine.to_path_buf())
         .map_err(|_| "local-api-fixed-engine-path-unavailable")?
         .expected_sha256(ENGINE_HASH);
-    let settings = ManagedOptions::new(program, root.join("state"), endpoint.clone())
+    let settings = ManagedOptions::new(program, root.join("state"), endpoint)
         .and_then(|options| options.startup_timeout(START))
         .and_then(|options| options.management_request_timeout(Duration::from_secs(14)))
         .and_then(|options| options.local_api_enabled(true))
         .map_err(|_| "local-api-fixed-native-options-unavailable")?;
-    let core = ManagedInstance::start(settings)
+    ManagedInstance::start(settings)
         .await
-        .map_err(|_| "local-api-owned-start-failed")?;
-    Ok((core, endpoint))
+        .map_err(|_| "local-api-owned-start-failed")
+}
+
+async fn case_device(
+    core: &ManagedInstance,
+    run: &str,
+    control: bool,
+    qualified: Option<&DeviceId>,
+) -> Stage<DeviceId> {
+    if control {
+        return Ok(core.client().instance().device_id.clone());
+    }
+    let device = qualified.ok_or("local-api-exact-qualification-required")?;
+    paid_native_permission(core, run).await?;
+    Ok(device.clone())
 }
 
 async fn qualify(
@@ -259,6 +286,7 @@ pub(crate) async fn serve_qualification(
         let mut login_submitted = false;
         let mut operation_consumed = false;
         let mut file_attempted = false;
+        let mut peer_attempted = false;
         let mut config_device = None;
         let mut native_logout = None;
         while let Some(request) = incoming.recv().await {
@@ -297,15 +325,15 @@ pub(crate) async fn serve_qualification(
                 Request::LocalApiFileVerify if !file_attempted && native_logout.is_none() => {
                     file_attempted = true;
                     async {
-                        let device = if control {
-                            core.client().instance().device_id.clone()
-                        } else {
-                            let device = config_device.clone()
-                                .ok_or("local-api-exact-qualification-required")?;
-                            paid_native_permission(&core, run).await?;
-                            device
-                        };
+                        let device = case_device(&core, run, control, config_device.as_ref()).await?;
                         file_effects::verify(root, &core, endpoint.clone(), &device, run).await
+                    }.await
+                }
+                Request::LocalApiPeerVerify if !peer_attempted && native_logout.is_none() => {
+                    peer_attempted = true;
+                    async {
+                        let device = case_device(&core, run, control, config_device.as_ref()).await?;
+                        peer_effects::verify(root, engine, &core, endpoint.clone(), &device, run).await
                     }.await
                 }
                 Request::LocalApiConfigVerify if !control && login_submitted && native_logout.is_none() => {
