@@ -1,0 +1,35 @@
+name: R33 one terminal with password SSH and synthetic account
+
+on:
+  push:
+    branches: [ci/r33-synthetic-20261124]
+    paths:
+      - .github/workflows/r33-composed-terminal.yml
+      - tests/r33-composed-terminal/**
+
+permissions:
+  contents: read
+
+jobs:
+  one-authentication:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Exercise the single foreground start and both stop methods
+        shell: bash
+        run: |
+          set -euo pipefail
+          r33_dir="$(mktemp -d)"
+          r33_image="r33-composed-fixture:${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          trap 'docker image rm "$r33_image" >/dev/null 2>&1 || true; rm -r -- "$r33_dir"' EXIT
+          cat > "$r33_dir/Dockerfile" <<'DOCKER'
+          FROM ubuntu:24.04
+          RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends openssh-server python3 && rm -rf /var/lib/apt/lists/*
+          DOCKER
+          docker build --quiet -t "$r33_image" "$r33_dir"
+          docker run --rm --network none --env R33_FOREGROUND_PASSWORD_TEST=isolated-linux-container \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/tests/r33-composed-terminal,dst=/fixture,readonly" \
+            "$r33_image" /usr/bin/python3 -B /fixture/check_composed_terminal.py
