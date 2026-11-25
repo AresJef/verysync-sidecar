@@ -56,7 +56,8 @@ jobs:
       - name: Run native admission and reuse controls
         id: controls
         continue-on-error: true
-        run: cargo +"$TEST_TOOLCHAIN" test --locked --offline --lib managed:: -- --nocapture
+        run: >-
+          cargo +"$TEST_TOOLCHAIN" test --locked --offline --lib managed:: -- --nocapture
       - name: Prepare fixed core and its pinned earlier upgrade source
         run: |
           python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
