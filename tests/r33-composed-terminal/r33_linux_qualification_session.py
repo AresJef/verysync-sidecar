@@ -15,7 +15,7 @@ from r33_ssh import Destination
 
 SSH_WITH_OPERATOR_INTERRUPT = (
     "import os, signal, sys\n"
-    "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})\n"
+    "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
     "os.execv(sys.argv[1], sys.argv[1:])\n"
 )
 
@@ -52,8 +52,8 @@ class LinuxQualification:
                                 "control" if synthetic else cls.live_scope])
             external=selected.command(staging,remote_entry=command)
             if cls.keeps_operator_interrupt:
-                # OpenSSH still owns the password prompt in this terminal.
-                # The supervisor handles Ctrl+C before closing the same connection.
+                # OpenSSH honors an inherited ignored SIGINT while connected.
+                # The supervisor receives Ctrl+C and requests remote cleanup first.
                 external = ["/usr/bin/python3", "-I", "-B", "-S", "-c",
                             SSH_WITH_OPERATOR_INTERRUPT, *external]
             child=await asyncio.create_subprocess_exec(*external,stdin=asyncio.subprocess.PIPE,
