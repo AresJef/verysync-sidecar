@@ -106,7 +106,8 @@ is attempted and no startup request is retried. If resource release cannot be
 confirmed, the exit wait reports cleanup failure. Lock availability is a point in
 time observation, not exclusion against unrelated launchers after lease release.
 A timeout while waiting leaves the owner intact. A shutdown request that is
-already in flight holds the lease until the request finishes. If an owner exits
+already in flight holds the lease until the request finishes or reaches its
+deadline. If an owner exits
 while its shutdown request is still waiting to be sent, that call returns the
 original owner's exit result. Await that result before starting the next owner
 on the same state.

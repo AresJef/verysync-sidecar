@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.1-rc.8 (unreleased)
+
+- Tie shutdown, offline backups and stopped maintenance to the managed program
+  that performed the run. After a newer run, obtain backups from its owner.
+- Check macOS extended permissions and Windows file ownership before using
+  private managed resources. Windows LocalSystem can create and reopen state
+  and cache resources with a single access-list entry.
+- Place Windows managed programs in their private Job as they are created.
+  Refuse special executable files on Unix without waiting on their contents.
+- Serialize Local-API scan and selection checks with other writes from the
+  same client. Default folder debugging omits private target paths.
+- Preserve the full consumed position across empty Local Sync event polls.
+  Report a gap if the engine starts reporting a new generation after delivery.
+- Check device identity on both sides of folder unregister readback. If
+  readback fails, inspect the intended instance before another removal.
+- Document the six-platform disk-full and index-reset observations.
+
 ## 0.1.1-rc.7 (unreleased)
 
 - Clarify the capability catalog for event cursors, peer discovery, directory creation, pending device offers, and Windows ARM64 upgrades.

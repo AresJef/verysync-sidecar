@@ -398,7 +398,7 @@ mod tests {
             result
         };
         let results = std::thread::scope(|scope| {
-            let second = scope.spawn(&start);
+            let second = scope.spawn(start);
             let first = start();
             (first, second.join().unwrap())
         });

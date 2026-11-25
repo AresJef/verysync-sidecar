@@ -66,9 +66,10 @@ impl ManagedInstance {
     /// another request; inspect its actual code/signal and forced flag.
     ///
     /// Errors use the normal typed authentication/business/unknown-write model.
-    /// A timeout or dropped future can leave an admitted request in progress.
-    /// Wait for the original owner's exit before sending another command. Dropping the owner still follows its
-    /// separately documented default cleanup policy.
+    /// An admitted request can continue if a caller drops this future before
+    /// its deadline. After a timeout, check whether the original owner is still
+    /// running before sending another command. Dropping the owner still follows
+    /// its configured lifetime policy.
     pub async fn shutdown(&mut self, timeout: Duration) -> Result<ManagedExit> {
         let deadline = deadline(timeout)?;
         let graceful = async {

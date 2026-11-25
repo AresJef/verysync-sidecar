@@ -170,6 +170,9 @@ async fn deep_repair_stopped_provenance_tracks_the_new_program_and_failed_run() 
     let sample = b"synthetic stopped-generation sample";
     std::fs::write(state.join("sample.bin"), sample)?;
     assert_eq!(old.shutdown(Duration::from_secs(10)).await?.code, Some(0));
+    // The only layout change is our run record. Restore the old layout
+    // in this synthetic fixture to verify that the next owner admits it.
+    std::fs::remove_file(state.join(crate::managed::state::GENERATION))?;
     let program = baseline()?;
     let mut current = ManagedInstance::start(settings(program.clone(), &state)?).await?;
     assert_ne!(current.program_info().sha256, previous);
@@ -227,7 +230,7 @@ async fn deep_repair_stopped_provenance_tracks_the_new_program_and_failed_run() 
         .is_err());
     assert!(!destination.exists());
     assert_eq!(std::fs::read(state.join("sample.bin"))?, sample);
-    println!("stopped provenance evidence: different official program digest, two reopened and restored snapshots, no stale snapshot or maintenance, failed selection and forced stop covered");
+    println!("stopped provenance evidence: legacy layout admitted, different official program digest, two reopened and restored snapshots, no stale snapshot or maintenance, failed selection and forced stop covered");
     Ok(())
 }
 

@@ -502,7 +502,11 @@ impl Client {
                     operation: "gracefully stop owned program",
                 });
             }
-            client.send_shutdown().await
+            tokio::time::timeout_at(deadline, client.send_shutdown())
+                .await
+                .map_err(|_| Error::Timeout {
+                    operation: "gracefully stop owned program",
+                })?
         })
         .await
         .map_err(|_| Error::ManagedFailure {
