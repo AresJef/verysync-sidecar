@@ -1,0 +1,146 @@
+name: RC7 repair host prerequisites
+
+on:
+  push:
+    branches: [ci/rc7-repair/diagnostics-20261125]
+    paths: [.github/workflows/rc7-repair-diagnostics.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  prerequisites:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: macOS Intel, runner: macos-15-intel, arch: x86_64 }
+          - { label: macOS Apple Silicon, runner: macos-15, arch: arm64 }
+          - { label: Linux AMD64, runner: ubuntu-24.04, arch: x86_64 }
+          - { label: Linux ARM64, runner: ubuntu-24.04-arm, arch: aarch64 }
+          - { label: Windows AMD64, runner: windows-2022, arch: X64 }
+          - { label: Windows ARM64, runner: windows-11-arm, arch: Arm64 }
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check the exact checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Check file types and independent state locks
+        if: runner.os == 'Linux'
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -eu
+          uname -sr
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          python3 - <<'PY'
+          import fcntl
+          import os
+          from pathlib import Path
+          import stat
+          from tempfile import TemporaryDirectory
+
+          with TemporaryDirectory(prefix="rc7-state-check-") as folder:
+              root = Path(folder)
+              fifo = root / "synthetic-fifo"
+              os.mkfifo(fifo, 0o600)
+              with os.fdopen(os.open(fifo, os.O_RDONLY | os.O_NONBLOCK), "rb") as handle:
+                  assert stat.S_ISFIFO(os.fstat(handle.fileno()).st_mode)
+              lock = root / "synthetic-lease"
+              lock.touch(mode=0o600)
+              with lock.open("rb") as first, lock.open("rb") as second:
+                  fcntl.flock(first, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                  try:
+                      fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                  except BlockingIOError:
+                      pass
+                  else:
+                      raise AssertionError("Independent lease opened while held")
+                  fcntl.flock(first, fcntl.LOCK_UN)
+                  fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+          assert not root.exists()
+          print("Nonblocking type observation, exclusive state lease and exact fixture removal passed.")
+          PY
+      - name: Check macOS access-control observations on temporary objects
+        if: runner.os == 'macOS'
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -eu
+          sw_vers
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          root="$(mktemp -d "$RUNNER_TEMP/rc7-acl.XXXXXXXX")"
+          trap 'chmod -N "$root/deny" 2>/dev/null || true; rmdir "$root/plain" "$root/deny" "$root/managed/child" "$root/managed" "$root" 2>/dev/null || true' EXIT
+          mkdir -m 700 "$root/plain" "$root/deny" "$root/managed"
+          chmod +a 'everyone deny delete' "$root/deny"
+          chmod +a 'everyone allow list,directory_inherit' "$root/managed"
+          mkdir -m 700 "$root/managed/child"
+          ls -led "$root/plain" "$root/deny" "$root/managed/child"
+          ls -led "$root/deny" | grep -F 'deny delete'
+          ls -led "$root/managed/child" | grep -F 'inherited'
+          chmod -N "$root/deny"
+          rmdir "$root/plain" "$root/deny" "$root/managed/child" "$root/managed" "$root"
+          test ! -e "$root"
+      - name: Check Windows owner, process containment and system account availability
+        if: runner.os == 'Windows'
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+          if ($arch -ne $env:EXPECTED_ARCH) { throw "Unexpected architecture $arch" }
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List
+          $current = [Security.Principal.WindowsIdentity]::GetCurrent()
+          Write-Output "Caller SID $($current.User.Value)"
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class Rc7HostObservation {
+              [DllImport("kernel32.dll", SetLastError = true)]
+              public static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool member);
+          }
+          '@
+          $member = $false
+          if (-not [Rc7HostObservation]::IsProcessInJob((Get-Process -Id $PID).Handle, [IntPtr]::Zero, [ref]$member)) {
+              throw 'Could not inspect current process containment.'
+          }
+          Write-Output "Runner process in a job $member"
+          $root = Join-Path $env:RUNNER_TEMP ("rc7-owner-" + [Guid]::NewGuid().ToString('N'))
+          $task = [IO.Path]::GetFileName($root)
+          New-Item -ItemType Directory -Path $root | Out-Null
+          try {
+              $acl = Get-Acl -LiteralPath $root
+              Write-Output "Created object's owner $($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value)"
+              $receipt = Join-Path $root 'system.txt'
+              $script = Join-Path $root 'identity.ps1'
+              "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value | Set-Content -LiteralPath '$receipt'" | Set-Content -LiteralPath $script
+              $argument = '-NoProfile -NonInteractive -File "{0}"' -f $script
+              $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $argument
+              $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount
+              Register-ScheduledTask -TaskName $task -Action $action -Principal $principal | Out-Null
+              Start-ScheduledTask -TaskName $task
+              $limit = [DateTime]::UtcNow.AddSeconds(30)
+              do {
+                Start-Sleep -Milliseconds 250
+                $sid = if (Test-Path -LiteralPath $receipt) { (Get-Content -LiteralPath $receipt -Raw).Trim() }
+              } while (-not $sid -and [DateTime]::UtcNow -lt $limit)
+              if ($sid -ne 'S-1-5-18') { throw 'The temporary task did not report the system account.' }
+              Write-Output "Test task token SID $sid"
+          } finally {
+              if (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue) {
+                  Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+                  Unregister-ScheduledTask -TaskName $task -Confirm:$false
+              }
+              Remove-Item -LiteralPath $root -Recurse -Force
+          }
+          if ((Test-Path -LiteralPath $root) -or (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue)) { throw 'Temporary host fixture remains.' }
+          Write-Output 'The temporary task and directory have been removed.'
