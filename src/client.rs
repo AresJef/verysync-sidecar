@@ -206,8 +206,6 @@ struct Connection<Authorization = ApiKey> {
     key: Authorization,
     response_limit: usize,
     mutation_lock: Arc<tokio::sync::Mutex<()>>,
-    #[cfg(all(test, feature = "engine-tests"))]
-    shutdown_calls: std::sync::atomic::AtomicUsize,
     endpoint_kind: crate::EndpointKind,
     endpoint: ManagementEndpoint,
     timeout: Duration,
@@ -224,6 +222,8 @@ struct Connection<Authorization = ApiKey> {
 pub struct Client {
     connection: Connection,
     instance: InstanceInfo,
+    #[cfg(all(test, feature = "engine-tests"))]
+    shutdown_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Client {
@@ -517,15 +517,13 @@ impl Client {
 
     #[cfg(all(test, feature = "engine-tests"))]
     pub(crate) fn test_shutdown_calls(&self) -> usize {
-        self.connection
-            .shutdown_calls
+        self.shutdown_calls
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     async fn send_shutdown(&self) -> Result<()> {
         #[cfg(all(test, feature = "engine-tests"))]
-        self.connection
-            .shutdown_calls
+        self.shutdown_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.connection
             .request_bytes(
@@ -598,8 +596,6 @@ impl Client {
             key: options.api_key,
             response_limit: options.response_limit,
             mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
-            #[cfg(all(test, feature = "engine-tests"))]
-            shutdown_calls: std::sync::atomic::AtomicUsize::new(0),
             endpoint_kind,
             endpoint: options.endpoint,
             timeout: options.timeout,
@@ -639,6 +635,8 @@ impl Client {
         }
         Ok(Self {
             connection,
+            #[cfg(all(test, feature = "engine-tests"))]
+            shutdown_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             instance: InstanceInfo {
                 device_id,
                 version,
