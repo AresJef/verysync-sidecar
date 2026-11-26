@@ -701,7 +701,7 @@ async fn cancelling_terminal_snapshot_wait_does_not_lose_scan_completion() -> Te
 
 #[tokio::test]
 async fn scan_requests_are_explicit_and_paused_targets_reject_before_post() -> TestResult {
-    use verysync_sidecar::FolderId;
+    use verysync_sidecar::{FolderId, PathStyle, TargetPath};
     let server = Server::start().await?;
     let client = server.client().await?;
     let id = FolderId::parse("scan-contract")?;
@@ -717,10 +717,10 @@ async fn scan_requests_are_explicit_and_paused_targets_reject_before_post() -> T
         client.observe_next_scan(&id).await,
         Err(Error::ScanNotIdle)
     ));
+    // The fixture advertises Linux, even when the test is running on Windows.
+    let subpath = TargetPath::remote(PathStyle::Unix, "sample.bin")?;
     assert!(matches!(
-        client
-            .request_scan_subpaths(&id, &[verysync_sidecar::TargetPath::local("sample.bin")])
-            .await,
+        client.request_scan_subpaths(&id, &[subpath]).await,
         Err(Error::ScanNotIdle)
     ));
     server.state.folder_paused.store(false, Ordering::SeqCst);

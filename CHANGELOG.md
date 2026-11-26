@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1-rc.9 (unreleased)
+## 0.1.1-rc.10 (unreleased)
 
 - Explain what to do when a folder is paused or busy before a new scan.
 - If a device acknowledged a folder removal but the follow-up check failed,
