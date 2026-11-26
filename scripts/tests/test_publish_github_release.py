@@ -86,6 +86,17 @@ class ReleaseIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "archive source differs"):
             HELPER.validate_package(*self.package(source="0" * 40))
 
+    def test_only_named_windows_permissions_script_is_public(self):
+        name = "scripts/run-windows-managed-permissions.ps1"
+        original = (ROOT / name).read_bytes()
+        self.assertEqual(HELPER.validate_package(*self.package(((name, original),)))[name], original)
+        for unregistered in ("scripts/other-windows-permissions.ps1",
+                             "scripts/nested/run-windows-managed-permissions.ps1"):
+            with self.subTest(unregistered=unregistered), self.assertRaisesRegex(
+                ValueError, "outside the public package"
+            ):
+                HELPER.validate_package(*self.package(((unregistered, original),)))
+
     def test_unpublished_inputs_and_binary_content_fail_even_with_the_correct_digest(self):
         for name, data, error in (
             ("docs/internal/work.md", "private", "outside the public package"),

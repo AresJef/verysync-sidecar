@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.1
+
+- Keep single-file downloads on the file path. Use the archive methods to
+  export directories. Historical restores continue to check the target clock
+  before writing.
+- Verify Local-API folder identity before writes and during readback. When an
+  unregistration was acknowledged but readback failed, check that device's
+  folder list before sending another removal request.
+- Report missing event IDs before delivering the next available event. Reject
+  dot-segment IDs for new registrations and shared folder joins. Existing
+  registrations with these IDs remain readable.
+- Use `GuiSession::login_with_outcome` to distinguish sign-in phases. The
+  existing sign-in entry point keeps its error types.
+- Check private state access before backing up a managed instance. Keep
+  shutdown, offline backups and stopped maintenance tied to the managed
+  program that performed the run.
+- When a scan cannot start, check the selected folder's status before resuming
+  a paused folder or waiting for current activity to finish.
+
+The Rust 1.85 minimum and the fixed VerySync v2.33.2 verification baseline
+remain in effect. This is a compatible update to the 0.1.0 public API. See the
+[release checks](docs/public/release-checklist.md) for supported conditions,
+historical evidence and remaining entitlement requirements.
+
 ## 0.1.1-rc.10 (unreleased)
 
 - Explain what to do when a folder is paused or busy before a new scan.

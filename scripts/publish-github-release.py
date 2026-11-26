@@ -163,6 +163,7 @@ def public_package_member(relative):
     if root == "scripts":
         return relative.suffix == ".py" or name in (
             "scripts/trace-native-folder-opener.ps1", "scripts/storage-test-requirements.txt",
+            "scripts/run-windows-managed-permissions.ps1",
         )
     if root == "docs":
         return (relative.parts[1] == "public" and len(relative.parts) > 2 and relative.suffix == ".md"

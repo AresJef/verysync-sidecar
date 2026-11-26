@@ -1,6 +1,6 @@
 # Release checks
 
-For the 0.1.1 repair candidate, review the exact crate, generated API docs,
+For 0.1.1, review the exact published crate, generated API docs,
 examples and user-facing output together with the six repair results. Sign off
 each message or page against the behavior it describes. Check the stable
 0.1.0 caller examples for matching error types and verify that machine output
@@ -13,17 +13,15 @@ gate below and actual consumption of the published package.
 
 ## First stable release coverage
 
-The following Pro behaviors await validation with an isolated, entitled core.
-Previously verified behavior and entitlement refusal checks keep their own
-evidence. The pending positive cases remain available for future validation.
+Release 0.1.0 with VerySync v2.33.2 verified entitled selective sync,
+global audit history and automatic local storage jobs in isolated tests.
+Separate account tests verified paid license readback, one refresh, persistence
+after restart and activation of a trial on an account without Pro. These are
+historical results for the tested accounts, program and setups.
 
-| Area | Positive validation deferred | Checks required for applicable behavior |
-| --- | --- | --- |
-| [Selective sync](selective-sync.md) | Entitled selection, file download, deselection and removal on all peers, with their data effects | Ordinary browsing and synchronization, native license refusals and file retention |
-| [File history](file-history.md) | Generating, paging and clearing the Pro global audit history | Ordinary version archives and recovery, file preservation and native refusal behavior |
-| [Local storage jobs](local-sync.md) | Entitled change watching, fixed intervals and calendar schedules | Manual runs, applicable launch triggers, authenticated backend transfer and recovery |
-| Pro license and trial | Effective license reads, refresh, persistence and trial activation | Observed empty, denied and indeterminate results and preserved state |
-| Official Pro remote management | A real official tunnel session, verified target identity and management operations | Explicit caller-configured HTTP(S) management and identity checks |
+The official Pro management tunnel still needs a licensed cross-network session
+with verified target identity and actual management operations. Explicit
+caller-configured HTTP(S) management retains its separate coverage.
 
 Positive [Local-API](local-api.md) cases that require an official entitlement
 remain deferred. The 28 typed entries, ordinary native effects and actual

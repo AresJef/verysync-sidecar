@@ -6,7 +6,7 @@ confirm the device identity before making changes. Start an isolated instance
 with its own files only when your application should manage its lifetime.
 
 Start with the [connection example](docs/public/getting-started.md). The
-[stable 0.1.0 guide](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/getting-started.md)
+[stable 0.1.1 guide](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/getting-started.md)
 is also available directly from the package page. A setting read back from the
 instance confirms the reported configuration. Check files and peer activity
 separately when you need to confirm a transfer.
@@ -29,17 +29,17 @@ recovery, discovery, controlled NAT traversal and relays on the tested field
 paths. [Release checks](docs/public/release-checklist.md#field-network-evidence)
 
 The [license API](docs/public/licenses.md) preserves native license
-metadata and separates explicit refresh/trial acknowledgements from actual
-licensed effects. Positive validation requiring a dedicated Pro entitlement is
-deferred in this release.
+metadata and separates explicit refresh and trial acknowledgements from
+actual licensed effects. Release 0.1.0 verified paid license readback, refresh
+and a separate trial activation with dedicated accounts.
 
 The [official-account API](docs/public/official-accounts.md) separates
 explicit cloud-account login/logout from GUI sessions and licensed entitlements.
 Native acknowledgements, actual account state and upstream rejection codes have
 separate results. The 0.1.0 release verified ordinary cloud sign-in, wrong
 password rejection, session persistence across restart and sign-out with a
-dedicated account. Positive Pro license, trial and enterprise cases still
-require their own validation.
+dedicated account. The official Pro management tunnel, entitled Local-API
+effects and enterprise control retain their separate prerequisites.
 
 The [platform guide](docs/public/platform-validation.md#verified-release-baselines)
 lists the systems actually verified with release 0.1.0 and the fixed VerySync
@@ -68,8 +68,8 @@ The [program cache](docs/public/program-cache.md) adds explicit
 offline resolution, cross-process preparation and immutable generations that
 preserve previously returned or running program paths.
 
-The stable installation examples use `verysync-sidecar` 0.1.0. The [changelog](CHANGELOG.md)
-identifies changes in the next candidate. The verified official program is VerySync v2.33.2.
+The stable installation examples use `verysync-sidecar` 0.1.1. The [changelog](CHANGELOG.md)
+lists the fixes in this release. The verified official program is VerySync v2.33.2.
 See the [release checks](docs/public/release-checklist.md) for tested native
 conditions, platform boundaries and deferred positive cases.
 

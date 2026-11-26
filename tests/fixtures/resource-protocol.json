@@ -1,15 +1,15 @@
 {
-  "protocol_id": "VS045-native-resources-v33",
-  "version": 33,
+  "protocol_id": "VS045-native-resources-v34",
+  "version": 34,
   "status": "FROZEN_BEFORE_FORMAL_COLLECTION",
   "engine_version": "v2.33.2",
   "rust_release": "1.85.0",
   "interval_ms": 10,
   "source_inputs": {
-    "rust_sources_sha256": "cf3cfab28fda062a97055abcff16055ecd8bbe861f2f737589ca6fead2d46269",
-    "cargo_lock_sha256": "83050bba49e434ee4b24fbaa5a64ca367c52d2b29f4a8ae984d1d18113dbc692",
+    "rust_sources_sha256": "580553ebc8a74ff2b03342fa3b126a1f267d7939af3bd73678ccc2ec6535fdfa",
+    "cargo_lock_sha256": "c481d8d515916a28e34e00cf2fa1c2564043fc589fd3edf01a5596557e7269d0",
     "sampler_sha256": "7e5d83edfcf064ac57656089997fae5e8456dce8a47c2cb1992b20872deccd25",
-    "wrapper_sha256": "ded3138c865aef9f2af2fc30c009b711755c7877f9624fa1681f0f6f4136483a",
+    "wrapper_sha256": "dcb60574818e3c51726ce7c15bc6fe207ce898cdce46125a97d127b70eeadb1a",
     "observer_activity_sha256": "f8ca7901ddf906b7ae640c9489ab7a643c32cc5b107f1898ccffb45aec3ef172",
     "darwin_reader_source_sha256": "8f2f1a90d91715941854558136bb26944c3f54c9843ec6613b8bae532fe0c51f",
     "darwin_reader_binding_sha256": "fd3c339457be1f3dcef18a26c08e043eba573da9a0b2aec9e803cfc4e43bb1e0"

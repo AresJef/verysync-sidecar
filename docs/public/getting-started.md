@@ -11,11 +11,11 @@ Read the device identity and status before making any changes. When you later
 submit a change, an accepted reply confirms that VerySync received it. Read back
 the settings to check what changed. A file or scan result needs its own observation.
 
-Install the stable 0.1.0 release from crates.io.
+Install the stable 0.1.1 release from crates.io.
 
 ```toml
 [dependencies]
-verysync-sidecar = "0.1.0"
+verysync-sidecar = "0.1.1"
 ```
 
 During local development a path dependency or reviewed pinned Git revision can
@@ -162,17 +162,17 @@ resume/pause configuration and unregisters while retaining files. It reports
 configuration readbacks and does not claim peer-transfer completion. It leaves
 the explicitly chosen engine running.
 
-For an SDK-owned process, see [Managed instances](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/managed-instances.md). For
-changes and progress, see [Event subscriptions](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/events.md) and
-[Long-running operations](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/long-running-operations.md). The crate also provides
-explicit [peer and sharing controls](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/sharing.md),
-[file downloads](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/file-transfers.md) and [program upgrades](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/program-upgrades.md).
-The linked guides explain each action for the published 0.1.0 release.
+For an SDK-owned process, see [Managed instances](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/managed-instances.md). For
+changes and progress, see [Event subscriptions](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/events.md) and
+[Long-running operations](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/long-running-operations.md). The crate also provides
+explicit [peer and sharing controls](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/sharing.md),
+[file downloads](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/file-transfers.md) and [program upgrades](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/program-upgrades.md).
+The linked guides explain each action for the published 0.1.1 release.
 
 The six standard native profiles for VerySync v2.33.2 include macOS, Linux
 and Windows on AMD64 and ARM64. The tests exercised Unix sockets on macOS
 and Linux, selected loopback HTTP setups, and the fixed engine's native HTTPS
-listener described above. Check [Platform validation](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/platform-validation.md)
+listener described above. Check [Platform validation](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/platform-validation.md)
 for the tested system builds, controller/engine pairings and additional
 environments. Authorized Local-API writes, Pro features and official enterprise
-control have their own [scope and prerequisites](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/licenses.md).
+control have their own [scope and prerequisites](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/licenses.md).
