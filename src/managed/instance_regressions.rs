@@ -318,6 +318,8 @@ async fn deep_repair_pipe_is_refused_before_start_and_lease_can_be_reacquired() 
 #[tokio::test]
 #[ignore = "requires the explicitly prepared isolated engine fixture"]
 async fn deep_repair_macos_state_and_backup_refuse_inherited_read_grants() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use std::io::ErrorKind;
     use std::os::unix::fs::MetadataExt;
     use std::process::Command;
 
@@ -347,22 +349,48 @@ async fn deep_repair_macos_state_and_backup_refuse_inherited_read_grants() -> Te
     std::fs::write(state.join("sample.bin"), sample)?;
     assert_eq!(core.shutdown(Duration::from_secs(10)).await?.code, Some(0));
     let rejected_backup = parent.join("backup");
-    assert!(matches!(
-        core.backup_state(StateBackupOptions::new(&rejected_backup)?)
-            .await,
-        Err(Error::LocalIo { .. })
-    ));
-    assert!(!rejected_backup.join("sample.bin").exists());
+    let error = core
+        .backup_state(StateBackupOptions::new(&rejected_backup)?)
+        .await
+        .unwrap_err();
+    let Error::LocalIo { source, .. } = &error else {
+        return Err("the backup destination must fail the private access check".into());
+    };
+    assert_eq!(source.kind(), ErrorKind::PermissionDenied);
+    let destination = match std::fs::symlink_metadata(&rejected_backup) {
+        Err(error) if error.kind() == ErrorKind::NotFound => "absent",
+        Err(error) => return Err(error.into()),
+        Ok(metadata) => {
+            assert!(metadata.is_dir());
+            let entries =
+                std::fs::read_dir(&rejected_backup)?.collect::<std::io::Result<Vec<_>>>()?;
+            assert!(entries.is_empty());
+            "empty"
+        }
+    };
     let clean_backup = fixture.path().join("private-backup");
     let backed_up = core
         .backup_state(StateBackupOptions::new(&clean_backup)?)
         .await?;
+    let manifest = backed_up.info().manifest_sha256;
+    let reopened = StateBackup::open(&clean_backup, manifest, Duration::from_secs(10)).await?;
+    let expected_sample = Sha256::digest(sample);
+    assert_eq!(
+        Sha256::digest(std::fs::read(clean_backup.join("data").join("sample.bin"))?),
+        expected_sample
+    );
     let restored = fixture.path().join("restored");
-    backed_up
+    reopened
         .restore_to(&restored, Duration::from_secs(10))
         .await?;
-    assert_eq!(std::fs::read(restored.join("sample.bin"))?, sample);
-    assert_eq!(std::fs::read(state.join("sample.bin"))?, sample);
+    assert_eq!(
+        Sha256::digest(std::fs::read(restored.join("sample.bin"))?),
+        expected_sample
+    );
+    assert_eq!(
+        Sha256::digest(std::fs::read(state.join("sample.bin"))?),
+        expected_sample
+    );
     let after = Command::new("/bin/ls").arg("-led").arg(&parent).output()?;
     assert!(after.status.success());
     assert_eq!(std::fs::metadata(&parent)?.mode() & 0o777, 0o700);
@@ -375,5 +403,15 @@ async fn deep_repair_macos_state_and_backup_refuse_inherited_read_grants() -> Te
     };
     assert_eq!(acl_lines(before.stdout), acl_lines(after.stdout));
     println!("macOS lifecycle ACL evidence: refused state before locks or keys, refused destination before copied bytes, ordinary backup and file-preserving restore passed");
+    println!(
+        "macOS rejected backup evidence: {}",
+        serde_json::json!({
+            "destination":destination, "entries":0, "permission_kind":"PermissionDenied",
+            "source":source.to_string(), "display":error.to_string(), "debug":format!("{error:?}"),
+            "manifest_sha256":manifest.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+            "sample_sha256":format!("{expected_sample:x}"), "verified_content":"data/sample.bin",
+            "original_preserved":true, "reopened_and_restored":true, "parent_acl_preserved":true
+        })
+    );
     Ok(())
 }

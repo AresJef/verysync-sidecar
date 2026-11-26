@@ -4832,6 +4832,13 @@ async fn folder_remove_keep_files_checks_identity_existence_and_absence_readback
             .1,
         ""
     );
+    println!(
+        "candidate feedback: {}",
+        serde_json::json!({
+            "case":"unregister-success", "configuration_absent":removed.configuration_absent,
+            "original_deletes":deletes.len(), "replacement_deletes":0, "requests":requests.len()
+        })
+    );
     Ok(())
 }
 
@@ -4930,13 +4937,13 @@ async fn unregister_reports_unknown_when_either_readback_identity_check_finds_a_
         let Error::MutationOutcomeUnknown {
             operation: "read back unregistered folder",
             source,
-        } = error
+        } = &error
         else {
             return Err("changed readback identity must remain an unknown mutation".into());
         };
-        assert!(matches!(*source,
+        assert!(matches!(source.as_ref(),
             Error::IdentityMismatch { expected, actual }
-            if expected == DeviceId::parse(ID)? && actual == DeviceId::parse(REPLACEMENT)?
+            if *expected == DeviceId::parse(ID)? && *actual == DeviceId::parse(REPLACEMENT)?
         ));
         bridge.await??;
         let sent = old.finish().await?;
@@ -4954,6 +4961,17 @@ async fn unregister_reports_unknown_when_either_readback_identity_check_finds_a_
             .contains(&format!("x-api-key: {KEY}")));
         assert_eq!(std::fs::read(&sample)?, b"synthetic file that stays local");
         println!("Folder unregister evidence: replacement after_snapshot={replace_after_snapshot}, original DELETE count=1, replacement DELETE count=0, readback unknown, sample preserved.");
+        assert_unregister_feedback(
+            &error,
+            if replace_after_snapshot {
+                "unregister-identity-after-readback"
+            } else {
+                "unregister-identity-before-readback"
+            },
+            &sent,
+            &received,
+            true,
+        );
     }
     Ok(())
 }
@@ -4961,36 +4979,107 @@ async fn unregister_reports_unknown_when_either_readback_identity_check_finds_a_
 #[tokio::test]
 async fn unregister_readback_failure_remains_unknown_without_a_second_delete() -> TestResult {
     let same = || Reply::json(serde_json::json!({"myID":ID}));
-    let folder = serde_json::json!({"id":"retained","label":"Retained","path":"/synthetic/target","paused":true});
-    let mut unavailable = Reply::json(serde_json::json!({"error":"unavailable"}));
-    unavailable.status = 503;
-    let server = ScriptedServer::start(vec![
-        Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
-        same(),
-        same(),
-        Reply::json(serde_json::json!({"folders":[folder]})),
-        Reply::json(serde_json::json!({})),
-        same(),
-        unavailable,
-    ])
-    .await?;
-    let client = Client::connect(server.options()?).await?;
-    let error = client
-        .remove_folder_keep_files(&verysync_sidecar::FolderId::parse("retained")?)
-        .await
-        .unwrap_err();
-    assert!(matches!(error, Error::MutationOutcomeUnknown { source, .. }
-        if matches!(source.as_ref(), Error::Http { response } if response.status() == 503)));
-    assert_eq!(
-        server
-            .finish()
-            .await?
-            .iter()
-            .filter(|line| line.starts_with("DELETE "))
-            .count(),
-        1
-    );
+    let data = tempfile::tempdir()?;
+    let sample = data.path().join("retained.bin");
+    std::fs::write(&sample, b"synthetic file that stays local")?;
+    let private_path = data.path().to_str().ok_or("synthetic path is not UTF-8")?;
+    for acknowledged in [false, true] {
+        let folder = serde_json::json!({"id":"retained","label":"Retained","path":private_path,"paused":true});
+        let mut unavailable = Reply::json(serde_json::json!({
+            "error":KEY, "cookie":"synthetic-cookie-value", "path":private_path
+        }));
+        unavailable.status = 503;
+        let mut replies = vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            same(),
+            same(),
+            Reply::json(serde_json::json!({"folders":[folder]})),
+        ];
+        if acknowledged {
+            replies.extend([Reply::json(serde_json::json!({})), same()]);
+        }
+        replies.push(unavailable);
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let error = client
+            .remove_folder_keep_files(&verysync_sidecar::FolderId::parse("retained")?)
+            .await
+            .unwrap_err();
+        let operation = if acknowledged {
+            "read back unregistered folder"
+        } else {
+            "unregister folder"
+        };
+        assert!(
+            matches!(&error, Error::MutationOutcomeUnknown { operation: actual, source }
+            if *actual == operation && matches!(source.as_ref(), Error::Http { response } if response.status() == 503))
+        );
+        let shown = format!(
+            "{error} {error:?} {}",
+            std::error::Error::source(&error).ok_or("missing HTTP cause")?
+        );
+        assert!(!shown.contains(private_path));
+        assert_eq!(std::fs::read(&sample)?, b"synthetic file that stays local");
+        let requests = server.finish().await?;
+        assert_eq!(requests.len(), if acknowledged { 7 } else { 5 });
+        assert_unregister_feedback(
+            &error,
+            if acknowledged {
+                "unregister-readback-503"
+            } else {
+                "unregister-delete-503"
+            },
+            &requests,
+            &[],
+            acknowledged,
+        );
+    }
     Ok(())
+}
+
+fn assert_unregister_feedback(
+    error: &Error,
+    case: &str,
+    original: &[String],
+    replacement: &[String],
+    acknowledged: bool,
+) {
+    let count_deletes = |requests: &[String]| {
+        requests
+            .iter()
+            .filter(|request| request.starts_with("DELETE "))
+            .count()
+    };
+    assert_eq!(count_deletes(original), 1);
+    assert_eq!(count_deletes(replacement), 0);
+    let cause = std::error::Error::source(error).expect("unregistration must preserve its cause");
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    let shown = format!("{display} {debug} {cause}");
+    for private in [KEY, "synthetic-cookie-value", "/synthetic/target"] {
+        assert!(!shown.contains(private));
+    }
+    println!(
+        "candidate feedback: {}",
+        serde_json::json!({
+            "case":case, "type":"MutationOutcomeUnknown", "display":display,
+            "debug":debug, "cause":cause.to_string(), "cause_debug":format!("{cause:?}"),
+            "original_deletes":count_deletes(original), "replacement_deletes":count_deletes(replacement),
+            "original_requests":original.len(), "replacement_requests":replacement.len(),
+            "sample_preserved":true
+        })
+    );
+    assert_eq!(
+        display.contains("acknowledged the request to unregister the folder"),
+        acknowledged
+    );
+    if acknowledged {
+        assert!(display.contains("We could not confirm whether the folder is still registered"));
+        assert!(display.contains(
+            "Check the folder list on that device before sending another removal request"
+        ));
+    }
+    assert_eq!(debug, format!("Error({display})"));
 }
 
 #[tokio::test]

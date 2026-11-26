@@ -717,8 +717,36 @@ async fn scan_requests_are_explicit_and_paused_targets_reject_before_post() -> T
         client.observe_next_scan(&id).await,
         Err(Error::ScanNotIdle)
     ));
+    assert!(matches!(
+        client
+            .request_scan_subpaths(&id, &[verysync_sidecar::TargetPath::local("sample.bin")])
+            .await,
+        Err(Error::ScanNotIdle)
+    ));
+    server.state.folder_paused.store(false, Ordering::SeqCst);
+    *server.state.folder_state.lock().unwrap() = "scanning".to_owned();
+    assert_eq!(
+        client.folder_status(&id).await?.state,
+        Some(verysync_sidecar::FolderState::Scanning)
+    );
+    let error = client.observe_next_scan(&id).await.unwrap_err();
+    assert!(matches!(error, Error::ScanNotIdle));
     assert_eq!(server.state.scan_requests.load(Ordering::SeqCst), 1);
-    server.finish().await
+    server.finish().await?;
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    assert!(std::error::Error::source(&error).is_none());
+    assert!(!format!("{display} {debug}").contains(KEY));
+    println!(
+        "candidate feedback: {}",
+        json!({
+            "case":"busy-observe-next-scan", "type":"ScanNotIdle", "display":display,
+            "debug":debug, "cause":null, "additional_scan_posts":0, "normal_scan_posts":1
+        })
+    );
+    assert!(display.contains("If it is busy, wait for the current activity to finish"));
+    assert_eq!(debug, format!("Error({display})"));
+    Ok(())
 }
 
 #[tokio::test]

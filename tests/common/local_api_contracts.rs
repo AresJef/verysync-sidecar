@@ -314,16 +314,39 @@ async fn local_api_paused_or_invalid_scope_never_submits_a_scan() -> TestResult 
     .await?;
     let client = LocalApiClient::connect(options(&server)?).await?;
     let id = FolderId::parse("local-folder")?;
-    assert!(matches!(
-        client.request_scan(&id, &SelectiveScope::FolderRoot).await,
-        Err(Error::ScanNotIdle)
-    ));
+    let error = client
+        .request_scan(&id, &SelectiveScope::FolderRoot)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::ScanNotIdle));
     let invalid = SelectiveScope::Path(TargetPath::remote(PathStyle::Unix, "../outside")?);
     assert!(matches!(
         client.request_scan(&id, &invalid).await,
         Err(Error::InvalidPath { .. })
     ));
-    assert_eq!(server.finish().await?.len(), 4);
+    let requests = server.finish().await?;
+    assert_eq!(requests.len(), 4);
+    let posts = requests
+        .iter()
+        .filter(|request| request.starts_with("POST "))
+        .count();
+    assert_eq!(posts, 0);
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    let cause = std::error::Error::source(&error);
+    assert!(cause.is_none());
+    assert!(!format!("{display} {debug}").contains(KEY));
+    println!(
+        "candidate feedback: {}",
+        serde_json::json!({
+            "case":"paused-local-api-scan", "type":"ScanNotIdle", "display":display,
+            "debug":debug, "cause":null, "scan_posts":posts, "requests":requests.len()
+        })
+    );
+    assert!(display.contains("If it is paused"));
+    assert!(display.contains("resume it only when you want scanning to continue"));
+    assert!(display.contains("If it is busy"));
+    assert_eq!(debug, format!("Error({display})"));
     Ok(())
 }
 

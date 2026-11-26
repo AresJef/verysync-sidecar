@@ -422,7 +422,7 @@ impl fmt::Display for Error {
                 return write!(formatter, "The program download source returned HTTP {status}. Check the source for the selected version."),
             Self::EventSubscriptionFailure => "Reading events stopped. Read the current state before starting another subscription.",
             Self::EventGenerationChanged => "VerySync's reported start time changed while reading events. Read the current state before using the event history.",
-            Self::ScanNotIdle => "The folder is active, so the next scan cannot be identified separately. Wait for the folder to become idle before observing a new scan.",
+            Self::ScanNotIdle => "The folder is not ready for a new scan. Check its status on the selected device. If it is paused, resume it only when you want scanning to continue. If it is busy, wait for the current activity to finish.",
             Self::UnlistedProgramVersion => "The selected program version has no verified download in the catalog. Select a listed version or verify a local program explicitly.",
             Self::UnsupportedProgramTarget { .. } => "The catalog has no verified download for the selected system, processor and build. Review the supported targets.",
             Self::ShareKeyRejected { .. } => "VerySync declined the sharing key. Check the key and the permissions it grants on the selected instance.",
@@ -597,6 +597,8 @@ fn explain_unknown_outcome(formatter: &mut fmt::Formatter<'_>, operation: &str) 
             "Some or all of the selected files may have been removed. Check what remains on the selected device before requesting another deletion.",
         "create resource directory" =>
             "The folder may already exist. Check the selected destination on the device before trying again.",
+        "read back unregistered folder" =>
+            "The original device acknowledged the request to unregister the folder. We could not confirm whether the folder is still registered. Check the folder list on that device before sending another removal request.",
         "restore archived directory versions" | "restore explicit file versions" =>
             "The restore may have written some files. Check the destination on the selected device and preserve any files you still need before trying again.",
         GRACEFUL_SHUTDOWN_OPERATION =>
