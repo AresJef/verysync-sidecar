@@ -80,7 +80,10 @@ CANDIDATE_ACTION_JOBS = {
             "Require frozen resource limits and exact candidate identity",
             "Require exact owned-program cleanup",
             "Preserve sanitized raw measurements and immutable group records",
-        ) for name in NATIVE_TARGETS},
+        ) + ((
+            "Calibrate the Intel resident peak bounds against owned synthetic processes",
+            "Remove the exact Intel observer build directory",
+        ) if name == "macos-amd64-standard" else ()) for name in NATIVE_TARGETS},
         RESOURCE_PLAN: ("Select the frozen resource profiles",),
     },
     "windows_amd64_packets": {

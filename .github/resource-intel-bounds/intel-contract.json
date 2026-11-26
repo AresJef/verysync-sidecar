@@ -1,0 +1,22 @@
+{
+  "id": "VS045-intel-rss-bounds-stable-0.1.1",
+  "scope": "macos-amd64-standard on native Intel macOS 15",
+  "resource_protocol_sha256": "0f7a60100d76bed6c07b6aa0746a1a44756d81139d880a00f916aaf03226d479",
+  "engine_sha256": "531b6df93546b591080025007a141be51a4c63be94900bf86b50555db149c182",
+  "observer_inputs": {
+    "calibrate.py": "0022b2beabd5dc07c6aedb2239e0efcc38f294e14d65737e2976b9752dfa4119",
+    "check_calibration.py": "521bc415cc89d74fb8091a4b14d6865f62fea9c8c82f2d2b92857b44add1766a",
+    "check_package.py": "098cc622eeccd0591bdd910bd6031dc8300feaa1c93385dc3dfa7627bf87594d",
+    "measure_cycles.py": "0db27e925b4f040304785c48f33abd8567f84fe8eed0f51eaf576003ecafe930",
+    "observe.py": "67ef700035dcd8b4256472d58e0d527696451d8dcb2b5f1a03d47ca6d972d924",
+    "probe/rss_worker.c": "390865c1f9033a32467e00689ba26091a9d2eb9eb6272e1a906a03e916b5df93",
+    "probe/run_probe.py": "6e8cc5e07c25b35abe11221c94d387ddd4d0eb83f7c311fd82f66252e4f8d88b",
+    "read-peak.c": "df809d519ea5509d94b225fb043d12037728fbecdee72d2908417034b4740ad0",
+    "rss_limits.py": "928ed10752c6d1acd82c1adf222c32b3cc30edacd3d56175c37993a5b907de29",
+    "run.sh": "de76d8d899a8e65f1d3044eb379cbc6f3a28545f4fb5ca8ec84250b66960178b",
+    "test_gate.py": "55245cff5e85156b5ae2a8bb611043c4b7f3379b426f1933cd08aafc4d65e73c"
+  },
+  "historical_method_run": "https://github.com/AresJef/verysync-sidecar/actions/runs/44906299987/job/136852498144",
+  "method": "Use definite-window RSS observations as the lower bound and the verified same-process historical resident peak as the upper bound. Keep every periodic observation and original coverage decision. Only a gap-only rejection can use bounded evidence with all other quality and identity checks satisfied.",
+  "limits": "Retain the original native workloads, two complete preparation orders, four formal and two independent cycles, the original duration, overhead and attempt limits, and conservative thresholds of 16 MiB across file sizes and 8 MiB for repeats."
+}

@@ -26,6 +26,7 @@ on:
       - scripts/resource-test-requirements.txt
       - scripts/tests/test_resource_*.py
       - .github/workflows/resource-collection.yml
+      - .github/resource-intel-bounds/**
   workflow_dispatch:
   push:
     branches: ['ci/formal-candidate/**']
@@ -77,6 +78,7 @@ jobs:
         shell: bash
     env:
       TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      RESOURCE_PROFILE: ${{ matrix.package }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -117,33 +119,53 @@ jobs:
           --evidence-dir "${{ runner.temp }}/vs-resource-clock-calibration"
       - name: Build the exact release workload before acquisition
         run: cargo +"$TEST_TOOLCHAIN" test --release --no-run --features engine-tests,download --test resource_usage_engine --locked
+      - name: Calibrate the Intel resident peak bounds against owned synthetic processes
+        if: matrix.package == 'macos-amd64-standard'
+        run: |
+          python -B .github/resource-intel-bounds/test_gate.py
+          bash .github/resource-intel-bounds/run.sh calibrate
       - name: Require complete fresh-process preparation on this actual profile
-        run: >-
-          python scripts/preflight-native-resources.py
-          --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
-          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-resource-v25-pretrial"
+        run: |
+          if [ "$RESOURCE_PROFILE" = macos-amd64-standard ]; then
+            bash .github/resource-intel-bounds/run.sh prepare
+          else
+            python scripts/preflight-native-resources.py \
+              --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN" \
+              --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')" \
+              --evidence-dir "${{ runner.temp }}/vs-resource-v25-pretrial"
+          fi
       - name: Collect four formal and two independent original-order cycles
         id: collection
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'resource-formal')
-        run: >-
-          python scripts/collect-native-resources.py --stage all
-          --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN"
-          --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')"
-          --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v25"
+        run: |
+          if [ "$RESOURCE_PROFILE" = macos-amd64-standard ]; then
+            bash .github/resource-intel-bounds/run.sh collect
+          else
+            python scripts/collect-native-resources.py --stage all \
+              --protocol tests/fixtures/resource-protocol.json --toolchain "$TEST_TOOLCHAIN" \
+              --cargo "$(python -c 'import shutil; print(shutil.which("cargo"))')" \
+              --evidence-dir "${{ runner.temp }}/vs-frozen-resource-v25"
+          fi
       - name: Require frozen resource limits and exact candidate identity
         if: steps.collection.outcome == 'success'
-        run: >-
-          python scripts/check-native-resource-profile.py --profile "${{ matrix.package }}"
-          --protocol tests/fixtures/resource-protocol.json
-          --collection "${{ runner.temp }}/vs-frozen-resource-v25"
-          --preparation "${{ runner.temp }}/vs-resource-v25-pretrial"
-          --output "${{ runner.temp }}/vs-resource-verdict"
-          --source "$(git rev-parse HEAD)" --tree "$(git rev-parse 'HEAD^{tree}')"
-          --engine-sha256 "$VERYSYNC_TEST_BINARY_SHA256"
+        run: |
+          if [ "$RESOURCE_PROFILE" = macos-amd64-standard ]; then
+            bash .github/resource-intel-bounds/run.sh verify
+          else
+            python scripts/check-native-resource-profile.py --profile "${{ matrix.package }}" \
+              --protocol tests/fixtures/resource-protocol.json \
+              --collection "${{ runner.temp }}/vs-frozen-resource-v25" \
+              --preparation "${{ runner.temp }}/vs-resource-v25-pretrial" \
+              --output "${{ runner.temp }}/vs-resource-verdict" \
+              --source "$(git rev-parse HEAD)" --tree "$(git rev-parse 'HEAD^{tree}')" \
+              --engine-sha256 "$VERYSYNC_TEST_BINARY_SHA256"
+          fi
       - name: Require exact owned-program cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Remove the exact Intel observer build directory
+        if: always() && env.VERYSYNC_INTEL_BOUNDS_BUILD != ''
+        run: bash .github/resource-intel-bounds/run.sh cleanup
       - name: Preserve sanitized raw measurements and immutable group records
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -174,3 +196,4 @@ jobs:
             ${{ runner.temp }}/vs-resource-v25-pretrial/**/safe-error.json
             ${{ runner.temp }}/vs-resource-v25-pretrial/**/console.log
             ${{ runner.temp }}/vs-resource-v25-pretrial/pretrial-result.json
+            ${{ runner.temp }}/vs-intel-resource-bounds/
