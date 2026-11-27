@@ -48,6 +48,8 @@ pub use upgrade_observation::{
     UpgradeProgramMatch, UpgradeProgramObservation, UpgradeProgramUncertainty,
 };
 
+const PROGRAM_CACHE_MARKER: &str = ".verysync-sidecar-cache-v1";
+
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 

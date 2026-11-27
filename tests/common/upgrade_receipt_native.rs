@@ -103,17 +103,28 @@ fn original_receipt(name: &str, receipt: &UpgradeReceipt, error: &Error) -> Test
     )
 }
 
-// One calibration process outside the recovery window. It runs the immutable
-// test-source executable, never the selected program being reconciled.
-fn calibrate_process_creation(name: &str, stage: &str, fixed: &Path) -> TestResult {
-    let mut child = std::process::Command::new(fixed)
-        .arg("--version")
+// Libtest's listing mode runs no tests and creates no engine state. It gives
+// the external observer a real short-lived child on both sides of the window.
+fn calibrate_process_creation(name: &str, stage: &str) -> TestResult {
+    let mut child = std::process::Command::new(std::env::current_exe()?)
+        .arg("--list")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()?;
     let id = child.id();
-    assert!(child.wait()?.success());
-    receipt_event(name, stage, serde_json::json!({"pid": id}))
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            assert!(status.success(), "libtest list mode failed");
+            return receipt_event(name, stage, serde_json::json!({"pid": id}));
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill()?;
+            child.wait()?;
+            return Err("the isolated calibration child exceeded its deadline".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 async fn verify_comparison(
@@ -131,8 +142,7 @@ async fn verify_comparison(
     assert_eq!(hash(program)?, digest);
     assert_eq!(receipt.outcome(), UpgradeOutcome::Unknown);
     let seen = requests.load(Ordering::SeqCst);
-    let calibration = pinned_program()?;
-    calibrate_process_creation(name, "calibration-child", &calibration)?;
+    calibrate_process_creation(name, "calibration-child")?;
     receipt_event(
         name,
         "begin-recovery",
@@ -154,7 +164,7 @@ async fn verify_comparison(
             "requests_seen": requests.load(Ordering::SeqCst)
         }),
     )?;
-    calibrate_process_creation(name, "calibration-after", &calibration)?;
+    calibrate_process_creation(name, "calibration-after")?;
     assert_eq!(result.comparison, expected, "{:?}", result.source);
     assert_eq!(result.original_outcome, UpgradeOutcome::Unknown);
     assert_eq!(result.operation_id, receipt.operation_id());

@@ -263,6 +263,20 @@ impl UpgradeObservationScope {
             reason: "the selected program or its containing directory changed during observation",
         };
         let parent = self.position.parent().ok_or_else(unstable)?;
+        for ancestor in parent.ancestors() {
+            match fs::symlink_metadata(ancestor.join(super::PROGRAM_CACHE_MARKER)) {
+                Ok(_) => {
+                    return Err(Error::ProgramRejected {
+                        reason: "a shared program-cache path cannot be used for owned upgrade observation",
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(io_error("check for a shared upgrade program cache", error))
+                }
+            }
+        }
+
         let directory = open_resource(parent, true)?;
         let parent_before = stamp(&directory)?;
         if parent_before.identity != self.parent_identity {

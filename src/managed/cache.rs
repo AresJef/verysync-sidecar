@@ -1,6 +1,6 @@
 //! Immutable program generations with a cross-process preparation lock and atomic index.
 
-use super::{download, native};
+use super::{download, native, PROGRAM_CACHE_MARKER};
 use crate::{DownloadOptions, Error, LocalProgram, OfficialProgram, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,6 @@ use std::{
 use tokio::sync::oneshot;
 use url::Url;
 
-const MARKER: &str = ".verysync-sidecar-cache-v1";
 const MAX_PROGRAM: u64 = 256 * 1024 * 1024;
 
 /// Whether a cache miss may explicitly fetch the selected fixed official asset.
@@ -199,7 +198,7 @@ fn lookup(
     deadline: Instant,
 ) -> Result<Lookup> {
     check(&cancelled, deadline)?;
-    let marker = root.join(MARKER);
+    let marker = root.join(PROGRAM_CACHE_MARKER);
     let created = match fs::symlink_metadata(root) {
         Ok(metadata) => {
             if !metadata.is_dir() || metadata.file_type().is_symlink() {

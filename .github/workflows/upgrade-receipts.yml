@@ -3,7 +3,7 @@ name: Upgrade receipts and read-only recovery
 on:
   push:
     branches:
-      - 'ci/upgrade-receipts-round-20261127'
+      - 'ci/upgrade-receipts-round-20261127*'
       - 'ci/formal-candidate/upgrade-receipts-*'
   workflow_dispatch:
 
@@ -133,7 +133,11 @@ jobs:
             cp "$trace/observer.stderr" "$raw/observer.stderr"
           fi
           python scripts/trace-upgrade-recovery.py --verify --trace "$trace/intermediate.json" \
-            --log "$raw/upgrade-engine.log" --output "$raw/independent-process-witness.json" || result=1
+            --log "$raw/upgrade-engine.log" --output "$raw/independent-process-witness.json" \
+            --scoped-trace "$raw/owned-process-events.json" || result=1
+          if [ -f "$trace/intermediate.json" ]; then
+            rm "$trace/intermediate.json"
+          fi
           exit "$result"
       - name: Compare the three original upgrade routes and their data effects
         if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''

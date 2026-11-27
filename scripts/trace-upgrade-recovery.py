@@ -150,12 +150,24 @@ def read_test_rows(path):
     return rows
 
 
+def scoped_events(rows, events):
+    lineage = {row["pid"] for row in rows}
+    owned = []
+    for item in sorted(events, key=lambda event: event["time"]):
+        if item["pid"] in lineage or item["parent"] in lineage or item["parent"] is None:
+            lineage.add(item["pid"])
+            owned.append(item)
+    return owned
+
+
 def check_case(name, rows, events):
     case = [row for row in rows if row["case"] == name]
     stages = {row["stage"]: row for row in case if row["stage"] in {
         "calibration-child", "begin-recovery", "end-recovery", "calibration-after", "original-receipt",
     }}
-    if len(stages) != 5 or len({row["pid"] for row in case}) != 1:
+    if len(stages) != 5 or len({row["pid"] for row in case}) != 1 or any(
+        sum(row["stage"] == stage for row in case) != 1 for stage in stages
+    ):
         raise ValueError(f"{name}: missing same-attempt calibration or recovery boundaries")
     original, before, begin, end, after = (stages[key] for key in [
         "original-receipt", "calibration-child", "begin-recovery", "end-recovery", "calibration-after"
@@ -163,24 +175,20 @@ def check_case(name, rows, events):
     op = original["detail"]["receipt"]["operation_id"]
     if begin["detail"]["operation_id"] != op or end["detail"]["operation_id"] != op:
         raise ValueError(f"{name}: recovery used a receipt from a different attempt")
-    if begin["detail"]["requests_seen"] != end["detail"]["requests_seen"]:
+    if begin["detail"]["requests_seen"] != 1 or end["detail"]["requests_seen"] != 1:
         raise ValueError(f"{name}: recovery sent at least one new request")
     if not before["unix_ns"] <= begin["unix_ns"] < end["unix_ns"] <= after["unix_ns"]:
         raise ValueError(f"{name}: invalid recovery clock")
-    lineage = {begin["pid"]}
-    for item in sorted(events, key=lambda event: event["time"]):
-        if item["parent"] in lineage or item["parent"] is None:
-            lineage.add(item["pid"])
     for control, minimum, maximum in [
         (before, original["unix_ns"], begin["unix_ns"]),
         (after, end["unix_ns"], after["unix_ns"]),
     ]:
         child = control["detail"]["pid"]
-        if child not in lineage or not any(
+        if not any(
             item["pid"] == child and minimum <= item["time"] <= maximum for item in events
         ):
             raise ValueError(f"{name}: observer did not capture the short-lived calibration child {child}")
-    during = [item for item in events if item["pid"] in lineage and
+    during = [item for item in events if
               begin["unix_ns"] - 1_000 <= item["time"] <= end["unix_ns"] + 1_000]
     if during:
         raise ValueError(f"{name}: recovery started a program or child process: {during}")
@@ -202,16 +210,20 @@ def verify(args):
     if not args.trace.is_file():
         raise ValueError("native runner did not produce a process witness")
     evidence = json.loads(args.trace.read_text(encoding="utf-8"))
-    args.trace.unlink()
     reason = evidence["diagnostic"]
+    rows = read_test_rows(args.log)
+    events = scoped_events(rows, evidence["events"])
+    if args.scoped_trace:
+        args.scoped_trace.write_text(json.dumps({
+            **evidence, "events": events,
+        }, indent=2) + "\n", encoding="utf-8")
     if reason or evidence["test_exit"] != 0:
         report = {"coverage": "blocked", "observer": evidence["observer"],
                   "reason": reason or "native product operation did not pass",
                   "test_exit": evidence["test_exit"]}
     else:
         try:
-            rows = read_test_rows(args.log)
-            cases = [check_case(name, rows, evidence["events"]) for name in ["cli-partial", "upload-drop"]]
+            cases = [check_case(name, rows, events) for name in ["cli-partial", "upload-drop"]]
             report = {"coverage": "passed", "observer": evidence["observer"], "cases": cases}
         except ValueError as error:
             report = {"coverage": "blocked", "observer": evidence["observer"], "reason": str(error)}
@@ -226,5 +238,6 @@ if __name__ == "__main__":
         parser.add_argument("--trace", type=Path, required=True)
         parser.add_argument("--log", type=Path, required=True)
         parser.add_argument("--output", type=Path, required=True)
+        parser.add_argument("--scoped-trace", type=Path)
         raise SystemExit(verify(parser.parse_args(sys.argv[2:])))
     raise SystemExit(start(sys.argv[1:]))
