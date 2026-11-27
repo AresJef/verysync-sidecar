@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from hashlib import file_digest
 import argparse
+from importlib.util import module_from_spec, spec_from_file_location
 import json
 import os
 from pathlib import Path
@@ -220,7 +221,7 @@ def prepare(args, out, root, base_env, platform):
                 "run": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
                 "workflow_job_label": f'{args.batch} ({args.platform})'}
     write_json(out / "identity.json", identity)
-    scopes = ("current", "upgrade_source") if args.batch != "I" else ("current",)
+    scopes = ("current", "upgrade_source") if args.batch in ("N1", "N2", "P1") else ("current",)
     engines = {}
     for scope in scopes:
         prepare_log = out / f"prepare-{scope}.log"
@@ -261,6 +262,46 @@ def copy_proxy_receipt(raw_root, case_dir):
         write_json(case_dir / receipt.name, read_json(receipt))
 
 
+def passive_upgrade_state(source, scratch, case, env):
+    """Inspect only the exact owned test tree, after the original child is terminal."""
+    prefix = {"N04a": "vku-", "N04b": "vcl-"}[case]
+    old = Path(env["VERYSYNC_TEST_UPGRADE_SOURCE_BINARY"])
+    known = {env["VERYSYNC_TEST_UPGRADE_SOURCE_SHA256"]: "v2.33.1",
+             env["VERYSYNC_TEST_BINARY_SHA256"]: "v2.33.2"}
+    spec = spec_from_file_location("exact_image_inventory", source / "scripts/prepare-test-engine.py")
+    inventory = module_from_spec(spec)
+    spec.loader.exec_module(inventory)
+    rows = []
+    dirs = sorted(scratch.glob(prefix + "*"))
+    if len(dirs) > 4:
+        raise ValueError("too many directories for the original two-mode upgrade selector")
+    for position, folder in enumerate(dirs, 1):
+        if not folder.is_dir() or folder.is_symlink() or not folder.resolve().is_relative_to(scratch):
+            raise ValueError("unexpected upgrade-owned state path")
+        paths = {"owned_program": folder / old.name,
+                 "retained_sample": folder / "data/retained.bin",
+                 "state_digest": folder / "c/setting.dat",
+                 "diagnostic_output": folder / "cli-upgrade-output.bin"}
+        facts = {}
+        for role, item in paths.items():
+            if not item.is_file() or item.is_symlink() or not item.resolve().is_relative_to(folder):
+                facts[role] = {"present":False}
+                continue
+            size = item.stat().st_size
+            if size > 128 * 1024 * 1024:
+                facts[role] = {"present":True, "bytes":size, "sha256":None}
+                continue
+            checksum = sha(item)
+            facts[role] = {"present":True, "bytes":size, "sha256":checksum}
+            if role == "owned_program":
+                facts[role]["matches_pinned_binary"] = known.get(checksum, "different")
+                facts[role]["owned_process_count"] = len(inventory.owned_processes(str(item)))
+        rows.append({"local_role":f"upgrade-root-{position}", "facts":facts})
+    return {"observed_after_original_process_exit":True, "roots":rows,
+            "active_write_calls":0,"executions_of_inspected_files":0,
+            "scope":"Only exact task-owned fixture paths. No raw settings, keys, or CLI output copied."}
+
+
 def run_case(args, entry, toolchain, env, root, out):
     case_id = entry["id"]
     case_dir = out / case_id
@@ -289,7 +330,17 @@ def run_case(args, entry, toolchain, env, root, out):
     # Save the result before doing any ownership inventory or cleanup.
     write_json(case_dir / "first-result.json", row)
     event(out, "case_first_result", **row)
+    owned_remaining = False
+    if args.batch=="P1":
+        snapshot=passive_upgrade_state(args.product,scratch,case_id,env)
+        write_json(case_dir / "post-exit-passive.json", snapshot)
+        event(out, "post_exit_passive", case=case_id, **snapshot)
+        owned_remaining=any(x["facts"]["owned_program"].get("owned_process_count",0)>0
+                            for x in snapshot["roots"])
     case_cleanup = cleanup(args.product, env, case_dir, "cleanup")
+    if args.batch=="P1":
+        case_cleanup["fixture_programs"]={"status":"failed" if owned_remaining else "passed",
+                                         "protected_by":"post-exit-passive.json"}
     write_json(case_dir / "cleanup.json", case_cleanup)
     row["cleanup"] = case_cleanup
     event(out, "case_cleanup", case=case_id,
@@ -328,14 +379,17 @@ def main():
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--platform", required=True)
-    parser.add_argument("--batch", choices=("N1", "N2", "I"), required=True)
+    parser.add_argument("--batch", choices=("P1",), required=True)
     args = parser.parse_args()
     for name in ("product", "package", "root", "out"):
         setattr(args, name, getattr(args, name).resolve())
     args.out.mkdir(parents=True, exist_ok=False)
     args.root.mkdir(mode=0o700, parents=True, exist_ok=False)
     platform = next(x for x in PLAN["platforms"] if x["package_id"] == args.platform)
-    cases = PLAN["controlled"] if args.batch == "I" else natural_cases(args.platform)
+    selected = set(read_json(HERE / "direction-plan.json")[args.platform])
+    cases = [entry for entry in natural_cases(args.platform) if entry["id"] in selected]
+    if set(e["id"] for e in cases) != selected or not selected <= {"N04a","N04b"}:
+        raise ValueError("unexpected upgrade observation roster")
     event(args.out, "job_entered", batch=args.batch, platform=args.platform, private_root=str(args.root))
     base_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", CARGO_TERM_COLOR="never")
     base_env.pop("VERYSYNC_TEST_GUI_RESTORE_LOST_REPLY", None)
