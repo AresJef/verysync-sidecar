@@ -1,6 +1,6 @@
 [package]
 name = "verysync-sidecar"
-version = "0.1.1"
+version = "0.1.2-rc.1"
 edition = "2021"
 rust-version = "1.85"
 resolver = "3"
@@ -42,6 +42,7 @@ percent-encoding = "2.3.2"
 getrandom = "0.4.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "multipart", "stream"] }
 rmpv = "1.3.1"
+rustls = { version = "=0.23.46", default-features = false, features = ["std"], optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
@@ -61,7 +62,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 
 [features]
 default = ["tls"]
-tls = ["reqwest/rustls"]
+tls = ["reqwest/rustls", "dep:rustls"]
 engine-tests = []
 host-configuration-tests = ["engine-tests"]
 download = ["tls", "dep:flate2", "dep:tar", "dep:rawzip"]
@@ -296,3 +297,8 @@ required-features = ["engine-tests"]
 name = "host_control_engine"
 path = "tests/host_control_engine.rs"
 required-features = ["engine-tests"]
+
+[[test]]
+name = "control_reliability_engine"
+path = "tests/control_reliability_engine.rs"
+required-features = ["engine-tests", "tls"]

@@ -5,6 +5,8 @@ mod archive;
 mod backup;
 mod bootstrap;
 mod command;
+mod control_generation;
+pub use control_generation::{ManagedControlGeneration, ManagedGenerationStatus};
 mod host;
 pub use host::{NativeWatchLimitExit, NativeWatchLimitObservation, NativeWatchLimitOutcome};
 mod completions;

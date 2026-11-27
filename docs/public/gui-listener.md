@@ -115,3 +115,68 @@ Passive listener observations report only bounded counts for the exact owned
 process and whether its owner observed exit. Raw process IDs, addresses and
 paths are omitted from ordinary output. Observation failures remain test
 failures, and missing observations do not imply successful disable.
+
+## Check a listener change after the application restarts
+
+Use a receipt when the original application may close before a listener change
+returns. Before submitting, obtain the expected device ID and plan how the next
+process will reach the device. The native bind authority is the setting to
+change. The connection URL is a separate choice supplied by the host each time,
+with its own HTTPS trust policy.
+
+Start with `Client::prepare_gui_listener_change()`. Pass that single-use
+operation to `execute_gui_listener_change_persisted()` with your application's
+save callback. The callback saves the intent and then the last checkpoint before
+the write. If either save fails, the library does not send the change. Save the
+returned receipt as well. If the application exits during the write or the last
+save fails, the checkpoint can still say the listener may have changed.
+
+After restarting the application, decode the saved receipt with
+`ControlOperationReceipt::decode()`. Create new `ConnectOptions` with an
+endpoint you already trust, the expected device ID, and the credentials your
+host has supplied for that connection. Call `observe_gui_listener()` on the
+receipt. It checks the selected device and reads the current listener settings.
+A matching snapshot confirms what the device reports at the observation time.
+The original acknowledgement remains unknown if it was lost. Another manager
+could have changed the same settings. A borrowed connection also leaves the
+process generation unknown.
+
+The [gui_listener_recovery example](../../examples/gui_listener_recovery.rs)
+shows two independent process invocations:
+
+```sh
+cargo run --example gui_listener_recovery -- submit "$operation_dir" < "$submit_settings"
+cargo run --example gui_listener_recovery -- observe "$operation_dir" < "$observe_settings"
+```
+
+To run the example from your own package, copy it to
+`src/bin/gui_listener_recovery.rs` and use `cargo run --bin gui_listener_recovery`.
+Add `verysync-sidecar`, `serde` with `derive`, `serde_json`, `tempfile`, and
+`tokio` with `macros` and `rt-multi-thread` as direct dependencies. Keep the
+`verysync-sidecar` TLS feature enabled for HTTPS.
+
+Create a fresh directory accessible only to the application user. The example
+checks Unix permission bits. On Windows, use a directory with a caller-only
+access control list. Keep both input files private or have your host pass the
+JSON directly on standard input. Both commands require `endpoint`, `api_key`,
+and `expected_device_id`. The `submit` input also requires the new `bind`
+authority and accepts `use_tls`. Use `ca_pem` for an additional HTTPS trust root
+and `timeout_ms` to change the request deadline. Set the `observe` input's
+endpoint to the connection you have selected for the readback. Use separate
+inputs so the new process can use current credentials and trust.
+
+The example keeps `receipt.json` in the private directory. It syncs each new file
+before replacing the saved checkpoint and syncs the directory on Unix. Keep the
+receipt private because it contains the intended setting. If you opt in with
+`event_log: true` on submit, the separate `events.jsonl` stores up to eight
+progress entries plus a drop count. Repeated adjacent entries are combined. A
+slow or unavailable log does not hold up the change, and you can remove the log
+independently of the receipt.
+
+Submit exits with code 2 if the listener may have changed without a confirmed
+acknowledgement. Run observe with a trusted endpoint before making another
+change. Observe exits with code 0 when it reads the original device, even when
+the settings differ. Inspect `requested_fields_match` for the comparison.
+If the receipt is unreadable, the endpoint is unreachable or the connected
+device has a different identity, keep the receipt and check the host's endpoint,
+trust and credentials.

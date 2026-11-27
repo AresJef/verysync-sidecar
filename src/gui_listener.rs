@@ -269,7 +269,7 @@ impl GuiListenerPatch {
         }
         Ok(body.into())
     }
-    fn matches(&self, actual: &GuiListenerConfig) -> bool {
+    pub(crate) fn matches(&self, actual: &GuiListenerConfig) -> bool {
         self.enabled.is_none_or(|v| v == actual.enabled)
             && self.use_tls.is_none_or(|v| v == actual.use_tls)
             && self

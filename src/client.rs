@@ -3,6 +3,8 @@
 mod auxiliary_control;
 mod auxiliary_maintenance;
 mod configuration_control;
+mod control_identity;
+mod control_recovery;
 mod default_versioning;
 mod device_control;
 mod device_ignore;
@@ -51,6 +53,8 @@ use crate::{
     Result, SystemStatus, BASELINE_ENGINE_VERSION,
 };
 use crate::{RawRequest, RawResponse, RequestEffect};
+pub use control_identity::ControlIdentityObservation;
+pub use control_recovery::GuiListenerRecovery;
 pub use local_api::{
     LocalApiClient, LocalApiConnectOptions, LocalApiExitAcknowledgement, LocalApiExitAction,
     LocalApiFolder, LocalApiFolderCollectionUpdate, LocalApiHardware, LocalApiHistoryFilter,
@@ -1148,11 +1152,22 @@ impl<Authorization: RequestAuthorization> Connection<Authorization> {
         body: Option<&serde_json::Value>,
         mutation: bool,
     ) -> Result<(u16, Vec<u8>)> {
-        let mut request = self.key.authorize(self.http.request(method, url));
-        if let Some(body) = body {
-            request = request.json(body);
-        }
+        let request = self.authorized_request(method, url, body);
         self.request_prepared(operation, request, mutation).await
+    }
+
+    fn authorized_request(
+        &self,
+        method: reqwest::Method,
+        url: Url,
+        body: Option<&serde_json::Value>,
+    ) -> reqwest::RequestBuilder {
+        let request = self.key.authorize(self.http.request(method, url));
+        if let Some(body) = body {
+            request.json(body)
+        } else {
+            request
+        }
     }
 
     async fn request_prepared(

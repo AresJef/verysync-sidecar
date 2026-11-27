@@ -46,6 +46,8 @@ mod review_history_clock;
 
 #[path = "common/auxiliary_maintenance_contracts.rs"]
 mod auxiliary_maintenance_contracts;
+#[path = "common/control_receipt_contracts.rs"]
+mod control_receipt_contracts;
 #[path = "common/download_progress_contracts.rs"]
 mod download_progress_contracts;
 #[path = "common/gui_listener_contracts.rs"]

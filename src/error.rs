@@ -285,6 +285,11 @@ pub enum Error {
         /// The underlying transport error, without its request URL.
         source: reqwest::Error,
     },
+    /// HTTPS certificate verification rejected the selected recovery endpoint.
+    TlsCertificateRejected {
+        /// The original URL-redacted management transport error.
+        source: Box<Error>,
+    },
     /// A folder identifier cannot be used as a protocol value.
     InvalidFolderId {
         /// A description that excludes the supplied identifier.
@@ -515,6 +520,8 @@ impl fmt::Display for Error {
                 }
                 return write!(formatter, "The connection did not complete the request to {operation}. Check the selected connection.");
             }
+            Self::TlsCertificateRejected { .. } =>
+                "The selected endpoint's HTTPS certificate could not be verified. Check the address and trust settings before trying again.",
             Self::InvalidFolderId { reason } =>
                 return explain(formatter, "The supplied folder ID cannot be used.", reason),
             Self::FolderNotFound { .. } => "The selected folder is not registered on this device. Check the device and folder ID.",
@@ -617,7 +624,8 @@ impl std::error::Error for Error {
         match self {
             Self::LocalIo { source, .. } => Some(source),
             Self::Transport { source, .. } => Some(source),
-            Self::MutationOutcomeUnknown { source, .. } => Some(source.as_ref()),
+            Self::MutationOutcomeUnknown { source, .. }
+            | Self::TlsCertificateRejected { source } => Some(source.as_ref()),
             _ => None,
         }
     }

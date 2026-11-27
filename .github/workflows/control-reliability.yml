@@ -1,0 +1,98 @@
+name: Control reliability
+
+on:
+  push:
+    branches:
+      - 'ci/control-reliability-*'
+      - 'ci/formal-candidate/control-reliability-*'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/control-reliability.yml'
+      - 'src/control_operation.rs'
+      - 'src/client/control_*.rs'
+      - 'src/client/gui_listener.rs'
+      - 'src/managed/control_generation.rs'
+      - 'examples/gui_listener_recovery.rs'
+      - 'tests/control_*.rs'
+      - 'tests/common/control_*.rs'
+      - 'scripts/prepare-control-reliability-consumer.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-reliability-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native:
+    name: Listener recovery (${{ matrix.package }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {package: macos-amd64-standard, runner: macos-15-intel, rust: x86_64-apple-darwin, observe: '1'}
+          - {package: macos-arm64-standard, runner: macos-15, rust: aarch64-apple-darwin, observe: '1'}
+          - {package: windows-amd64-standard, runner: windows-2022, rust: x86_64-pc-windows-msvc, observe: '0'}
+          - {package: windows-arm64-standard, runner: windows-11-arm, rust: aarch64-pc-windows-msvc, observe: '0'}
+          - {package: linux-amd64-standard, runner: ubuntu-24.04, rust: x86_64-unknown-linux-gnu, observe: '1'}
+          - {package: linux-arm64-standard, runner: ubuntu-24.04-arm, rust: aarch64-unknown-linux-gnu, observe: '1'}
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      VERYSYNC_TEST_REQUIRE_DIRECT_REQUEST_CAPTURE: ${{ matrix.observe }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install and identify the native Rust toolchain
+        run: |
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Select separate x64 TLS-peer tooling on Windows ARM
+        if: matrix.package == 'windows-arm64-standard'
+        id: peer_python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+          architecture: x64
+          update-environment: false
+      - name: Prepare the private protocol-peer runtime
+        env:
+          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.peer_python.outputs.python-path }}
+        run: python scripts/prepare-storage-test-environment.py --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Prepare the matching official VerySync v2.33.2 test program
+        run: |
+          mkdir -p "${{ runner.temp }}/control-evidence"
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}" --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV" | tee "${{ runner.temp }}/control-evidence/engine.json"
+      - name: Compile the external recovery application from the exact candidate archive
+        run: >-
+          python scripts/prepare-control-reliability-consumer.py --toolchain "$TEST_TOOLCHAIN"
+          --work "${{ runner.temp }}/control-package-consumer"
+          --evidence "${{ runner.temp }}/control-evidence/consumer" --github-env "$GITHUB_ENV"
+      - name: Require the controlled request counters and receipt contracts
+        run: |
+          cargo +"$TEST_TOOLCHAIN" test --locked --offline --test control_fault_fixture -- --nocapture
+          cargo +"$TEST_TOOLCHAIN" test --locked --offline --test transport_contract control_receipt_contracts -- --nocapture
+      - name: Verify native listener recovery, process ownership and exact write counts
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target control_reliability_engine --evidence-dir "${{ runner.temp }}/control-evidence/native"
+      - name: Confirm no exact task-owned test core remains
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup | tee "${{ runner.temp }}/control-evidence/core-cleanup.log"
+      - name: Archive the candidate consumer and native evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: control-reliability-${{ matrix.package }}
+          path: ${{ runner.temp }}/control-evidence

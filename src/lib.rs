@@ -66,6 +66,7 @@ mod auxiliary;
 mod capabilities;
 mod client;
 mod configuration;
+mod control_operation;
 mod device_options;
 mod devices;
 mod diagnostics_preferences;
@@ -128,16 +129,21 @@ pub use capabilities::{
     InstanceObservation, LibraryCapability, TargetSnapshot, TargetValidation, VerificationStatus,
 };
 pub use client::{
-    Client, ConnectOptions, EngineVersion, InstanceInfo, LocalApiClient, LocalApiConnectOptions,
-    LocalApiExitAcknowledgement, LocalApiExitAction, LocalApiFolder,
-    LocalApiFolderCollectionUpdate, LocalApiHardware, LocalApiHistoryFilter, LocalApiHistoryPage,
-    LocalApiHistoryRecord, LocalApiPeer, LocalApiScanAcknowledgement,
-    LocalApiUpgradeAcknowledgement, VersionCompatibility, VersionPolicy,
+    Client, ConnectOptions, ControlIdentityObservation, EngineVersion, GuiListenerRecovery,
+    InstanceInfo, LocalApiClient, LocalApiConnectOptions, LocalApiExitAcknowledgement,
+    LocalApiExitAction, LocalApiFolder, LocalApiFolderCollectionUpdate, LocalApiHardware,
+    LocalApiHistoryFilter, LocalApiHistoryPage, LocalApiHistoryRecord, LocalApiPeer,
+    LocalApiScanAcknowledgement, LocalApiUpgradeAcknowledgement, VersionCompatibility,
+    VersionPolicy,
 };
 pub use configuration::{
     ConfigurationSectionUpdate, ConfigurationSnapshot, ConfigurationSyncState, ConfigurationUpdate,
     DiskFreeRequirement, DiskSpaceUnit, FolderDefaults, FolderDefaultsPatch, GeneralOptions,
     GeneralOptionsPatch, GuiConfigurationReplacement,
+};
+pub use control_operation::{
+    ControlOperationEvent, ControlOperationKind, ControlOperationReceipt, ControlOperationResult,
+    ControlSubmission, PreparedControlOperation,
 };
 pub use device_options::{DeviceAdvancedConfig, DeviceAdvancedPatch, IntroductionSource};
 pub use devices::{
@@ -230,6 +236,7 @@ pub use managed::{
 };
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
+pub use managed::{ManagedControlGeneration, ManagedGenerationStatus};
 pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
 pub use management_transport::{ManagementProxy, ManagementTransport};
 pub use network::{
