@@ -62,5 +62,26 @@ class UpgradeProcessWitnessTests(unittest.TestCase):
             witness.check_case(name, rows, events)
 
 
+    def test_bracketed_job_counts_and_fork_flags_require_independent_controls(self):
+        name, rows, _ = inputs()
+        windows = [
+            {"case": name, "phase": phase, "pid": 50, "unix_ns": stamp,
+             "observed": {"active": 1, "total": total}}
+            for phase, stamp, total in zip(witness.PHASES, (11_000, 18_000, 31_000, 41_000), (9, 10, 10, 11))
+        ]
+        witness.check_case(name, rows, [], "windows_job_total", windows)
+        windows[2]["observed"]["total"] = 11
+        with self.assertRaisesRegex(ValueError, "zero creation"):
+            witness.check_case(name, rows, [], "windows_job_total", windows)
+        mac = [
+            {**row, "observed": {"fork": index in {1, 3}, "root_exec": False}}
+            for index, row in enumerate(windows)
+        ]
+        witness.check_case(name, rows, [], "darwin_kqueue", mac)
+        mac[0]["pid"] = 100
+        with self.assertRaisesRegex(ValueError, "caller"):
+            witness.check_case(name, rows, [], "darwin_kqueue", mac)
+
+
 if __name__ == "__main__":
     unittest.main()

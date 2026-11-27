@@ -103,6 +103,46 @@ fn original_receipt(name: &str, receipt: &UpgradeReceipt, error: &Error) -> Test
     )
 }
 
+// The fixture brackets real calls with a separate process that reads native
+// accounting. No environment switch affects the candidate SDK operation.
+async fn process_observer_barrier(case: &str, phase: &str) -> TestResult {
+    let Some(root) = std::env::var_os("VERYSYNC_S29_PHASE_DIR").map(PathBuf::from) else {
+        return Ok(());
+    };
+    tokio::time::timeout(Duration::from_secs(12), async {
+        while !root.join("attached").is_file() {
+            if root.join("unavailable").is_file() {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let stem = root.join(format!("{case}-{phase}"));
+        std::fs::File::create_new(stem.with_extension("request"))?;
+        while !stem.with_extension("response").is_file() {
+            if root.join("unavailable").is_file() {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await??;
+    Ok(())
+}
+
+async fn await_process_observer() -> TestResult {
+    let Some(root) = std::env::var_os("VERYSYNC_S29_PHASE_DIR").map(PathBuf::from) else {
+        return Ok(());
+    };
+    tokio::time::timeout(Duration::from_secs(12), async {
+        while !root.join("attached").is_file() && !root.join("unavailable").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
 // Libtest's listing mode runs no tests and creates no engine state. It gives
 // the external observer a real short-lived child on both sides of the window.
 fn calibrate_process_creation(name: &str, stage: &str) -> TestResult {
@@ -142,7 +182,9 @@ async fn verify_comparison(
     assert_eq!(hash(program)?, digest);
     assert_eq!(receipt.outcome(), UpgradeOutcome::Unknown);
     let seen = requests.load(Ordering::SeqCst);
+    process_observer_barrier(name, "before-control").await?;
     calibrate_process_creation(name, "calibration-child")?;
+    process_observer_barrier(name, "begin").await?;
     receipt_event(
         name,
         "begin-recovery",
@@ -164,7 +206,9 @@ async fn verify_comparison(
             "requests_seen": requests.load(Ordering::SeqCst)
         }),
     )?;
+    process_observer_barrier(name, "end").await?;
     calibrate_process_creation(name, "calibration-after")?;
+    process_observer_barrier(name, "after-control").await?;
     assert_eq!(result.comparison, expected, "{:?}", result.source);
     assert_eq!(result.original_outcome, UpgradeOutcome::Unknown);
     assert_eq!(result.operation_id, receipt.operation_id());
@@ -177,6 +221,7 @@ async fn verify_comparison(
 
 #[tokio::test]
 async fn native_same_attempt_observes_previous_after_partial_cli_archive() -> TestResult {
+    await_process_observer().await?;
     let root = tempfile::Builder::new().prefix("u2c").tempdir()?;
     let (mut core, settings, program) = owned_old(root.path(), false).await?;
     let identity = core.client().instance().device_id.clone();
@@ -446,6 +491,7 @@ async fn forwards_until_native_upload_reply(
 
 #[tokio::test]
 async fn native_same_attempt_observes_replacement_after_upload_reply_loss() -> TestResult {
+    await_process_observer().await?;
     let root = tempfile::Builder::new().prefix("u2h").tempdir()?;
     let (mut core, settings, program) = owned_old(root.path(), true).await?;
     let real_endpoint = settings

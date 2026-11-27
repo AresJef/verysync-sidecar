@@ -6,16 +6,12 @@ import os
 from pathlib import Path
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import time
 
-DTRACE = r"""
-dtrace:::BEGIN { printf("ready\n"); }
-proc:::create { printf("%lld %d %d create\n", walltimestamp, args[0]->pr_pid, pid); }
-proc:::exec-success { printf("%lld %d %d exec\n", walltimestamp, pid, ppid); }
-"""
+PHASES = ("before-control", "begin", "end", "after-control")
+CASES = ("cli-partial", "upload-drop")
 
 
 def record_linux(command, root):
@@ -43,85 +39,114 @@ def record_linux(command, root):
     return completed, events, None if events else "no strace process events"
 
 
-def wait_for(predicate, process, timeout=8):
-    until = time.monotonic() + timeout
-    while time.monotonic() < until:
-        if predicate():
-            return True
-        if process.poll() is not None:
-            return False
-        time.sleep(0.05)
-    return False
+class DarwinForkObserver:
+    def __init__(self, pid):
+        import select
+        self.select = select
+        self.queue = select.kqueue()
+        self.control = select.KQ_NOTE_FORK | select.KQ_NOTE_EXEC
+        self.queue.control([select.kevent(
+            pid, select.KQ_FILTER_PROC, select.KQ_EV_ADD | select.KQ_EV_CLEAR, self.control,
+        )], 0, 0)
+
+    def snapshot(self):
+        flags = 0
+        for event in self.queue.control(None, 8, 0):
+            if event.flags & self.select.KQ_EV_ERROR:
+                raise OSError("the owned process kevent returned an error")
+            flags |= event.fflags
+        return {
+            "fork": bool(flags & self.select.KQ_NOTE_FORK),
+            "root_exec": bool(flags & self.select.KQ_NOTE_EXEC),
+        }
+
+    def close(self):
+        self.queue.close()
 
 
-def record_macos(command, root):
-    source = root / "observe.d"
-    source.write_text(DTRACE, encoding="utf-8")
-    console = root / "observer.stderr"
-    rows = root / "observer.local"
-    with console.open("wb") as errors:
-        command_line = ["/usr/bin/sudo", "-n", "/usr/sbin/dtrace", "-q", "-x", "switchrate=10hz", "-s", str(source),
-                        "-o", str(rows)]
-        observer = subprocess.Popen(command_line, stdout=subprocess.DEVNULL, stderr=errors, start_new_session=True)
-        ready = wait_for(lambda: rows.exists() and rows.stat().st_size >= 6, observer)
+class WindowsJobObserver:
+    def __init__(self, pid):
+        import ctypes
+        from ctypes import wintypes
+
+        class Accounting(ctypes.Structure):
+            _fields_ = [
+                (name, ctypes.c_int64) for name in ("user", "kernel", "period_user", "period_kernel")
+            ] + [(name, wintypes.DWORD) for name in ("faults", "total", "active", "terminated")]
+
+        self.ctypes = ctypes
+        self.accounting = Accounting
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel = kernel
+        for name, output, inputs in [
+            ("CreateJobObjectW", wintypes.HANDLE, [ctypes.c_void_p, wintypes.LPCWSTR]),
+            ("OpenProcess", wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
+            ("AssignProcessToJobObject", wintypes.BOOL, [wintypes.HANDLE, wintypes.HANDLE]),
+            ("QueryInformationJobObject", wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]),
+            ("CloseHandle", wintypes.BOOL, [wintypes.HANDLE]),
+        ]:
+            method = getattr(kernel, name)
+            method.restype = output
+            method.argtypes = inputs
+        self.job = kernel.CreateJobObjectW(None, None)
+        if not self.job:
+            raise ctypes.WinError(ctypes.get_last_error())
         try:
-            status = subprocess.call(command)
-        finally:
-            if observer.poll() is None:
-                os.killpg(observer.pid, signal.SIGINT)
+            # The Job API requires SET_QUOTA and TERMINATE rights for admission.
+            # The observer owns only this disposable test process and queries
+            # counts after admission. The Job has no limits or kill-on-close.
+            child = kernel.OpenProcess(0x0101, False, pid)
+            if not child:
+                raise ctypes.WinError(ctypes.get_last_error())
             try:
-                observer.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                os.killpg(observer.pid, signal.SIGTERM)
-                observer.wait(timeout=8)
-                ready = False
-    events = []
-    if rows.exists():
-        for line in rows.read_text(encoding="utf-8").splitlines():
-            match = re.fullmatch(r"(\d+) (\d+) (\d+) (create|exec)", line.strip())
-            if match:
-                stamp, child, parent, event = match.groups()
-                events.append({"time": int(stamp), "pid": int(child), "parent": int(parent), "event": event})
-        rows.unlink()
-    diagnostics = console.read_text(encoding="utf-8", errors="replace").lower()
-    error = None
-    if not ready or not events or re.search(r"\bdrop(?:s|ped)?\b|error|cannot|failed", diagnostics):
-        error = "DTrace not ready, failed or reported missed events"
-    return status, events, error
+                if not kernel.AssignProcessToJobObject(self.job, child):
+                    raise ctypes.WinError(ctypes.get_last_error())
+            finally:
+                kernel.CloseHandle(child)
+        except BaseException:
+            self.close()
+            raise
+
+    def snapshot(self):
+        record = self.accounting()
+        if not self.kernel.QueryInformationJobObject(
+            self.job, 1, self.ctypes.byref(record), self.ctypes.sizeof(record), None,
+        ):
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+        return {"total": record.total, "active": record.active}
+
+    def close(self):
+        self.kernel.CloseHandle(self.job)
 
 
-def record_windows(command, root):
-    powershell = shutil.which("powershell")
-    if not powershell:
-        return subprocess.call(command), [], "Windows process event subscriber missing"
-    script = Path(__file__).with_suffix(".ps1")
-    console = root / "observer.stderr"
-    with console.open("wb") as errors:
-        observer = subprocess.Popen(
-            [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script), str(root)],
-            stdout=errors, stderr=subprocess.STDOUT,
-        )
-        ready = wait_for((root / "ready").exists, observer, timeout=15)
-        try:
-            status = subprocess.call(command)
-        finally:
-            (root / "stop").touch()
-            try:
-                observer.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                observer.kill()
-                observer.wait(timeout=5)
-                ready = False
-    raw = root / "observer.local.json"
-    events = []
-    error = "Windows process subscriber did not complete"
-    if ready and raw.exists():
-        result = json.loads(raw.read_text(encoding="utf-8"))
-        raw.unlink()
-        if not result["error"] and not result["omitted"] and result["closed"]:
-            events = result["events"]
-            error = None if events else "no Windows process start events"
-    return status, events, error
+def record_bracketed(command, root):
+    observer_class = {"darwin": DarwinForkObserver, "win32": WindowsJobObserver}[sys.platform]
+    env = dict(os.environ, VERYSYNC_S29_PHASE_DIR=str(root))
+    process = subprocess.Popen(command, env=env)
+    frames = []
+    failure = None
+    observer = None
+    try:
+        observer = observer_class(process.pid)
+        (root / "attached").touch()
+        expected = {(name, phase) for name in CASES for phase in PHASES}
+        while process.poll() is None and expected:
+            for name, phase in sorted(expected):
+                stem = root / f"{name}-{phase}"
+                if stem.with_suffix(".request").is_file():
+                    frame = {"case": name, "phase": phase, "pid": process.pid,
+                             "observed": observer.snapshot(), "unix_ns": time.time_ns()}
+                    frames.append(frame)
+                    stem.with_suffix(".response").touch()
+                    expected.remove((name, phase))
+            time.sleep(0.01)
+    except OSError as error:
+        failure = f"kernel process observation failed: {error}"
+        (root / "unavailable").touch()
+    finally:
+        if observer:
+            observer.close()
+    return process.wait(), frames, failure
 
 
 def start(command):
@@ -129,15 +154,20 @@ def start(command):
         raise ValueError("the native process observers require an isolated GitHub runner")
     root = Path(os.environ["VERYSYNC_S29_TRACE_DIR"])
     root.mkdir(mode=0o700)
-    method = {"linux": record_linux, "darwin": record_macos, "win32": record_windows}[sys.platform]
-    status, events, diagnostic = method(command, root)
-    # This intermediate contains only IDs, timestamps and event classes. The
-    # verifier later retains only test lineage and removes the unfiltered file.
+    if sys.platform == "linux":
+        method = "strace"
+        status, events, diagnostic = record_linux(command, root)
+        brackets = []
+    else:
+        method = {"darwin": "darwin_kqueue", "win32": "windows_job_total"}[sys.platform]
+        status, brackets, diagnostic = record_bracketed(command, root)
+        events = []
     (root / "intermediate.json").write_text(json.dumps({
         "test_exit": status,
-        "observer": method.__name__,
+        "observer": method,
         "diagnostic": diagnostic,
         "events": events,
+        "brackets": brackets,
     }), encoding="utf-8")
     return status
 
@@ -160,7 +190,7 @@ def scoped_events(rows, events):
     return owned
 
 
-def check_case(name, rows, events):
+def check_case(name, rows, events, method="strace", brackets=()):
     case = [row for row in rows if row["case"] == name]
     stages = {row["stage"]: row for row in case if row["stage"] in {
         "calibration-child", "begin-recovery", "end-recovery", "calibration-after", "original-receipt", "before-dispatch",
@@ -189,19 +219,22 @@ def check_case(name, rows, events):
         raise ValueError(f"{name}: recovery sent at least one new request")
     if not before["unix_ns"] <= begin["unix_ns"] < end["unix_ns"] <= after["unix_ns"]:
         raise ValueError(f"{name}: invalid recovery clock")
-    for control, minimum, maximum in [
-        (before, original["unix_ns"], begin["unix_ns"]),
-        (after, end["unix_ns"], after["unix_ns"]),
-    ]:
-        child = control["detail"]["pid"]
-        if not any(
-            item["pid"] == child and minimum <= item["time"] <= maximum for item in events
-        ):
-            raise ValueError(f"{name}: observer did not capture the short-lived calibration child {child}")
-    during = [item for item in events if
-              begin["unix_ns"] - 1_000 <= item["time"] <= end["unix_ns"] + 1_000]
-    if during:
-        raise ValueError(f"{name}: recovery started a program or child process: {during}")
+    if method == "strace":
+        for control, minimum, maximum in [
+            (before, original["unix_ns"], begin["unix_ns"]),
+            (after, end["unix_ns"], after["unix_ns"]),
+        ]:
+            child = control["detail"]["pid"]
+            if not any(
+                item["pid"] == child and minimum <= item["time"] <= maximum for item in events
+            ):
+                raise ValueError(f"{name}: observer did not capture the short-lived calibration child {child}")
+        during = [item for item in events if
+                  begin["unix_ns"] - 1_000 <= item["time"] <= end["unix_ns"] + 1_000]
+        if during:
+            raise ValueError(f"{name}: recovery started a program or child process: {during}")
+    else:
+        verify_bracket(name, method, brackets, begin, end)
     return {
         "case": name,
         "operation_id": op,
@@ -209,11 +242,33 @@ def check_case(name, rows, events):
         "end_unix_ns": end["unix_ns"],
         "additional_upgrade_requests": 0,
         "additional_started_processes": 0,
+        "kernel_brackets": [row for row in brackets if row["case"] == name],
         "calibration_pids": [before["detail"]["pid"], after["detail"]["pid"]],
         "calibration_events": [item for item in events if item["pid"] in {
             before["detail"]["pid"], after["detail"]["pid"]
         }],
     }
+
+
+def verify_bracket(name, method, brackets, begin, end):
+    frames = sorted((row for row in brackets if row["case"] == name), key=lambda row: row["unix_ns"])
+    if [row["phase"] for row in frames] != list(PHASES) or any(row["pid"] != begin["pid"] for row in frames):
+        raise ValueError(f"{name}: missing independent kernel counter frames for the caller")
+    if not frames[1]["unix_ns"] <= begin["unix_ns"] < end["unix_ns"] <= frames[2]["unix_ns"]:
+        raise ValueError(f"{name}: independent kernel counters did not bracket the full operation")
+    a, b, c, d = [row["observed"] for row in frames]
+    if method == "darwin_kqueue":
+        good = b["fork"] and not c["fork"] and d["fork"] and not any(
+            row["root_exec"] for row in [b, c, d]
+        )
+    elif method == "windows_job_total":
+        good = all(row["active"] == 1 for row in [a, b, c, d]) and (
+            b["total"] - a["total"], c["total"] - b["total"], d["total"] - c["total"]
+        ) == (1, 0, 1)
+    else:
+        raise ValueError(f"unknown independent observer method: {method}")
+    if not good:
+        raise ValueError(f"{name}: kernel accounting did not prove short-child controls and zero creation: {frames}")
 
 
 def verify(args):
@@ -233,7 +288,10 @@ def verify(args):
                   "test_exit": evidence["test_exit"]}
     else:
         try:
-            cases = [check_case(name, rows, events) for name in ["cli-partial", "upload-drop"]]
+            cases = [
+                check_case(name, rows, events, evidence["observer"], evidence.get("brackets", []))
+                for name in CASES
+            ]
             report = {"coverage": "passed", "observer": evidence["observer"], "cases": cases}
         except ValueError as error:
             report = {"coverage": "blocked", "observer": evidence["observer"], "reason": str(error)}

@@ -1,6 +1,6 @@
 [package]
 name = "verysync-sidecar"
-version = "0.1.2-rc.8"
+version = "0.1.2-rc.9"
 edition = "2021"
 rust-version = "1.85"
 resolver = "3"
@@ -22,7 +22,6 @@ include = [
     "/tests/fixtures/resource-protocol.json",
     "/scripts/**/*.py",
     "/scripts/trace-native-folder-opener.ps1",
-    "/scripts/trace-upgrade-recovery.ps1",
     "/scripts/run-windows-managed-permissions.ps1",
     "/scripts/storage-test-requirements.txt",
     "/docs/public/**/*.md",
