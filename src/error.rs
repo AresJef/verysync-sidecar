@@ -285,11 +285,6 @@ pub enum Error {
         /// The underlying transport error, without its request URL.
         source: reqwest::Error,
     },
-    /// HTTPS certificate verification rejected the selected recovery endpoint.
-    TlsCertificateRejected {
-        /// The original URL-redacted management transport error.
-        source: Box<Error>,
-    },
     /// A folder identifier cannot be used as a protocol value.
     InvalidFolderId {
         /// A description that excludes the supplied identifier.
@@ -389,6 +384,11 @@ pub enum Error {
     },
     /// A native path cannot be represented as UTF-8 without changing it.
     PathEncoding,
+    /// HTTPS certificate verification rejected the selected recovery endpoint.
+    TlsCertificateRejected {
+        /// The original URL-redacted management transport error.
+        source: Box<Error>,
+    },
 }
 
 impl fmt::Debug for Error {

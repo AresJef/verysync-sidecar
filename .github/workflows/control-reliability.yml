@@ -96,6 +96,7 @@ jobs:
             --cargo "$(command -v cargo)" --parent "$RUNNER_TEMP" --evidence "$RUNNER_TEMP/profile-evidence/api"
       - name: Build and run an external consumer under each feature profile
         run: |
+          set -o pipefail
           for profile in minimal default all; do
             base="$RUNNER_TEMP/profile-evidence/$profile"
             settings="$RUNNER_TEMP/control-$profile.env"
