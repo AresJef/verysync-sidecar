@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (unreleased)
 
 - Save and reopen private receipts for listener changes and device removal.
   Observe the current state on a trusted endpoint after a reply is lost.

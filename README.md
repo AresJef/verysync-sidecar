@@ -5,6 +5,9 @@ running instance with its management address and API key, read its status and
 confirm the device identity before making changes. Start an isolated instance
 with its own files only when your application should manage its lifetime.
 
+All development and maintenance now use `main` at version 0.1.2.
+This version is unreleased. The latest release on crates.io is 0.1.1.
+
 Start with the [connection example](docs/public/getting-started.md). The
 [stable 0.1.1 guide](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/getting-started.md)
 is also available directly from the package page. A setting read back from the
@@ -77,7 +80,7 @@ offline resolution, cross-process preparation and immutable generations that
 preserve previously returned or running program paths.
 
 The stable installation examples use `verysync-sidecar` 0.1.1. The [changelog](CHANGELOG.md)
-lists the fixes in this release. The verified official program is VerySync v2.33.2.
+covers both the published release and the changes on `main`. The verified official program is VerySync v2.33.2.
 See the [release checks](docs/public/release-checklist.md) for tested native
 conditions, platform boundaries and deferred positive cases.
 
