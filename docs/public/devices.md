@@ -197,7 +197,11 @@ before each possible write. If a save fails, the operation stops before the
 next write. An earlier pause may already have taken effect. Save the returned
 receipt separately. The receipt's submission status describes the one DELETE.
 The preceding pause and disconnect are recorded by `device_removal_progress()`.
-An acknowledged DELETE and a failed readback can appear in the same result.
+The explicit disconnect form checks the connection again after saving the
+DELETE checkpoint. If the peer has reconnected or cannot be confirmed
+disconnected, that call stops before deletion. An acknowledged DELETE and a
+failed readback can appear in the same result. If a deadline expires while a
+response body is incomplete, the receipt keeps any HTTP status already received.
 
 To check the current registration, reopen the saved
 `ControlOperationReceipt`, supply fresh connection options for the original

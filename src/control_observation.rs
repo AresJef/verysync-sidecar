@@ -173,13 +173,15 @@ impl Client {
         options: EventOptions,
     ) -> Result<FolderObservation> {
         let resumed = options.has_resume_cursor();
-        let events = self.subscribe_events(options).await?;
+        let (events, head) = self.subscribe_events_with_head(options).await?;
         let position = FolderObservationPosition {
             folder,
             peer,
             cursor: events.cursor().clone(),
         };
-        let snapshot = read_folder_snapshot(self, &position, &position.cursor).await?;
+        // A reopened consumer position can refer to an older engine. Associate
+        // this initial snapshot with the fresh head without advancing the saved cursor.
+        let snapshot = read_folder_snapshot(self, &position, &head).await?;
         Ok(FolderObservation {
             client: self.clone(),
             events,
@@ -304,6 +306,9 @@ async fn read_folder_snapshot(
 ) -> Result<FolderObservationSnapshot> {
     let started_at = SystemTime::now();
     let before = client.system_status().await?;
+    if before.start_time != cursor.engine_started_at {
+        return Err(Error::EventGenerationChanged);
+    }
     let status = client.folder_status(&position.folder).await?;
     let peer_completion = match &position.peer {
         Some(peer) => Some(

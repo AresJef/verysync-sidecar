@@ -53,6 +53,8 @@ pub enum ControlOperationKind {
 pub struct DeviceRemovalProgress {
     /// Checkpoint for the optional peer pause. No entry means no PATCH was needed.
     pub pause_request: Option<ControlSubmission>,
+    /// Native pause response status, if response headers were observed.
+    pub pause_response_status: Option<u16>,
     /// Whether native connections showed an entry for this peer with connected=false.
     pub disconnection_observed: bool,
 }
@@ -277,18 +279,7 @@ impl ControlOperationReceipt {
                 .operation_id
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-        let status_is_valid = data
-            .response_status
-            .is_none_or(|status| (100..=599).contains(&status))
-            && match data.submission {
-                ControlSubmission::Prepared | ControlSubmission::NotSubmitted => {
-                    data.response_status.is_none()
-                }
-                ControlSubmission::Acknowledged { status } => {
-                    (200..300).contains(&status) && data.response_status == Some(status)
-                }
-                ControlSubmission::PossiblySubmitted => true,
-            };
+        let status_is_valid = valid_response_status(data.submission, data.response_status);
         if !id_is_valid || !status_is_valid {
             return Err(invalid_receipt());
         }
@@ -306,6 +297,16 @@ impl ControlOperationReceipt {
                     || disconnect_timeout.is_some_and(|timeout| timeout.is_zero())
                     || (disconnect_timeout.is_none()
                         && (progress.pause_request.is_some() || progress.disconnection_observed))
+                    || (progress.disconnection_observed
+                        && progress.pause_request.is_some_and(|state| {
+                            !matches!(state, ControlSubmission::Acknowledged { .. })
+                        }))
+                    || !valid_response_status(
+                        progress
+                            .pause_request
+                            .unwrap_or(ControlSubmission::NotSubmitted),
+                        progress.pause_response_status,
+                    )
                     || (disconnect_timeout.is_some()
                         && !progress.disconnection_observed
                         && matches!(
@@ -313,8 +314,6 @@ impl ControlOperationReceipt {
                             ControlSubmission::PossiblySubmitted
                                 | ControlSubmission::Acknowledged { .. }
                         ))
-                    || matches!(progress.pause_request,
-                        Some(ControlSubmission::Acknowledged {status}) if !(200..300).contains(&status))
                 {
                     return Err(invalid_receipt());
                 }
@@ -362,6 +361,7 @@ impl ControlOperationReceipt {
                 disconnect_timeout,
                 progress: DeviceRemovalProgress {
                     pause_request: disconnect_timeout.map(|_| ControlSubmission::Prepared),
+                    pause_response_status: None,
                     disconnection_observed: false,
                 },
             },
@@ -451,6 +451,19 @@ pub(crate) fn version_fingerprint(version: &str) -> [u8; 32] {
 
 fn milliseconds(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn valid_response_status(submission: ControlSubmission, status: Option<u16>) -> bool {
+    if !status.is_none_or(|received| (100..=599).contains(&received)) {
+        return false;
+    }
+    match submission {
+        ControlSubmission::Prepared | ControlSubmission::NotSubmitted => status.is_none(),
+        ControlSubmission::Acknowledged { status: received } => {
+            (200..300).contains(&received) && status == Some(received)
+        }
+        ControlSubmission::PossiblySubmitted => true,
+    }
 }
 
 fn invalid_receipt() -> Error {

@@ -10,7 +10,7 @@ use tokio::{
     task::JoinHandle,
 };
 use verysync_sidecar::{
-    ApiKey, BuildVariant, Client, ConnectOptions, Error, FolderId, LocalApiClient,
+    ApiKey, BuildVariant, Client, ConnectOptions, Error, FolderId, ListPage, LocalApiClient,
     LocalApiConnectOptions, ManagementEndpoint, PinnedVersion, PreflightLicense,
     PreflightReadAccess, PreflightReads, ProgramArchitecture, ProgramOs, ProgramTarget,
     UpgradePreflightSource, UpgradeSourceEvidence, VersionCompatibility, VersionPolicy,
@@ -287,6 +287,96 @@ async fn local_api_requires_explicit_probe_and_only_reads_selected_page() {
         }
         witness.confirm().await;
     }
+}
+
+#[tokio::test]
+async fn local_api_preflight_requires_any_reported_pagination_to_match() {
+    let folder = FolderId::parse("one-folder").unwrap();
+    for (page, per_page, accepted) in [
+        (Some(2), Some(1), false),
+        (Some(1), Some(2), false),
+        (Some(2), None, false),
+        (None, Some(2), false),
+        (Some(0), Some(0), false),
+        (None, None, true),
+        (Some(1), None, true),
+        (None, Some(1), true),
+    ] {
+        let mut body = json!({"progress":[],"queued":[],"rest":[]});
+        if let Some(value) = page {
+            body["page"] = value.into();
+        }
+        if let Some(value) = per_page {
+            body["perpage"] = value.into();
+        }
+        let mut script = local_handshake();
+        script.extend(local_handshake());
+        script.push(response(
+            "/rest/localapi/folders/need/one-folder?page=1&perpage=1",
+            200,
+            body.clone(),
+        ));
+        script.extend(local_handshake());
+        let witness = Witness::start(false, script).await;
+        let observed = witness
+            .local()
+            .await
+            .preflight_folder_need(&folder, PreflightReads::SelectedOperation)
+            .await
+            .observation
+            .unwrap();
+        witness.confirm().await;
+        assert!(observed.identity_verified);
+        if accepted {
+            assert_eq!(observed.permission, PreflightReadAccess::Observed);
+            assert_eq!(observed.license, PreflightLicense::SelectedReadAccepted);
+            assert!(observed.issue.is_none());
+        } else {
+            assert_eq!(
+                observed.permission,
+                PreflightReadAccess::Inconclusive,
+                "a different page or limit cannot confirm the selected read"
+            );
+            assert_eq!(observed.license, PreflightLicense::Unobserved);
+            let Error::InvalidResponse { response, .. } = observed.issue.unwrap() else {
+                panic!("the contradictory metadata must be preserved as a response error");
+            };
+            assert_eq!(response.status(), 200);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(response.body_bytes()).unwrap(),
+                body
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn established_local_folder_need_preserves_the_actual_reported_page_and_limit() {
+    let mut script = local_handshake();
+    script.push(identity("/rest/localapi/system/status", DEVICE));
+    script.push(response(
+        "/rest/localapi/config/folders",
+        200,
+        json!([{"id":"one-folder", "path":"/synthetic", "paused":false}]),
+    ));
+    script.push(identity("/rest/localapi/system/status", DEVICE));
+    script.push(response(
+        "/rest/localapi/folders/need/one-folder?page=1&perpage=1",
+        200,
+        json!({"progress":[],"queued":[],"rest":[],"page":2,"perpage":9}),
+    ));
+    let witness = Witness::start(false, script).await;
+    let actual = witness
+        .local()
+        .await
+        .folder_need(
+            &FolderId::parse("one-folder").unwrap(),
+            ListPage::new(1, 1).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!((actual.page, actual.per_page), (Some(2), Some(9)));
+    witness.confirm().await;
 }
 
 #[tokio::test]

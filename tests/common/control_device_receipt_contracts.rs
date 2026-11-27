@@ -161,6 +161,8 @@ async fn explicit_removal_checkpoints_pause_then_connection_then_delete() -> Tes
         Reply::json(serde_json::json!({"connections":{peer.as_str():{"connected":false}}})),
         version(),
         identity(),
+        identity(),
+        Reply::json(serde_json::json!({"connections":{peer.as_str():{"connected":false}}})),
         Reply::json(serde_json::json!({})),
         identity(),
         empty_registration,
@@ -296,5 +298,143 @@ async fn rejected_storage_checkpoint_and_target_change_prevent_delete() -> TestR
         }
         assert!(server.finish().await?.iter().all(|r| r.starts_with("GET ")));
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn completed_delete_rejection_keeps_the_legacy_error_and_actual_status() -> TestResult {
+    let peer = peer()?;
+    for status in [401, 403] {
+        for detailed in [false, true] {
+            let mut replies = vec![version(), identity()];
+            if detailed {
+                replies.push(version());
+            }
+            replies.extend([identity(), record(&peer, true)]);
+            if detailed {
+                replies.extend([version(), identity()]);
+            }
+            replies.push(Reply {
+                status,
+                ..Reply::json(serde_json::json!({}))
+            });
+            let server = ScriptedServer::start(replies).await?;
+            let client = Client::connect(server.options()?).await?;
+            let error = if detailed {
+                let prepared = client.prepare_device_removal(&peer)?;
+                let outcome = client.execute_device_removal(prepared).await;
+                assert_eq!(outcome.receipt.response_status(), Some(status));
+                outcome.result.unwrap_err()
+            } else {
+                client.remove_device(&peer).await.unwrap_err()
+            };
+            assert!(matches!(
+                (status, error),
+                (401, Error::Authentication { .. }) | (403, Error::AccessDenied { .. })
+            ));
+            let requests = server.finish().await?;
+            assert_eq!(
+                requests.iter().filter(|r| r.starts_with("DELETE ")).count(),
+                1
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn total_deadline_preserves_received_headers_when_delete_body_is_incomplete() -> TestResult {
+    let peer = peer()?;
+    let (signal_headers, headers_sent) = tokio::sync::oneshot::channel();
+    let (release_body, hold_body) = tokio::sync::oneshot::channel();
+    let disconnected =
+        || Reply::json(serde_json::json!({"connections":{peer.as_str():{"connected":false}}}));
+    let server = ScriptedServer::with_controls(
+        vec![
+            version(),
+            identity(),
+            version(),
+            identity(),
+            record(&peer, true),
+            identity(),
+            disconnected(),
+            version(),
+            identity(),
+            identity(),
+            disconnected(),
+            Reply::json(serde_json::json!({"acknowledged":true})),
+        ],
+        None,
+        Some((12, signal_headers, hold_body)),
+    )
+    .await?;
+    let client =
+        Client::connect(server.options()?.request_timeout(Duration::from_secs(5))?).await?;
+    let operation =
+        client.prepare_device_disconnect_and_remove(&peer, Duration::from_millis(600))?;
+    let task = client.execute_device_removal(operation);
+    tokio::pin!(task);
+    tokio::select! {
+        result = &mut task => panic!("deadline before fixture sent headers: {result:?}"),
+        ready = headers_sent => ready?,
+    }
+    let outcome = task.await;
+    assert!(
+        matches!(outcome.result, Err(Error::MutationOutcomeUnknown { source, .. })
+        if matches!(*source, Error::Timeout { .. }))
+    );
+    assert_eq!(
+        outcome.receipt.submission(),
+        ControlSubmission::PossiblySubmitted
+    );
+    assert_eq!(outcome.receipt.response_status(), Some(200));
+    release_body
+        .send(())
+        .map_err(|_| "synthetic body control ended early")?;
+    let requests = server.finish().await?;
+    assert_eq!(
+        requests.iter().filter(|r| r.starts_with("DELETE ")).count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconnected_peer_during_checkpoint_never_reaches_delete() -> TestResult {
+    let peer = peer()?;
+    let state = |connected| {
+        Reply::json(serde_json::json!({"connections":{peer.as_str():{"connected":connected}}}))
+    };
+    let server = ScriptedServer::start(vec![
+        version(),
+        identity(),
+        version(),
+        identity(),
+        record(&peer, true),
+        identity(),
+        state(false),
+        version(),
+        identity(),
+        identity(),
+        state(true),
+    ])
+    .await?;
+    let client = Client::connect(server.options()?).await?;
+    let operation = client.prepare_device_disconnect_and_remove(&peer, Duration::from_secs(3))?;
+    let report = client.execute_device_removal(operation).await;
+    assert!(matches!(report.result, Err(Error::ConfigurationChanged)));
+    assert_eq!(report.receipt.submission(), ControlSubmission::NotSubmitted);
+    assert!(
+        report
+            .receipt
+            .device_removal_progress()
+            .ok_or("receipt absent")?
+            .disconnection_observed
+    );
+    assert!(server
+        .finish()
+        .await?
+        .iter()
+        .all(|request| request.starts_with("GET ")));
     Ok(())
 }

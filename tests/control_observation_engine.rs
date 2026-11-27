@@ -330,3 +330,118 @@ async fn packed_observer_stops_and_resumes_in_an_independent_process() -> TestRe
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn native_folder_observation_reopens_saved_cursor_after_owned_generation_changed(
+) -> TestResult {
+    let root = private_root()?;
+    let mut instance = open(root.path()).await?;
+    let generation = instance.control_generation();
+    let identity = instance.client().instance().device_id.clone();
+    let watched = FolderId::parse("native-control-observation-restart")?;
+    let folder = root.path().join("fixture-files");
+    std::fs::create_dir(&folder)?;
+    let sample = folder.join("retained.bin");
+    std::fs::write(&sample, SAMPLE)?;
+    instance
+        .client()
+        .create_folder(&CreateFolderOptions::new(
+            watched.clone(),
+            TargetPath::local(folder),
+        ))
+        .await?;
+    collected_files(instance.client(), &watched).await?;
+
+    let old = instance
+        .client()
+        .observe_folder(&watched, None, events()?)
+        .await?;
+    let old_started_at = old
+        .snapshot()
+        .engine_started_at()
+        .ok_or("native start time unavailable before restart")?
+        .to_owned();
+    let saved = serde_json::to_vec(old.position())?;
+    old.close().await?;
+    // Separate native wall-clock seconds even on a fast fixture.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    instance.restart(WAIT).await?;
+    assert_ne!(instance.control_generation(), generation);
+    assert_eq!(instance.client().instance().device_id, identity);
+    let new_started_at = instance
+        .client()
+        .system_status()
+        .await?
+        .start_time
+        .ok_or("native start time unavailable after restart")?;
+    assert_ne!(old_started_at, new_started_at);
+
+    let position: FolderObservationPosition = serde_json::from_slice(&saved)?;
+    let mut reopened = instance
+        .client()
+        .resume_folder_observation(position, events()?)
+        .await?;
+    assert_eq!(
+        reopened.position().cursor().engine_started_at.as_deref(),
+        Some(old_started_at.as_str())
+    );
+    assert_eq!(
+        reopened
+            .snapshot()
+            .trigger_cursor
+            .engine_started_at
+            .as_deref(),
+        Some(new_started_at.as_str())
+    );
+    assert_eq!(
+        reopened.snapshot().engine_started_at(),
+        Some(new_started_at.as_str())
+    );
+    assert_eq!(reopened.snapshot().status.local_files, Some(1));
+    let resume_gap = reopened
+        .next_within(WAIT)
+        .await?
+        .ok_or("resumed observation ended before continuity gap")?;
+    assert!(matches!(resume_gap.item, EventStreamItem::Gap(gap)
+        if gap.reason == EventGapReason::ResumedContinuityUnverified));
+    assert!(matches!(
+        resume_gap.refresh,
+        FolderObservationRefresh::Failed(verysync_sidecar::Error::EventGenerationChanged)
+    ));
+    let generation_gap = reopened
+        .next_within(WAIT)
+        .await?
+        .ok_or("resumed observation ended before native generation gap")?;
+    assert!(matches!(generation_gap.item, EventStreamItem::Gap(gap)
+        if gap.reason == EventGapReason::EngineStartTimeChanged));
+    assert!(matches!(
+        generation_gap.refresh,
+        FolderObservationRefresh::Read
+    ));
+    assert_eq!(
+        reopened.position().cursor().engine_started_at.as_deref(),
+        Some(new_started_at.as_str())
+    );
+    assert_eq!(reopened.snapshot().status.local_files, Some(1));
+    reopened.close().await?;
+
+    let exit = instance.shutdown(WAIT).await?;
+    assert!(exit.code == Some(0) && exit.tree_stopped && exit.state_released && !exit.forced);
+    assert_eq!(std::fs::read(sample)?, SAMPLE);
+    drop(instance);
+    root.close()?;
+    println!(
+        "folder native restart evidence {}",
+        json!({
+            "owned_new_generation": true,
+            "same_logical_device": true,
+            "fresh_snapshot_bound_to_real_new_start": true,
+            "saved_position_not_advanced_before_gap_delivery": true,
+            "ordered_resume_then_restart_gaps": true,
+            "synthetic_file_bytes_preserved": true,
+            "owned_exit_and_state_release": true,
+            "temporary_root_removed": true,
+        })
+    );
+    Ok(())
+}

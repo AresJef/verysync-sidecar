@@ -1,5 +1,5 @@
 //! Peer operations on the same authenticated, bounded management connection.
-use super::{checked_response, send_bounded_with_status, Client};
+use super::{checked_response, send_bounded_reporting_headers, Client};
 use crate::{
     CreateDeviceOptions, DeviceConfig, DeviceDefaults, DeviceId, DevicePatch, DeviceRemoval,
     DeviceUpdate, Error, FolderId, Result,
@@ -285,21 +285,14 @@ impl Client {
         let request = self
             .connection
             .authorized_request(method, self.device_url(id)?, body);
-        let response = match send_bounded_with_status(
+        let response = send_bounded_reporting_headers(
             operation,
             request,
             true,
             self.connection.response_limit,
+            status,
         )
-        .await
-        {
-            Ok(response) => response,
-            Err(failure) => {
-                *status = failure.status;
-                return Err(failure.error);
-            }
-        };
-        *status = Some(response.status);
+        .await?;
         Ok(checked_response(operation, response, true)?.status)
     }
 

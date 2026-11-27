@@ -31,7 +31,9 @@ Local-API preflight uses the exact folder ID and reads no other folder
 configurations. With a matching target, HTTP 200 with the native 3001 envelope
 is evidence that this need request requires a Local-API entitlement. An ordinary
 403 leaves the entitlement unknown. A successful page proves only that the
-page was available at that time. A successful GUI or official account login
+page was available at that time. The engine may omit pagination metadata.
+If it supplies a different page number or item limit, the selected read
+remains unconfirmed. A successful GUI or official account login
 leaves this specialized entitlement unknown. The preflight returns no folder
 entries and makes no request to acquire or change a license.
 

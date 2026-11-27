@@ -30,6 +30,7 @@ struct ScriptState {
     fail_folder_reads: usize,
     hold_folder: bool,
     indexed_files: u64,
+    replacement_started_at: Option<&'static str>,
 }
 
 struct Script {
@@ -182,9 +183,11 @@ async fn serve(mut socket: TcpStream, script: Arc<Script>) -> TestResult {
                 json!({"version":"v2.33.2","os":"linux","arch":"amd64"}),
                 false,
             ),
-            ("GET", "/rest/system/status") => {
-                (200, json!({"myID":ID,"startTime":"unchanged-start"}), false)
-            }
+            ("GET", "/rest/system/status") => (
+                200,
+                json!({"myID":ID,"startTime":state.replacement_started_at.unwrap_or("unchanged-start")}),
+                false,
+            ),
             ("GET", "/rest/db/status") if state.fail_folder_reads != 0 => {
                 state.fail_folder_reads -= 1;
                 (503, json!({}), false)
@@ -462,6 +465,116 @@ async fn resume_rejects_a_different_device_or_unscoped_cursor_before_reads() -> 
         json!({
             "conflicting_device_reads": 0,
             "unscoped_cursor_reads": 0,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_queued_event_cannot_replace_the_snapshot_with_another_engine_generation() -> TestResult {
+    let origin = Origin::start().await?;
+    let mut observer = origin
+        .client
+        .observe_folder(&FolderId::parse(SELECTED)?, None, options()?)
+        .await?;
+    assert_eq!(observer.snapshot().status.local_files, Some(1));
+    assert_eq!(
+        observer.snapshot().engine_started_at(),
+        Some("unchanged-start")
+    );
+    origin.script.record(2, SELECTED, 2);
+    wait_for_queue(&observer).await?;
+    {
+        let mut state = origin.script.state.lock().unwrap();
+        state.replacement_started_at = Some("replacement-start");
+        state.events.clear();
+        state.indexed_files = 99;
+    }
+    let folder_reads = origin.folder_reads();
+    let update = next(&mut observer).await?;
+    assert!(matches!(update.item, EventStreamItem::Event(ref event)
+        if event.cursor.last_id == 2 && event.cursor.engine_started_at.as_deref() == Some("unchanged-start")));
+    assert!(matches!(
+        update.refresh,
+        FolderObservationRefresh::Failed(Error::EventGenerationChanged)
+    ));
+    assert_eq!(origin.folder_reads(), folder_reads);
+    assert_eq!(observer.snapshot().status.local_files, Some(1));
+    assert_eq!(
+        observer.snapshot().engine_started_at(),
+        Some("unchanged-start")
+    );
+    assert_eq!(observer.position().cursor().last_id, 2);
+    assert_eq!(observer.last_gap(), None);
+    let saved = observer.position().clone();
+
+    let gap = next(&mut observer).await?;
+    assert!(matches!(gap.item, EventStreamItem::Gap(ref gap)
+        if gap.reason == EventGapReason::EngineStartTimeChanged && gap.resume_from.last_id == 0));
+    assert!(matches!(gap.refresh, FolderObservationRefresh::Read));
+    assert_eq!(observer.snapshot().trigger_cursor.last_id, 0);
+    assert_eq!(observer.snapshot().status.local_files, Some(99));
+    assert_eq!(
+        observer.snapshot().engine_started_at(),
+        Some("replacement-start")
+    );
+
+    origin.script.record(1, SELECTED, 100);
+    let update = next(&mut observer).await?;
+    assert!(matches!(update.item, EventStreamItem::Event(ref event)
+        if event.cursor.last_id == 1 && event.cursor.engine_started_at.as_deref() == Some("replacement-start")));
+    assert!(matches!(update.refresh, FolderObservationRefresh::Read));
+    assert_eq!(
+        observer.last_gap(),
+        Some(EventGapReason::EngineStartTimeChanged)
+    );
+    assert_eq!(observer.snapshot().status.local_files, Some(100));
+    observer.close().await?;
+
+    let mut reopened = origin
+        .client
+        .resume_folder_observation(saved, options()?)
+        .await?;
+    assert_eq!(reopened.position().cursor().last_id, 2);
+    assert_eq!(
+        reopened.position().cursor().engine_started_at.as_deref(),
+        Some("unchanged-start")
+    );
+    assert_eq!(reopened.snapshot().trigger_cursor.last_id, 1);
+    assert_eq!(
+        reopened.snapshot().engine_started_at(),
+        Some("replacement-start")
+    );
+    assert_eq!(reopened.snapshot().status.local_files, Some(100));
+    let resume_gap = next(&mut reopened).await?;
+    assert!(matches!(resume_gap.item, EventStreamItem::Gap(ref gap)
+        if gap.reason == EventGapReason::ResumedContinuityUnverified));
+    assert!(matches!(
+        resume_gap.refresh,
+        FolderObservationRefresh::Failed(Error::EventGenerationChanged)
+    ));
+    assert_eq!(reopened.snapshot().status.local_files, Some(100));
+    let generation_gap = next(&mut reopened).await?;
+    assert!(matches!(generation_gap.item, EventStreamItem::Gap(ref gap)
+        if gap.reason == EventGapReason::EngineStartTimeChanged));
+    assert!(matches!(
+        generation_gap.refresh,
+        FolderObservationRefresh::Read
+    ));
+    assert_eq!(reopened.position().cursor().last_id, 1);
+    assert_eq!(reopened.snapshot().status.local_files, Some(100));
+    reopened.close().await?;
+    origin.assert_requests();
+    println!(
+        "folder controlled engine generation evidence {}",
+        json!({
+            "old_event_kept_and_consumed": 2,
+            "wrong_generation_did_not_replace_snapshot": true,
+            "new_snapshot_read_on_ordered_generation_gap": true,
+            "new_generation_event_observed": 1,
+            "saved_old_cursor_reopened_with_fresh_native_anchor": true,
+            "resumed_continuity_gap_and_actual_generation_gap_both_retained": true,
+            "mutation_requests": 0,
         })
     );
     Ok(())

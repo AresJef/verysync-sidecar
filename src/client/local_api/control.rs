@@ -273,9 +273,10 @@ impl LocalApiClient {
     ///
     /// With selected reads, the client checks version and device before and
     /// after requesting page 1 with an item limit of 1 for the exact folder.
-    /// The page contents stay out of the report. A successful read describes
-    /// only that page at the observed time. It grants no other Local-API, Pro
-    /// or enterprise permission.
+    /// If the response reports a page number or limit, it must match the
+    /// request. The page contents stay out of the report. A successful read
+    /// describes only that page at the observed time. Other Local-API, Pro
+    /// and enterprise permissions remain unverified.
     pub async fn preflight_folder_need(
         &self,
         folder: &FolderId,
@@ -326,11 +327,20 @@ impl LocalApiClient {
         // This dedicated read is paced by its own identity checks. It does not
         // enumerate the unrelated folder configurations used by the old call.
         let response = checked_control_response(operation, self.send_raw(request).await?, false)?;
-        serde_json::from_slice::<NeedPage>(&response.body).map_err(|_| Error::InvalidResponse {
-            operation,
-            response: ResponseDiagnostic::new(response.status, response.body),
-        })?;
-        Ok(())
+        let page_matches = serde_json::from_slice::<NeedPage>(&response.body).is_ok_and(|actual| {
+            actual.page.is_none_or(|number| number == page.number())
+                && actual
+                    .per_page
+                    .is_none_or(|limit| limit == u32::from(page.per_page()))
+        });
+        if page_matches {
+            Ok(())
+        } else {
+            Err(Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(response.status, response.body),
+            })
+        }
     }
 
     async fn preflight_local_identity(&self) -> Result<()> {

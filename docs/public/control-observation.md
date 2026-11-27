@@ -27,7 +27,10 @@ async fn watch_once(client: &Client, folder: &FolderId) -> Result<()> {
 
 ## Read gaps and continue from a saved position
 
-The queue is bounded. A slow reader can cause gaps in the engine's available history. The watch delivers the gap explicitly and rereads only its selected folder and optional peer. An update identified as belonging to another folder can advance the shared stream position without reading that folder. If a refresh fails, the update still arrives and the last successful snapshot stays available. A later successful refresh gives you current state. The gap still describes history you did not see.
+The queue is bounded. A slow reader can cause gaps in the engine's available history. The watch delivers the gap explicitly and rereads only its selected folder and optional peer. An update identified as belonging to another folder can advance the shared stream position without reading that folder. If a refresh fails, the update still arrives and the last successful snapshot stays available. A later successful refresh gives you current state. The gap still describes history you did not see. If VerySync reports a
+different start time while you handle an older event, the watch delivers that
+event with a failed refresh. The stream's later restart gap marks when it began
+reporting the new engine's state.
 
 Save `FolderObservationPosition` in a private location after you handle an update. It supports Serde and contains the selected folder, optional peer, and consumed event cursor. It carries no endpoint or credential. At restart, reconnect with the intended address, trust settings, and fresh credentials, then pass that position to `Client::resume_folder_observation` with a new event policy. Resume checks the stored source and device against the connection. The first notice explains why the history since the saved position remains uncertain.
 

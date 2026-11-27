@@ -495,6 +495,11 @@ async fn remove_device(directory: PathBuf, input: Input) -> (u8, Value) {
             let uncertain = matches!(error, Error::MutationOutcomeUnknown { .. });
             let message = if uncertain {
                 "The change could not be fully confirmed. Use observe-device to check the registration before sending another request."
+            } else if matches!(
+                error,
+                Error::Authentication { .. } | Error::AccessDenied { .. }
+            ) {
+                "VerySync rejected the removal request. Check which credentials have access to the selected device."
             } else {
                 "No removal was requested. Check the selected peer and private receipt location."
             };

@@ -535,7 +535,21 @@ impl Client {
         source: EventSource,
         options: EventOptions,
     ) -> Result<EventSubscription> {
-        subscribe(EventConnection::Management(self.clone()), source, options).await
+        let (subscription, _) =
+            subscribe(EventConnection::Management(self.clone()), source, options).await?;
+        Ok(subscription)
+    }
+
+    pub(crate) async fn subscribe_events_with_head(
+        &self,
+        options: EventOptions,
+    ) -> Result<(EventSubscription, EventCursor)> {
+        subscribe(
+            EventConnection::Management(self.clone()),
+            EventSource::Standard,
+            options,
+        )
+        .await
     }
 }
 
@@ -546,12 +560,13 @@ impl crate::LocalApiClient {
     /// not retried. This registers a native in-memory event subscription only;
     /// it never enables licensing, manufactures an event or changes files.
     pub async fn subscribe_index_events(&self, options: EventOptions) -> Result<EventSubscription> {
-        subscribe(
+        let (subscription, _) = subscribe(
             EventConnection::LocalApi(self.clone()),
             EventSource::LocalIndex(None),
             options,
         )
-        .await
+        .await?;
+        Ok(subscription)
     }
     /// Observe one explicit canonical name filter on the Local-API index source.
     /// Filtered/default and GUI-key cursors remain distinct. Unknown names are
@@ -561,12 +576,13 @@ impl crate::LocalApiClient {
         filter: EventFilter,
         options: EventOptions,
     ) -> Result<EventSubscription> {
-        subscribe(
+        let (subscription, _) = subscribe(
             EventConnection::LocalApi(self.clone()),
             EventSource::LocalIndex(Some(filter)),
             options,
         )
-        .await
+        .await?;
+        Ok(subscription)
     }
 }
 
@@ -610,7 +626,7 @@ async fn subscribe(
     client: EventConnection,
     source: EventSource,
     options: EventOptions,
-) -> Result<EventSubscription> {
+) -> Result<(EventSubscription, EventCursor)> {
     tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
         reason: "event subscriptions require a Tokio runtime with I/O and timers",
     })?;
@@ -632,14 +648,18 @@ async fn subscribe(
     let cursor = options.cursor.clone().unwrap_or_else(|| latest.clone());
     let (sender, receiver) = mpsc::channel(options.queue_capacity);
     let worker_cursor = cursor.clone();
+    let worker_head = latest.clone();
     let task = tokio::spawn(async move {
-        run(client, options, worker_cursor, latest, sender).await;
+        run(client, options, worker_cursor, worker_head, sender).await;
     });
-    Ok(EventSubscription {
-        receiver,
-        task: Some(task),
-        cursor,
-    })
+    Ok((
+        EventSubscription {
+            receiver,
+            task: Some(task),
+            cursor,
+        },
+        latest,
+    ))
 }
 
 async fn verify_version(client: &EventConnection) -> Result<()> {

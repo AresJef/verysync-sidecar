@@ -368,6 +368,17 @@ async fn native_preflight_checks_only_its_selected_reads_and_preserves_state() -
                 native_code: 3001
             }
         );
+        let Some(Error::LicenseRequired {
+            code: 3001,
+            response,
+        }) = need.issue
+        else {
+            return Err("the selected need read did not retain its native refusal".into());
+        };
+        let refusal: serde_json::Value = serde_json::from_slice(response.body_bytes())?;
+        assert!(refusal.as_object().is_some_and(|fields| {
+            fields.len() == 2 && fields.contains_key("code") && fields.contains_key("error")
+        }));
         let end = marker(gui, &state, "p5-local-end").await?;
         assert_window(&state, &start, &end, &LOCAL_PROBE)?;
         let start = marker(gui, &state, "p5-consumer-start").await?;
@@ -393,6 +404,7 @@ async fn native_preflight_checks_only_its_selected_reads_and_preserves_state() -
             "static_reads":0, "gui_reads":6, "fixed_source_reads":2, "disabled_provider_reads":6,
             "provider_status":501, "local_need_total_reads":5, "local_need_pages":1,
             "local_need_http_status":200, "local_need_native_code":3001, "writes":0,
+            "local_need_denial_pagination_fields_absent":true,
             "external_example_local_need_reads":7, "external_example_local_need_pages":1,
             "external_example_english_entitlement_result":true,
         "same_process_and_device":true,

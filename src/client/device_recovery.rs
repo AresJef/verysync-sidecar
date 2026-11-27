@@ -17,6 +17,12 @@ use crate::{
 
 const EXPLICIT_REMOVAL: &str = "disconnect and remove device";
 
+#[derive(Default)]
+struct RemovalResponses {
+    pause: Option<u16>,
+    delete: Option<u16>,
+}
+
 /// Current registration state on the verified management device.
 pub struct DeviceRemovalRecovery {
     /// Device identity and version observed when the read finished.
@@ -130,10 +136,13 @@ impl Client {
             endpoint,
             mut receipt,
         } = operation;
-        let mut delete_status = None;
+        let staged = receipt
+            .device_removal_intent()
+            .is_ok_and(|(_, timeout)| timeout.is_some());
+        let mut responses = RemovalResponses::default();
         let result = match self.require_prepared_control_target(&endpoint, &receipt) {
             Ok(()) => {
-                self.run_device_removal(&mut receipt, &mut save, started, &mut delete_status)
+                self.run_device_removal(&mut receipt, &mut save, started, &mut responses)
                     .await
             }
             Err(error) => Err(error),
@@ -142,12 +151,13 @@ impl Client {
             ControlSubmission::Prepared => ControlSubmission::NotSubmitted,
             state => state,
         };
-        receipt.note_submission(delete, delete_status, started.elapsed());
+        receipt.note_submission(delete, responses.delete, started.elapsed());
         if let Some(mut progress) = receipt.device_removal_progress() {
             if progress.pause_request == Some(ControlSubmission::Prepared) {
                 progress.pause_request = Some(ControlSubmission::NotSubmitted);
-                receipt.note_device_removal_progress(progress);
             }
+            progress.pause_response_status = responses.pause;
+            receipt.note_device_removal_progress(progress);
         }
         let pause_may_have_applied = receipt.device_removal_progress().is_some_and(|progress| {
             matches!(
@@ -156,7 +166,8 @@ impl Client {
             )
         });
         let result = result.map_err(|error| {
-            if (delete != ControlSubmission::NotSubmitted || pause_may_have_applied)
+            if staged
+                && (delete != ControlSubmission::NotSubmitted || pause_may_have_applied)
                 && !matches!(error, Error::MutationOutcomeUnknown { .. })
             {
                 uncertain("complete device removal", error)
@@ -172,7 +183,7 @@ impl Client {
         receipt: &mut ControlOperationReceipt,
         save: &mut Save,
         started: Instant,
-        delete_status: &mut Option<u16>,
+        responses: &mut RemovalResponses,
     ) -> Result<DeviceRemoval>
     where
         Save: FnMut(ControlOperationReceipt) -> Saved,
@@ -188,8 +199,15 @@ impl Client {
             self.observe_control_identity().await?;
             let previous = self.device(&peer).await?;
             if let Some(deadline) = deadline {
-                self.pause_for_recorded_removal(&peer, previous.paused, receipt, save, deadline)
-                    .await?;
+                self.pause_for_recorded_removal(
+                    &peer,
+                    previous.paused,
+                    receipt,
+                    save,
+                    deadline,
+                    &mut responses.pause,
+                )
+                .await?;
             }
 
             let mut checkpoint = receipt.clone();
@@ -200,16 +218,21 @@ impl Client {
             );
             save(checkpoint).await.map_err(save_error)?;
             self.observe_control_identity().await?;
+            if deadline.is_some() && !self.peer_disconnected(&peer).await? {
+                return Err(Error::ConfigurationChanged);
+            }
             require_removal_time(deadline)?;
             receipt.note_submission(
                 ControlSubmission::PossiblySubmitted,
                 None,
                 started.elapsed(),
             );
-            let status = self.submit_device_delete(&peer, delete_status).await?;
+            let status = self
+                .submit_device_delete(&peer, &mut responses.delete)
+                .await?;
             receipt.note_submission(
                 ControlSubmission::Acknowledged { status },
-                *delete_status,
+                responses.delete,
                 started.elapsed(),
             );
             let readback = async {
@@ -238,6 +261,7 @@ impl Client {
         receipt: &mut ControlOperationReceipt,
         save: &mut Save,
         deadline: tokio::time::Instant,
+        pause_status: &mut Option<u16>,
     ) -> Result<()>
     where
         Save: FnMut(ControlOperationReceipt) -> Saved,
@@ -259,8 +283,9 @@ impl Client {
             self.observe_control_identity().await?;
             require_removal_time(Some(deadline))?;
             receipt.note_device_removal_progress(progress);
-            let status = self.submit_peer_pause(peer, &mut None).await?;
+            let status = self.submit_peer_pause(peer, pause_status).await?;
             progress.pause_request = Some(ControlSubmission::Acknowledged { status });
+            progress.pause_response_status = *pause_status;
             receipt.note_device_removal_progress(progress);
             if !self.device(peer).await?.paused {
                 return Err(Error::ManagedFailure {
@@ -270,18 +295,22 @@ impl Client {
         }
         receipt.note_device_removal_progress(progress);
         loop {
-            let connections = self.connections().await?;
-            if connections
-                .connections
-                .get(peer)
-                .is_some_and(|entry| !entry.connected)
-            {
+            if self.peer_disconnected(peer).await? {
                 progress.disconnection_observed = true;
                 receipt.note_device_removal_progress(progress);
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
+    }
+
+    async fn peer_disconnected(&self, peer: &DeviceId) -> Result<bool> {
+        Ok(self
+            .connections()
+            .await?
+            .connections
+            .get(peer)
+            .is_some_and(|entry| !entry.connected))
     }
 }
 
