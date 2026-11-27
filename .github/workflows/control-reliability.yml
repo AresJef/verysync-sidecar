@@ -97,7 +97,7 @@ jobs:
             --baseline "$RUNNER_TEMP/published-0.1.1.crate" --checker "$VERYSYNC_SEMVER_CHECKER" \
             --cargo "$(command -v cargo)" --parent "$RUNNER_TEMP" --evidence "$RUNNER_TEMP/profile-evidence/api"
       - name: Verify the exact development baseline API for upgrade receipts
-        if: startsWith(github.ref, 'refs/heads/ci/formal-candidate/upgrade-receipts-')
+        if: startsWith(github.ref, 'refs/heads/ci/formal-candidate/upgrade-receipts-') || startsWith(github.ref, 'refs/heads/ci/upgrade-receipts-round-20261127-rc')
         run: |
           git fetch --no-tags --depth=1 https://github.com/AresJef/verysync-sidecar.git \
             1c1f4956aa850b9ff662e07de910c49e0c9320a1

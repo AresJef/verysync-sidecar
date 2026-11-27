@@ -625,6 +625,7 @@ async fn native_same_attempt_observes_replacement_after_upload_reply_loss() -> T
 }
 
 #[tokio::test]
+#[ignore = "requires the isolated provider-blocked receipt job"]
 async fn stopped_cli_blocked_check_preserves_actual_nonzero_exit_with_no_installation() -> TestResult
 {
     let root = tempfile::Builder::new().prefix("u1c").tempdir()?;

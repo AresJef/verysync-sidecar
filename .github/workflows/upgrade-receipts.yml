@@ -116,7 +116,7 @@ jobs:
         if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
         run: |
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
-            --test-target upgrade_engine --test-filter stopped_cli_blocked_check \
+            --test-target upgrade_engine --test-filter stopped_cli_blocked_check --blocked-upgrade-check \
             --upgrade-consumer "$RUNNER_TEMP/upgrade-package-consumer/consumer" \
             --evidence-dir "$RUNNER_TEMP/upgrade-evidence/cli-check"
       - name: Test both same-attempt unknown upgrades from the unpacked crate

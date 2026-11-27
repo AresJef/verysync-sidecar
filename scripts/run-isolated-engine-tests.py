@@ -501,6 +501,8 @@ def main():
     suite.add_argument("--managed-repair-regressions", action="store_true",
                        help="run the isolated managed lifecycle regressions")
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
+    parser.add_argument("--blocked-upgrade-check", action="store_true",
+                        help="run the dedicated CLI check with vendor metadata blocked")
     parser.add_argument("--upgrade-process-trace", type=Path,
                         help="collect independent process events for the two native upgrade recovery cases")
     parser.add_argument("--upgrade-consumer", type=Path,
@@ -523,6 +525,15 @@ def main():
         raise ValueError("a test filter requires an explicit Cargo test target")
     if args.allow_private_discovery and args.test_target != "network":
         raise ValueError("private discovery routing is restricted to the explicit network suite")
+    if args.blocked_upgrade_check and (
+        args.test_target != "upgrade_engine"
+        or args.test_filter != "stopped_cli_blocked_check"
+        or args.allow_upgrade_metadata
+        or args.serve_pinned_upgrade_archive
+    ):
+        raise ValueError("the blocked CLI check requires its dedicated selector and blocked metadata")
+    if args.test_filter == "stopped_cli_blocked_check" and not args.blocked_upgrade_check:
+        raise ValueError("use --blocked-upgrade-check to select the provider-blocked CLI case")
     if args.upgrade_process_trace and (
         args.test_target != "upgrade_engine"
         or args.test_filter != "native_same_attempt_observes"
@@ -630,6 +641,8 @@ def main():
                 if args.test_filter:
                     command += [args.test_filter]
                 command += ["--", "--test-threads=1", "--nocapture"]
+                if args.blocked_upgrade_check:
+                    command += ["--ignored"]
                 if args.test_target == "browser_engine":
                     command = isolate_browser_command(command, args.evidence_dir, env)
             else:
