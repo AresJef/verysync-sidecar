@@ -176,17 +176,24 @@ async fn forward_to_owned(
     if backend.ip() != Ipv4Addr::LOCALHOST || backend.port() == 18886 {
         return Err("explicit isolated loopback backend required".into());
     }
-    let uri = format!(
-        "http://{backend}{}",
-        request.route.path().ok_or("unknown backend route")?
-    );
-    let mut outgoing = if request.method == Method::Patch {
-        client
+    let path = if let Some(peer) = request.peer.as_ref() {
+        format!("/rest/config/devices/{}", peer.as_str())
+    } else {
+        request
+            .route
+            .path()
+            .ok_or("unknown backend route")?
+            .to_owned()
+    };
+    let uri = format!("http://{backend}{path}");
+    let mut outgoing = match request.method {
+        Method::Patch => client
             .patch(&uri)
             .header("content-type", "application/json")
-            .body(request.body)
-    } else {
-        client.get(&uri)
+            .body(request.body),
+        Method::Get => client.get(&uri),
+        Method::Delete => client.delete(&uri),
+        _ => return Err("fixture does not forward this request method".into()),
     };
     if let Some(key) = request.credential {
         outgoing = outgoing.header("x-api-key", key);
@@ -1014,6 +1021,174 @@ async fn native_old_owner_generation_cannot_shutdown_restarted_same_device() -> 
     let mut report = checked?;
     exit?;
     report["owned_normal_exit_and_state_release"] = true.into();
+    println!("control reliability native evidence {report}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_delete_reply_loss_and_reregistration_are_separate_facts() -> TestResult {
+    use control_native_request_log::LogWindow;
+    use verysync_sidecar::{
+        CreateDeviceOptions, DevicePatch, RawMethod, RawRequest, RequestEffect,
+    };
+
+    let executable = app_executable()?;
+    let root = private_tree()?;
+    let owner_port = reserved()?;
+    let peer_port = reserved()?;
+    let owner_address = owner_port.local_addr()?;
+    let peer_address = peer_port.local_addr()?;
+    drop(owner_port);
+    drop(peer_port);
+    let mut owner = owned_core(root.path(), owner_address).await?;
+    let peer_fixture = root.path().join("owned-peer");
+    std::fs::create_dir(&peer_fixture)?;
+    let mut peer_owner = owned_core(&peer_fixture, peer_address).await?;
+    let peer = peer_owner.client().instance().device_id.clone();
+    confirmed_exit(&mut peer_owner).await?;
+
+    let report: TestResult<Value> = async {
+        let id = owner.client().instance().device_id.clone();
+        let before_generation = owner.control_generation();
+        let configuration = owner.client().configuration().await?;
+        let key = configuration.native_document()["gui"]["apiKey"]
+            .as_str()
+            .ok_or("isolated native key absent")?;
+        let data = root.path().join("retained-device-files");
+        std::fs::create_dir(&data)?;
+        let sample = data.join("fixture.txt");
+        std::fs::write(&sample, RETAINED_FILE)?;
+        let folder = FolderId::parse("device-recovery-fixture")?;
+        let registration =
+            CreateDeviceOptions::new(peer.clone()).settings(DevicePatch::default().paused(true));
+        owner.client().create_device(&registration).await?;
+        let created = owner
+            .client()
+            .create_folder(
+                &CreateFolderOptions::new(folder.clone(), TargetPath::local(&data)).paused(true),
+            )
+            .await?;
+        let mut devices = created.extra["devices"]
+            .as_array()
+            .cloned()
+            .ok_or("native folder associations absent")?;
+        devices.push(json!({"deviceID": peer.as_str()}));
+        let attach = RawRequest::new(
+            RawMethod::Patch,
+            ["rest", "config", "folders", folder.as_str()],
+            RequestEffect::MayModify,
+        )?
+        .json_body(&json!({"devices":devices}))?;
+        let result = owner.client().raw_request(&attach).await?;
+        assert!((200..300).contains(&result.status()));
+
+        let journal = journal_path(root.path())?;
+        let witness = Witness::new();
+        let forwarder = forward_http()?;
+        let origin = Origin::start_for_peer(
+            "device_a",
+            witness.clone(),
+            Some(peer.clone()),
+            move |_, request: Request| {
+                let lose_reply = request.method == Method::Delete;
+                forward_to_owned(forwarder.clone(), owner_address, request, lose_reply)
+            },
+        )
+        .await?;
+        let removed = launch_app(
+            &executable,
+            "remove-device",
+            &journal,
+            &json!({
+                "endpoint": origin.url(), "api_key": key, "expected_device_id": id.as_str(),
+                "peer_id": peer.as_str(), "event_log": true
+            }),
+        )
+        .await?;
+        assert_eq!(removed.code, 2);
+        assert_eq!(removed.output["submission"], "possibly_submitted");
+        assert!(!owner
+            .client()
+            .devices()
+            .await?
+            .iter()
+            .any(|item| item.device_id == peer));
+        assert_eq!(std::fs::read(&sample)?, RETAINED_FILE);
+
+        owner.restart(PROGRAM_WAIT).await?;
+        assert_eq!(owner.client().instance().device_id, id);
+        assert_ne!(owner.control_generation(), before_generation);
+        control_native_request_log::enable(owner.client()).await?;
+        witness.recovery()?;
+        let observe_input = json!({
+            "endpoint": format!("http://{owner_address}/"), "api_key": key,
+            "expected_device_id": id.as_str()
+        });
+        let checkpoint = std::fs::read(journal.join("receipt.json"))?;
+        let window = LogWindow::new(owner.state_directory(), owner_address, key)?;
+        window.open().await?;
+        let absent = launch_app(&executable, "observe-device", &journal, &observe_input).await?;
+        let first_reads = window.close().await?;
+        assert_eq!(absent.code, 0);
+        assert_eq!(absent.operation_id()?, removed.operation_id()?);
+        assert_eq!(absent.output["submission"], "possibly_submitted");
+        assert_eq!(absent.output["configuration_absent"], true);
+        assert_eq!(absent.output["remaining_folder_count"], 0);
+
+        // An independent owner action registers the same ID again outside both
+        // observation windows. An old receipt must report the new live state.
+        owner.client().create_device(&registration).await?;
+        let window = LogWindow::new(owner.state_directory(), owner_address, key)?;
+        window.open().await?;
+        let returned = launch_app(&executable, "observe-device", &journal, &observe_input).await?;
+        let second_reads = window.close().await?;
+        assert_eq!(returned.code, 0);
+        assert_eq!(returned.operation_id()?, removed.operation_id()?);
+        assert_eq!(returned.output["submission"], "possibly_submitted");
+        assert_eq!(returned.output["configuration_absent"], false);
+        assert_eq!(std::fs::read(journal.join("receipt.json"))?, checkpoint);
+        for observation in [&first_reads, &second_reads] {
+            assert_eq!(
+                observation["ordered_reads"],
+                json!([
+                    Route::Version,
+                    Route::Identity,
+                    Route::Identity,
+                    Route::RegistrationConfig,
+                    Route::Version,
+                    Route::Identity
+                ])
+            );
+            assert_eq!(observation["modifications_received"], 0);
+        }
+        let rows = witness.rows()?;
+        let changes = rows
+            .iter()
+            .filter(|row| row.method != Method::Get)
+            .collect::<Vec<_>>();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].method, Method::Delete);
+        assert_eq!(changes[0].route, Route::Peer);
+        assert_eq!(changes[0].phase, Phase::Submission);
+        assert_eq!(changes[0].delivery, Delivery::DroppedAfterBackendResponse);
+        assert!(changes[0]
+            .backend_status
+            .is_some_and(|status| (200..300).contains(&status)));
+        assert!(owner.client().folder(&folder).await?.paused);
+        assert_eq!(std::fs::read(&sample)?, RETAINED_FILE);
+        Ok(json!({
+            "scenario":"native_device_removal_reply_lost", "operation_id": removed.operation_id()?,
+            "delete_requests": 1, "absence_verified_after_core_restart": true,
+            "later_registration_detected": true, "original_outcome": "possibly_submitted",
+            "recovery_observations": [first_reads, second_reads],
+            "bytes_and_folder_preserved": true, "witnesses": rows
+        }))
+    }
+    .await;
+    let exit = confirmed_exit(&mut owner).await;
+    let mut report = report?;
+    exit?;
+    report["owned_cleanup_verified"] = true.into();
     println!("control reliability native evidence {report}");
     Ok(())
 }

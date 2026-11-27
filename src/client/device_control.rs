@@ -1,5 +1,5 @@
 //! Peer operations on the same authenticated, bounded management connection.
-use super::Client;
+use super::{checked_response, send_bounded_with_status, Client};
 use crate::{
     CreateDeviceOptions, DeviceConfig, DeviceDefaults, DeviceId, DevicePatch, DeviceRemoval,
     DeviceUpdate, Error, FolderId, Result,
@@ -201,17 +201,8 @@ impl Client {
             let previous = self.device(id).await?;
             check_deadline()?;
             if !previous.paused {
-                let url = self.device_url(id)?;
                 modified = true;
-                self.connection
-                    .request_bytes(
-                        "pause peer before explicit removal",
-                        reqwest::Method::PATCH,
-                        url,
-                        Some(&serde_json::json!({"paused":true})),
-                        true,
-                    )
-                    .await?;
+                self.submit_peer_pause(id, &mut None).await?;
                 if !self.device(id).await?.paused {
                     return Err(Error::ManagedFailure {
                         reason: "peer pause was not observed before removal",
@@ -251,10 +242,71 @@ impl Client {
         id: &DeviceId,
         previous_configuration: DeviceConfig,
     ) -> Result<DeviceRemoval> {
-        let url = self.device_url(id)?;
-        self.connection
-            .request_bytes("remove device", reqwest::Method::DELETE, url, None, true)
-            .await?;
+        self.submit_device_delete(id, &mut None).await?;
+        let snapshot = self
+            .device_registration_state(id)
+            .await
+            .map_err(|source| uncertain("read back removed device", source))?;
+        Ok(snapshot.removal(previous_configuration))
+    }
+
+    pub(super) async fn submit_peer_pause(
+        &self,
+        id: &DeviceId,
+        status: &mut Option<u16>,
+    ) -> Result<u16> {
+        self.send_device_mutation(
+            "pause peer before explicit removal",
+            reqwest::Method::PATCH,
+            id,
+            Some(&serde_json::json!({"paused":true})),
+            status,
+        )
+        .await
+    }
+
+    pub(super) async fn submit_device_delete(
+        &self,
+        id: &DeviceId,
+        status: &mut Option<u16>,
+    ) -> Result<u16> {
+        self.send_device_mutation("remove device", reqwest::Method::DELETE, id, None, status)
+            .await
+    }
+
+    async fn send_device_mutation(
+        &self,
+        operation: &'static str,
+        method: reqwest::Method,
+        id: &DeviceId,
+        body: Option<&serde_json::Value>,
+        status: &mut Option<u16>,
+    ) -> Result<u16> {
+        let request = self
+            .connection
+            .authorized_request(method, self.device_url(id)?, body);
+        let response = match send_bounded_with_status(
+            operation,
+            request,
+            true,
+            self.connection.response_limit,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(failure) => {
+                *status = failure.status;
+                return Err(failure.error);
+            }
+        };
+        *status = Some(response.status);
+        Ok(checked_response(operation, response, true)?.status)
+    }
+
+    pub(super) async fn device_registration_state(
+        &self,
+        id: &DeviceId,
+    ) -> Result<DeviceRegistrationState> {
         #[derive(Deserialize)]
         struct Snapshot {
             devices: Vec<DeviceConfig>,
@@ -273,16 +325,14 @@ impl Client {
         let snapshot: Snapshot = self
             .connection
             .get_json("read device removal associations", "rest/config")
-            .await
-            .map_err(|source| uncertain("read back removed device", source))?;
+            .await?;
         let remaining_folder_associations = snapshot
             .folders
             .into_iter()
             .filter(|folder| folder.devices.iter().any(|peer| peer.id == *id))
             .map(|folder| folder.id)
             .collect();
-        Ok(DeviceRemoval {
-            previous_configuration,
+        Ok(DeviceRegistrationState {
             configuration_absent: !snapshot.devices.iter().any(|v| v.device_id == *id),
             remaining_folder_associations,
         })
@@ -308,12 +358,28 @@ impl Client {
         Ok(url)
     }
 }
+
+pub(super) struct DeviceRegistrationState {
+    pub(super) configuration_absent: bool,
+    pub(super) remaining_folder_associations: Vec<FolderId>,
+}
+
+impl DeviceRegistrationState {
+    pub(super) fn removal(self, previous_configuration: DeviceConfig) -> DeviceRemoval {
+        DeviceRemoval {
+            previous_configuration,
+            configuration_absent: self.configuration_absent,
+            remaining_folder_associations: self.remaining_folder_associations,
+        }
+    }
+}
+
 fn patch_json(patch: &DevicePatch) -> Result<serde_json::Value> {
     serde_json::to_value(patch).map_err(|_| Error::InvalidConfiguration {
         reason: "device settings cannot be encoded",
     })
 }
-fn uncertain(operation: &'static str, source: Error) -> Error {
+pub(super) fn uncertain(operation: &'static str, source: Error) -> Error {
     Error::MutationOutcomeUnknown {
         operation,
         source: Box::new(source),

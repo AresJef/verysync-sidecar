@@ -13,12 +13,19 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/control-reliability.yml'
       - 'src/control_operation.rs'
+      - 'src/control_observation.rs'
+      - 'src/capabilities.rs'
       - 'src/client/control_*.rs'
       - 'src/client/gui_listener.rs'
+      - 'src/client/device*.rs'
       - 'src/managed/control_generation.rs'
+      - 'src/managed/observation.rs'
       - 'examples/gui_listener_recovery.rs'
+      - 'examples/*_control.rs'
+      - 'docs/public/control-*.md'
       - 'tests/control_*.rs'
       - 'tests/common/control_*.rs'
+      - 'scripts/check-control-candidate-compatibility.py'
       - 'scripts/prepare-control-reliability-consumer.py'
 
 permissions:
@@ -54,6 +61,67 @@ jobs:
           name: control-frozen-package
           path: ${{ runner.temp }}/control-frozen-package
           if-no-files-found: error
+
+  consumers:
+    name: Packaged consumers and published API compatibility
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v4
+        with:
+          name: control-frozen-package
+          path: ${{ runner.temp }}/control-frozen-package
+      - name: Prepare the supported SDK compiler and fixed API checker
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup toolchain install 1.99.1 --profile minimal
+          cargo +1.85.0 fetch --locked
+          python scripts/prepare-api-compatibility-tool.py --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Compare the exact candidate and published crate in three feature profiles
+        run: |
+          curl --fail --silent --show-error --location --max-time 40 \
+            https://static.crates.io/crates/verysync-sidecar/verysync-sidecar-0.1.1.crate \
+            --output "$RUNNER_TEMP/published-0.1.1.crate"
+          python scripts/check-control-candidate-compatibility.py \
+            --candidate "$RUNNER_TEMP/control-frozen-package/candidate.crate" \
+            --identity "$RUNNER_TEMP/control-frozen-package/package.json" \
+            --baseline "$RUNNER_TEMP/published-0.1.1.crate" --checker "$VERYSYNC_SEMVER_CHECKER" \
+            --cargo "$(command -v cargo)" --parent "$RUNNER_TEMP" --evidence "$RUNNER_TEMP/profile-evidence/api"
+      - name: Build and run an external consumer under each feature profile
+        run: |
+          for profile in minimal default all; do
+            base="$RUNNER_TEMP/profile-evidence/$profile"
+            settings="$RUNNER_TEMP/control-$profile.env"
+            python scripts/prepare-control-reliability-consumer.py --toolchain 1.85.0 \
+              --candidate "$RUNNER_TEMP/control-frozen-package/candidate.crate" \
+              --candidate-identity "$RUNNER_TEMP/control-frozen-package/package.json" \
+              --work "$RUNNER_TEMP/control-$profile" --evidence "$base" --github-env "$settings" --profile "$profile"
+            set -a
+            source "$settings"
+            set +a
+            for program in "$VERYSYNC_TEST_RECOVERY_EXAMPLE" "$VERYSYNC_TEST_OBSERVATION_EXAMPLE" "$VERYSYNC_TEST_PREVIEW_EXAMPLE" "$VERYSYNC_TEST_PREFLIGHT_EXAMPLE"; do
+              "$program" --help | tee "$base/$(basename "$program").help"
+            done
+            cargo +1.85.0 test --locked --offline --features engine-tests --test control_reliability_engine \
+              package_consumer_distinguishes_acknowledgement_loss_and_later_changes -- --nocapture \
+              | tee "$base/control-recovery.log"
+            cargo +1.85.0 test --locked --offline --test control_preview_contract \
+              package_consumer_requires_approval_before_one_scoped_write -- --nocapture \
+              | tee "$base/control-preview.log"
+          done
+      - name: Archive exact consumer and comparison receipts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: control-consumer-feature-profiles
+          path: ${{ runner.temp }}/profile-evidence
 
   native:
     name: Listener recovery (${{ matrix.package }})
@@ -119,10 +187,21 @@ jobs:
         run: |
           cargo +"$TEST_TOOLCHAIN" test --locked --offline --test control_fault_fixture -- --nocapture
           cargo +"$TEST_TOOLCHAIN" test --locked --offline --test transport_contract control_receipt_contracts -- --nocapture
-      - name: Verify native listener recovery, process ownership and exact write counts
+          cargo +"$TEST_TOOLCHAIN" test --locked --offline --test transport_contract control_device_receipt_contracts -- --nocapture
+          cargo +"$TEST_TOOLCHAIN" test --locked --offline --test control_observation_contract --test control_preview_contract --test control_preflight_contract -- --nocapture
+      - name: Verify native control, package consumers and exact write counts
+        run: |
+          result=0
+          for target in control_reliability_engine control_observation_engine control_preview_engine control_preflight_engine; do
+            python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+              --test-target "$target" --evidence-dir "${{ runner.temp }}/control-evidence/$target" || result=1
+          done
+          exit "$result"
+      - name: Observe a native peer disconnect before a single removal
         run: >-
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
-          --test-target control_reliability_engine --evidence-dir "${{ runner.temp }}/control-evidence/native"
+          --test-target devices --test-filter actual_receipt_disconnect_and_remove_preserves_files
+          --evidence-dir "${{ runner.temp }}/control-evidence/staged-device-removal"
       - name: Confirm no exact task-owned test core remains
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: python scripts/prepare-test-engine.py check-cleanup | tee "${{ runner.temp }}/control-evidence/core-cleanup.log"

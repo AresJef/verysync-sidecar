@@ -4,7 +4,10 @@ use std::{fmt, time::SystemTime};
 
 use super::{Client, ConnectOptions, EngineVersion};
 use crate::control_operation::version_fingerprint;
-use crate::{managed::ManagedControlGeneration, DeviceId, Error, GuiListenerConfig, Result};
+use crate::{
+    managed::ManagedControlGeneration, ControlOperationReceipt, DeviceId, Error, GuiListenerConfig,
+    ManagementEndpoint, Result,
+};
 
 /// Device identity and engine metadata observed on one selected management connection.
 ///
@@ -59,6 +62,30 @@ impl fmt::Debug for ControlIdentityObservation {
 }
 
 impl Client {
+    pub(super) fn require_prepared_control_target(
+        &self,
+        endpoint: &ManagementEndpoint,
+        receipt: &ControlOperationReceipt,
+    ) -> Result<()> {
+        if endpoint != self.endpoint() {
+            return Err(Error::InvalidConfiguration {
+                reason: "the prepared operation belongs to a different management address",
+            });
+        }
+        if receipt.target_device_id() != &self.instance().device_id {
+            return Err(Error::IdentityMismatch {
+                expected: receipt.target_device_id().clone(),
+                actual: self.instance().device_id.clone(),
+            });
+        }
+        if receipt.version_fingerprint() != &version_fingerprint(&self.instance().version.version) {
+            return Err(Error::InvalidConfiguration {
+                reason: "the prepared operation belongs to a different engine version",
+            });
+        }
+        Ok(())
+    }
+
     /// Check the selected endpoint's version and device identity again.
     ///
     /// The version must match this connection's handshake. The check uses named
@@ -128,6 +155,27 @@ impl ReadOnlyControl {
             .await
             .map_err(recovery_read_error)?;
         Ok((identity, current))
+    }
+
+    pub(super) async fn device_registration(
+        &self,
+        peer: &DeviceId,
+    ) -> Result<(
+        ControlIdentityObservation,
+        super::device_control::DeviceRegistrationState,
+    )> {
+        self.0.system_status().await.map_err(recovery_read_error)?;
+        let registration = self
+            .0
+            .device_registration_state(peer)
+            .await
+            .map_err(recovery_read_error)?;
+        let identity = self
+            .0
+            .observe_control_identity()
+            .await
+            .map_err(recovery_read_error)?;
+        Ok((identity, registration))
     }
 }
 

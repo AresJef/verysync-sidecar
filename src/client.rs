@@ -4,10 +4,13 @@ mod auxiliary_control;
 mod auxiliary_maintenance;
 mod configuration_control;
 mod control_identity;
+mod control_preflight;
+mod control_preview;
 mod control_recovery;
 mod default_versioning;
 mod device_control;
 mod device_ignore;
+mod device_recovery;
 mod file_control;
 mod file_mutation;
 mod file_transfer;
@@ -54,7 +57,13 @@ use crate::{
 };
 use crate::{RawRequest, RawResponse, RequestEffect};
 pub use control_identity::ControlIdentityObservation;
+pub use control_preview::{
+    SettingsChange, SettingsCommit, SettingsField, SettingsFieldChange, SettingsFieldResult,
+    SettingsFieldState, SettingsPreview, SettingsStep, SettingsStepResult, SettingsTarget,
+    SettingsValue,
+};
 pub use control_recovery::GuiListenerRecovery;
+pub use device_recovery::DeviceRemovalRecovery;
 pub use local_api::{
     LocalApiClient, LocalApiConnectOptions, LocalApiExitAcknowledgement, LocalApiExitAction,
     LocalApiFolder, LocalApiFolderCollectionUpdate, LocalApiHardware, LocalApiHistoryFilter,
@@ -838,21 +847,11 @@ impl Client {
             });
         }
         let url = self.connection.folder_url(id)?;
-        let body = serde_json::to_value(patch).map_err(|_| Error::InvalidConfiguration {
-            reason: "folder patch cannot be encoded",
-        })?;
+        let body = Self::folder_patch_body(patch)?;
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
         self.folder(id).await?;
-        self.connection
-            .request_bytes(
-                "update folder",
-                reqwest::Method::PATCH,
-                url,
-                Some(&body),
-                true,
-            )
-            .await?;
+        self.submit_folder_patch(url, &body).await?;
         let configuration =
             self.folder(id)
                 .await
@@ -864,6 +863,26 @@ impl Client {
             requested_fields_match: patch.matches(&configuration),
             configuration,
         })
+    }
+
+    fn folder_patch_body(patch: &FolderPatch) -> Result<serde_json::Value> {
+        serde_json::to_value(patch).map_err(|_| Error::InvalidConfiguration {
+            reason: "folder patch cannot be encoded",
+        })
+    }
+
+    async fn submit_folder_patch(&self, url: Url, body: &serde_json::Value) -> Result<u16> {
+        let (status, _) = self
+            .connection
+            .request_bytes(
+                "update folder",
+                reqwest::Method::PATCH,
+                url,
+                Some(body),
+                true,
+            )
+            .await?;
+        Ok(status)
     }
 
     /// Request folder-level pause and return configuration readback.

@@ -51,6 +51,8 @@ pub enum Route {
     Version,
     Identity,
     Gui,
+    RegistrationConfig,
+    Peer,
     Unknown,
 }
 
@@ -60,6 +62,8 @@ impl Route {
             "/rest/system/version" => Self::Version,
             "/rest/system/status" => Self::Identity,
             "/rest/config/gui" => Self::Gui,
+            "/rest/config" => Self::RegistrationConfig,
+            value if value.starts_with("/rest/config/devices/") => Self::Peer,
             _ => Self::Unknown,
         }
     }
@@ -69,7 +73,8 @@ impl Route {
             Self::Version => Some("/rest/system/version"),
             Self::Identity => Some("/rest/system/status"),
             Self::Gui => Some("/rest/config/gui"),
-            Self::Unknown => None,
+            Self::RegistrationConfig => Some("/rest/config"),
+            Self::Peer | Self::Unknown => None,
         }
     }
 }
@@ -175,6 +180,7 @@ pub struct Request {
     pub route: Route,
     pub credential: Option<reqwest::header::HeaderValue>,
     pub body: Vec<u8>,
+    pub peer: Option<verysync_sidecar::DeviceId>,
 }
 
 pub struct Response {
@@ -239,6 +245,19 @@ impl Origin {
         F: Fn(Phase, Request) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = TestResult<Response>> + Send + 'static,
     {
+        Self::start_for_peer(name, witness, None, handle).await
+    }
+
+    pub async fn start_for_peer<F, Fut>(
+        name: &'static str,
+        witness: Witness,
+        selected_peer: Option<verysync_sidecar::DeviceId>,
+        handle: F,
+    ) -> TestResult<Self>
+    where
+        F: Fn(Phase, Request) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = TestResult<Response>> + Send + 'static,
+    {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
         if addr.port() == 18886 {
@@ -249,11 +268,17 @@ impl Origin {
                 let result = tokio::time::timeout(IO_TIMEOUT, async {
                     let request = read_request(&mut stream).await?;
                     let (index, phase) = witness.record(name, &request)?;
-                    let mut response = if request.method == Method::Get && request.route.path().is_some()
-                        || phase == Phase::Submission
-                            && request.method == Method::Patch
-                            && request.route == Route::Gui
-                    {
+                    let permitted_read = request.method == Method::Get && match request.route {
+                        Route::Version | Route::Identity | Route::Gui => true,
+                        Route::RegistrationConfig => selected_peer.is_some(),
+                        _ => false,
+                    };
+                    let permitted_write = phase == Phase::Submission && (
+                        request.method == Method::Patch && request.route == Route::Gui
+                        || matches!(request.method, Method::Patch | Method::Delete)
+                            && selected_peer.as_ref().is_some_and(|peer| request.peer.as_ref() == Some(peer))
+                    );
+                    let mut response = if permitted_read || permitted_write {
                         handle(phase, request).await?
                     } else {
                         Response::rejected()
@@ -312,7 +337,12 @@ async fn read_request(stream: &mut TcpStream) -> TestResult<Request> {
         .ok_or("fixture request line absent")?
         .split(' ');
     let method = Method::parse(first.next().ok_or("fixture request method absent")?);
-    let route = Route::parse(first.next().ok_or("fixture request route absent")?);
+    let path = first.next().ok_or("fixture request route absent")?;
+    let route = Route::parse(path);
+    let peer = path
+        .strip_prefix("/rest/config/devices/")
+        .map(verysync_sidecar::DeviceId::parse)
+        .transpose()?;
     if first.next() != Some("HTTP/1.1") || first.next().is_some() {
         return Err("fixture requires an HTTP/1.1 request line".into());
     }
@@ -352,6 +382,7 @@ async fn read_request(stream: &mut TcpStream) -> TestResult<Request> {
         route,
         credential,
         body: bytes.split_off(head_end),
+        peer,
     })
 }
 
@@ -373,7 +404,7 @@ pub fn assert_read_only(rows: &[Event]) -> TestResult {
         || rows.iter().any(|row| {
             row.phase != Phase::Recovery
                 || row.method != Method::Get
-                || row.route == Route::Unknown
+                || row.route.path().is_none()
                 || row.delivery != Delivery::ResponseSent
         })
     {

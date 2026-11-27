@@ -50,6 +50,9 @@
 #![doc = include_str!("../docs/public/remote-management.md")]
 #![doc = include_str!("../docs/public/management-transport.md")]
 #![doc = include_str!("../docs/public/gui-listener.md")]
+#![doc = include_str!("../docs/public/control-observation.md")]
+#![doc = include_str!("../docs/public/control-preview.md")]
+#![doc = include_str!("../docs/public/control-preflight.md")]
 #![doc = include_str!("../docs/public/target-directories.md")]
 #![doc = include_str!("../docs/public/native-helpers.md")]
 #![doc = include_str!("../docs/public/native-hardware.md")]
@@ -66,6 +69,7 @@ mod auxiliary;
 mod capabilities;
 mod client;
 mod configuration;
+mod control_observation;
 mod control_operation;
 mod device_options;
 mod devices;
@@ -126,24 +130,32 @@ pub use auxiliary::{
 };
 pub use capabilities::{
     library_capabilities, Capability, CapabilityReport, ImplementationStatus, InstanceConditions,
-    InstanceObservation, LibraryCapability, TargetSnapshot, TargetValidation, VerificationStatus,
+    InstanceObservation, LibraryCapability, OperationPreflightReport, PreflightLicense,
+    PreflightObservation, PreflightReadAccess, PreflightReads, TargetSnapshot, TargetValidation,
+    UpgradePreflightSource, UpgradeSourceEvidence, VerificationStatus,
 };
 pub use client::{
-    Client, ConnectOptions, ControlIdentityObservation, EngineVersion, GuiListenerRecovery,
-    InstanceInfo, LocalApiClient, LocalApiConnectOptions, LocalApiExitAcknowledgement,
-    LocalApiExitAction, LocalApiFolder, LocalApiFolderCollectionUpdate, LocalApiHardware,
-    LocalApiHistoryFilter, LocalApiHistoryPage, LocalApiHistoryRecord, LocalApiPeer,
-    LocalApiScanAcknowledgement, LocalApiUpgradeAcknowledgement, VersionCompatibility,
-    VersionPolicy,
+    Client, ConnectOptions, ControlIdentityObservation, DeviceRemovalRecovery, EngineVersion,
+    GuiListenerRecovery, InstanceInfo, LocalApiClient, LocalApiConnectOptions,
+    LocalApiExitAcknowledgement, LocalApiExitAction, LocalApiFolder,
+    LocalApiFolderCollectionUpdate, LocalApiHardware, LocalApiHistoryFilter, LocalApiHistoryPage,
+    LocalApiHistoryRecord, LocalApiPeer, LocalApiScanAcknowledgement,
+    LocalApiUpgradeAcknowledgement, SettingsChange, SettingsCommit, SettingsField,
+    SettingsFieldChange, SettingsFieldResult, SettingsFieldState, SettingsPreview, SettingsStep,
+    SettingsStepResult, SettingsTarget, SettingsValue, VersionCompatibility, VersionPolicy,
 };
 pub use configuration::{
     ConfigurationSectionUpdate, ConfigurationSnapshot, ConfigurationSyncState, ConfigurationUpdate,
     DiskFreeRequirement, DiskSpaceUnit, FolderDefaults, FolderDefaultsPatch, GeneralOptions,
     GeneralOptionsPatch, GuiConfigurationReplacement,
 };
+pub use control_observation::{
+    FolderObservation, FolderObservationPosition, FolderObservationRefresh,
+    FolderObservationSnapshot, FolderObservationUpdate,
+};
 pub use control_operation::{
     ControlOperationEvent, ControlOperationKind, ControlOperationReceipt, ControlOperationResult,
-    ControlSubmission, PreparedControlOperation,
+    ControlSubmission, DeviceRemovalProgress, PreparedControlOperation,
 };
 pub use device_options::{DeviceAdvancedConfig, DeviceAdvancedPatch, IntroductionSource};
 pub use devices::{
@@ -236,7 +248,10 @@ pub use managed::{
 };
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
-pub use managed::{ManagedControlGeneration, ManagedGenerationStatus};
+pub use managed::{
+    ManagedControlGeneration, ManagedExitObservation, ManagedExitObservationOutcome,
+    ManagedGenerationStatus,
+};
 pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
 pub use management_transport::{ManagementProxy, ManagementTransport};
 pub use network::{

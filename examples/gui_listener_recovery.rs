@@ -1,4 +1,4 @@
-//! Submit one listener change and recover its receipt from a separate process.
+//! Submit a listener change or peer removal and reopen its receipt from a separate process.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -17,11 +17,12 @@ use verysync_sidecar::{
     ManagementTransport,
 };
 
-const USAGE: &str = "Usage: gui_listener_recovery <submit|observe> <private-operation-directory>\n\
-Supply one JSON object on standard input. Both commands require endpoint, api_key, and \
+const USAGE: &str = "Usage: gui_listener_recovery <submit|observe|remove-device|observe-device> <private-operation-directory>\n\
+Supply one JSON object on standard input. All commands require endpoint, api_key, and \
 expected_device_id. Supply ca_pem for an additional HTTPS trust root, or timeout_ms \
 to select the request deadline. Submit also requires bind and accepts use_tls. \
-Set event_log to true to save bounded, separate submit diagnostics.";
+Remove-device requires peer_id. Add disconnect_timeout_ms to first pause the peer and confirm its disconnect. \
+Set event_log to true on a submit or removal command to save separate progress diagnostics.";
 const INPUT_LIMIT: u64 = 2 * 1024 * 1024;
 const RECEIPT_LIMIT: u64 = 64 * 1024;
 const RECEIPT_NAME: &str = "receipt.json";
@@ -39,6 +40,8 @@ struct Input {
     timeout_ms: Option<u64>,
     bind: Option<String>,
     use_tls: Option<bool>,
+    peer_id: Option<DeviceId>,
+    disconnect_timeout_ms: Option<u64>,
     #[serde(default)]
     event_log: bool,
 }
@@ -57,6 +60,11 @@ impl Input {
     }
 
     fn patch(&self) -> verysync_sidecar::Result<GuiListenerPatch> {
+        if self.peer_id.is_some() || self.disconnect_timeout_ms.is_some() {
+            return Err(Error::InvalidConfiguration {
+                reason: "use the remove-device command for device removal settings",
+            });
+        }
         let bind = self.bind.as_deref().ok_or(Error::InvalidConfiguration {
             reason: "submit requires a native listener bind authority",
         })?;
@@ -76,11 +84,9 @@ struct Events {
 
 impl Events {
     fn record(&mut self, event: ControlOperationEvent) {
-        if let Some(last) = self
-            .entries
-            .last_mut()
-            .filter(|last| last.0.submission == event.submission)
-        {
+        if let Some(last) = self.entries.last_mut().filter(|last| {
+            last.0.submission == event.submission && last.0.device_removal == event.device_removal
+        }) {
             last.0 = event;
             last.1 += 1;
         } else if self.entries.len() < EVENT_LIMIT {
@@ -139,6 +145,16 @@ impl Journal {
         })
         .await
         .map_err(io::Error::other)?
+    }
+
+    async fn checkpoint(self: Arc<Self>, receipt: ControlOperationReceipt) -> io::Result<()> {
+        let initial = !self.prepared.load(Ordering::Acquire);
+        self.save(receipt, initial).await
+    }
+
+    async fn save_result(self: &Arc<Self>, receipt: &ControlOperationReceipt) -> bool {
+        self.prepared.load(Ordering::Acquire)
+            && Arc::clone(self).save(receipt.clone(), false).await.is_ok()
     }
 
     fn finish_event_log(&self) -> Option<&'static str> {
@@ -227,11 +243,15 @@ fn submission_name(state: ControlSubmission) -> &'static str {
 }
 
 fn submission_report(command: &'static str, receipt: &ControlOperationReceipt) -> Value {
-    json!({
+    let mut summary = json!({
         "command": command,
         "operation_id": receipt.id(),
         "submission": submission_name(receipt.submission()),
-    })
+    });
+    if let Some(progress) = receipt.device_removal_progress() {
+        summary["device_removal_progress"] = json!(progress);
+    }
+    summary
 }
 
 fn error_label(error: &Error) -> &'static str {
@@ -287,19 +307,11 @@ async fn submit(directory: PathBuf, input: Input) -> (u8, Value) {
     let journal = Arc::new(Journal::new(directory, input.event_log));
     let checkpoints = Arc::clone(&journal);
     let report = client
-        .execute_gui_listener_change_persisted(
-            operation,
-            move |receipt: ControlOperationReceipt| {
-                let initial = matches!(receipt.submission(), ControlSubmission::Prepared);
-                Arc::clone(&checkpoints).save(receipt, initial)
-            },
-        )
+        .execute_gui_listener_change_persisted(operation, move |receipt| {
+            Arc::clone(&checkpoints).checkpoint(receipt)
+        })
         .await;
-    let result_saved = journal.prepared.load(Ordering::Acquire)
-        && Arc::clone(&journal)
-            .save(report.receipt.clone(), false)
-            .await
-            .is_ok();
+    let result_saved = journal.save_result(&report.receipt).await;
     let mut summary = submission_report("submit", &report.receipt);
     if let Some(event_log) = journal.finish_event_log() {
         summary["event_log"] = json!(event_log);
@@ -339,7 +351,12 @@ async fn observe(directory: &Path, input: Input) -> (u8, Value) {
         return (1, summary);
     };
     let mut summary = submission_report("observe", &receipt);
-    if input.bind.is_some() || input.use_tls.is_some() || input.event_log {
+    if input.bind.is_some()
+        || input.use_tls.is_some()
+        || input.event_log
+        || input.peer_id.is_some()
+        || input.disconnect_timeout_ms.is_some()
+    {
         failure(
             &mut summary,
             "invalid_input",
@@ -394,6 +411,149 @@ async fn observe(directory: &Path, input: Input) -> (u8, Value) {
     }
 }
 
+async fn remove_device(directory: PathBuf, input: Input) -> (u8, Value) {
+    let mut summary = json!({"command":"remove-device","submission":"not_submitted"});
+    let Some(peer) = input.peer_id.as_ref() else {
+        failure(
+            &mut summary,
+            "invalid_input",
+            "Supply the peer_id of the registration to remove.",
+        );
+        return (1, summary);
+    };
+    if input.bind.is_some() || input.use_tls.is_some() {
+        failure(&mut summary, "invalid_input", "Remove-device accepts connection settings, a peer ID and an optional disconnect deadline.");
+        return (1, summary);
+    }
+    let options = match input.options() {
+        Ok(options) => options,
+        Err(error) => {
+            failure(
+                &mut summary,
+                error_label(&error),
+                "Check the selected management address and trust settings.",
+            );
+            return (1, summary);
+        }
+    };
+    let client = match Client::connect(options).await {
+        Ok(client) => client,
+        Err(error) => {
+            failure(
+                &mut summary,
+                error_label(&error),
+                "No removal was requested. Check the device, credentials and connection.",
+            );
+            return (1, summary);
+        }
+    };
+    let operation = match input.disconnect_timeout_ms {
+        Some(timeout) => {
+            client.prepare_device_disconnect_and_remove(peer, Duration::from_millis(timeout))
+        }
+        None => client.prepare_device_removal(peer),
+    };
+    let operation = match operation {
+        Ok(operation) => operation,
+        Err(error) => {
+            failure(
+                &mut summary,
+                error_label(&error),
+                "No removal was requested. Check the peer ID and any disconnect deadline.",
+            );
+            return (1, summary);
+        }
+    };
+    let journal = Arc::new(Journal::new(directory, input.event_log));
+    let checkpoints = Arc::clone(&journal);
+    let report = client
+        .execute_device_removal_persisted(operation, move |receipt| {
+            Arc::clone(&checkpoints).checkpoint(receipt)
+        })
+        .await;
+    let saved = journal.save_result(&report.receipt).await;
+    let mut summary = submission_report("remove-device", &report.receipt);
+    summary["final_receipt_saved"] = json!(saved);
+    if let Some(event_log) = journal.finish_event_log() {
+        summary["event_log"] = json!(event_log);
+    }
+    match report.result {
+        Ok(observed) => {
+            summary["configuration_absent"] = json!(observed.configuration_absent);
+            summary["remaining_folder_count"] = json!(observed.remaining_folder_associations.len());
+            if saved {
+                summary["message"] = json!(
+                    "Check whether the registration is still present before taking another action."
+                );
+                (0, summary)
+            } else {
+                failure(&mut summary, "receipt_storage", "The final receipt could not be saved. Keep the earlier checkpoint and use observe-device to check the current registration.");
+                (1, summary)
+            }
+        }
+        Err(error) => {
+            let uncertain = matches!(error, Error::MutationOutcomeUnknown { .. });
+            let message = if uncertain {
+                "The change could not be fully confirmed. Use observe-device to check the registration before sending another request."
+            } else {
+                "No removal was requested. Check the selected peer and private receipt location."
+            };
+            failure(&mut summary, error_label(&error), message);
+            (if uncertain { 2 } else { 1 }, summary)
+        }
+    }
+}
+
+async fn observe_device(directory: &Path, input: Input) -> (u8, Value) {
+    let mut summary = json!({"command":"observe-device"});
+    if input.peer_id.is_some()
+        || input.disconnect_timeout_ms.is_some()
+        || input.event_log
+        || input.use_tls.is_some()
+        || input.bind.is_some()
+    {
+        failure(&mut summary, "invalid_input", "Observe-device accepts only connection settings. The saved receipt identifies the peer.");
+        return (1, summary);
+    }
+    let Some(receipt) =
+        open_receipt(directory).filter(|receipt| receipt.device_removal_progress().is_some())
+    else {
+        failure(&mut summary, "invalid_receipt", "The saved device-removal receipt could not be read. Use the original receipt directory.");
+        return (1, summary);
+    };
+    let mut summary = submission_report("observe-device", &receipt);
+    let options = match input.options() {
+        Ok(options) => options,
+        Err(error) => {
+            failure(&mut summary, error_label(&error), "The current registration could not be checked. Verify the endpoint and its trust settings.");
+            return (1, summary);
+        }
+    };
+    match receipt.observe_device_removal(options).await {
+        Ok(observed) => {
+            summary["configuration_absent"] = json!(observed.configuration_absent);
+            summary["remaining_folder_count"] = json!(observed.remaining_folder_associations.len());
+            summary["observed_at_unix_ms"] = json!(observed
+                .identity
+                .observed_at()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .map(|time| time.as_millis()));
+            summary["process_generation"] = json!("unknown");
+            summary["message"] = json!(if observed.configuration_absent {
+                "The selected device no longer lists this registration. Sharing keys may still allow the peer to register again."
+            } else {
+                "The selected device currently lists this registration."
+            });
+            (0, summary)
+        }
+        Err(error) => {
+            failure(&mut summary, error_label(&error), "The current registration could not be confirmed. Check the original device, trusted endpoint and credentials.");
+            (1, summary)
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
@@ -402,11 +562,16 @@ async fn main() -> ExitCode {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let (Some(mode @ ("submit" | "observe")), Some(directory), None) = (
+    let (
+        Some(mode @ ("submit" | "observe" | "remove-device" | "observe-device")),
+        Some(directory),
+        None,
+    ) = (
         mode.as_deref().and_then(|mode| mode.to_str()),
         args.next(),
         args.next(),
-    ) else {
+    )
+    else {
         eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
@@ -432,10 +597,11 @@ async fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     };
-    let (code, summary) = if mode == "submit" {
-        submit(directory, input).await
-    } else {
-        observe(&directory, input).await
+    let (code, summary) = match mode {
+        "submit" => submit(directory, input).await,
+        "observe" => observe(&directory, input).await,
+        "remove-device" => remove_device(directory, input).await,
+        _ => observe_device(&directory, input).await,
     };
     let _ = writeln!(io::stdout().lock(), "{summary}");
     ExitCode::from(code)
@@ -454,6 +620,7 @@ mod tests {
             started_at_unix_millis: 40,
             elapsed_millis: 3,
             response_status: None,
+            device_removal: None,
         }
     }
 

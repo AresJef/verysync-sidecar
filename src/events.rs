@@ -314,6 +314,9 @@ impl EventOptions {
         self.cursor = Some(cursor);
         Ok(self)
     }
+    pub(crate) fn has_resume_cursor(&self) -> bool {
+        self.cursor.is_some()
+    }
     /// Bound queued items to 1..=1024 (default 32); a full queue applies backpressure.
     pub fn queue_capacity(mut self, capacity: usize) -> Result<Self> {
         if !(1..=1024).contains(&capacity) {

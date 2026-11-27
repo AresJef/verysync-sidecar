@@ -1,6 +1,9 @@
 //! Library implementation, recorded validation and unprobed instance conditions.
 
-use crate::{EndpointKind, InstanceInfo, BASELINE_ENGINE_VERSION};
+use crate::{
+    DeviceId, EndpointKind, Error, InstanceInfo, KernelUpgradeCheck, OfficialProgram,
+    PinnedVersion, ProgramTarget, VersionCompatibility, BASELINE_ENGINE_VERSION,
+};
 use std::fmt;
 
 /// A library capability family. Raw transport does not implement other families.
@@ -580,6 +583,223 @@ impl CapabilityReport {
         }
     }
 }
+
+/// Explicit selection of the requests an operation preflight may make.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PreflightReads {
+    /// Use the existing handshake and recorded evidence with zero network requests.
+    #[default]
+    None,
+    /// Check the selected operation using its documented, bounded reads.
+    SelectedOperation,
+}
+
+/// The upgrade path being evaluated independently of other sources.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug)]
+pub enum UpgradePreflightSource<'a> {
+    /// The running engine's own release provider.
+    ServerProvider,
+    /// A pinned tuple from the SDK's bundled official catalog.
+    FixedArchive {
+        /// Version selected explicitly by the caller.
+        version: &'a PinnedVersion,
+        /// Exact artifact OS, architecture and build variant.
+        target: ProgramTarget,
+    },
+    /// A caller-selected URL path, without supplying or opening the URL.
+    ExplicitUrl,
+}
+
+/// Evidence about the selected upgrade path.
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub enum UpgradeSourceEvidence {
+    /// The running engine's provider is separate from the fixed artifact catalog.
+    ServerProvider {
+        /// The documented v2.33.2 provider feed omitted this Windows ARM64 target.
+        /// Later provider responses are separate observations.
+        recorded_windows_arm64_gap: bool,
+        /// Release metadata from the explicit live check, when it succeeded.
+        observed_release: Option<KernelUpgradeCheck>,
+    },
+    /// The exact pinned artifact is listed. No local or remote file was read.
+    FixedArchiveListed {
+        /// The target, version, archive bounds and checksum from the bundled catalog.
+        program: Box<OfficialProgram>,
+        /// The artifact's OS and architecture match the reported engine labels.
+        /// Build variant, host ABI and installation remain separate conditions.
+        matches_target_os_arch: bool,
+    },
+    /// The exact version and target tuple is absent from the bundled catalog.
+    FixedArchiveUnlisted {
+        /// The version itself exists in the catalog.
+        version_listed: bool,
+    },
+    /// The URL and its content have not been inspected.
+    ExplicitUrlUninspected,
+}
+
+/// Permission observed by the selected read.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreflightReadAccess {
+    /// The documented reads completed.
+    Observed,
+    /// The endpoint requested authentication.
+    AuthenticationRequired {
+        /// The returned HTTP status.
+        http_status: u16,
+    },
+    /// The endpoint refused access without establishing a specific licensing requirement.
+    Denied {
+        /// The returned HTTP status.
+        http_status: u16,
+    },
+    /// The selected read returned its explicit native licensing refusal.
+    LicenseDenied,
+    /// The reads could not establish access for this operation.
+    Inconclusive,
+}
+
+/// Commercial access evidence scoped to the selected Local-API need page.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreflightLicense {
+    /// No conclusion about this entitlement is available.
+    Unobserved,
+    /// The selected page was accepted at the observed time.
+    SelectedReadAccepted,
+    /// The fixed native API reported a specific entitlement refusal.
+    ExplicitlyDenied {
+        /// The HTTP status delivering the native refusal.
+        http_status: u16,
+        /// The exact native refusal code.
+        native_code: i64,
+    },
+}
+
+/// Result and wall-clock completion time of explicitly authorized reads.
+#[non_exhaustive]
+#[derive(Debug)]
+pub struct PreflightObservation {
+    /// Local wall-clock time when the attempts finished.
+    pub observed_at: std::time::SystemTime,
+    /// Required identity and version reads matched the existing handshake.
+    /// A separate borrowed connection cannot verify process generation.
+    pub identity_verified: bool,
+    /// Permission or access evidence from these reads.
+    pub permission: PreflightReadAccess,
+    /// Scope-limited licensing evidence from these reads.
+    pub license: PreflightLicense,
+    /// Original typed failure, if present. Inspect protected details explicitly.
+    pub issue: Option<Error>,
+}
+
+impl PreflightObservation {
+    pub(crate) fn from_read(
+        result: crate::Result<()>,
+        identity_verified: bool,
+        local_need: bool,
+    ) -> Self {
+        let (permission, license) = match &result {
+            Ok(()) if local_need => (
+                PreflightReadAccess::Observed,
+                PreflightLicense::SelectedReadAccepted,
+            ),
+            Ok(()) => (PreflightReadAccess::Observed, PreflightLicense::Unobserved),
+            Err(Error::Authentication { status }) => (
+                PreflightReadAccess::AuthenticationRequired {
+                    http_status: *status,
+                },
+                PreflightLicense::Unobserved,
+            ),
+            Err(Error::AccessDenied { response }) => (
+                PreflightReadAccess::Denied {
+                    http_status: response.status(),
+                },
+                PreflightLicense::Unobserved,
+            ),
+            Err(Error::LicenseRequired {
+                code: 3001,
+                response,
+            }) if local_need && identity_verified && response.status() == 200 => (
+                PreflightReadAccess::LicenseDenied,
+                PreflightLicense::ExplicitlyDenied {
+                    http_status: 200,
+                    native_code: 3001,
+                },
+            ),
+            Err(_) => (
+                PreflightReadAccess::Inconclusive,
+                PreflightLicense::Unobserved,
+            ),
+        };
+        Self {
+            observed_at: std::time::SystemTime::now(),
+            identity_verified,
+            permission,
+            license,
+            issue: result.err(),
+        }
+    }
+}
+
+/// Operation-specific evidence, kept separate from permission to submit a change.
+#[non_exhaustive]
+pub struct OperationPreflightReport {
+    /// Relevant family in the static implementation catalog.
+    pub capability: Capability,
+    /// Connection-time version policy classification.
+    pub version: VersionCompatibility,
+    /// Previously observed target metadata, recorded scope, and catalog.
+    pub static_evidence: CapabilityReport,
+    /// Current reads, if the caller selected them.
+    pub observation: Option<PreflightObservation>,
+    /// Source evidence for an explicitly selected upgrade path.
+    pub upgrade_source: Option<UpgradeSourceEvidence>,
+    device_id: DeviceId,
+}
+
+impl fmt::Debug for OperationPreflightReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OperationPreflightReport")
+            .field("capability", &self.capability)
+            .field("version", &self.version)
+            .field("static_evidence", &self.static_evidence)
+            .field("observation", &self.observation)
+            .field("upgrade_source", &self.upgrade_source)
+            .finish_non_exhaustive()
+    }
+}
+
+impl OperationPreflightReport {
+    /// Borrow the device identifier reported during the original connection.
+    ///
+    /// A matching live observation checked this identifier again. Establish
+    /// the expected identifier out of band when selecting a connection.
+    pub fn device_id(&self) -> &DeviceId {
+        &self.device_id
+    }
+
+    pub(crate) fn new(
+        capability: Capability,
+        instance: &InstanceInfo,
+        transport: EndpointKind,
+        https: bool,
+    ) -> Self {
+        Self {
+            capability,
+            version: instance.compatibility,
+            static_evidence: CapabilityReport::build(instance, transport, https),
+            observation: None,
+            upgrade_source: None,
+            device_id: instance.device_id.clone(),
+        }
+    }
+}
+
 fn classify_target(target: &TargetSnapshot) -> TargetValidation {
     let os = match target.controller_os {
         "macos" => "darwin",

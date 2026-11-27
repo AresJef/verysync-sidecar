@@ -367,15 +367,27 @@ async fn actual_peer_defaults_creation_patch_conflicts_and_self_protection() -> 
 
 #[tokio::test]
 async fn actual_single_delete_preserves_files_and_allows_share_key_readmission() -> TestResult {
-    device_control_effects(false).await
+    device_control_effects(RemovalCase::Single).await
 }
 
 #[tokio::test]
 async fn actual_explicit_disconnect_and_remove_preserves_files() -> TestResult {
-    device_control_effects(true).await
+    device_control_effects(RemovalCase::Explicit).await
 }
 
-async fn device_control_effects(explicit_disconnect: bool) -> TestResult {
+#[tokio::test]
+async fn actual_receipt_disconnect_and_remove_preserves_files() -> TestResult {
+    device_control_effects(RemovalCase::Receipt).await
+}
+
+enum RemovalCase {
+    Single,
+    Explicit,
+    Receipt,
+}
+
+async fn device_control_effects(case: RemovalCase) -> TestResult {
+    let explicit_disconnect = !matches!(case, RemovalCase::Single);
     let root = tempfile::Builder::new().prefix("vsdp-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
@@ -476,12 +488,45 @@ async fn device_control_effects(explicit_disconnect: bool) -> TestResult {
     let b_before = connected(b.client(), &a_id, true).await?;
     println!("synthetic device effect stage: perform explicitly selected removal semantics");
     let removal_started = std::time::SystemTime::now();
-    let removed = if explicit_disconnect {
-        a.client()
-            .disconnect_and_remove_device(&b_id, Duration::from_secs(20))
-            .await?
-    } else {
-        a.client().remove_device(&b_id).await?
+    let removed = match case {
+        RemovalCase::Single => a.client().remove_device(&b_id).await?,
+        RemovalCase::Explicit => {
+            a.client()
+                .disconnect_and_remove_device(&b_id, Duration::from_secs(20))
+                .await?
+        }
+        RemovalCase::Receipt => {
+            use verysync_sidecar::{ControlOperationReceipt, ControlSubmission};
+            let prepared = a
+                .client()
+                .prepare_device_disconnect_and_remove(&b_id, Duration::from_secs(20))?;
+            let mut checkpoints = Vec::new();
+            let finished = a
+                .client()
+                .execute_device_removal_persisted(prepared, |receipt| {
+                    checkpoints.push(receipt);
+                    std::future::ready(Ok(()))
+                })
+                .await;
+            assert_eq!(checkpoints.len(), 3);
+            let saved = ControlOperationReceipt::decode(&checkpoints[2].encode()?)?;
+            let progress = saved
+                .device_removal_progress()
+                .ok_or("removal stages absent")?;
+            assert!(progress.disconnection_observed);
+            assert!(matches!(
+                progress.pause_request,
+                Some(ControlSubmission::Acknowledged { .. })
+            ));
+            assert!(matches!(
+                finished.receipt.submission(),
+                ControlSubmission::Acknowledged { .. }
+            ));
+            println!(
+                "verified native pause, observed disconnect and acknowledged DELETE in one receipt"
+            );
+            finished.result?
+        }
     };
     assert!(removed.configuration_absent && removed.remaining_folder_associations.is_empty());
     let disconnect = if explicit_disconnect {

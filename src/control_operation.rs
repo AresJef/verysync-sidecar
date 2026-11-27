@@ -42,6 +42,19 @@ pub enum ControlSubmission {
 pub enum ControlOperationKind {
     /// Change one or more native GUI listener fields.
     GuiListenerChange,
+    /// Unregister one remote device, optionally after observing a disconnect.
+    DeviceRemoval,
+}
+
+/// Stages preceding the single DELETE in a device-removal operation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct DeviceRemovalProgress {
+    /// Checkpoint for the optional peer pause. No entry means no PATCH was needed.
+    pub pause_request: Option<ControlSubmission>,
+    /// Whether native connections showed an entry for this peer with connected=false.
+    pub disconnection_observed: bool,
 }
 
 /// A redacted event that can be sent to the caller's own logging facility.
@@ -59,6 +72,9 @@ pub struct ControlOperationEvent {
     pub elapsed_millis: u64,
     /// Actual status if HTTP response headers were seen.
     pub response_status: Option<u16>,
+    /// Earlier device-removal stages, if this event concerns device removal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_removal: Option<DeviceRemovalProgress>,
 }
 
 /// A single-use prepared action. It can be executed only with its original
@@ -119,7 +135,15 @@ struct ReceiptData {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ControlIntent {
-    GuiListenerChange { unix: bool, fields: ListenerFields },
+    GuiListenerChange {
+        unix: bool,
+        fields: ListenerFields,
+    },
+    DeviceRemoval {
+        peer: DeviceId,
+        disconnect_timeout: Option<Duration>,
+        progress: DeviceRemovalProgress,
+    },
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -186,6 +210,8 @@ impl ControlOperationReceipt {
     }
 
     /// Original submission evidence. A subsequent read does not change it.
+    /// For device removal this describes the DELETE. Check the separate progress
+    /// if the caller also requested pause and disconnect.
     pub fn submission(&self) -> ControlSubmission {
         self.0.submission
     }
@@ -195,17 +221,27 @@ impl ControlOperationReceipt {
         self.0.response_status
     }
 
+    /// Return the removal stages that precede the DELETE for this receipt.
+    pub fn device_removal_progress(&self) -> Option<DeviceRemovalProgress> {
+        match self.0.intent {
+            ControlIntent::DeviceRemoval { progress, .. } => Some(progress),
+            ControlIntent::GuiListenerChange { .. } => None,
+        }
+    }
+
     /// Prepare a redacted log record without taking over the caller's logging.
     pub fn log_event(&self) -> ControlOperationEvent {
         ControlOperationEvent {
             operation_id: self.id().to_owned(),
             kind: match self.0.intent {
                 ControlIntent::GuiListenerChange { .. } => ControlOperationKind::GuiListenerChange,
+                ControlIntent::DeviceRemoval { .. } => ControlOperationKind::DeviceRemoval,
             },
             submission: self.submission(),
             started_at_unix_millis: self.0.started_at_unix_millis,
             elapsed_millis: self.0.elapsed_millis,
             response_status: self.response_status(),
+            device_removal: self.device_removal_progress(),
         }
     }
 
@@ -261,6 +297,28 @@ impl ControlOperationReceipt {
             ControlIntent::GuiListenerChange { .. } => {
                 receipt.gui_listener_patch()?;
             }
+            ControlIntent::DeviceRemoval {
+                peer,
+                disconnect_timeout,
+                progress,
+            } => {
+                if peer == receipt.target_device_id()
+                    || disconnect_timeout.is_some_and(|timeout| timeout.is_zero())
+                    || (disconnect_timeout.is_none()
+                        && (progress.pause_request.is_some() || progress.disconnection_observed))
+                    || (disconnect_timeout.is_some()
+                        && !progress.disconnection_observed
+                        && matches!(
+                            receipt.submission(),
+                            ControlSubmission::PossiblySubmitted
+                                | ControlSubmission::Acknowledged { .. }
+                        ))
+                    || matches!(progress.pause_request,
+                        Some(ControlSubmission::Acknowledged {status}) if !(200..300).contains(&status))
+                {
+                    return Err(invalid_receipt());
+                }
+            }
         }
         Ok(receipt)
     }
@@ -278,6 +336,34 @@ impl ControlOperationReceipt {
             ControlIntent::GuiListenerChange {
                 unix: style == PathStyle::Unix,
                 fields,
+            },
+        )
+    }
+
+    pub(crate) fn for_device_removal(
+        device_id: DeviceId,
+        version: &str,
+        peer: DeviceId,
+        disconnect_timeout: Option<Duration>,
+    ) -> Result<Self> {
+        if device_id == peer {
+            return Err(Error::LocalDeviceProtected);
+        }
+        if disconnect_timeout.is_some_and(|timeout| timeout.is_zero()) {
+            return Err(Error::InvalidConfiguration {
+                reason: "device disconnect/removal deadline must be positive and representable",
+            });
+        }
+        Self::new(
+            device_id,
+            version,
+            ControlIntent::DeviceRemoval {
+                peer,
+                disconnect_timeout,
+                progress: DeviceRemovalProgress {
+                    pause_request: disconnect_timeout.map(|_| ControlSubmission::Prepared),
+                    disconnection_observed: false,
+                },
             },
         )
     }
@@ -317,6 +403,24 @@ impl ControlOperationReceipt {
             } else {
                 PathStyle::Windows
             }),
+            ControlIntent::DeviceRemoval { .. } => Err(invalid_receipt()),
+        }
+    }
+
+    pub(crate) fn device_removal_intent(&self) -> Result<(&DeviceId, Option<Duration>)> {
+        match &self.0.intent {
+            ControlIntent::DeviceRemoval {
+                peer,
+                disconnect_timeout,
+                ..
+            } => Ok((peer, *disconnect_timeout)),
+            ControlIntent::GuiListenerChange { .. } => Err(invalid_receipt()),
+        }
+    }
+
+    pub(crate) fn note_device_removal_progress(&mut self, observed: DeviceRemovalProgress) {
+        if let ControlIntent::DeviceRemoval { progress, .. } = &mut self.0.intent {
+            *progress = observed;
         }
     }
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Save and reopen private receipts for listener changes and device removal.
+  Observe the current state on a trusted endpoint after a reply is lost.
+- Resume folder observations from their last delivered event position and
+  keep event gaps visible. Check whether a particular owned process exited
+  after a previous wait expired.
+- Preview selected folder and listener settings before applying a change.
+  The SDK checks the selected values again at commit and reports each result.
+- Check requirements for listener changes, upgrades and the Local-API
+  pending-file list with named, read-only preflight methods.
+
 ## 0.1.1
 
 - Keep single-file downloads on the file path. Use the archive methods to

@@ -9,6 +9,13 @@ import subprocess
 import tarfile
 import tomllib
 
+EXAMPLES = {
+    "gui_listener_recovery": "VERYSYNC_TEST_RECOVERY_EXAMPLE",
+    "observe_control": "VERYSYNC_TEST_OBSERVATION_EXAMPLE",
+    "preview_control": "VERYSYNC_TEST_PREVIEW_EXAMPLE",
+    "preflight_control": "VERYSYNC_TEST_PREFLIGHT_EXAMPLE",
+}
+
 
 def read_git(source, *args):
     return subprocess.check_output(["git", "-C", str(source), *args], text=True, timeout=20).strip()
@@ -52,6 +59,9 @@ def prepare(args):
         "version": version,
         "locked_source_dependencies_sha256": checksum(source / "Cargo.lock"),
         "example_source_sha256": checksum(source / "examples/gui_listener_recovery.rs"),
+        "example_sources_sha256": {
+            name: checksum(source / "examples" / f"{name}.rs") for name in EXAMPLES
+        },
     }
     if args.candidate is None:
         packed = root / "package-target"
@@ -87,12 +97,17 @@ def prepare(args):
     (fixture / "src").mkdir(parents=True)
     (fixture / "src/main.rs").write_text("fn main() {}\n", encoding="utf-8")
     (fixture / "examples").mkdir()
-    source_example = candidate / "examples/gui_listener_recovery.rs"
-    if checksum(source_example) != source_record["example_source_sha256"]:
-        raise ValueError("packaged example differs from the candidate source")
-    external_example = fixture / "examples/gui_listener_recovery.rs"
-    shutil.copyfile(source_example, external_example)
+    for name, expected in source_record["example_sources_sha256"].items():
+        source_example = candidate / "examples" / f"{name}.rs"
+        if checksum(source_example) != expected:
+            raise ValueError(f"packaged example differs from the candidate source: {name}")
+        shutil.copyfile(source_example, fixture / "examples" / source_example.name)
     candidate_path = json.dumps(str(candidate), ensure_ascii=False)
+    options = {
+        "default": "",
+        "minimal": ", default-features = false",
+        "all": ", features = " + json.dumps(sorted(set(manifest["features"]) - {"default"})),
+    }[args.profile]
     external_manifest = f'''[package]
 name = "listener-recovery-candidate-consumer"
 version = "0.0.0"
@@ -101,7 +116,7 @@ rust-version = "1.85"
 resolver = "3"
 
 [dependencies]
-verysync-sidecar = {{ path = {candidate_path}, version = "={version}" }}
+verysync-sidecar = {{ path = {candidate_path}, version = "={version}"{options} }}
 serde = {{ version = "1.0.229", features = ["derive"] }}
 serde_json = "1.0.154"
 tempfile = "3.27.0"
@@ -111,22 +126,29 @@ tokio = {{ version = "1.54.1", features = ["macros", "rt-multi-thread"] }}
     consumer_target = root / "consumer-target"
     checked([*cargo, "generate-lockfile", "--offline"], fixture, proof / "consumer-lock.log")
     checked([*cargo, "build", "--locked", "--offline", "--target-dir", str(consumer_target),
-             "--example", "gui_listener_recovery"], fixture, proof / "consumer-build.log")
-    executable = (consumer_target / "debug" / "examples" /
-                  ("gui_listener_recovery.exe" if os.name == "nt" else "gui_listener_recovery"))
+             "--examples"], fixture, proof / "consumer-build.log")
+    suffix = ".exe" if os.name == "nt" else ""
+    executables = {
+        name: consumer_target / "debug" / "examples" / (name + suffix) for name in EXAMPLES
+    }
     result = {
         **package_record,
         "consumer_lock_sha256": checksum(fixture / "Cargo.lock"),
-        "example_executable_sha256": checksum(executable),
+        "example_executable_sha256": checksum(executables["gui_listener_recovery"]),
+        "example_executables_sha256": {
+            name: checksum(executable) for name, executable in executables.items()
+        },
+        "consumer_feature_profile": args.profile,
         "consumer_uses_independently_unpacked_candidate": True,
         "used_shared_candidate_archive": args.candidate is not None,
     }
     (proof / "build.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    env_path = executable.absolute().as_posix()
-    if "\n" in env_path or "\r" in env_path:
-        raise ValueError("external example path contains an environment separator")
     with args.github_env.open("a", encoding="utf-8") as output:
-        output.write(f"VERYSYNC_TEST_RECOVERY_EXAMPLE={env_path}\n")
+        for name, executable in executables.items():
+            env_path = executable.absolute().as_posix()
+            if "\n" in env_path or "\r" in env_path:
+                raise ValueError("external example path contains an environment separator")
+            output.write(f"{EXAMPLES[name]}={env_path}\n")
     print(json.dumps(result))
 
 
@@ -139,6 +161,7 @@ if __name__ == "__main__":
     parser.add_argument("--package-only", action="store_true")
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--candidate-identity", type=Path)
+    parser.add_argument("--profile", choices=["default", "minimal", "all"], default="default")
     parser.add_argument("--cargo")
     parser.add_argument("--toolchain", default="1.85.0")
     args = parser.parse_args()

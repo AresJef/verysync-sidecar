@@ -182,3 +182,43 @@ selected baseline, a template normalizes an introduction source to the empty
 value even with a configured introducer. A configured peer can retain an explicit
 valid introducer identity; inspect actual field matching instead of inferring
 source inheritance.
+
+## Recover a device-removal result after an interruption
+
+Use a private receipt if your application might lose the reply or exit during
+removal. Prepare the exact remote ID with `Client::prepare_device_removal()`.
+Use `prepare_device_disconnect_and_remove()` if you first need VerySync to
+report that the peer has disconnected. That form can pause the peer once.
+An absent connection entry does not confirm a disconnect.
+
+Pass the single-use preparation to `execute_device_removal_persisted()`.
+The save callback records the intent before the operation and a checkpoint
+before each possible write. If a save fails, the operation stops before the
+next write. An earlier pause may already have taken effect. Save the returned
+receipt separately. The receipt's submission status describes the one DELETE.
+The preceding pause and disconnect are recorded by `device_removal_progress()`.
+An acknowledged DELETE and a failed readback can appear in the same result.
+
+To check the current registration, reopen the saved
+`ControlOperationReceipt`, supply fresh connection options for the original
+management device, and call `observe_device_removal()`. It reads the exact
+peer's presence and remaining folder references. It leaves the original
+request outcome intact. If the registration appears again, that is the current
+state. Valid share keys can allow the peer to register again.
+
+The [recovery example](../../examples/gui_listener_recovery.rs) runs the
+write and readback in separate processes.
+
+```sh
+cargo run --example gui_listener_recovery -- remove-device "$operation_dir" < "$remove_settings"
+cargo run --example gui_listener_recovery -- observe-device "$operation_dir" < "$observe_settings"
+```
+
+Use an existing private directory and send both JSON inputs over standard
+input. Both need `endpoint`, `api_key` and `expected_device_id` for the
+management device. The removal input also needs `peer_id`. Add
+`disconnect_timeout_ms` to require the explicit disconnect sequence. The
+observation input takes connection settings only. The example reports the
+current registration and association count without displaying credentials or
+folder IDs. If a write may have taken effect, keep the receipt and check
+the original device before sending any further changes.

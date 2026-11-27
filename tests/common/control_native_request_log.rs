@@ -180,6 +180,7 @@ fn read_window(source: &str, before: &str, after: &str) -> TestResult<Vec<Route>
             "/rest/system/version" => Route::Version,
             "/rest/system/status" => Route::Identity,
             "/rest/config/gui" => Route::Gui,
+            "/rest/config" => Route::RegistrationConfig,
             _ => {
                 return Err(
                     "native recovery handled a route outside the read-only allowlist".into(),

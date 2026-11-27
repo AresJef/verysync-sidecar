@@ -33,7 +33,7 @@ impl Client {
         let body = patch.body(self.folder_path_style()?)?;
         let _guard = self.connection.mutation_lock.lock().await;
         let previous = self.gui_listener().await?;
-        self.submit_gui_listener_patch(patch, body, previous, &mut None)
+        self.submit_gui_listener_patch(patch, &body, previous, &mut None)
             .await
     }
 
@@ -169,21 +169,21 @@ impl Client {
             None,
             started.elapsed(),
         );
-        self.submit_gui_listener_patch(&patch, body, previous, response_status)
+        self.submit_gui_listener_patch(&patch, &body, previous, response_status)
             .await
     }
 
-    async fn submit_gui_listener_patch(
+    pub(super) async fn submit_gui_listener_patch(
         &self,
         patch: &GuiListenerPatch,
-        body: serde_json::Value,
+        body: &serde_json::Value,
         previous_configuration: GuiListenerConfig,
         response_status: &mut Option<u16>,
     ) -> Result<GuiListenerUpdate> {
         let request = self.connection.authorized_request(
             reqwest::Method::PATCH,
             self.connection.management_url("rest/config/gui", &[])?,
-            Some(&body),
+            Some(body),
         );
         let response = send_bounded_with_status(
             CHANGE_LISTENER,

@@ -16,6 +16,14 @@ explicit address/TLS/server-enable/socket-mode writes from caller reconnection,
 certificate trust and process ownership. Live GUI/API hot-disable is unsupported
 on fixed v2.33.2. Verify endpoint closure separately from the stored enable flag.
 
+Keep a private receipt for a [listener change](docs/public/gui-listener.md#check-a-listener-change-after-the-application-restarts)
+or [device removal](docs/public/devices.md#recover-a-device-removal-result-after-an-interruption).
+If the reply is lost, a new process can verify the device and read its current
+settings without sending the change again. You can also
+[continue a folder or exit observation](docs/public/control-observation.md),
+[review changes before applying them](docs/public/control-preview.md), and
+[check what an operation requires](docs/public/control-preflight.md).
+
 The [management transport policy](docs/public/management-transport.md)
 accepts per-connection trusted certificates and explicit authenticated HTTP(S)
 proxies. Certificate and hostname verification and reconnection policy remain

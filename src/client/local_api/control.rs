@@ -1,7 +1,8 @@
 //! Native registered folder controls, separate from GUI route contracts.
 use super::LocalApiClient;
 use crate::{
-    Error, FolderId, ListPage, NeedPage, PathStyle, RawMethod, RawRequest, RawResponse,
+    Capability, Error, FolderId, InstanceObservation, ListPage, NeedPage, OperationPreflightReport,
+    PathStyle, PreflightObservation, PreflightReads, RawMethod, RawRequest, RawResponse,
     RequestEffect, ResponseDiagnostic, Result, SelectiveAcknowledgement, SelectiveAction,
     SelectiveScope, SelectiveTree, TargetPath,
 };
@@ -262,6 +263,53 @@ impl LocalApiClient {
     /// Read exactly one bounded need page. The native wrapper defaults an empty
     /// limit to 100; this API always sends the caller's explicit validated page.
     pub async fn folder_need(&self, folder: &FolderId, page: ListPage) -> Result<NeedPage> {
+        let request = Self::need_page_request(folder, page)?;
+        self.folder(folder).await?;
+        self.control_json(request, "read Local-API folder need")
+            .await
+    }
+
+    /// Inspect readiness for one Local-API folder-need operation.
+    ///
+    /// With selected reads, the client checks version and device before and
+    /// after requesting page 1 with an item limit of 1 for the exact folder.
+    /// The page contents stay out of the report. A successful read describes
+    /// only that page at the observed time. It grants no other Local-API, Pro
+    /// or enterprise permission.
+    pub async fn preflight_folder_need(
+        &self,
+        folder: &FolderId,
+        reads: PreflightReads,
+    ) -> OperationPreflightReport {
+        let mut report = OperationPreflightReport::new(
+            Capability::LocalApiConnection,
+            self.instance(),
+            self.connection.endpoint_kind,
+            self.connection.base.scheme() == "https",
+        );
+        // The credential-free Local-API handshake identifies the peer. It
+        // does not establish GUI authentication or any commercial entitlement.
+        report.static_evidence.instance.authentication = InstanceObservation::Unknown;
+        if reads == PreflightReads::SelectedOperation {
+            report.observation = Some(match self.preflight_local_identity().await {
+                Ok(()) => {
+                    let page = ListPage {
+                        number: 1,
+                        per_page: 1,
+                    };
+                    let read = self.preflight_need_page(folder, page).await;
+                    match self.preflight_local_identity().await {
+                        Ok(()) => PreflightObservation::from_read(read, true, true),
+                        Err(error) => PreflightObservation::from_read(Err(error), false, true),
+                    }
+                }
+                Err(error) => PreflightObservation::from_read(Err(error), false, true),
+            });
+        }
+        report
+    }
+
+    fn need_page_request(folder: &FolderId, page: ListPage) -> Result<RawRequest> {
         let request = RawRequest::new(
             RawMethod::Get,
             ["folders", "need", folder.as_str()],
@@ -269,9 +317,36 @@ impl LocalApiClient {
         )?
         .query("page", page.number().to_string())
         .query("perpage", page.per_page().to_string());
-        self.folder(folder).await?;
-        self.control_json(request, "read Local-API folder need")
-            .await
+        Ok(request)
+    }
+
+    async fn preflight_need_page(&self, folder: &FolderId, page: ListPage) -> Result<()> {
+        let operation = "preflight Local-API folder need";
+        let request = Self::need_page_request(folder, page)?;
+        // This dedicated read is paced by its own identity checks. It does not
+        // enumerate the unrelated folder configurations used by the old call.
+        let response = checked_control_response(operation, self.send_raw(request).await?, false)?;
+        serde_json::from_slice::<NeedPage>(&response.body).map_err(|_| Error::InvalidResponse {
+            operation,
+            response: ResponseDiagnostic::new(response.status, response.body),
+        })?;
+        Ok(())
+    }
+
+    async fn preflight_local_identity(&self) -> Result<()> {
+        let expected = &self.instance().version;
+        let observed = self.version().await?;
+        if observed.version != expected.version {
+            return Err(Error::IncompatibleVersion {
+                actual: self
+                    .connection
+                    .transport
+                    .version_diagnostic(&observed.version),
+            });
+        }
+        super::super::control_preflight::compare_preflight_platform(&observed, expected)?;
+        self.system_status().await?;
+        Ok(())
     }
 
     /// Request one root/subpath scan through the registered native wrapper.

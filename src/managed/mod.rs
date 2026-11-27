@@ -7,6 +7,8 @@ mod bootstrap;
 mod command;
 mod control_generation;
 pub use control_generation::{ManagedControlGeneration, ManagedGenerationStatus};
+mod observation;
+pub use observation::{ManagedExitObservation, ManagedExitObservationOutcome};
 mod host;
 pub use host::{NativeWatchLimitExit, NativeWatchLimitObservation, NativeWatchLimitOutcome};
 mod completions;

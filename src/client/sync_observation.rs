@@ -127,6 +127,14 @@ impl Client {
     ) -> Result<CompletionSnapshot> {
         self.system_status().await?;
         self.folder(folder).await?;
+        self.folder_completion_snapshot(folder, device).await
+    }
+
+    pub(crate) async fn folder_completion_snapshot(
+        &self,
+        folder: &FolderId,
+        device: &DeviceId,
+    ) -> Result<CompletionSnapshot> {
         self.connection
             .get_json_with_query(
                 "read folder peer completion",

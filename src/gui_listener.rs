@@ -85,7 +85,7 @@ impl GuiListenAddress {
             }),
         }
     }
-    fn same_native(&self, other: &Self) -> bool {
+    pub(crate) fn same_native(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
             (Address::Socket(a), Address::Socket(b)) => {
                 a.style() == b.style() && a.to_protocol().ok() == b.to_protocol().ok()
@@ -213,10 +213,10 @@ fn shape() -> Error {
 /// Explicit listener changes. Unspecified fields and credentials are preserved.
 #[derive(Clone, Default)]
 pub struct GuiListenerPatch {
-    enabled: Option<bool>,
-    address: Option<GuiListenAddress>,
-    use_tls: Option<bool>,
-    permissions: Option<GuiSocketPermissions>,
+    pub(crate) enabled: Option<bool>,
+    pub(crate) address: Option<GuiListenAddress>,
+    pub(crate) use_tls: Option<bool>,
+    pub(crate) permissions: Option<GuiSocketPermissions>,
 }
 impl GuiListenerPatch {
     /// Request the native stored server-enable flag. Acknowledgement/readback
