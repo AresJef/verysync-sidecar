@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the candidate archive with the exact published 0.1.1 API in three profiles."""
+"""Compare a candidate with one exact pinned prior crate in three API profiles."""
 import argparse
 from hashlib import file_digest
 import json
@@ -40,11 +40,19 @@ def unpack(archive, dest, version, commit):
 
 
 def check(args):
+    baseline_version, baseline_commit, baseline_sha = {
+        "0.1.1": (BASELINE_VERSION, BASELINE_COMMIT, BASELINE_SHA),
+        "0.1.2-development": (
+            "0.1.2",
+            "1c1f4956aa850b9ff662e07de910c49e0c9320a1",
+            "bad8ef3207c34ba0d3078d5a8866df3440aecff9fb25f7d26159077dc9e2e71e",
+        ),
+    }[args.baseline_identity]
     candidate = json.loads(args.identity.read_text(encoding="utf8"))
     baseline_hash = sha256(args.baseline)
     candidate_hash = sha256(args.candidate)
-    if baseline_hash != BASELINE_SHA or candidate_hash != candidate["candidate_crate_sha256"]:
-        raise ValueError("candidate or official 0.1.1 package checksum differs")
+    if baseline_hash != baseline_sha or candidate_hash != candidate["candidate_crate_sha256"]:
+        raise ValueError("candidate or pinned baseline package checksum differs")
     args.evidence.mkdir(mode=0o700, parents=True)
     version = subprocess.check_output([args.checker, "--version"], text=True, timeout=15).strip()
     if version != CHECKER_VERSION:
@@ -56,7 +64,7 @@ def check(args):
     results = []
     with tempfile.TemporaryDirectory(prefix="control-api-comparison-", dir=args.parent) as directory:
         scratch = Path(directory)
-        published = unpack(args.baseline, scratch / "baseline", BASELINE_VERSION, BASELINE_COMMIT)
+        published = unpack(args.baseline, scratch / "baseline", baseline_version, baseline_commit)
         current = unpack(args.candidate, scratch / "candidate", candidate["version"], candidate["source"])
         env = dict(os.environ, RUSTUP_TOOLCHAIN=RUSTUP_TOOLCHAIN, CARGO_NET_OFFLINE="true",
                    PATH=str(args.cargo.parent) + os.pathsep + os.environ.get("PATH", ""))
@@ -72,7 +80,7 @@ def check(args):
                             "log": log.name, "log_sha256": sha256(log)})
     report = {
         "candidate_commit": candidate["source"], "candidate_tree": candidate["tree"],
-        "candidate_crate_sha256": candidate_hash, "baseline_commit": BASELINE_COMMIT,
+        "candidate_crate_sha256": candidate_hash, "baseline_commit": baseline_commit,
         "baseline_crate_sha256": baseline_hash, "checker": version,
         "checker_sha256": sha256(args.checker), "rustc": rustc, "profiles": results,
         "isolated_materials_removed": not scratch.exists(),
@@ -89,4 +97,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("identity", "baseline", "candidate", "checker", "cargo", "parent", "evidence"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--baseline-identity", choices=["0.1.1", "0.1.2-development"], default="0.1.1")
     check(parser.parse_args())

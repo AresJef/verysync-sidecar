@@ -22,6 +22,7 @@ include = [
     "/tests/fixtures/resource-protocol.json",
     "/scripts/**/*.py",
     "/scripts/trace-native-folder-opener.ps1",
+    "/scripts/trace-upgrade-recovery.ps1",
     "/scripts/run-windows-managed-permissions.ps1",
     "/scripts/storage-test-requirements.txt",
     "/docs/public/**/*.md",

@@ -53,6 +53,7 @@ pub enum Route {
     Gui,
     RegistrationConfig,
     Peer,
+    Shutdown,
     Unknown,
 }
 
@@ -63,6 +64,7 @@ impl Route {
             "/rest/system/status" => Self::Identity,
             "/rest/config/gui" => Self::Gui,
             "/rest/config" => Self::RegistrationConfig,
+            "/rest/system/shutdown" => Self::Shutdown,
             value if value.starts_with("/rest/config/devices/") => Self::Peer,
             _ => Self::Unknown,
         }
@@ -74,6 +76,7 @@ impl Route {
             Self::Identity => Some("/rest/system/status"),
             Self::Gui => Some("/rest/config/gui"),
             Self::RegistrationConfig => Some("/rest/config"),
+            Self::Shutdown => Some("/rest/system/shutdown"),
             Self::Peer | Self::Unknown => None,
         }
     }
@@ -258,6 +261,29 @@ impl Origin {
         F: Fn(Phase, Request) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = TestResult<Response>> + Send + 'static,
     {
+        Self::start_scoped(name, witness, selected_peer, false, handle).await
+    }
+
+    #[allow(dead_code)] // Only the native owned-shutdown target uses this scope.
+    pub async fn start_shutdown<F, Fut>(witness: Witness, handle: F) -> TestResult<Self>
+    where
+        F: Fn(Phase, Request) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = TestResult<Response>> + Send + 'static,
+    {
+        Self::start_scoped("owned_shutdown", witness, None, true, handle).await
+    }
+
+    async fn start_scoped<F, Fut>(
+        name: &'static str,
+        witness: Witness,
+        selected_peer: Option<verysync_sidecar::DeviceId>,
+        allow_shutdown: bool,
+        handle: F,
+    ) -> TestResult<Self>
+    where
+        F: Fn(Phase, Request) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = TestResult<Response>> + Send + 'static,
+    {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
         if addr.port() == 18886 {
@@ -275,6 +301,7 @@ impl Origin {
                     };
                     let permitted_write = phase == Phase::Submission && (
                         request.method == Method::Patch && request.route == Route::Gui
+                        || allow_shutdown && request.method == Method::Post && request.route == Route::Shutdown
                         || matches!(request.method, Method::Patch | Method::Delete)
                             && selected_peer.as_ref().is_some_and(|peer| request.peer.as_ref() == Some(peer))
                     );

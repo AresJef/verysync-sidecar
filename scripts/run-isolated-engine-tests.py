@@ -501,6 +501,8 @@ def main():
     suite.add_argument("--managed-repair-regressions", action="store_true",
                        help="run the isolated managed lifecycle regressions")
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
+    parser.add_argument("--upgrade-process-trace", type=Path,
+                        help="collect independent process events for the two native upgrade recovery cases")
     parser.add_argument("--upgrade-consumer", type=Path,
                         help="separately unpacked crate consumer directory for the upgrade suite")
     parser.add_argument("--test-filter", help="run only tests matching this name in the selected suite")
@@ -521,6 +523,13 @@ def main():
         raise ValueError("a test filter requires an explicit Cargo test target")
     if args.allow_private_discovery and args.test_target != "network":
         raise ValueError("private discovery routing is restricted to the explicit network suite")
+    if args.upgrade_process_trace and (
+        args.test_target != "upgrade_engine"
+        or args.test_filter != "native_same_attempt_observes"
+        or not args.upgrade_consumer
+        or os.environ.get("GITHUB_ACTIONS") != "true"
+    ):
+        raise ValueError("process tracing is scoped to the two packaged native upgrade recovery cases on GitHub")
     if args.upgrade_consumer and args.test_target != "upgrade_engine":
         raise ValueError("the independent upgrade consumer requires the upgrade suite")
     if (args.allow_upgrade_metadata or args.serve_pinned_upgrade_archive) and args.test_target != "upgrade_engine":
@@ -580,6 +589,18 @@ def main():
         if discovery_file:
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TARGET_FILE"] = str(discovery_file)
             env["VERYSYNC_TEST_DISCOVERY_FORWARD_TOKEN"] = discovery_token
+        if args.upgrade_process_trace:
+            host = subprocess.check_output(
+                ["rustc", f"+{args.toolchain}", "-vV"], text=True, timeout=30
+            ).splitlines()
+            host = next(row.split(": ", 1)[1] for row in host if row.startswith("host: "))
+            runner = "CARGO_TARGET_" + host.replace("-", "_").upper() + "_RUNNER"
+            witness = Path(__file__).with_name("trace-upgrade-recovery.py").resolve(strict=True)
+            launcher = [str(Path(sys.executable).resolve(strict=True)), str(witness)]
+            if any(any(character.isspace() for character in path) for path in launcher):
+                raise ValueError("the private native tracing runner requires launcher paths without spaces")
+            env[runner] = " ".join(launcher)
+            env["VERYSYNC_S29_TRACE_DIR"] = str(args.upgrade_process_trace)
         opener = None
         for name in ("VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE", "VERYSYNC_TEST_OPENER_SYSTEM_ROOT", "VERYSYNC_TEST_OPENER_OWNED_CHILD", "VERYSYNC_TEST_OPENER_RUNTIME_PROBE", "VERYSYNC_TEST_BROWSER_HOLD", "VERYSYNC_TEST_BROWSER_ACTOR", "VERYSYNC_TEST_BROWSER_ISOLATION"):
             env.pop(name, None)

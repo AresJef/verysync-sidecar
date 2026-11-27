@@ -279,7 +279,7 @@ client.request_restart().await?;
 The compiled `manage_owned` example accepts:
 
 ```text
-manage_owned <owned|persistent|connect|shutdown> PROGRAM STATE <http|socket> ADDRESS
+manage_owned <owned|persistent|connect|shutdown|observe-shutdown> PROGRAM STATE <http|socket> ADDRESS
 ```
 
 `owned` starts, queries and normally stops an owned instance with actual exit
@@ -297,6 +297,20 @@ proxy to reject those requests. Proxy observations do not establish an OS-wide
 egress restriction, and the library does not install a global proxy or firewall.
 
 ## Explicit shutdown and termination
+
+When a shutdown call times out, use the remaining part of your application
+deadline to observe the same owned process. Save its `control_generation()`
+before calling `shutdown` once. If the result is uncertain and time remains,
+pass that generation to `observe_control_exit`. Report the original error
+together with the time and result of the later observation. A later confirmed
+normal exit lets you continue. If the time runs out, check whether the
+original instance is still running before requesting any action.
+
+The `manage_owned observe-shutdown` example starts an explicitly persistent
+instance and follows this sequence. The core retains that lifetime if the
+example returns without confirming exit. Keep the private state and endpoint
+for a later check. The observation sends no shutdown request.
+
 
 `shutdown(total_timeout)` first rechecks the selected identity, sends one typed
 normal-shutdown request, then waits for the exact process tree and state lease to

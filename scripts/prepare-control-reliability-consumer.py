@@ -10,6 +10,7 @@ import tarfile
 import tomllib
 
 EXAMPLES = {
+    "manage_owned": "VERYSYNC_TEST_MANAGED_EXAMPLE",
     "gui_listener_recovery": "VERYSYNC_TEST_RECOVERY_EXAMPLE",
     "observe_control": "VERYSYNC_TEST_OBSERVATION_EXAMPLE",
     "preview_control": "VERYSYNC_TEST_PREVIEW_EXAMPLE",
@@ -53,7 +54,9 @@ def prepare(args):
     if not cargo_path:
         raise ValueError("Cargo was not located")
     cargo = [str(Path(cargo_path).absolute()), "+" + args.toolchain]
+    managed_helper = Path("examples/common/owned_shutdown.rs")
     source_record = {
+        "owned_shutdown_example_helper_sha256": checksum(source / managed_helper),
         "source": identity[0],
         "tree": identity[1],
         "version": version,
@@ -102,6 +105,10 @@ def prepare(args):
         if checksum(source_example) != expected:
             raise ValueError(f"packaged example differs from the candidate source: {name}")
         shutil.copyfile(source_example, fixture / "examples" / source_example.name)
+    if checksum(candidate / managed_helper) != source_record["owned_shutdown_example_helper_sha256"]:
+        raise ValueError("packaged shutdown helper differs from the checked-out version")
+    (fixture / managed_helper.parent).mkdir()
+    shutil.copyfile(candidate / managed_helper, fixture / managed_helper)
     candidate_path = json.dumps(str(candidate), ensure_ascii=False)
     options = {
         "default": "",

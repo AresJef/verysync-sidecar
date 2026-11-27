@@ -105,7 +105,7 @@ fn original_receipt(name: &str, receipt: &UpgradeReceipt, error: &Error) -> Test
 
 // One calibration process outside the recovery window. It runs the immutable
 // test-source executable, never the selected program being reconciled.
-fn calibrate_process_creation(name: &str, fixed: &Path) -> TestResult {
+fn calibrate_process_creation(name: &str, stage: &str, fixed: &Path) -> TestResult {
     let mut child = std::process::Command::new(fixed)
         .arg("--version")
         .stdout(std::process::Stdio::null())
@@ -113,7 +113,7 @@ fn calibrate_process_creation(name: &str, fixed: &Path) -> TestResult {
         .spawn()?;
     let id = child.id();
     assert!(child.wait()?.success());
-    receipt_event(name, "calibration-child", serde_json::json!({"pid": id}))
+    receipt_event(name, stage, serde_json::json!({"pid": id}))
 }
 
 async fn verify_comparison(
@@ -131,7 +131,8 @@ async fn verify_comparison(
     assert_eq!(hash(program)?, digest);
     assert_eq!(receipt.outcome(), UpgradeOutcome::Unknown);
     let seen = requests.load(Ordering::SeqCst);
-    calibrate_process_creation(name, &pinned_program()?)?;
+    let calibration = pinned_program()?;
+    calibrate_process_creation(name, "calibration-child", &calibration)?;
     receipt_event(
         name,
         "begin-recovery",
@@ -153,6 +154,7 @@ async fn verify_comparison(
             "requests_seen": requests.load(Ordering::SeqCst)
         }),
     )?;
+    calibrate_process_creation(name, "calibration-after", &calibration)?;
     assert_eq!(result.comparison, expected, "{:?}", result.source);
     assert_eq!(result.original_outcome, UpgradeOutcome::Unknown);
     assert_eq!(result.operation_id, receipt.operation_id());
@@ -258,13 +260,17 @@ async fn native_same_attempt_observes_previous_after_partial_cli_archive() -> Te
         .run_cli_upgrade_with_target_receipt(
             KernelUpgradeCommand::FromUrl(url),
             &asset,
-            Duration::from_secs(8),
+            Duration::from_secs(25),
         )
         .await?;
     let error = attempt
         .result
         .expect_err("partial archive unexpectedly produced CLI completion");
-    assert!(matches!(error, Error::MutationOutcomeUnknown { .. }));
+    assert!(
+        matches!(error, Error::MutationOutcomeUnknown { .. }),
+        "expected a contained modifying CLI timeout: error={error:?}, receipt={:?}",
+        attempt.receipt
+    );
     assert_eq!(attempt.receipt.dispatch(), UpgradeDispatch::CliStarted);
     assert_eq!(attempt.receipt.previous_program_sha256(), Some(old));
     assert_eq!(attempt.receipt.target_program_sha256(), Some(target));
@@ -355,6 +361,18 @@ async fn forwards_until_native_upload_reply(
         .next()
         .ok_or("missing private witness request")?;
     let upload = method.starts_with("POST /rest/system/upgrade/upload ");
+    let upgrade_route = method
+        .split_whitespace()
+        .nth(1)
+        .is_some_and(|path| path.starts_with("/rest/system/upgrade"));
+    if upgrade_route {
+        let previous = seen.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(previous, 0, "only one upgrade request is allowed");
+        assert!(
+            upload,
+            "the original fixture only dispatches a fixed archive"
+        );
+    }
     assert!(upload || method.starts_with("GET "));
     let mut upstream = TcpStream::connect(native).await?;
     let rewritten = head
@@ -368,8 +386,6 @@ async fn forwards_until_native_upload_reply(
         tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
         return Ok(());
     }
-    let previous = seen.fetch_add(1, Ordering::SeqCst);
-    assert_eq!(previous, 0, "only one native upgrade upload is allowed");
     let length: u64 = head
         .lines()
         .find_map(|line| {

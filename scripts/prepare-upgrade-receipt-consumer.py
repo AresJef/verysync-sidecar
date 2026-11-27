@@ -48,6 +48,8 @@ def prepare(args):
     for name in ("upgrade_engine.rs", "upgrade_receipt_contract.rs"):
         shutil.copyfile(package / "tests" / name, testroot / name)
     shutil.copytree(package / "tests/common", testroot / "common")
+    (consumer / "scripts").mkdir()
+    shutil.copyfile(package / "scripts/prepare-test-engine.py", consumer / "scripts/prepare-test-engine.py")
     (consumer / "Cargo.toml").write_text(
         f"""[package]
 name = "verysync-upgrade-receipt-consumer"

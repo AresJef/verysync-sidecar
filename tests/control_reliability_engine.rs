@@ -14,6 +14,8 @@ mod managed_fixture;
 #[path = "common/management_service.rs"]
 #[allow(dead_code)] // This target uses only the TLS origin and its observation feed.
 mod management_service;
+#[path = "../examples/common/owned_shutdown.rs"]
+mod owned_shutdown;
 
 use control_fault_origin::{
     assert_read_only, Delivery, Method, Origin, Phase, Request, Response, Route, TestResult,
@@ -193,6 +195,7 @@ async fn forward_to_owned(
             .body(request.body),
         Method::Get => client.get(&uri),
         Method::Delete => client.delete(&uri),
+        Method::Post if request.route == Route::Shutdown => client.post(&uri),
         _ => return Err("fixture does not forward this request method".into()),
     };
     if let Some(key) = request.credential {
@@ -1190,5 +1193,125 @@ async fn native_delete_reply_loss_and_reregistration_are_separate_facts() -> Tes
     exit?;
     report["owned_cleanup_verified"] = true.into();
     println!("control reliability native evidence {report}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_shutdown_once_observes_late_exit_or_expiry_of_the_same_generation() -> TestResult {
+    use std::sync::atomic::AtomicUsize;
+    use verysync_sidecar::{Error, ManagedExitObservationOutcome};
+
+    for forward in [true, false] {
+        let root = private_tree()?;
+        let reservation = reserved()?;
+        let address = reservation.local_addr()?;
+        drop(reservation);
+        let mut owner = owned_core(root.path(), address).await?;
+        let original_pid = owner.process_id();
+        let generation = owner.control_generation();
+        let device = owner.client().instance().device_id.clone();
+        let key = owner.client().gui_authentication().await?.api_key()?;
+        let witness = Witness::new();
+        let forwarded = Arc::new(AtomicUsize::new(0));
+        let count = forwarded.clone();
+        let upstream = forward_http()?;
+        let origin = Origin::start_shutdown(witness.clone(), move |_, request| {
+            let client = upstream.clone();
+            let count = count.clone();
+            async move {
+                if request.route != Route::Shutdown {
+                    return forward_to_owned(client, address, request, false).await;
+                }
+                // The proxy receives the actual request within the first
+                // wait. Only the task-owned HTTP peer delays forwarding it.
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+                if forward {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    forward_to_owned(client, address, request, true).await
+                } else {
+                    Ok(Response::drop_reply(None))
+                }
+            }
+        })
+        .await?;
+        owner
+            .reconnect_management(options(origin.address(), key.clone(), device.clone())?)
+            .await?;
+        let first = Duration::from_secs(1);
+        let total = if forward {
+            Duration::from_secs(8)
+        } else {
+            Duration::from_millis(1250)
+        };
+        let report = owned_shutdown::shutdown_once_observing_exit(&mut owner, first, total).await;
+        assert!(matches!(report.original, Err(Error::Timeout { .. })));
+        let later = report.later.ok_or("no remaining-time observation")??;
+        assert_eq!(later.generation, generation);
+        assert!(later.waited <= total);
+        let later_kind = match later.outcome {
+            ManagedExitObservationOutcome::Exited(exit) if forward => {
+                assert!(
+                    exit.tree_stopped
+                        && exit.state_released
+                        && !exit.forced
+                        && exit.code == Some(0)
+                );
+                "original_generation_exited"
+            }
+            ManagedExitObservationOutcome::TimedOut if !forward => {
+                assert_eq!(owner.process_id(), original_pid);
+                assert_eq!(
+                    owner.check_control_generation(&generation),
+                    ManagedGenerationStatus::Current
+                );
+                "observation_expired"
+            }
+            other => return Err(format!("wrong later outcome: {other:?}").into()),
+        };
+        // A live-case proxy handler is deliberately still pending after the
+        // observation. Wait for its witness before the independent teardown.
+        let rows = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Ok(rows) = witness.rows() {
+                    break rows;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await?;
+        assert_eq!(
+            rows.iter().filter(|row| row.method != Method::Get).count(),
+            1
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.method == Method::Post && row.route == Route::Shutdown)
+                .count(),
+            1
+        );
+        assert_eq!(forwarded.load(Ordering::SeqCst), usize::from(forward));
+        println!(
+            "s29-shutdown {}",
+            json!({
+                "original":"timeout", "later":later_kind, "owned_process_id":original_pid,
+                "observed_at_unix_ms":later.observed_at.duration_since(std::time::UNIX_EPOCH)?.as_millis(),
+                "observation_ms":later.waited.as_millis(), "original_request_count":1,
+                "forwarded_original_requests":forwarded.load(Ordering::SeqCst), "observation_requests":0,
+                "request_witness":rows,
+            })
+        );
+        if !forward {
+            owner
+                .reconnect_management(options(address, key, device)?)
+                .await?;
+            let exit = owner.shutdown(SHORT_WAIT).await?;
+            assert!(
+                exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0)
+            );
+            println!("s29-shutdown cleanup used the fixture's explicit normal stop after the observation");
+        }
+        drop(owner);
+        root.close()?;
+    }
     Ok(())
 }

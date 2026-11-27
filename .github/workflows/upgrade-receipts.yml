@@ -77,8 +77,10 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/upgrade-evidence"
-          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}"             --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV" | tee "$RUNNER_TEMP/upgrade-evidence/target.json"
-          python scripts/prepare-test-engine.py prepare --upgrade-source --package "${{ matrix.package }}"             --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV" | tee "$RUNNER_TEMP/upgrade-evidence/previous.json"
+          python scripts/prepare-test-engine.py prepare --package "${{ matrix.package }}" \
+            --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV" | tee "$RUNNER_TEMP/upgrade-evidence/target.json"
+          python scripts/prepare-test-engine.py prepare --upgrade-source --package "${{ matrix.package }}" \
+            --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV" | tee "$RUNNER_TEMP/upgrade-evidence/previous.json"
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v4
         with:
           name: upgrade-frozen-package
@@ -86,25 +88,62 @@ jobs:
       - name: Verify and independently unpack the frozen crate
         run: |
           set -o pipefail
-          python scripts/prepare-upgrade-receipt-consumer.py --toolchain "$TEST_TOOLCHAIN"             --work "$RUNNER_TEMP/upgrade-package-consumer"             --identity "$RUNNER_TEMP/upgrade-frozen-package/package.json"             --crate "$RUNNER_TEMP/upgrade-frozen-package/candidate.crate"             | tee "$RUNNER_TEMP/upgrade-evidence/consumer.json"
+          python scripts/prepare-upgrade-receipt-consumer.py --toolchain "$TEST_TOOLCHAIN" \
+            --work "$RUNNER_TEMP/upgrade-package-consumer" \
+            --identity "$RUNNER_TEMP/upgrade-frozen-package/package.json" \
+            --crate "$RUNNER_TEMP/upgrade-frozen-package/candidate.crate" \
+            | tee "$RUNNER_TEMP/upgrade-evidence/consumer.json"
       - name: Check HTTP stages from an external package consumer
         run: |
           set -o pipefail
-          cargo +"$TEST_TOOLCHAIN" test --locked --offline             --manifest-path "$RUNNER_TEMP/upgrade-package-consumer/consumer/Cargo.toml"             --test upgrade_receipt_contract -- --nocapture             | tee "$RUNNER_TEMP/upgrade-evidence/http-contract.log"
-      - name: Test U1 and both U2 native unknown outcomes from the same package
+          cargo +"$TEST_TOOLCHAIN" test --locked --offline \
+            --manifest-path "$RUNNER_TEMP/upgrade-package-consumer/consumer/Cargo.toml" \
+            --test upgrade_receipt_contract -- --nocapture \
+            | tee "$RUNNER_TEMP/upgrade-evidence/http-contract.log"
+      - name: Prepare Linux process observer
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v strace >/dev/null; then
+            strace_dir=$(mktemp -d "$RUNNER_TEMP/strace.XXXXXX")
+            (
+              cd "$strace_dir"
+              apt-get download strace
+              dpkg-deb -x ./strace_*.deb "$strace_dir/unpacked"
+            )
+            printf '%s\n' "$strace_dir/unpacked/usr/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Test native CLI exit handling from the unpacked crate
+        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
+        run: |
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target upgrade_engine --test-filter stopped_cli_blocked_check \
+            --upgrade-consumer "$RUNNER_TEMP/upgrade-package-consumer/consumer" \
+            --evidence-dir "$RUNNER_TEMP/upgrade-evidence/cli-check"
+      - name: Test both same-attempt unknown upgrades from the unpacked crate
         if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
         run: |
           result=0
-          for selector in stopped_cli_blocked_check native_same_attempt_observes; do
-            python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"               --test-target upgrade_engine --test-filter "$selector"               --upgrade-consumer "$RUNNER_TEMP/upgrade-package-consumer/consumer"               --evidence-dir "$RUNNER_TEMP/upgrade-evidence/$selector" || result=1
-          done
+          trace="$RUNNER_TEMP/s29-native-trace"
+          raw="$RUNNER_TEMP/upgrade-evidence/native-same-attempt"
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target upgrade_engine --test-filter native_same_attempt_observes \
+            --upgrade-consumer "$RUNNER_TEMP/upgrade-package-consumer/consumer" \
+            --upgrade-process-trace "$trace" --evidence-dir "$raw" || result=1
+          if [ -f "$trace/observer.stderr" ]; then
+            cp "$trace/observer.stderr" "$raw/observer.stderr"
+          fi
+          python scripts/trace-upgrade-recovery.py --verify --trace "$trace/intermediate.json" \
+            --log "$raw/upgrade-engine.log" --output "$raw/independent-process-witness.json" || result=1
           exit "$result"
       - name: Compare the three original upgrade routes and their data effects
         if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
         run: |
           result=0
           for selector in kernel_provider_upgrade kernel_streamed_archive_upload stopped_owner_cli; do
-            python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"               --test-target upgrade_engine --test-filter "$selector"               --allow-upgrade-metadata --serve-pinned-upgrade-archive               --evidence-dir "$RUNNER_TEMP/upgrade-evidence/original-$selector" || result=1
+            python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+              --test-target upgrade_engine --test-filter "$selector" \
+            --allow-upgrade-metadata --serve-pinned-upgrade-archive \
+            --evidence-dir "$RUNNER_TEMP/upgrade-evidence/original-$selector" || result=1
           done
           exit "$result"
       - name: Verify no task-owned core or upgrade source remains

@@ -5,6 +5,7 @@ on:
     branches:
       - 'ci/control-reliability-*'
       - 'ci/formal-candidate/control-reliability-*'
+      - 'ci/formal-candidate/upgrade-receipts-*'
   workflow_dispatch:
   pull_request:
     paths:
@@ -67,7 +68,7 @@ jobs:
     name: Packaged consumers and published API compatibility
     needs: package
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -95,6 +96,24 @@ jobs:
             --identity "$RUNNER_TEMP/control-frozen-package/package.json" \
             --baseline "$RUNNER_TEMP/published-0.1.1.crate" --checker "$VERYSYNC_SEMVER_CHECKER" \
             --cargo "$(command -v cargo)" --parent "$RUNNER_TEMP" --evidence "$RUNNER_TEMP/profile-evidence/api"
+      - name: Verify the exact development baseline API for upgrade receipts
+        if: startsWith(github.ref, 'refs/heads/ci/formal-candidate/upgrade-receipts-')
+        run: |
+          git fetch --no-tags --depth=1 https://github.com/AresJef/verysync-sidecar.git \
+            1c1f4956aa850b9ff662e07de910c49e0c9320a1
+          git worktree add --detach "$RUNNER_TEMP/upgrade-prior" 1c1f4956aa850b9ff662e07de910c49e0c9320a1
+          trap 'git worktree remove "$RUNNER_TEMP/upgrade-prior"' EXIT
+          (
+            cd "$RUNNER_TEMP/upgrade-prior"
+            cargo +1.85.0 package --locked --offline --no-verify --target-dir "$RUNNER_TEMP/upgrade-prior-target"
+          )
+          python scripts/check-control-candidate-compatibility.py \
+            --candidate "$RUNNER_TEMP/control-frozen-package/candidate.crate" \
+            --identity "$RUNNER_TEMP/control-frozen-package/package.json" \
+            --baseline "$RUNNER_TEMP/upgrade-prior-target/package/verysync-sidecar-0.1.2.crate" \
+            --baseline-identity 0.1.2-development \
+            --checker "$VERYSYNC_SEMVER_CHECKER" --cargo "$(command -v cargo)" \
+            --parent "$RUNNER_TEMP" --evidence "$RUNNER_TEMP/profile-evidence/0.1.2-api"
       - name: Build and run an external consumer under each feature profile
         run: |
           set -o pipefail
@@ -108,7 +127,7 @@ jobs:
             set -a
             source "$settings"
             set +a
-            for program in "$VERYSYNC_TEST_RECOVERY_EXAMPLE" "$VERYSYNC_TEST_OBSERVATION_EXAMPLE" "$VERYSYNC_TEST_PREVIEW_EXAMPLE" "$VERYSYNC_TEST_PREFLIGHT_EXAMPLE"; do
+            for program in "$VERYSYNC_TEST_RECOVERY_EXAMPLE" "$VERYSYNC_TEST_OBSERVATION_EXAMPLE" "$VERYSYNC_TEST_PREVIEW_EXAMPLE" "$VERYSYNC_TEST_PREFLIGHT_EXAMPLE" "$VERYSYNC_TEST_MANAGED_EXAMPLE"; do
               "$program" --help | tee "$base/$(basename "$program").help"
             done
             cargo +1.85.0 test --locked --offline --features engine-tests --test control_reliability_engine \

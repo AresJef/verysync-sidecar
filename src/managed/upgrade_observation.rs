@@ -221,6 +221,9 @@ async fn run_read_worker<T: Send + 'static>(
     deadline: Instant,
     work: impl FnOnce(mpsc::Receiver<()>) -> Result<T> + Send + 'static,
 ) -> Result<T> {
+    tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
+        reason: "program observation requires a Tokio runtime with timers",
+    })?;
     let (cancel, cancelled) = mpsc::channel();
     let task = tokio::task::spawn_blocking(move || work(cancelled));
     let result = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), task).await;
@@ -376,4 +379,39 @@ fn decode_digest(hex: &str) -> Option<[u8; 32]> {
         *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(digest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comparison_rejects_aliases_and_distinguishes_a_replaced_directory() -> Result<()> {
+        let root = tempfile::tempdir().map_err(|e| io_error("create test directory", e))?;
+        let map = |e| io_error("prepare synthetic receipt control", e);
+        let location = root.path().join("dedicated");
+        fs::create_dir(&location).map_err(map)?;
+        let position = location.join("program");
+        fs::write(&position, b"original synthetic bytes").map_err(map)?;
+        let old = Sha256::digest(b"original synthetic bytes").into();
+        let scope = UpgradeObservationScope {
+            parent_identity: stamp(&open_resource(&location, true)?)?.identity,
+            position: position.clone(),
+            previous: old,
+            target: Sha256::digest(b"different bytes").into(),
+        };
+        let (_cancel, active) = mpsc::channel();
+        let read = || scope.read_program(&active, Instant::now() + Duration::from_secs(2));
+        assert_eq!(read()?, old);
+        let alias = location.join("second-name");
+        fs::hard_link(&position, &alias).map_err(map)?;
+        assert!(matches!(read(), Err(Error::ProgramRejected { .. })));
+        fs::remove_file(alias).map_err(map)?;
+        let archived = root.path().join("original-directory");
+        fs::rename(&location, archived).map_err(map)?;
+        fs::create_dir(&location).map_err(map)?;
+        fs::write(&position, b"original synthetic bytes").map_err(map)?;
+        assert!(matches!(read(), Err(Error::ProgramRejected { .. })));
+        Ok(())
+    }
 }

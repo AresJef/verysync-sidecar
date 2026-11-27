@@ -1,15 +1,25 @@
 //! Explicit owned startup or read-only private-state reconnection; no discovery.
+#[path = "common/owned_shutdown.rs"]
+mod owned_shutdown;
+
+use owned_shutdown::shutdown_once_observing_exit;
 use serde_json::json;
 use std::path::PathBuf;
 use std::time::Duration;
 use verysync_sidecar::{
-    LocalProgram, ManagedInstance, ManagedLifetime, ManagedOptions, ManagementEndpoint,
+    LocalProgram, ManagedExitObservationOutcome, ManagedInstance, ManagedLifetime, ManagedOptions,
+    ManagementEndpoint,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    const USAGE: &str = "Usage: manage_owned <owned|persistent|connect|shutdown|observe-shutdown> PROGRAM STATE <http|socket> ADDRESS";
     let mut args = std::env::args_os().skip(1);
-    let mode = args.next().ok_or("usage: manage_owned <owned|persistent|connect|shutdown> PROGRAM STATE <http|socket> ADDRESS")?;
+    let mode = args.next().ok_or(USAGE)?;
+    if mode == "--help" && args.next().is_none() {
+        println!("{USAGE}");
+        return Ok(());
+    }
     let mode = mode.to_str().ok_or("mode must be UTF-8")?;
     let program_path = PathBuf::from(
         args.next()
@@ -83,6 +93,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // default owned path already observed its normal tree exit above.
             drop(instance);
         }
+        "observe-shutdown" => {
+            // With an unresolved exit, keep the core under its explicit
+            // persistent lifetime when this short-lived example returns.
+            let mut instance =
+                ManagedInstance::start(options.lifetime(ManagedLifetime::Persistent)).await?;
+            let report = shutdown_once_observing_exit(
+                &mut instance,
+                Duration::from_secs(5),
+                Duration::from_secs(15),
+            )
+            .await;
+            if let Err(error) = &report.original {
+                eprintln!("The shutdown call did not confirm exit. {error}");
+            }
+            match report.later {
+                Some(Ok(observation)) => {
+                    match observation.outcome {
+                        ManagedExitObservationOutcome::Exited(exit)
+                            if exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0) =>
+                        {
+                            println!("Later observation confirmed that the original VerySync process exited normally.");
+                            return Ok(());
+                        }
+                        ManagedExitObservationOutcome::TimedOut =>
+                            eprintln!("The observation ended before exit was confirmed. Check whether the original instance is still running."),
+                        _ => eprintln!("The original instance did not produce a confirmed normal exit. Check its exit report and saved state."),
+                    }
+                }
+                Some(Err(error)) => eprintln!("Could not observe the original process. {error}"),
+                None => {}
+            }
+            if let Err(error) = report.original {
+                return Err(error.into());
+            }
+            println!("The original VerySync process exited. Check its exit report before changing its files.");
+        }
         "connect" | "shutdown" => {
             let client = options.connect_existing().await?;
             let identity = client.system_status().await?.device_id;
@@ -103,7 +149,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             // Keep the JSON acknowledgement distinct from observed process exit.
         }
-        _ => return Err("mode must be owned, persistent, connect or shutdown".into()),
+        _ => {
+            return Err(
+                "mode must be owned, persistent, connect, shutdown or observe-shutdown".into(),
+            )
+        }
     }
     Ok(())
 }

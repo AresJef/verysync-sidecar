@@ -520,9 +520,9 @@ async fn observe(directory: &Path, input: Input) -> (u8, Value) {
             };
             summary["process_generation"] = json!(generation);
             summary["message"] = json!(if observed.requested_fields_match {
-                "The selected device currently reports the requested listener settings."
+                "The selected device currently reports the requested listener settings. No further listener change is needed for these fields."
             } else {
-                "The selected device currently reports different listener settings."
+                "The selected device currently reports different listener settings. Review the current settings before deciding whether to make a new change."
             });
             (0, summary)
         }
@@ -739,9 +739,9 @@ async fn observe_device(directory: &Path, input: Input) -> (u8, Value) {
                 .map(|time| time.as_millis()));
             summary["process_generation"] = json!("unknown");
             summary["message"] = json!(if observed.configuration_absent {
-                "The selected device no longer lists this registration. Sharing keys may still allow the peer to register again."
+                "The selected device no longer lists this registration. Files were not checked. A peer with valid sharing keys may join again."
             } else {
-                "The selected device currently lists this registration."
+                "The selected device currently lists this registration. Check its folder associations and your sharing keys before deciding whether to remove it."
             });
             (0, summary)
         }
