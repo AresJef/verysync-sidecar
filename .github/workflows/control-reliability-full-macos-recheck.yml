@@ -1,0 +1,416 @@
+name: Recheck the full standard macOS fixture on the exact RC6 source
+
+on:
+  push:
+    branches: ['ci/legacy-recheck-control-20261127']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fixture:
+    if: github.repository == 'AresJef/verysync-sidecar'
+    name: ${{ matrix.package }}
+    runs-on: ${{ matrix.runner }}
+    # Source136 Windows native bundles reached cache suites at the65-minute
+    # job limit; later required suites and cleanup never completed. Reserve the
+    # full bundle allowance; individual operation deadlines and outcome gates
+    # remain unchanged. A cancelled/partial bundle still cannot pass acceptance.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: macos-amd64-standard
+            runner: macos-15-intel
+            rust: x86_64-apple-darwin
+          - package: macos-arm64-standard
+            runner: macos-15
+            rust: aarch64-apple-darwin
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      VERYSYNC_TEST_LOCAL_ANNOUNCEMENT: github-actions-isolated-vm
+      VERYSYNC_TEST_EXPLICIT_TUNNEL: github-actions-isolated-vm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: f849b0fccc6ab9e27a568e82d2c0d1cfe0e19d5b
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Check extraction and exact process inventory contracts
+        run: |
+          python -m unittest discover -s scripts/tests -p test_prepare_test_engine.py
+          python -m unittest discover -s scripts/tests -p test_prepare_test_examples.py
+          python -m unittest discover -s scripts/tests -p test_run_isolated_engine_tests.py
+          python -m unittest discover -s scripts/tests -p test_ldap_tls_fixture.py
+      - name: Install native Rust toolchain
+        run: rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+      - name: Require the exact source and locked dependencies before any native scenario
+        run: |
+          test "$(git rev-parse HEAD)" = "f849b0fccc6ab9e27a568e82d2c0d1cfe0e19d5b"
+          test "$(git rev-parse 'HEAD^{tree}')" = "e8452a7b8fa103e75068f15a10a57fb3144a5c60"
+          test "$(shasum -a 256 Cargo.lock | awk '{print $1}')" = "de7ee28664d3439a0a02842ef0024b8cf4f44b96b6dce9f1aab515dd296d1b4e"
+          echo 'SECTION27_EXACT_SOURCE f849b0fccc6ab9e27a568e82d2c0d1cfe0e19d5b e8452a7b8fa103e75068f15a10a57fb3144a5c60 de7ee28664d3439a0a02842ef0024b8cf4f44b96b6dce9f1aab515dd296d1b4e'
+      - name: Record compiler identity
+        run: rustc +"$TEST_TOOLCHAIN" -vV
+      - name: Select separate x64 protocol-peer tools on Windows ARM
+        if: matrix.package == 'windows-arm64-standard'
+        id: storage_tools_python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+          architecture: x64
+          update-environment: false
+      - name: Explicitly prepare private protocol peer tools, separate from native SDK and core
+        id: storage_environment
+        continue-on-error: true
+        env:
+          VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.storage_tools_python.outputs.python-path }}
+        run: >-
+          python scripts/prepare-storage-test-environment.py
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Fetch locked Rust dependencies before offline runtime isolation
+        run: cargo +"$TEST_TOOLCHAIN" fetch --locked
+      - name: Explicitly prepare fixed official test engine
+        run: >-
+          python scripts/prepare-test-engine.py prepare
+          --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}"
+          --github-env "${{ github.env }}"
+      - name: Run public input and synthetic transport contracts
+        run: cargo +"$TEST_TOOLCHAIN" test --lib --test client_contract --test transport_contract --test managed_contract --test events_contract --test devices_contract --test invitations_contract --test network_contract --test sync_observation_contract --test releases --locked
+      - name: Explicitly prepare pinned older upgrade-source fixture
+        run: >-
+          python scripts/prepare-test-engine.py prepare --upgrade-source
+          --package "${{ matrix.package }}"
+          --parent "${{ runner.temp }}"
+          --github-env "${{ github.env }}"
+      - name: Verify local account, System account and foreign owner handling
+        id: native_windows_managed_permissions
+        if: startsWith(matrix.package, 'windows-')
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/run-windows-managed-permissions.ps1 -Toolchain $env:TEST_TOOLCHAIN
+      - name: Verify owned shutdown, stopped generations and private state admission
+        id: native_managed_repair
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --managed-repair-regressions
+          --evidence-dir "${{ runner.temp }}/vs-managed-repair-proxy"
+      - name: Check explicit preparation and bounded archive contracts
+        run: cargo +"$TEST_TOOLCHAIN" test --features download --lib --test download --test cache --locked
+      - name: Build public examples explicitly
+        run: >-
+          python scripts/prepare-test-examples.py
+          --toolchain "$TEST_TOOLCHAIN"
+          --github-env "${{ github.env }}"
+      - name: Validate the Windows UI probe before the complete lifecycle bundle
+        id: native_windows_ui
+        continue-on-error: true
+        if: startsWith(matrix.package, 'windows-')
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_instance --test-filter restart_preserves_identity_folders_settings_and_samples
+          --evidence-dir "${{ runner.temp }}/vs-managed-ui-proxy"
+      - name: Verify management, account, license and remote-tunnel boundaries
+        id: native_authentication_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target authentication_engine --evidence-dir "${{ runner.temp }}/vs-authentication-proxy"
+      - name: Verify one lost GUI reply and actual HTTP restoration on Windows AMD64
+        id: native_windows_gui_lost_reply
+        continue-on-error: true
+        if: matrix.package == 'windows-amd64-standard'
+        env:
+          VERYSYNC_TEST_GUI_RESTORE_LOST_REPLY: isolated-native-case
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target authentication_engine
+          --test-filter native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control
+          --evidence-dir "${{ runner.temp }}/vs-gui-single-lost-reply"
+      - name: Explicitly prepare the pinned private public-CA loopback TLS fixture
+        id: native_ldap_tls_preparation
+        continue-on-error: true
+        run: >-
+          python scripts/prepare-ldap-tls-fixture.py prepare
+          --parent "${{ runner.temp }}" --github-env "$GITHUB_ENV"
+      - name: Verify strict public-CA LDAP without system trust modification
+        id: native_ldap_trusted_ca_engine
+        continue-on-error: true
+        timeout-minutes: 4
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target ldap_trusted_ca_engine
+          --evidence-dir "${{ runner.temp }}/vs-ldap-trusted-ca-proxy"
+      - name: Verify actual sync, selective browse, recovery and bounded transfers
+        id: native_sync_observation
+        continue-on-error: true
+        env:
+          VERYSYNC_BANDWIDTH_PHASE: acceptance
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target sync_observation
+          --evidence-dir "${{ runner.temp }}/vs-sync-observation-proxy"
+      - name: Verify fixed-version upgrades, state restoration and cancellation
+        id: native_upgrade_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target upgrade_engine --allow-upgrade-metadata --serve-pinned-upgrade-archive
+          --evidence-dir "${{ runner.temp }}/vs-upgrade-proxy"
+      - name: Verify mounted resource metadata, checksums and native previews
+        id: native_files_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target files_engine
+          --evidence-dir "${{ runner.temp }}/vs-file-resources-proxy"
+      - name: Verify resource file mutations and exact native directory conditions
+        id: native_file_mutation_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_mutation_engine
+          --evidence-dir "${{ runner.temp }}/vs-file-mutation-proxy"
+      - name: Verify bounded file streaming, archive contents and actual cancellation
+        id: native_file_transfer_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_transfer_engine
+          --evidence-dir "${{ runner.temp }}/vs-file-transfer-proxy"
+      - name: Verify real disk-full retention and explicit recovery on an owned bounded filesystem
+        id: native_disk_full_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-bounded-disk-full-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --parent "${{ runner.temp }}" --evidence-dir "${{ runner.temp }}/vs-disk-full"
+      - name: Verify native host watch-limit observations and explicit refusals
+        id: native_host_watch_limit
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target host_control_engine
+          --evidence-dir "${{ runner.temp }}/vs-host-watch-limit-observations"
+      - name: Verify native browser fallback and released desktop actor in private state
+        id: native_browser_engine
+        continue-on-error: true
+        if: startsWith(matrix.package, 'macos-') || startsWith(matrix.package, 'linux-')
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target browser_engine
+          --evidence-dir "${{ runner.temp }}/vs-native-browser-proxy"
+      - name: Verify actual version retention, deleted-file restoration and free audit conditions
+        id: native_file_history_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target file_history_engine --evidence-dir "${{ runner.temp }}/vs-file-history-proxy"
+      - name: Verify explicit core errors, logs, package levels and owned diagnostics
+        id: native_maintenance_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target maintenance_engine --evidence-dir "${{ runner.temp }}/vs-maintenance-proxy"
+      - name: Verify native Local Sync registration, analysis and explicit data effects
+        id: native_local_sync_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-proxy"
+      - name: Verify actual native-core FTP, SFTP, SMB and WebDAV data effects
+        id: native_local_sync_protocol_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_protocol_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-protocols-proxy"
+      - name: Verify each protocol's reverse copies, three conflicts and selected data effects
+        id: native_local_sync_protocol_advanced_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_protocol_advanced_engine --evidence-dir "${{ runner.temp }}/vs-protocol-advanced-proxy"
+      - name: Verify selected actions, reverse copies and actual native two-way conflicts
+        id: native_local_sync_advanced_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_advanced_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-advanced-proxy"
+      - name: Verify actual inflight Local Sync controls, native events and restart continuity
+        id: native_local_sync_runtime_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_runtime_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-runtime-proxy"
+      - name: Verify native automatic startup data effects and free schedule guards
+        id: native_local_sync_automation_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_automation_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-automation-proxy"
+      - name: Verify actual marker and incompatible baseline recovery without implicit execution
+        id: native_local_sync_repair_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_repair_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-repair-proxy"
+      - name: Verify complete scoped storage configuration and explicit data effects
+        id: native_local_sync_configuration_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target local_sync_configuration_engine --evidence-dir "${{ runner.temp }}/vs-local-sync-configuration-proxy"
+      - name: Verify actual creation defaults, inheritance and persisted configuration
+        id: native_configuration_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target configuration_engine --evidence-dir "${{ runner.temp }}/vs-configuration-proxy"
+      - name: Verify public host exit and native descriptor or Job ownership
+        id: native_managed_lifetime
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_lifetime --evidence-dir "${{ runner.temp }}/vs-host-lifetime-proxy"
+      - name: Exercise public managed startup, shutdown, restart and owned UI observations
+        id: native_managed_instance
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target managed_instance --evidence-dir "${{ runner.temp }}/vs-managed-proxy"
+      - name: Verify independent auxiliary address and passive owned IPv4 listeners
+        id: native_p2p_isolation
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target p2p_isolation --evidence-dir "${{ runner.temp }}/vs-p2p-isolation-proxy"
+      - name: Verify public device controls and actual private peer effects
+        id: native_devices
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target devices --evidence-dir "${{ runner.temp }}/vs-devices-proxy"
+      - name: Verify actual folder offers, persistent ignores and explicit key acceptance
+        id: native_invitations
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target invitations --evidence-dir "${{ runner.temp }}/vs-invitations-proxy"
+      - name: Verify private TCP, UDP/QUIC, relay and isolated discovery effects
+        id: native_network
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target network --allow-private-discovery --test-filter actual_
+          --evidence-dir "${{ runner.temp }}/vs-network-proxy"
+      - name: Verify read-only handoff to a fresh third node with the source stopped
+        id: native_p2p_three_nodes
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target p2p_three_nodes
+          --evidence-dir "${{ runner.temp }}/vs-three-node-proxy"
+      - name: Run independent-engine fixture contracts
+        id: native_engine_control
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target engine_control --evidence-dir "${{ runner.temp }}/vs-control-proxy"
+      - name: Verify native wallpaper source denial without external permission
+        id: native_wallpaper_denied
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target wallpaper_engine --evidence-dir "${{ runner.temp }}/vs-wallpaper-denied"
+      - name: Verify explicit native wallpaper image and conditional resource
+        id: native_wallpaper_resource
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target wallpaper_engine --allow-wallpaper-source
+          --evidence-dir "${{ runner.temp }}/vs-wallpaper-resource"
+      - name: Exercise public bounded events, gaps, cancellation and actual restart recovery
+        id: native_events
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target events --evidence-dir "${{ runner.temp }}/vs-events-proxy"
+      - name: Run compiled public examples on an independent engine
+        id: native_example_control
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target example_control --evidence-dir "${{ runner.temp }}/vs-examples-proxy"
+      - name: Exercise actual scan phase observation, file effects and cancellation
+        id: native_operations
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target operations --evidence-dir "${{ runner.temp }}/vs-operations-proxy"
+      - name: Exercise real sharing keys, distinct local registrations and loopback effects
+        id: native_sharing
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target sharing --evidence-dir "${{ runner.temp }}/vs-sharing-proxy"
+      - name: Prepare the official fixed program through Rust and verify actual native startup
+        id: native_download_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target download_engine --evidence-dir "${{ runner.temp }}/vs-download-proxy"
+      - name: Verify cache reuse, recovery, immutable running programs and independent callers
+        id: native_cache_engine
+        continue-on-error: true
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --test-target cache_engine --evidence-dir "${{ runner.temp }}/vs-cache-proxy"
+      - name: Investigate native macOS lifetime mechanisms
+        id: native_mechanism_macos
+        continue-on-error: true
+        if: startsWith(matrix.package, 'macos-')
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --mechanism macos --evidence-dir "${{ runner.temp }}/vs-macos-mechanism-proxy"
+      - name: Investigate native Linux lifetime mechanisms
+        id: native_mechanism_linux
+        continue-on-error: true
+        if: startsWith(matrix.package, 'linux-')
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --mechanism linux --evidence-dir "${{ runner.temp }}/vs-linux-mechanism-proxy"
+      - name: Investigate native Windows Job lifetime mechanisms
+        id: native_mechanism_windows
+        continue-on-error: true
+        if: startsWith(matrix.package, 'windows-')
+        run: >-
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN"
+          --mechanism windows --evidence-dir "${{ runner.temp }}/vs-windows-mechanism-proxy"
+      - name: Confirm no task-owned engine remains
+        id: native_cleanup_baseline
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup
+      - name: Confirm no pinned older upgrade-source engine remains
+        id: native_cleanup_upgrade
+        if: always() && env.VERYSYNC_TEST_UPGRADE_SOURCE_BINARY != ''
+        run: python scripts/prepare-test-engine.py check-cleanup --upgrade-source
+      - name: Remove only this job's private public-CA fixture
+        id: native_ldap_tls_cleanup
+        if: always()
+        run: python scripts/prepare-ldap-tls-fixture.py cleanup --parent "${{ runner.temp }}"
+      - name: Require every applicable native suite and exact cleanup
+        if: always()
+        env:
+          NATIVE_STEP_RESULTS: ${{ toJson(steps) }}
+          NATIVE_MATRIX_PACKAGE: ${{ matrix.package }}
+        run: python scripts/check-native-step-results.py
