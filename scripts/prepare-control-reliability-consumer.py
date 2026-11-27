@@ -46,11 +46,35 @@ def prepare(args):
     if not cargo_path:
         raise ValueError("Cargo was not located")
     cargo = [str(Path(cargo_path).absolute()), "+" + args.toolchain]
-    packed = root / "package-target"
-    checked([*cargo, "package", "--locked", "--offline", "--target-dir", str(packed)],
-            source, proof / "package.log")
-    archive = packed / "package" / f"{crate_name}-{version}.crate"
-    archive_digest = checksum(archive)
+    source_record = {
+        "source": identity[0],
+        "tree": identity[1],
+        "version": version,
+        "locked_source_dependencies_sha256": checksum(source / "Cargo.lock"),
+        "example_source_sha256": checksum(source / "examples/gui_listener_recovery.rs"),
+    }
+    if args.candidate is None:
+        packed = root / "package-target"
+        checked([*cargo, "package", "--locked", "--offline", "--target-dir", str(packed)],
+                source, proof / "package.log")
+        archive = packed / "package" / f"{crate_name}-{version}.crate"
+    else:
+        archive = args.candidate.resolve(strict=True)
+    package_record = {
+        **source_record,
+        "candidate_crate_sha256": checksum(archive),
+        "candidate_crate_bytes": archive.stat().st_size,
+    }
+    if args.candidate_identity is not None:
+        frozen = json.loads(args.candidate_identity.read_text(encoding="utf-8"))
+        if frozen != package_record:
+            raise ValueError("candidate artifact does not match the frozen package and checkout")
+    if args.package_only:
+        shutil.copyfile(archive, proof / "candidate.crate")
+        (proof / "package.json").write_text(json.dumps(package_record, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(package_record))
+        return
+
     unpacked = root / "unpacked"
     unpacked.mkdir()
     with tarfile.open(archive, "r:gz") as package_file:
@@ -64,6 +88,8 @@ def prepare(args):
     (fixture / "src/main.rs").write_text("fn main() {}\n", encoding="utf-8")
     (fixture / "examples").mkdir()
     source_example = candidate / "examples/gui_listener_recovery.rs"
+    if checksum(source_example) != source_record["example_source_sha256"]:
+        raise ValueError("packaged example differs from the candidate source")
     external_example = fixture / "examples/gui_listener_recovery.rs"
     shutil.copyfile(source_example, external_example)
     candidate_path = json.dumps(str(candidate), ensure_ascii=False)
@@ -89,16 +115,11 @@ tokio = {{ version = "1.54.1", features = ["macros", "rt-multi-thread"] }}
     executable = (consumer_target / "debug" / "examples" /
                   ("gui_listener_recovery.exe" if os.name == "nt" else "gui_listener_recovery"))
     result = {
-        "source": identity[0],
-        "tree": identity[1],
-        "version": version,
-        "locked_source_dependencies_sha256": checksum(source / "Cargo.lock"),
-        "candidate_crate_sha256": archive_digest,
-        "candidate_crate_bytes": archive.stat().st_size,
+        **package_record,
         "consumer_lock_sha256": checksum(fixture / "Cargo.lock"),
-        "example_source_sha256": checksum(external_example),
         "example_executable_sha256": checksum(executable),
         "consumer_uses_independently_unpacked_candidate": True,
+        "used_shared_candidate_archive": args.candidate is not None,
     }
     (proof / "build.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     env_path = executable.absolute().as_posix()
@@ -114,7 +135,17 @@ if __name__ == "__main__":
     parser.add_argument("--source", type=Path, default=Path.cwd())
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
-    parser.add_argument("--github-env", type=Path, required=True)
+    parser.add_argument("--github-env", type=Path)
+    parser.add_argument("--package-only", action="store_true")
+    parser.add_argument("--candidate", type=Path)
+    parser.add_argument("--candidate-identity", type=Path)
     parser.add_argument("--cargo")
     parser.add_argument("--toolchain", default="1.85.0")
-    prepare(parser.parse_args())
+    args = parser.parse_args()
+    if (args.candidate is None) != (args.candidate_identity is None):
+        parser.error("an external candidate requires its archive and recorded identity")
+    if args.package_only and args.candidate is not None:
+        parser.error("packing a candidate requires the clean source checkout")
+    if not args.package_only and args.github_env is None:
+        parser.error("the compiled consumer requires a private environment output")
+    prepare(args)
