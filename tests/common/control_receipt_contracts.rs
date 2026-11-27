@@ -47,15 +47,16 @@ async fn receipt_checkpoint_failure_proves_zero_writes() -> TestResult {
     assert!(matches!(report.result, Err(Error::LocalIo { .. })));
     assert_eq!(report.receipt.submission(), ControlSubmission::NotSubmitted);
     assert!(!format!("{report:?}").contains(KEY));
-    let checkpoints = saved.lock().unwrap();
-    assert_eq!(checkpoints.len(), 2);
-    assert_eq!(checkpoints[0].submission(), ControlSubmission::Prepared);
-    assert_eq!(
-        checkpoints[1].submission(),
-        ControlSubmission::PossiblySubmitted
-    );
-    assert_eq!(checkpoints[0].id(), checkpoints[1].id());
-    drop(checkpoints);
+    {
+        let checkpoints = saved.lock().unwrap();
+        assert_eq!(checkpoints.len(), 2);
+        assert_eq!(checkpoints[0].submission(), ControlSubmission::Prepared);
+        assert_eq!(
+            checkpoints[1].submission(),
+            ControlSubmission::PossiblySubmitted
+        );
+        assert_eq!(checkpoints[0].id(), checkpoints[1].id());
+    }
     assert!(server.finish().await?.iter().all(|r| r.starts_with("GET ")));
     Ok(())
 }

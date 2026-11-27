@@ -6,6 +6,8 @@ mod control_fault_origin;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "common/control_loopback_capture.rs"]
 mod control_loopback_capture;
+#[path = "common/control_native_request_log.rs"]
+mod control_native_request_log;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
 #[cfg(feature = "tls")]
@@ -384,7 +386,13 @@ async fn native_migration_keeps_one_submission_and_new_process_recovers_read_onl
         let saved = std::fs::read(&receipt_file)?;
         assert!(saved.len() <= 16 * 1024);
         assert!(!String::from_utf8_lossy(&saved).contains(api_key));
+        control_native_request_log::enable(&native_b).await?;
+        let native_log_calibration =
+            calibrate_native_request_log(core.state_directory(), after, api_key).await?;
         witness.recovery()?;
+        let native_log =
+            control_native_request_log::LogWindow::new(core.state_directory(), after, api_key)?;
+        native_log.open().await?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let direct_capture = control_loopback_capture::DirectCapture::start(after.port())?;
         let recovered_direct = launch_app(
@@ -398,11 +406,13 @@ async fn native_migration_keeps_one_submission_and_new_process_recovers_read_onl
         )
         .await?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        let direct_b_evidence = direct_capture
+        let direct_b_wire = direct_capture
             .map(|observer| observer.finish())
             .transpose()?;
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        let direct_b_evidence: Option<Value> = None;
+        let direct_b_wire: Option<Value> = None;
+        let direct_b_evidence = native_log.close().await?;
+        assert_eq!(direct_b_evidence["ordered_reads"], json!(READ_PATHS));
         check_recovered(&recovered_direct, &operation_id)?;
         assert_eq!(std::fs::read(&receipt_file)?, saved);
 
@@ -450,8 +460,10 @@ async fn native_migration_keeps_one_submission_and_new_process_recovers_read_onl
             "operation_id":operation_id,
             "direct_b_confirmed":true,
             "direct_b_application_exited":true,
-            "direct_b_requests_independently_counted":direct_b_evidence.is_some(),
+            "direct_b_requests_independently_counted":true,
             "direct_b_request_witness":direct_b_evidence,
+            "direct_b_packet_witness":direct_b_wire,
+            "native_request_log_calibration":native_log_calibration,
             "guarded_b_read_requests":recovery.len(),
             "guarded_b_modifications":0,
             "submission_patch":1,
@@ -479,6 +491,59 @@ async fn native_migration_keeps_one_submission_and_new_process_recovers_read_onl
     assert_eq!(std::fs::read(sample)?, RETAINED_FILE);
     println!("control reliability native evidence {report}");
     Ok(())
+}
+
+async fn calibrate_native_request_log(
+    state: &Path,
+    address: SocketAddr,
+    api_key: &str,
+) -> TestResult<Value> {
+    use control_native_request_log::LogWindow;
+    let http = forward_http()?;
+    let positive = LogWindow::new(state, address, api_key)?;
+    positive.open().await?;
+    let reply = http
+        .get(format!("http://{address}/rest/system/version"))
+        .header("x-api-key", api_key)
+        .send()
+        .await?;
+    assert_eq!(reply.status(), 200);
+    let body = reply.json::<Value>().await?;
+    assert_eq!(body["version"], "v2.33.2");
+    let positive_log = positive.close().await?;
+    assert_eq!(positive_log["ordered_reads"], json!([Route::Version]));
+    for (method, path, expected_error) in [
+        (
+            reqwest::Method::HEAD,
+            "/rest/system/version",
+            "native recovery handled a request whose method was not GET",
+        ),
+        (
+            reqwest::Method::GET,
+            "/rest/system/ping?test_control_unexpected=marker-control",
+            "native recovery handled a route outside the read-only allowlist",
+        ),
+    ] {
+        let negative = LogWindow::new(state, address, api_key)?;
+        negative.open().await?;
+        // Both methods exercise read endpoints on the synthetic native core.
+        // The expected rejection is from the independent observer.
+        let reply = http
+            .request(method, format!("http://{address}{path}"))
+            .header("x-api-key", api_key)
+            .send()
+            .await?;
+        let _ = reply.bytes().await?;
+        assert_eq!(
+            negative.close().await.unwrap_err().to_string(),
+            expected_error
+        );
+    }
+    Ok(json!({
+        "confirmed_expected_read":true,
+        "detected_non_get_method":true,
+        "detected_unexpected_get_route":true
+    }))
 }
 
 fn check_recovered(result: &AppResult, id: &str) -> TestResult {
