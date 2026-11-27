@@ -1,0 +1,72 @@
+name: Collect one independent first-window sample job
+description: Run the named historical selectors in a separate exact product checkout.
+inputs:
+  batch:
+    required: true
+    description: Sample batch
+  package-id:
+    required: true
+    description: Fixed official architecture catalog ID
+  rust-host:
+    required: true
+    description: Exact native Rust host
+  observe:
+    required: true
+    description: Original direct request capture availability
+runs:
+  using: composite
+  steps:
+    - name: Allocate this job's separate evidence root
+      shell: bash
+      env:
+        BATCH: ${{ inputs.batch }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+      run: |
+        mkdir "$RUNNER_TEMP/r1-evidence"
+        printf 'batch=%s package=%s run=%s attempt=%s\n' "$BATCH" "$PACKAGE_ID" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/r1-evidence/runner-entry.log"
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      with:
+        persist-credentials: false
+        path: product
+        ref: 1c1f4956aa850b9ff662e07de910c49e0c9320a1
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: '3.13'
+    - name: Select the original separate protocol-peer interpreter on Windows ARM
+      if: inputs.package-id == 'windows-arm64-standard'
+      id: peer_python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: '3.13'
+        architecture: x64
+        update-environment: false
+    - name: Install and record the fixed native toolchain and fixture dependencies
+      shell: bash
+      working-directory: product
+      env:
+        TEST_TOOLCHAIN: 1.85.0-${{ inputs.rust-host }}
+        VERYSYNC_STORAGE_BASE_PYTHON: ${{ steps.peer_python.outputs.python-path }}
+      run: |
+        rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+        rustc +"$TEST_TOOLCHAIN" -vV
+        cargo +"$TEST_TOOLCHAIN" fetch --locked
+        python scripts/prepare-storage-test-environment.py --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+    - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v4
+      with:
+        name: r1-frozen-package
+        path: ${{ runner.temp }}/r1-frozen-package
+    - name: Record first observations and clean only the owned test roots
+      shell: bash
+      env:
+        BATCH: ${{ inputs.batch }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+        VERYSYNC_TEST_REQUIRE_DIRECT_REQUEST_CAPTURE: ${{ inputs.observe }}
+      run: |
+        python -B tool/scripts/ci-fault-r1/collect.py --product product --package "$RUNNER_TEMP/r1-frozen-package" --batch "$BATCH" --platform "$PACKAGE_ID" --root "$RUNNER_TEMP/r1-owned-$BATCH-$PACKAGE_ID" --out "$RUNNER_TEMP/r1-evidence/results"
+    - name: Retain first-attempt evidence even if an original test fails
+      if: always()
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: r1-${{ inputs.batch }}-${{ inputs.package-id }}-a${{ github.run_attempt }}
+        path: ${{ runner.temp }}/r1-evidence
+        if-no-files-found: error

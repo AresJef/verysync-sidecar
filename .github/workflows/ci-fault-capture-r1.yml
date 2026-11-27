@@ -1,0 +1,114 @@
+name: 0.1.2 first-window CI fault capture
+on:
+  push:
+    branches: ['ci/fault-capture-r1-*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Freeze and self-check the first-window capture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      platforms: ${{ steps.matrix.outputs.platforms }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: tool
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: product
+          ref: 1c1f4956aa850b9ff662e07de910c49e0c9320a1
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Verify capture controls before starting real tests
+        id: matrix
+        run: |
+          python -B tool/scripts/ci-fault-r1/selfcheck.py --product product
+          python -c 'import json; print("platforms=" + json.dumps(json.load(open("tool/scripts/ci-fault-r1/plan.json"))["platforms"],separators=(",",":")))' >> "$GITHUB_OUTPUT"
+      - name: Rebuild the exact authorized archive with Cargo 1.85
+        working-directory: product
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 fetch --locked
+          python scripts/prepare-control-reliability-consumer.py --toolchain 1.85.0 --package-only --work "$RUNNER_TEMP/package-work" --evidence "$RUNNER_TEMP/frozen-package"
+          python -B ../tool/scripts/ci-fault-r1/selfcheck.py --product . --package "$RUNNER_TEMP/frozen-package"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: r1-frozen-package
+          path: ${{ runner.temp }}/frozen-package
+          if-no-files-found: error
+
+  first:
+    name: N1 (${{ matrix.package_id }})
+    needs: package
+    if: ${{ always() && needs.package.result == 'success' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.package.outputs.platforms) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          path: tool
+      - uses: ./tool/.github/actions/fault-capture-r1
+        with:
+          batch: N1
+          package-id: ${{ matrix.package_id }}
+          rust-host: ${{ matrix.host }}
+          observe: ${{ matrix.observe }}
+
+  second:
+    name: N2 (${{ matrix.package_id }})
+    needs: [package, first]
+    if: ${{ always() && needs.package.result == 'success' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.package.outputs.platforms) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          path: tool
+      - uses: ./tool/.github/actions/fault-capture-r1
+        with:
+          batch: N2
+          package-id: ${{ matrix.package_id }}
+          rust-host: ${{ matrix.host }}
+          observe: ${{ matrix.observe }}
+
+  controlled:
+    name: I (${{ matrix.package_id }})
+    needs: package
+    if: ${{ always() && needs.package.result == 'success' }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.package.outputs.platforms) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          path: tool
+      - uses: ./tool/.github/actions/fault-capture-r1
+        with:
+          batch: I
+          package-id: ${{ matrix.package_id }}
+          rust-host: ${{ matrix.host }}
+          observe: ${{ matrix.observe }}

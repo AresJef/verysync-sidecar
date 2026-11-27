@@ -1,0 +1,133 @@
+{
+  "product": {
+    "source": "1c1f4956aa850b9ff662e07de910c49e0c9320a1",
+    "tree": "e07b4c2d61fcf1a6e8236d296759b803cc567d18",
+    "version": "0.1.2",
+    "locked_source_dependencies_sha256": "1f1a0232910ca86e209392ffb8fa9aba580d9da4debf04d31dcb4a1c6d3b99d7",
+    "candidate_crate_sha256": "bad8ef3207c34ba0d3078d5a8866df3440aecff9fb25f7d26159077dc9e2e71e",
+    "candidate_crate_bytes": 1430841
+  },
+  "platforms": [
+    {
+      "package_id": "linux-amd64-standard",
+      "runner": "ubuntu-24.04",
+      "host": "x86_64-unknown-linux-gnu",
+      "observe": 1
+    },
+    {
+      "package_id": "linux-arm64-standard",
+      "runner": "ubuntu-24.04-arm",
+      "host": "aarch64-unknown-linux-gnu",
+      "observe": 1
+    },
+    {
+      "package_id": "macos-amd64-standard",
+      "runner": "macos-15-intel",
+      "host": "x86_64-apple-darwin",
+      "observe": 1
+    },
+    {
+      "package_id": "macos-arm64-standard",
+      "runner": "macos-15",
+      "host": "aarch64-apple-darwin",
+      "observe": 1
+    },
+    {
+      "package_id": "windows-amd64-standard",
+      "runner": "windows-2022",
+      "host": "x86_64-pc-windows-msvc",
+      "observe": 0
+    },
+    {
+      "package_id": "windows-arm64-standard",
+      "runner": "windows-11-arm",
+      "host": "aarch64-pc-windows-msvc",
+      "observe": 0
+    }
+  ],
+  "natural": [
+    {
+      "id": "N01",
+      "target": "authentication_engine",
+      "selector": "management_transport_cases::native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control"
+    },
+    {
+      "id": "N02",
+      "target": "devices",
+      "selector": "actual_explicit_disconnect_and_remove_preserves_files"
+    },
+    {
+      "id": "N03",
+      "target": "sync_observation",
+      "selector": "actual_folder_order_and_specific_priority_change_preserve_samples"
+    },
+    {
+      "id": "N03-M",
+      "target": "configuration_engine",
+      "selector": "sleep_prevention_cases::native_sleep_prevention_tracks_actual_owned_assertions_during_transfer"
+    },
+    {
+      "id": "N04a",
+      "target": "upgrade_engine",
+      "selector": "kernel_provider_upgrade_replaces_only_the_owned_old_copy"
+    },
+    {
+      "id": "N04b",
+      "target": "upgrade_engine",
+      "selector": "stopped_owner_cli_checks_and_upgrades_the_dedicated_program"
+    },
+    {
+      "id": "N05",
+      "target": "configuration_engine",
+      "selector": "incoming_admission_cases::native_incoming_request_cap_bounds_saturated_admission_and_preserves_files"
+    }
+  ],
+  "controlled": [
+    {
+      "id": "I01-PROXY",
+      "target": "control_reliability_engine",
+      "selector": "package_consumer_distinguishes_acknowledgement_loss_and_later_changes"
+    },
+    {
+      "id": "I01-NATIVE",
+      "target": "control_reliability_engine",
+      "selector": "native_migration_keeps_one_submission_and_new_process_recovers_read_only"
+    },
+    {
+      "id": "I02-NATIVE",
+      "target": "devices",
+      "selector": "actual_receipt_disconnect_and_remove_preserves_files"
+    },
+    {
+      "id": "I03-EXIT",
+      "target": "control_observation_engine",
+      "selector": "native_observation_resumes_a_folder_and_confirms_the_exact_later_exit"
+    },
+    {
+      "id": "I03-OWNER",
+      "target": "control_reliability_engine",
+      "selector": "native_old_owner_generation_cannot_shutdown_restarted_same_device"
+    }
+  ],
+  "public_illustrations": [
+    "B-gui-401",
+    "B-gui-403",
+    "B-gui-headers-403",
+    "B-gui-drop",
+    "B-gui-success",
+    "B-device-401",
+    "B-device-403",
+    "B-device-headers-403",
+    "B-device-drop",
+    "B-device-success",
+    "B-device-pre-read-403",
+    "B-device-post-read-403",
+    "B-device-pause-read-403"
+  ],
+  "supplemental_controls": [
+    "I04-METADATA-COMPLETE",
+    "I04-METADATA-CLOSED",
+    "I04-PROGRESS-LATE",
+    "I04-PROGRESS-STILL"
+  ]
+}
