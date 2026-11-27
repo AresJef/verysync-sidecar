@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -220,7 +221,7 @@ def prepare(args, out, root, base_env, platform):
                 "run": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
                 "workflow_job_label": f'{args.batch} ({args.platform})'}
     write_json(out / "identity.json", identity)
-    scopes = ("current", "upgrade_source") if args.batch != "I" else ("current",)
+    scopes = ("current", "upgrade_source") if args.batch in ("N1", "N2") else ("current",)
     engines = {}
     for scope in scopes:
         prepare_log = out / f"prepare-{scope}.log"
@@ -269,12 +270,15 @@ def run_case(args, entry, toolchain, env, root, out):
     runtime.mkdir()
     scratch = runtime / "private-runtime"
     scratch.mkdir()
-    local = {**env, "TMPDIR": str(scratch), "TMP": str(scratch), "TEMP": str(scratch),
-             "CARGO_TERM_COLOR": "never"}
+    local = {**env, "CARGO_TERM_COLOR": "never"}
+    if args.batch != "D":
+        local.update(TMPDIR=str(scratch), TMP=str(scratch), TEMP=str(scratch))
     raw = runtime / "research"
     capture_log = case_dir / "process.log"
     event(out, "case_dispatch", case=case_id, target=entry["target"], selector=entry["selector"],
-          sample=f"{args.batch}-{args.platform}-{case_id}")
+          sample=f"{args.batch}-{args.platform}-{case_id}",
+          tested_runtime_temp=(tempfile.gettempdir() if args.batch == "D" else str(scratch)),
+          temp_override_active=args.batch != "D")
     result = capture([sys.executable, "scripts/run-isolated-engine-tests.py",
                       "--toolchain", toolchain, "--test-target", entry["target"],
                       "--test-filter", entry["selector"], "--evidence-dir", str(raw),
@@ -328,14 +332,17 @@ def main():
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--platform", required=True)
-    parser.add_argument("--batch", choices=("N1", "N2", "I"), required=True)
+    parser.add_argument("--batch", choices=("D",), required=True)
     args = parser.parse_args()
     for name in ("product", "package", "root", "out"):
         setattr(args, name, getattr(args, name).resolve())
     args.out.mkdir(parents=True, exist_ok=False)
     args.root.mkdir(mode=0o700, parents=True, exist_ok=False)
     platform = next(x for x in PLAN["platforms"] if x["package_id"] == args.platform)
-    cases = PLAN["controlled"] if args.batch == "I" else natural_cases(args.platform)
+    direction = read_json(HERE / "direction-plan.json")[args.platform]
+    cases = [r for r in natural_cases(args.platform) + PLAN["controlled"] if r["id"] in direction]
+    if set(direction) != {r["id"] for r in cases}:
+        raise ValueError("directional authorization and case roster differ")
     event(args.out, "job_entered", batch=args.batch, platform=args.platform, private_root=str(args.root))
     base_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", CARGO_TERM_COLOR="never")
     base_env.pop("VERYSYNC_TEST_GUI_RESTORE_LOST_REPLY", None)

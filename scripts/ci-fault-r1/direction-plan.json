@@ -1,0 +1,23 @@
+{
+  "linux-amd64-standard": [
+    "N01",
+    "N05",
+    "I02-NATIVE"
+  ],
+  "linux-arm64-standard": [
+    "N01",
+    "N05",
+    "I02-NATIVE"
+  ],
+  "macos-amd64-standard": [
+    "N01",
+    "N05",
+    "I02-NATIVE"
+  ],
+  "macos-arm64-standard": [
+    "N01",
+    "N05",
+    "N03-M",
+    "I02-NATIVE"
+  ]
+}
