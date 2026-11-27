@@ -1,0 +1,101 @@
+name: Diagnose two exact-source macOS regressions
+
+on:
+  push:
+    branches: ['ci/control-reliability-legacy-triage-20261127']
+
+permissions:
+  contents: read
+
+jobs:
+  paired:
+    if: github.repository == 'AresJef/verysync-sidecar'
+    name: Paired ${{ matrix.package }} exact-source diagnostic
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 24
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            package: macos-amd64-standard
+            rust: x86_64-apple-darwin
+            target: authentication_engine
+            filter: management_transport_cases::native_listener_tls_address_and_disable_limit_preserve_explicit_owner_control
+            order: stable candidate
+          - runner: macos-15
+            package: macos-arm64-standard
+            rust: aarch64-apple-darwin
+            target: configuration_engine
+            filter: sleep_prevention_cases::native_sleep_prevention_tracks_actual_owned_assertions_during_transfer
+            order: candidate stable
+    env:
+      TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      PACKAGE: ${{ matrix.package }}
+      TARGET: ${{ matrix.target }}
+      FILTER: ${{ matrix.filter }}
+      ORDER: ${{ matrix.order }}
+      STABLE_SHA: 1918028860f710f67e5e1ae5266eefe408ff6519
+      CANDIDATE_SHA: f849b0fccc6ab9e27a568e82d2c0d1cfe0e19d5b
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: stable
+          ref: 1918028860f710f67e5e1ae5266eefe408ff6519
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: candidate
+          ref: f849b0fccc6ab9e27a568e82d2c0d1cfe0e19d5b
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Verify the two exact versions and prepare the isolated test prerequisites
+        run: |
+          test "$(git -C stable rev-parse HEAD)" = "$STABLE_SHA"
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          rustup toolchain install "$TEST_TOOLCHAIN" --profile minimal
+          rustc +"$TEST_TOOLCHAIN" -vV
+          shasum -a 256 stable/Cargo.lock candidate/Cargo.lock
+          cd candidate
+          python scripts/prepare-storage-test-environment.py --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          python scripts/prepare-test-engine.py prepare --package "$PACKAGE" --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Run both original test cases in separate native state and build directories
+        run: |
+          set -o pipefail
+          out="$RUNNER_TEMP/paired-evidence"
+          mkdir "$out"
+          result=0
+          for build in $ORDER; do
+            (
+              cd "$build" || exit 90
+              mkdir "$RUNNER_TEMP/$build-state" || exit 91
+              export TMPDIR="$RUNNER_TEMP/$build-state/"
+              export CARGO_TARGET_DIR="$RUNNER_TEMP/$build-target"
+              git rev-parse HEAD > "$out/$build-source.txt" || exit 92
+              cargo +"$TEST_TOOLCHAIN" fetch --locked || exit 93
+              set +e
+              python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+                --test-target "$TARGET" --test-filter "$FILTER" --evidence-dir "$out/$build" \
+                2>&1 | tee "$out/$build.log"
+              code=$?
+              python scripts/prepare-test-engine.py check-cleanup > "$out/$build-cleanup.log" 2>&1
+              clean=$?
+              printf 'test=%s\ncleanup=%s\n' "$code" "$clean" > "$out/$build-status.txt"
+              test "$code" -eq 0 && test "$clean" -eq 0
+            ) || result=1
+          done
+          exit "$result"
+      - name: Check exact fixed engine process inventory after the pair
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: python candidate/scripts/prepare-test-engine.py check-cleanup
+      - name: Archive both source-bound diagnostic results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: legacy-mac-pair-${{ matrix.package }}
+          path: ${{ runner.temp }}/paired-evidence
