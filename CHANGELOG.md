@@ -16,6 +16,13 @@
 - Check requirements for listener changes, upgrades and the Local-API
   pending-file list with named, read-only preflight methods.
 
+- Keep one receipt for an explicit upgrade check or installation attempt.
+  It records the HTTP response boundary or native CLI exit alongside the
+  original error. After an uncertain upgrade of an owned dedicated copy,
+  compare the current executable with the trusted old and target digests.
+- The managed shutdown example can observe the original process within the
+  caller's remaining time after one shutdown request.
+
 ## 0.1.1
 
 - Keep single-file downloads on the file path. Use the archive methods to

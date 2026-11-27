@@ -259,6 +259,15 @@ fn stamp(file: &fs::File) -> Result<native::FileStamp> {
 
 impl UpgradeObservationScope {
     fn read_program(&self, cancelled: &mpsc::Receiver<()>, deadline: Instant) -> Result<[u8; 32]> {
+        self.read_program_with_checkpoint(cancelled, deadline, || Ok(()))
+    }
+
+    fn read_program_with_checkpoint(
+        &self,
+        cancelled: &mpsc::Receiver<()>,
+        deadline: Instant,
+        before_verify: impl FnOnce() -> Result<()>,
+    ) -> Result<[u8; 32]> {
         let unstable = || Error::ProgramRejected {
             reason: "the selected program or its containing directory changed during observation",
         };
@@ -307,6 +316,7 @@ impl UpgradeObservationScope {
             }
             hash.update(&buffer[..count]);
         }
+        before_verify()?;
         let now = open_resource(&self.position, false)?;
         let parent_now = open_resource(parent, true)?;
         if total != before.bytes
@@ -426,6 +436,47 @@ mod tests {
         fs::create_dir(&location).map_err(map)?;
         fs::write(&position, b"original synthetic bytes").map_err(map)?;
         assert!(matches!(read(), Err(Error::ProgramRejected { .. })));
+        Ok(())
+    }
+    #[test]
+    fn observing_the_same_handle_rejects_replacement_or_holds_windows_write_sharing() -> Result<()>
+    {
+        let map = |e| io_error("prepare deterministic read-time change control", e);
+        let root = tempfile::tempdir().map_err(map)?;
+        let selected = root.path().join("selected");
+        let replacement = root.path().join("replacement");
+        fs::write(&selected, b"original bytes").map_err(map)?;
+        fs::write(&replacement, b"replaced bytes").map_err(map)?;
+        let old = Sha256::digest(b"original bytes").into();
+        let scope = UpgradeObservationScope {
+            parent_identity: stamp(&open_resource(root.path(), true)?)?.identity,
+            position: selected.clone(),
+            previous: old,
+            target: Sha256::digest(b"replaced bytes").into(),
+        };
+        let (_cancel, active) = mpsc::channel();
+        let result = scope.read_program_with_checkpoint(
+            &active,
+            Instant::now() + Duration::from_secs(2),
+            || {
+                #[cfg(unix)]
+                fs::rename(&replacement, &selected).map_err(map)?;
+                #[cfg(windows)]
+                assert_eq!(
+                    fs::OpenOptions::new()
+                        .write(true)
+                        .open(&selected)
+                        .unwrap_err()
+                        .raw_os_error(),
+                    Some(32),
+                );
+                Ok(())
+            },
+        );
+        #[cfg(unix)]
+        assert!(matches!(result, Err(Error::ProgramRejected { .. })));
+        #[cfg(windows)]
+        assert_eq!(result?, old);
         Ok(())
     }
 }

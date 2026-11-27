@@ -162,17 +162,49 @@ fn windows_delete_admission_distinguishes_a_real_held_handle_without_removing_da
 
 #[tokio::test]
 async fn kernel_provider_upgrade_replaces_only_the_owned_old_copy() -> TestResult {
-    kernel_upgrade(UpgradeRoute::Provider).await
+    kernel_upgrade(UpgradeRoute::Provider, false).await
 }
 #[tokio::test]
 async fn kernel_streamed_archive_upload_replaces_only_the_owned_old_copy() -> TestResult {
-    kernel_upgrade(UpgradeRoute::StreamedArchive).await
+    kernel_upgrade(UpgradeRoute::StreamedArchive, false).await
 }
+#[tokio::test]
+async fn kernel_provider_upgrade_detailed_records_native_application_response() -> TestResult {
+    kernel_upgrade(UpgradeRoute::Provider, true).await
+}
+
+#[tokio::test]
+async fn kernel_streamed_archive_upload_detailed_checks_program_and_acknowledgement() -> TestResult
+{
+    kernel_upgrade(UpgradeRoute::StreamedArchive, true).await
+}
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[tokio::test]
 async fn local_api_provider_upgrade_without_a_license_preserves_owned_identity_and_bytes(
 ) -> TestResult {
-    kernel_upgrade(UpgradeRoute::LocalApi).await
+    kernel_upgrade(UpgradeRoute::LocalApi, false).await
+}
+
+fn assert_native_upgrade_acknowledgement(
+    attempt: &verysync_sidecar::UpgradeOperationResult<()>,
+) -> TestResult {
+    use verysync_sidecar::{UpgradeDispatch, UpgradeOutcome};
+    println!(
+        "native modifying HTTP receipt {}",
+        serde_json::to_string(&attempt.receipt)?
+    );
+    if attempt.result.is_ok() {
+        assert_eq!(attempt.receipt.outcome(), UpgradeOutcome::Acknowledged);
+        assert!(matches!(
+            attempt.receipt.dispatch(),
+            UpgradeDispatch::Http {
+                status: Some(200),
+                complete: true
+            }
+        ));
+    }
+    Ok(())
 }
 
 enum UpgradeRoute {
@@ -192,12 +224,13 @@ impl UpgradeRoute {
     }
 }
 
-async fn kernel_upgrade(route: UpgradeRoute) -> TestResult {
+async fn kernel_upgrade(route: UpgradeRoute, detailed: bool) -> TestResult {
     use sha2::{Digest, Sha256};
     use verysync_sidecar::{
         CreateFolderOptions, FolderId, LocalApiClient, LocalApiConnectOptions,
         ManagedUpgradeChecks, ManagementEndpoint,
     };
+    use verysync_sidecar::{UpgradeDispatch, UpgradeOutcome};
     let upload = matches!(route, UpgradeRoute::StreamedArchive);
     let use_local_api = route.uses_local_api();
     let root = tempfile::Builder::new().prefix("vku-").tempdir()?.keep();
@@ -298,17 +331,47 @@ async fn kernel_upgrade(route: UpgradeRoute) -> TestResult {
     if !upload {
         let provider_started = std::time::Instant::now();
         eprintln!("provider-check-begin management_request_deadline_s=10 initial_retry_count=0");
-        let provider_result = core
-            .client()
-            .check_kernel_upgrade()
-            .await
-            .inspect_err(|error| {
-                if let Error::Http { response } | Error::UpgradeReleaseUnavailable { response } =
-                    error
-                {
-                    report_upgrade_diagnostic("provider-check", response.body_bytes());
-                }
-            });
+        let provider_result = if detailed {
+            let attempt = core
+                .client()
+                .check_kernel_upgrade_with_receipt(Duration::from_secs(10))
+                .await?;
+            println!(
+                "native provider check receipt {}",
+                serde_json::to_string(&attempt.receipt)?
+            );
+            if attempt.result.is_ok() {
+                assert_eq!(attempt.receipt.outcome(), UpgradeOutcome::Queried);
+                assert!(matches!(
+                    attempt.receipt.dispatch(),
+                    UpgradeDispatch::Http {
+                        status: Some(200),
+                        complete: true
+                    }
+                ));
+            } else if matches!(attempt.result, Err(Error::UpgradeReleaseUnavailable { .. })) {
+                assert_eq!(
+                    attempt.receipt.outcome(),
+                    UpgradeOutcome::ReleaseUnavailable
+                );
+                assert!(matches!(
+                    attempt.receipt.dispatch(),
+                    UpgradeDispatch::Http {
+                        status: Some(500),
+                        complete: true
+                    }
+                ));
+            }
+            attempt.result
+        } else {
+            core.client().check_kernel_upgrade().await
+        }
+        .inspect_err(|error| {
+            if let Error::Http { response } | Error::UpgradeReleaseUnavailable { response } = error
+            {
+                report_upgrade_diagnostic("provider-check", response.body_bytes());
+            }
+        });
         let outcome = match &provider_result {
             Ok(_) => "response",
             Err(Error::Timeout { .. }) => "management_deadline",
@@ -335,8 +398,32 @@ async fn kernel_upgrade(route: UpgradeRoute) -> TestResult {
                     ("windows", "aarch64")
                 );
                 let config = std::fs::read(base.state_directory().join("setting.dat"))?;
+                let release_unavailable = if detailed {
+                    let attempt = core
+                        .client()
+                        .request_server_selected_upgrade_with_receipt(Duration::from_secs(10))
+                        .await?;
+                    assert_eq!(
+                        attempt.receipt.outcome(),
+                        UpgradeOutcome::ReleaseUnavailable
+                    );
+                    assert!(matches!(
+                        attempt.receipt.dispatch(),
+                        UpgradeDispatch::Http {
+                            status: Some(500),
+                            complete: true
+                        }
+                    ));
+                    println!(
+                        "native provider no-matching-release receipt {}",
+                        serde_json::to_string(&attempt.receipt)?
+                    );
+                    attempt.result
+                } else {
+                    core.client().request_server_selected_upgrade().await
+                };
                 assert!(matches!(
-                    core.client().request_server_selected_upgrade().await,
+                    release_unavailable,
                     Err(Error::UpgradeReleaseUnavailable { .. })
                 ));
                 assert_eq!(
@@ -406,21 +493,29 @@ async fn kernel_upgrade(route: UpgradeRoute) -> TestResult {
             .as_slice(),
             old_sha
         );
-        core.client()
-            .upload_kernel_upgrade(
-                PathBuf::from(
-                    std::env::var_os("VERYSYNC_TEST_ARCHIVE")
-                        .ok_or("fixed local archive required")?,
-                ),
-                &baseline_asset()?,
-            )
-            .await
-            .map(drop)
+        let archive = PathBuf::from(
+            std::env::var_os("VERYSYNC_TEST_ARCHIVE").ok_or("fixed local archive required")?,
+        );
+        let program = baseline_asset()?;
+        if detailed {
+            let attempt = core
+                .client()
+                .upload_kernel_upgrade_with_receipt(archive, &program, Duration::from_secs(30))
+                .await?;
+            assert_native_upgrade_acknowledgement(&attempt)?;
+            attempt.result
+        } else {
+            core.client().upload_kernel_upgrade(archive, &program).await
+        }
+    } else if detailed {
+        let attempt = core
+            .client()
+            .request_server_selected_upgrade_with_receipt(Duration::from_secs(10))
+            .await?;
+        assert_native_upgrade_acknowledgement(&attempt)?;
+        attempt.result
     } else {
-        core.client()
-            .request_server_selected_upgrade()
-            .await
-            .map(drop)
+        core.client().request_server_selected_upgrade().await
     };
     if let Err(e) = &result {
         let mut detail = format!("{e:?}");
@@ -952,8 +1047,18 @@ async fn actual_2331_to_baseline_switch_preserves_index_identity_and_credentials
 
 #[tokio::test]
 async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestResult {
+    stopped_cli_upgrade(false).await
+}
+
+#[tokio::test]
+async fn stopped_owner_cli_detailed_records_check_provider_and_url_exits() -> TestResult {
+    stopped_cli_upgrade(true).await
+}
+
+async fn stopped_cli_upgrade(detailed: bool) -> TestResult {
     use sha2::{Digest, Sha256};
     use verysync_sidecar::KernelUpgradeCommand;
+    use verysync_sidecar::{UpgradeDispatch, UpgradeOutcome};
     for provider in [false, true] {
         let root = tempfile::Builder::new().prefix("vcl-").tempdir()?.keep();
         let old = upgrade_source()?;
@@ -975,9 +1080,35 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
             .is_err());
         let exit = core.shutdown(Duration::from_secs(10)).await?;
         assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
-        let check = core
-            .run_cli_upgrade(KernelUpgradeCommand::Check, Duration::from_secs(20))
-            .await?;
+        let check = if detailed {
+            let attempt = core
+                .run_cli_upgrade_with_receipt(KernelUpgradeCommand::Check, Duration::from_secs(20))
+                .await?;
+            let exit = attempt.result?;
+            assert_eq!(
+                attempt.receipt.dispatch(),
+                UpgradeDispatch::CliExited {
+                    code: exit.code,
+                    tree_stopped: true,
+                }
+            );
+            assert_eq!(
+                attempt.receipt.outcome(),
+                if exit.release_unavailable {
+                    UpgradeOutcome::ReleaseUnavailable
+                } else {
+                    UpgradeOutcome::Queried
+                }
+            );
+            println!(
+                "native stopped CLI query receipt {}",
+                serde_json::to_string(&attempt.receipt)?
+            );
+            exit
+        } else {
+            core.run_cli_upgrade(KernelUpgradeCommand::Check, Duration::from_secs(20))
+                .await?
+        };
         report_upgrade_diagnostic("cli-check", check.diagnostic.body_bytes());
         eprintln!(
             "native CLI upgrade check: code={:?} output_bytes={}",
@@ -1008,9 +1139,37 @@ async fn stopped_owner_cli_checks_and_upgrades_the_dedicated_program() -> TestRe
                 .map_err(|_| "cannot select explicit local test archive source")?;
             KernelUpgradeCommand::FromUrl(url)
         };
-        let upgraded = core
-            .run_cli_upgrade(command, Duration::from_secs(30))
-            .await?;
+        let upgraded = if detailed {
+            let attempt = core
+                .run_cli_upgrade_with_receipt(command, Duration::from_secs(30))
+                .await?;
+            let exit = attempt.result?;
+            assert_eq!(
+                attempt.receipt.dispatch(),
+                UpgradeDispatch::CliExited {
+                    code: exit.code,
+                    tree_stopped: true,
+                }
+            );
+            assert_eq!(
+                attempt.receipt.outcome(),
+                if exit.release_unavailable {
+                    UpgradeOutcome::ReleaseUnavailable
+                } else if exit.code == Some(0) {
+                    UpgradeOutcome::Acknowledged
+                } else {
+                    UpgradeOutcome::Unknown
+                }
+            );
+            println!(
+                "native stopped CLI modifying receipt {}",
+                serde_json::to_string(&attempt.receipt)?
+            );
+            exit
+        } else {
+            core.run_cli_upgrade(command, Duration::from_secs(30))
+                .await?
+        };
         report_upgrade_diagnostic("cli-upgrade", upgraded.diagnostic.body_bytes());
         std::fs::write(
             root.join("cli-upgrade-output.bin"),

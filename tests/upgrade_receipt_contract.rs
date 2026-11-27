@@ -113,3 +113,32 @@ async fn installation_preserves_distinct_application_response_stages(
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn fixed_archive_preflight_preserves_legacy_error_and_sends_no_upgrade_request(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, mut observed) = peer(None).await?;
+    let target = verysync_sidecar::official_programs()?
+        .into_iter()
+        .next()
+        .ok_or("fixed catalog is empty")?;
+    assert!(matches!(
+        client
+            .upload_kernel_upgrade("relative-archive.zip", &target)
+            .await,
+        Err(Error::InvalidPath { .. })
+    ));
+    let attempt = client
+        .upload_kernel_upgrade_with_receipt("relative-archive.zip", &target, DEADLINE)
+        .await?;
+    assert!(matches!(attempt.result, Err(Error::InvalidPath { .. })));
+    assert_eq!(attempt.receipt.outcome(), UpgradeOutcome::NotSubmitted);
+    assert_eq!(attempt.receipt.dispatch(), UpgradeDispatch::Preparing);
+    assert_eq!(
+        attempt.receipt.archive_sha256(),
+        Some(target.archive_sha256())
+    );
+    assert!(observed.try_recv().is_err());
+    assert!(!format!("{:?}", attempt.receipt).contains("synthetic-upgrade-key"));
+    Ok(())
+}

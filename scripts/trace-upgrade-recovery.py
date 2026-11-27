@@ -163,18 +163,28 @@ def scoped_events(rows, events):
 def check_case(name, rows, events):
     case = [row for row in rows if row["case"] == name]
     stages = {row["stage"]: row for row in case if row["stage"] in {
-        "calibration-child", "begin-recovery", "end-recovery", "calibration-after", "original-receipt",
+        "calibration-child", "begin-recovery", "end-recovery", "calibration-after", "original-receipt", "before-dispatch",
     }}
-    if len(stages) != 5 or len({row["pid"] for row in case}) != 1 or any(
+    if len(stages) != 6 or len({row["pid"] for row in case}) != 1 or any(
         sum(row["stage"] == stage for row in case) != 1 for stage in stages
     ):
         raise ValueError(f"{name}: missing same-attempt calibration or recovery boundaries")
     original, before, begin, end, after = (stages[key] for key in [
         "original-receipt", "calibration-child", "begin-recovery", "end-recovery", "calibration-after"
     ])
-    op = original["detail"]["receipt"]["operation_id"]
+    receipt = original["detail"]["receipt"]
+    op = receipt["operation_id"]
     if begin["detail"]["operation_id"] != op or end["detail"]["operation_id"] != op:
         raise ValueError(f"{name}: recovery used a receipt from a different attempt")
+    if receipt["outcome"] != "unknown" or end["detail"]["original_outcome"] != "Unknown":
+        raise ValueError(f"{name}: original unknown outcome was not preserved")
+    expected = {"cli-partial": ("Previous", "old_sha256", "previous_program_sha256"),
+                "upload-drop": ("Target", "target_sha256", "target_program_sha256")}
+    desired, true_key, receipt_key = expected[name]
+    final = end["detail"]
+    digest = stages["before-dispatch"]["detail"][true_key]
+    if final["comparison"] != desired or final["sdk_sha256"] != digest or final["true_sha256"] != digest or bytes(receipt[receipt_key]).hex() != digest:
+        raise ValueError(f"{name}: outcome or program digest differs from the original case")
     if begin["detail"]["requests_seen"] != 1 or end["detail"]["requests_seen"] != 1:
         raise ValueError(f"{name}: recovery sent at least one new request")
     if not before["unix_ns"] <= begin["unix_ns"] < end["unix_ns"] <= after["unix_ns"]:

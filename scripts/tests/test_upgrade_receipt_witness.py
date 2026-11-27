@@ -11,13 +11,19 @@ spec.loader.exec_module(witness)
 
 def inputs():
     name, owner, op = "cli-partial", 50, [1, 2, 3]
+    digest = [4] * 32
+    hex_digest = bytes(digest).hex()
     rows = [
         {"case": name, "stage": name_of_stage, "pid": owner, "unix_ns": stamp, "detail": detail}
         for name_of_stage, stamp, detail in [
-            ("original-receipt", 10_000, {"receipt": {"operation_id": op}}),
+            ("before-dispatch", 8_000, {"old_sha256": hex_digest}),
+            ("original-receipt", 10_000, {"receipt": {"operation_id": op, "outcome": "unknown",
+                                                       "previous_program_sha256": digest}}),
             ("calibration-child", 16_000, {"pid": 51}),
             ("begin-recovery", 20_000, {"operation_id": op, "requests_seen": 1}),
-            ("end-recovery", 30_000, {"operation_id": op, "requests_seen": 1}),
+            ("end-recovery", 30_000, {"operation_id": op, "requests_seen": 1, "comparison": "Previous",
+                                      "sdk_sha256": hex_digest, "true_sha256": hex_digest,
+                                      "original_outcome": "Unknown"}),
             ("calibration-after", 40_000, {"pid": 52}),
         ]
     ]
@@ -48,10 +54,10 @@ class UpgradeProcessWitnessTests(unittest.TestCase):
 
     def test_rejects_new_request_and_wrong_receipt(self):
         name, rows, events = inputs()
-        rows[3]["detail"]["requests_seen"] = 2
+        rows[4]["detail"]["requests_seen"] = 2
         with self.assertRaisesRegex(ValueError, "new request"):
             witness.check_case(name, rows, events)
-        rows[3]["detail"].update(requests_seen=1, operation_id=[4])
+        rows[4]["detail"].update(requests_seen=1, operation_id=[4])
         with self.assertRaisesRegex(ValueError, "different attempt"):
             witness.check_case(name, rows, events)
 

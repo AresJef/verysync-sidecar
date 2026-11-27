@@ -298,6 +298,25 @@ async fn native_same_attempt_observes_previous_after_partial_cli_archive() -> Te
     .await?;
     assert!(exact_program_pids(&program).await?.is_empty());
 
+    let locked = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(core.state_directory().join(".verysync-sidecar-lease"))?;
+    fs2::FileExt::try_lock_exclusive(&locked)?;
+    let busy = core
+        .observe_upgrade_program(&attempt.receipt, Duration::from_secs(2))
+        .await?;
+    assert_eq!(
+        busy.comparison,
+        UpgradeProgramMatch::Unconfirmed(UpgradeProgramUncertainty::WriterNotFinished)
+    );
+    fs2::FileExt::unlock(&locked)?;
+    drop(locked);
+    receipt_event(
+        "cli-partial",
+        "busy-writer-control",
+        serde_json::json!({"rejected":true}),
+    )?;
     // Deliberate negative changes are confined to this fixture after the
     // original case. The original receipt is reused without any upgrade call.
     drop(std::fs::File::open(&program)?);
@@ -527,6 +546,24 @@ async fn native_same_attempt_observes_replacement_after_upload_reply_loss() -> T
     .await?;
     assert_eq!(updated.program_info().version, "v2.33.2");
     assert_eq!(updated.client().instance().device_id, identity);
+    let equal = updated
+        .run_cli_upgrade_with_target_receipt(
+            KernelUpgradeCommand::Provider,
+            &asset,
+            Duration::from_secs(2),
+        )
+        .await?;
+    assert!(matches!(
+        equal.result,
+        Err(Error::InvalidConfiguration { .. })
+    ));
+    assert_eq!(equal.receipt.dispatch(), UpgradeDispatch::Preparing);
+    assert_eq!(equal.receipt.outcome(), UpgradeOutcome::NotSubmitted);
+    receipt_event(
+        "upload-drop",
+        "identical-target-control",
+        serde_json::json!({"rejected_before_dispatch":true}),
+    )?;
     let exit = updated.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     assert!(exact_program_pids(&program).await?.is_empty());
