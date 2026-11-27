@@ -181,3 +181,45 @@ The upgrade test proxy explicitly permits end-to-end TLS only to the genuine
 official metadata host and serves the exact verified baseline archive locally.
 It reports this external metadata exception accurately. This is not a public
 Internet asset-delivery, WAN, minimum-OS or arbitrary-version compatibility test.
+
+## Keep a receipt for the attempt
+
+Use the `_with_receipt` forms of the management check, installation request, or
+archive upload when your application needs to explain where an attempt ended.
+Pass a total time allowance. Each HTTP request also keeps the deadline
+configured on the connection. The original methods keep their existing
+signatures and behavior.
+
+```rust,no_run
+# async fn check(client: &verysync_sidecar::Client) -> verysync_sidecar::Result<()> {
+use std::time::Duration;
+
+let attempt = client
+    .check_kernel_upgrade_with_receipt(Duration::from_secs(12))
+    .await?;
+eprintln!("Upgrade check: {:?}", attempt.receipt.outcome());
+let check = attempt.result?;
+println!("Provider reports a newer release: {}", check.newer);
+# Ok(())
+# }
+```
+
+The outer result reports whether the SDK could start recording the attempt.
+The inner result retains the original operation's error and its cause. The
+receipt is versioned and can be serialized for private records. It leaves out
+credentials, archive URLs and local paths. The operation ID is for correlation.
+
+For a management request, the receipt distinguishes handing the request to the
+HTTP client, reading response headers and reading the complete response. Only
+an independent server observation can establish receipt at the other end. A
+complete refusal can be distinguished from a connection lost after the headers.
+A `restarting` acknowledgement is a good point to check process exit and program
+files before continuing.
+
+For a normally stopped owner, `run_cli_upgrade_with_receipt` also records whether
+a contained helper started and whether the worker saw it exit. Use the native
+exit code and private diagnostic to explain a failed check. The documented
+provider-installation exit code 4 is preserved as observed; independently
+compare the executable before proceeding. The attempt can return an uncertain
+outcome after a timeout or a lost response. Preserve the receipt and verify the
+selected program before deciding whether to continue.

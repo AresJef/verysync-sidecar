@@ -1,6 +1,6 @@
 //! Shared exact-program, stopped-state CLI execution and cancellation ownership.
 use super::{bootstrap, io_error, state, ManagedInstance};
-use crate::{Error, ProcessDiagnostic, Result};
+use crate::{upgrade_receipt::UpgradeAttempt, Error, ProcessDiagnostic, Result};
 use sha2::{Digest, Sha256};
 use std::{
     io::Read,
@@ -25,6 +25,15 @@ impl ManagedInstance {
         plan: CliPlan,
         timeout: Duration,
     ) -> Result<CliExit> {
+        self.run_stopped_cli_observed(plan, timeout, None).await
+    }
+
+    pub(super) async fn run_stopped_cli_observed(
+        &mut self,
+        plan: CliPlan,
+        timeout: Duration,
+        attempt: Option<&UpgradeAttempt>,
+    ) -> Result<CliExit> {
         let exit = self
             .exit_snapshot()
             .filter(|exit| exit.tree_stopped)
@@ -38,12 +47,16 @@ impl ManagedInstance {
                 reason: "CLI upgrade requires a known normally stopped owner",
             });
         }
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .filter(|_| !timeout.is_zero())
-            .ok_or(Error::InvalidConfiguration {
-                reason: "CLI deadline must be positive and representable",
-            })?;
+        let deadline = match attempt {
+            Some(attempt) => attempt.deadline,
+            None => Instant::now()
+                .checked_add(timeout)
+                .filter(|_| !timeout.is_zero())
+                .ok_or(Error::InvalidConfiguration {
+                    reason: "CLI deadline must be positive and representable",
+                })?,
+        };
+        let progress = attempt.map(|attempt| attempt.progress.clone());
         let source = self.selected_program().path().to_owned();
         let expected = self.program_info().sha256;
         let generation = self.generation;
@@ -111,6 +124,9 @@ impl ManagedInstance {
                             reason: "CLI program differs from the last ready generation",
                         });
                     }
+                    if let Some(progress) = &progress {
+                        progress.verified_program(expected);
+                    }
                     // Windows must be able to replace the old executable. Do not
                     // retain a verification handle across the modifying CLI.
                     drop(file);
@@ -131,11 +147,11 @@ impl ManagedInstance {
                     let outcome = bootstrap::cli_capture_positional(
                         &source,
                         lease.path(),
-                        &args,
-                        &positional,
+                        (&args, &positional),
                         None,
                         &cancelled,
                         deadline,
+                        progress.as_ref(),
                     );
                     let (status, bytes) = outcome.map_err(|source| {
                         if !plan.may_modify {

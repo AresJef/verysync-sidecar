@@ -414,18 +414,25 @@ pub(super) fn cli_capture(
     cancel: &Receiver<()>,
     deadline: Instant,
 ) -> Result<(std::process::ExitStatus, Vec<u8>)> {
-    cli_capture_positional(binary, state, args, &[], password, cancel, deadline)
+    cli_capture_positional(binary, state, (args, &[]), password, cancel, deadline, None)
 }
 
 pub(super) fn cli_capture_positional(
     binary: &Path,
     state: &Path,
-    args: &[&str],
-    positional: &[&str],
+    arguments: (&[&str], &[&str]),
     password: Option<&str>,
     cancel: &Receiver<()>,
     deadline: Instant,
+    progress: Option<&crate::upgrade_receipt::UpgradeProgress>,
 ) -> Result<(std::process::ExitStatus, Vec<u8>)> {
+    use crate::UpgradeDispatch;
+    let (args, positional) = arguments;
+    let record = |stage| {
+        if let Some(progress) = progress {
+            progress.dispatch(stage);
+        }
+    };
     let active = || {
         check_active(cancel, deadline).map_err(|error| {
             if args.first() == Some(&"upgrade") && matches!(error, Error::Timeout { .. }) {
@@ -475,8 +482,10 @@ pub(super) fn cli_capture_positional(
             None
         },
     };
+    record(UpgradeDispatch::CliSpawnUnconfirmed);
     let mut process = OwnedProcess::spawn(command, helper, super::ManagedLifetime::CallerOwned, io)
         .map_err(|e| io_error("spawn metadata helper", e))?;
+    record(UpgradeDispatch::CliStarted);
     if let Some(password) = password {
         let mut input = process
             .child_mut()
@@ -508,9 +517,17 @@ pub(super) fn cli_capture_positional(
         }
         std::thread::sleep(Duration::from_millis(10));
     };
+    record(UpgradeDispatch::CliExited {
+        code: status.code(),
+        tree_stopped: false,
+    });
     process
         .finish()
         .map_err(|e| io_error("confirm helper tree exit", e))?;
+    record(UpgradeDispatch::CliExited {
+        code: status.code(),
+        tree_stopped: true,
+    });
     let mut bytes = Vec::new();
     native::open_private(&scratch.0, true)
         .map_err(|e| io_error("read private CLI result", e))?

@@ -117,6 +117,7 @@ mod sync_observation;
 mod system_preferences;
 mod timestamps;
 mod transports;
+mod upgrade_receipt;
 mod upgrades;
 
 pub use auth::{ApiKey, DeviceId};
@@ -298,6 +299,9 @@ pub use sync_observation::{
 pub use system_preferences::{NativePathSelection, SystemPreferences, SystemPreferencesPatch};
 pub use transports::{
     TrackerStatus, TransportConfig, TransportPatch, TransportStatus, TransportUpdate,
+};
+pub use upgrade_receipt::{
+    UpgradeAction, UpgradeDispatch, UpgradeOperationResult, UpgradeOutcome, UpgradeReceipt,
 };
 pub use upgrades::KernelUpgradeCheck;
 

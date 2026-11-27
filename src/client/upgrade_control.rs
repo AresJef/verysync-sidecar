@@ -1,11 +1,16 @@
 //! Explicit kernel upgrade calls. No automatic selection, download or retry.
-use super::Client;
-use crate::{Error, KernelUpgradeCheck, OfficialProgram, ResponseDiagnostic, Result};
+use super::{checked_response, mutation_error, send_bounded_observing_headers, Client};
+use crate::{
+    upgrade_receipt::{UpgradeAttempt, UpgradeProgress},
+    Error, KernelUpgradeCheck, OfficialProgram, ResponseDiagnostic, Result, UpgradeAction,
+    UpgradeDispatch, UpgradeOperationResult, UpgradeOutcome,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
     io::{Read, Seek},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 impl Client {
@@ -14,17 +19,37 @@ impl Client {
     /// checks while keeping periodic upgrade checks off. A 501 is retained as
     /// an HTTP error rather than interpreted as a license requirement.
     pub async fn check_kernel_upgrade(&self) -> Result<KernelUpgradeCheck> {
+        self.check_kernel_upgrade_inner(None).await
+    }
+
+    /// Check once within a caller-supplied deadline and return the query receipt.
+    /// A provider answer does not authorize or initiate an installation.
+    pub async fn check_kernel_upgrade_with_receipt(
+        &self,
+        timeout: Duration,
+    ) -> Result<UpgradeOperationResult<KernelUpgradeCheck>> {
+        self.upgrade_with_receipt(
+            UpgradeAction::ManagementCheck,
+            "check kernel upgrade",
+            timeout,
+            |progress| self.check_kernel_upgrade_inner(Some(progress)),
+        )
+        .await
+    }
+
+    async fn check_kernel_upgrade_inner(
+        &self,
+        progress: Option<UpgradeProgress>,
+    ) -> Result<KernelUpgradeCheck> {
         self.system_status().await?;
         let operation = "check kernel upgrade";
+        let request = self.connection.authorized_request(
+            reqwest::Method::GET,
+            self.connection.management_url("rest/system/upgrade", &[])?,
+            None,
+        );
         let (status, body) = self
-            .connection
-            .request_bytes(
-                operation,
-                reqwest::Method::GET,
-                self.connection.management_url("rest/system/upgrade", &[])?,
-                None,
-                false,
-            )
+            .send_upgrade(operation, request, false, progress.as_ref())
             .await
             .map_err(classify_release_unavailable)?;
         let value: KernelUpgradeCheck =
@@ -49,18 +74,38 @@ impl Client {
     /// executable identity, owned-process exit and readiness after restarting.
     /// Cancellation or a transport error can leave an unknown mutation outcome.
     pub async fn request_server_selected_upgrade(&self) -> Result<()> {
+        self.request_server_selected_upgrade_inner(None).await
+    }
+
+    /// Make one provider-selected installation request with a total deadline.
+    /// Keep the receipt when no complete acknowledgement reaches the caller.
+    pub async fn request_server_selected_upgrade_with_receipt(
+        &self,
+        timeout: Duration,
+    ) -> Result<UpgradeOperationResult<()>> {
+        self.upgrade_with_receipt(
+            UpgradeAction::ManagementProvider,
+            "request server-selected upgrade",
+            timeout,
+            |progress| self.request_server_selected_upgrade_inner(Some(progress)),
+        )
+        .await
+    }
+
+    async fn request_server_selected_upgrade_inner(
+        &self,
+        progress: Option<UpgradeProgress>,
+    ) -> Result<()> {
         let operation = "request server-selected upgrade";
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
+        let request = self.connection.authorized_request(
+            reqwest::Method::POST,
+            self.connection.management_url("rest/system/upgrade", &[])?,
+            None,
+        );
         let (status, body) = self
-            .connection
-            .request_bytes(
-                operation,
-                reqwest::Method::POST,
-                self.connection.management_url("rest/system/upgrade", &[])?,
-                None,
-                true,
-            )
+            .send_upgrade(operation, request, true, progress.as_ref())
             .await
             .map_err(classify_release_unavailable)?;
         acknowledge(operation, status, body)
@@ -81,13 +126,40 @@ impl Client {
         archive: impl Into<PathBuf>,
         program: &OfficialProgram,
     ) -> Result<()> {
+        self.upload_kernel_upgrade_inner(archive.into(), program, None)
+            .await
+    }
+
+    /// Verify and upload a fixed archive within a total deadline and return
+    /// the receipt. The acknowledgement alone does not establish installation.
+    pub async fn upload_kernel_upgrade_with_receipt(
+        &self,
+        archive: impl Into<PathBuf>,
+        program: &OfficialProgram,
+        timeout: Duration,
+    ) -> Result<UpgradeOperationResult<()>> {
+        self.upgrade_with_receipt(
+            UpgradeAction::ManagementArchive,
+            "upload fixed kernel upgrade",
+            timeout,
+            |progress| self.upload_kernel_upgrade_inner(archive.into(), program, Some(progress)),
+        )
+        .await
+        .map(|result| UpgradeAttempt::with_archive(result, program.archive_sha256()))
+    }
+
+    async fn upload_kernel_upgrade_inner(
+        &self,
+        path: PathBuf,
+        program: &OfficialProgram,
+        progress: Option<UpgradeProgress>,
+    ) -> Result<()> {
         let operation = "upload fixed kernel upgrade";
         if program.archive_bytes() > 128 * 1024 * 1024 {
             return Err(Error::ProgramRejected {
                 reason: "archive exceeds the kernel upload bound",
             });
         }
-        let path = archive.into();
         if !path.is_absolute() {
             return Err(Error::InvalidPath {
                 reason: "upgrade archive must be an absolute local path",
@@ -118,10 +190,76 @@ impl Client {
             .header("X-API-Key", self.connection.key.header())
             .multipart(reqwest::multipart::Form::new().part("file", part));
         let (status, body) = self
-            .connection
-            .request_prepared(operation, request, true)
+            .send_upgrade(operation, request, true, progress.as_ref())
             .await?;
         acknowledge(operation, status, body)
+    }
+
+    async fn send_upgrade(
+        &self,
+        operation: &'static str,
+        request: reqwest::RequestBuilder,
+        mutation: bool,
+        progress: Option<&UpgradeProgress>,
+    ) -> Result<(u16, Vec<u8>)> {
+        let Some(progress) = progress else {
+            return self
+                .connection
+                .request_prepared(operation, request, mutation)
+                .await;
+        };
+        progress.dispatch(UpgradeDispatch::Http {
+            status: None,
+            complete: false,
+        });
+        let response = send_bounded_observing_headers(
+            operation,
+            request,
+            mutation,
+            self.connection.response_limit,
+            |status| {
+                progress.dispatch(UpgradeDispatch::Http {
+                    status: Some(status),
+                    complete: false,
+                });
+            },
+        )
+        .await?;
+        progress.dispatch(UpgradeDispatch::Http {
+            status: Some(response.status),
+            complete: true,
+        });
+        let response = checked_response(operation, response, mutation)?;
+        Ok((response.status, response.body))
+    }
+
+    async fn upgrade_with_receipt<T, F>(
+        &self,
+        action: UpgradeAction,
+        operation: &'static str,
+        timeout: Duration,
+        run: impl FnOnce(UpgradeProgress) -> F,
+    ) -> Result<UpgradeOperationResult<T>>
+    where
+        F: std::future::Future<Output = Result<T>>,
+    {
+        let attempt = UpgradeAttempt::new(action, self.instance().device_id.clone(), timeout)?;
+        let deadline = tokio::time::Instant::from_std(attempt.deadline);
+        let result = match tokio::time::timeout_at(deadline, run(attempt.progress.clone())).await {
+            Ok(result) => result,
+            Err(_) => Err(mutation_error(
+                operation,
+                !action.is_query() && matches!(attempt.dispatch(), UpgradeDispatch::Http { .. }),
+                Error::Timeout { operation },
+            )),
+        };
+        Ok(attempt.finish(result, |_| {
+            if action.is_query() {
+                UpgradeOutcome::Queried
+            } else {
+                UpgradeOutcome::Acknowledged
+            }
+        }))
     }
 }
 

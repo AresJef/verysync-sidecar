@@ -1,6 +1,9 @@
 //! Explicit stopped-state CLI upgrades with exact child containment.
 use super::ManagedInstance;
-use crate::{Error, ProcessDiagnostic, Result};
+use crate::{
+    upgrade_receipt::UpgradeAttempt, Error, ProcessDiagnostic, Result, UpgradeAction,
+    UpgradeOperationResult, UpgradeOutcome,
+};
 use std::{fmt, time::Duration};
 use url::Url;
 
@@ -56,6 +59,51 @@ impl ManagedInstance {
         command: KernelUpgradeCommand,
         timeout: Duration,
     ) -> Result<KernelUpgradeExit> {
+        self.run_cli_upgrade_inner(command, timeout, None).await
+    }
+
+    /// Run one stopped-state CLI operation and return evidence of actual spawn,
+    /// exit and cleanup observations together with the original result.
+    /// A CLI acknowledgement alone does not establish program replacement.
+    pub async fn run_cli_upgrade_with_receipt(
+        &mut self,
+        command: KernelUpgradeCommand,
+        timeout: Duration,
+    ) -> Result<UpgradeOperationResult<KernelUpgradeExit>> {
+        let action = match &command {
+            KernelUpgradeCommand::Check => UpgradeAction::CliCheck,
+            KernelUpgradeCommand::Provider => UpgradeAction::CliProvider,
+            KernelUpgradeCommand::FromUrl(_) => UpgradeAction::CliFromUrl,
+        };
+        let mut attempt =
+            UpgradeAttempt::new(action, self.client().instance().device_id.clone(), timeout)?;
+        attempt.set_owner_generation(self.generation);
+        let result = self
+            .run_cli_upgrade_inner(command, timeout, Some(&attempt))
+            .await;
+        Ok(attempt.finish(result, |exit| {
+            if exit.release_unavailable {
+                UpgradeOutcome::ReleaseUnavailable
+            } else if action.is_query() {
+                if exit.code == Some(0) {
+                    UpgradeOutcome::Queried
+                } else {
+                    UpgradeOutcome::QueryFailed
+                }
+            } else if exit.code == Some(0) {
+                UpgradeOutcome::Acknowledged
+            } else {
+                UpgradeOutcome::Unknown
+            }
+        }))
+    }
+
+    async fn run_cli_upgrade_inner(
+        &mut self,
+        command: KernelUpgradeCommand,
+        timeout: Duration,
+        attempt: Option<&UpgradeAttempt>,
+    ) -> Result<KernelUpgradeExit> {
         if !self.state_ready_for_backup
             || !self.exit_snapshot().is_some_and(|e| {
                 e.tree_stopped && e.state_released && !e.forced && e.code == Some(0)
@@ -84,7 +132,7 @@ impl ManagedInstance {
             }
         }
         let exit = self
-            .run_stopped_cli(
+            .run_stopped_cli_observed(
                 super::command::CliPlan {
                     arguments,
                     positional: Vec::new(),
@@ -93,6 +141,7 @@ impl ManagedInstance {
                     clean_stop_required: true,
                 },
                 timeout,
+                attempt,
             )
             .await?;
         Ok(KernelUpgradeExit {

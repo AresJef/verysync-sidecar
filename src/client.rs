@@ -1255,13 +1255,26 @@ pub(super) async fn send_bounded_reporting_headers(
     response_limit: usize,
     response_status: &mut Option<u16>,
 ) -> Result<RawResponse> {
+    send_bounded_observing_headers(operation, request, mutation, response_limit, |status| {
+        *response_status = Some(status);
+    })
+    .await
+}
+
+async fn send_bounded_observing_headers(
+    operation: &'static str,
+    request: reqwest::RequestBuilder,
+    mutation: bool,
+    response_limit: usize,
+    observe_headers: impl FnOnce(u16),
+) -> Result<RawResponse> {
     let uncertain = |source| mutation_error(operation, mutation, source);
     let mut response = request
         .send()
         .await
         .map_err(|error| uncertain(transport_error(operation, error)))?;
     let status = response.status().as_u16();
-    *response_status = Some(status);
+    observe_headers(status);
     let headers = response
         .headers()
         .iter()
