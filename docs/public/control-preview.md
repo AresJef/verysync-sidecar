@@ -70,7 +70,13 @@ with `macros` and `rt-multi-thread`. Enable `verysync-sidecar`'s default TLS
 feature if you use HTTPS. Supply one JSON line using a private input stream. Its
 `connection` contains `endpoint`, `api_key`, and `expected_device_id`, and can
 include `ca_pem` for HTTPS. Include `folder` with `id` and at least one of
-`label` or `paused`, or `listener` with the new native `bind` authority.
+`label` or `paused`. Use `folders` for an ordered array of additional folders.
+These are processed after `folder` and before a `listener` with the new native
+`bind` authority.
 For a listener change you can give a separately trusted `readback` connection.
 Inspect the redacted preview. Write `apply` on a second line to submit it, or
-end the input to leave the settings as they are.
+end the input to leave the settings as they are. Output describes the original
+submission before reading the current listener. A complete 401 or 403 refusal
+gives a nonzero exit even if the current listener address already matches.
+When the reply is lost, a successful matching observation can still confirm the
+current fields. The output keeps the original acknowledgement unknown.

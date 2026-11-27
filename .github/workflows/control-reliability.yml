@@ -26,6 +26,7 @@ on:
       - 'tests/control_*.rs'
       - 'tests/common/control_*.rs'
       - 'scripts/check-control-candidate-compatibility.py'
+      - 'scripts/check-control-corrections-*.py'
       - 'scripts/prepare-control-reliability-consumer.py'
 
 permissions:
@@ -116,6 +117,9 @@ jobs:
             cargo +1.85.0 test --locked --offline --test control_preview_contract \
               package_consumer_requires_approval_before_one_scoped_write -- --nocapture \
               | tee "$base/control-preview.log"
+            python scripts/check-control-corrections-output.py \
+              --listener "$VERYSYNC_TEST_RECOVERY_EXAMPLE" --preview "$VERYSYNC_TEST_PREVIEW_EXAMPLE" \
+              | tee "$base/control-corrections-output.jsonl"
           done
       - name: Archive exact consumer and comparison receipts
         if: always()
@@ -184,6 +188,19 @@ jobs:
           --candidate-identity "${{ runner.temp }}/control-frozen-package/package.json"
           --work "${{ runner.temp }}/control-package-consumer"
           --evidence "${{ runner.temp }}/control-evidence/consumer" --github-env "$GITHUB_ENV"
+      - name: Check the packaged command output and exact recovery requests
+        run: |
+          set -o pipefail
+          python scripts/check-control-corrections-output.py \
+            --listener "$VERYSYNC_TEST_RECOVERY_EXAMPLE" --preview "$VERYSYNC_TEST_PREVIEW_EXAMPLE" \
+            | tee "${{ runner.temp }}/control-evidence/control-corrections-output.jsonl"
+      - name: Check cancelled storage workers and reopen the final receipt
+        run: >-
+          python scripts/check-control-corrections-storage.py --toolchain "$TEST_TOOLCHAIN"
+          --consumer-work "${{ runner.temp }}/control-package-consumer"
+          --consumer-build "${{ runner.temp }}/control-evidence/consumer/build.json"
+          --crate "${{ runner.temp }}/control-frozen-package/candidate.crate"
+          --output "${{ runner.temp }}/control-evidence/control-corrections-storage"
       - name: Require the controlled request counters and receipt contracts
         run: |
           cargo +"$TEST_TOOLCHAIN" test --locked --offline --test control_fault_fixture -- --nocapture

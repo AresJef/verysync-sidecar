@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc, Arc, Mutex,
 };
 use std::time::{Duration, UNIX_EPOCH};
@@ -115,6 +115,8 @@ impl Events {
 struct Journal {
     directory: PathBuf,
     prepared: AtomicBool,
+    next_sequence: AtomicU64,
+    committed_sequence: Mutex<u64>,
     events: Option<Mutex<Events>>,
 }
 
@@ -123,6 +125,8 @@ impl Journal {
         Self {
             directory,
             prepared: AtomicBool::new(false),
+            next_sequence: AtomicU64::new(1),
+            committed_sequence: Mutex::new(0),
             events: log_events.then(|| Mutex::new(Events::default())),
         }
     }
@@ -132,9 +136,22 @@ impl Journal {
         receipt: ControlOperationReceipt,
         initial: bool,
     ) -> io::Result<()> {
+        // A cancelled async wait can leave its blocking storage worker running.
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         tokio::task::spawn_blocking(move || {
             let bytes = receipt.encode().map_err(io::Error::other)?;
-            store_file(&self.directory, RECEIPT_NAME, &bytes, initial)?;
+            let temporary = stage_file(&self.directory, &bytes)?;
+            let mut committed = self
+                .committed_sequence
+                .lock()
+                .map_err(|_| io::Error::other("the receipt commit lock is unavailable"))?;
+            if sequence <= *committed {
+                return Ok(());
+            }
+            replace_file(temporary, &self.directory.join(RECEIPT_NAME), initial)?;
+            // Once replaced, no earlier worker can replace it, even if directory sync fails.
+            *committed = sequence;
+            sync_directory(&self.directory)?;
             if initial {
                 self.prepared.store(true, Ordering::Release);
             }
@@ -182,17 +199,39 @@ impl Journal {
 }
 
 fn store_file(directory: &Path, name: &str, bytes: &[u8], initial: bool) -> io::Result<()> {
+    replace_file(
+        stage_file(directory, bytes)?,
+        &directory.join(name),
+        initial,
+    )?;
+    sync_directory(directory)
+}
+
+fn stage_file(directory: &Path, bytes: &[u8]) -> io::Result<tempfile::NamedTempFile> {
     let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
     temporary.write_all(bytes)?;
     temporary.as_file().sync_all()?;
-    let destination = directory.join(name);
+    Ok(temporary)
+}
+
+fn replace_file(
+    temporary: tempfile::NamedTempFile,
+    destination: &Path,
+    initial: bool,
+) -> io::Result<()> {
     if initial {
         temporary.persist_noclobber(destination)?;
     } else {
         temporary.persist(destination)?;
     }
+    Ok(())
+}
+
+fn sync_directory(directory: &Path) -> io::Result<()> {
     #[cfg(unix)]
     File::open(directory)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = directory;
     Ok(())
 }
 
@@ -269,9 +308,86 @@ fn error_label(error: &Error) -> &'static str {
     }
 }
 
-fn failure(report: &mut Value, label: &'static str, message: &'static str) {
+fn failure(report: &mut Value, label: &'static str, message: impl Into<String>) {
     report["failure"] = json!(label);
-    report["message"] = json!(message);
+    report["message"] = json!(message.into());
+}
+
+fn complete_response_status(error: &Error) -> Option<u16> {
+    match error {
+        Error::Authentication { status } => Some(*status),
+        Error::AccessDenied { response }
+        | Error::Http { response }
+        | Error::Api { response, .. }
+        | Error::InvalidResponse { response, .. }
+        | Error::LicenseRequired { response, .. } => Some(response.status()),
+        Error::MutationOutcomeUnknown { source, .. } => complete_response_status(source),
+        _ => None,
+    }
+}
+
+fn read_failure(summary: &mut Value, stage: &'static str, error: &Error, message: &'static str) {
+    summary["failure_stage"] = json!(stage);
+    failure(summary, error_label(error), message);
+    if let Some(status) = complete_response_status(error) {
+        summary["read_http_status"] = json!(status);
+        append_message(
+            summary,
+            &format!("VerySync returned HTTP {status} for this read."),
+        );
+    }
+}
+
+fn write_failure(
+    summary: &mut Value,
+    stage: &'static str,
+    status: Option<u16>,
+    error: Option<&Error>,
+    request: &str,
+    next: &str,
+) -> u8 {
+    let complete = status.is_some() && status == error.and_then(complete_response_status);
+    summary["failure_stage"] = json!(stage);
+    summary["response_complete"] = json!(complete);
+    if let Some(status) = status {
+        summary["http_status"] = json!(status);
+    }
+    if complete {
+        let message = match status {
+            Some(401) => Some(format!(
+                "VerySync could not authenticate the {request} request (HTTP 401). Check the management credentials."
+            )),
+            Some(403) => Some(format!(
+                "VerySync refused the {request} request (HTTP 403). Check access to the selected device."
+            )),
+            _ => None,
+        };
+        if let Some(message) = message {
+            failure(summary, "authentication", message);
+            return 1;
+        }
+    }
+    let fact = match status {
+        Some(status) if complete => {
+            format!("VerySync returned HTTP {status}. The {request} outcome is still unknown.")
+        }
+        Some(status) => {
+            format!("VerySync sent HTTP {status} headers, but the {request} reply did not finish.")
+        }
+        None => format!("No reply arrived for the {request} request. The outcome is unknown."),
+    };
+    failure(
+        summary,
+        "mutation_outcome_unknown",
+        format!("{fact} {next}"),
+    );
+    2
+}
+
+fn append_message(summary: &mut Value, extra: &str) {
+    if let Some(message) = summary["message"].as_str() {
+        summary["message"] = json!(format!("{message} {extra}"));
+    }
 }
 
 async fn submit(directory: PathBuf, input: Input) -> (u8, Value) {
@@ -289,7 +405,7 @@ async fn submit(directory: PathBuf, input: Input) -> (u8, Value) {
     let client = match Client::connect(options).await {
         Ok(client) => client,
         Err(error) => {
-            failure(&mut summary, error_label(&error), "No listener change was sent. Check the selected device, credentials, and connection.");
+            read_failure(&mut summary, "pre_submit_read", &error, "The selected device could not be checked. No listener change was sent. Check the device, credentials, and connection.");
             return (1, summary);
         }
     };
@@ -313,32 +429,45 @@ async fn submit(directory: PathBuf, input: Input) -> (u8, Value) {
         .await;
     let result_saved = journal.save_result(&report.receipt).await;
     let mut summary = submission_report("submit", &report.receipt);
+    summary["final_receipt_saved"] = json!(result_saved);
     if let Some(event_log) = journal.finish_event_log() {
         summary["event_log"] = json!(event_log);
     }
     match report.receipt.submission() {
         ControlSubmission::PossiblySubmitted => {
-            failure(&mut summary, "mutation_outcome_unknown", "The listener may have changed. Use observe with a trusted endpoint before trying another change.");
-            summary["final_receipt_saved"] = json!(result_saved);
-            (2, summary)
+            let code = write_failure(
+                &mut summary,
+                "submit",
+                report.receipt.response_status(),
+                report.result.as_ref().err(),
+                "listener change",
+                "Use observe with a trusted endpoint to check the current listener settings.",
+            );
+            (code, summary)
         }
         ControlSubmission::Acknowledged { status } if report.result.is_ok() && result_saved => {
             summary["http_status"] = json!(status);
+            summary["response_complete"] = json!(true);
             summary["message"] = json!("VerySync acknowledged the listener change. Use observe to check its current settings.");
             (0, summary)
         }
         ControlSubmission::Acknowledged { status } => {
             summary["http_status"] = json!(status);
-            failure(&mut summary, "receipt_storage", "VerySync acknowledged the listener change. Keep the saved receipt and use observe to check the settings.");
+            summary["response_complete"] = json!(true);
+            failure(&mut summary, "receipt_storage", "VerySync acknowledged the listener change. The final receipt could not be saved. Keep the earlier checkpoint and use observe to check the settings.");
             (1, summary)
         }
         _ => {
-            let label = report
-                .result
-                .as_ref()
-                .err()
-                .map_or("management_error", error_label);
-            failure(&mut summary, label, "No listener change was sent. Check the selected device and the private receipt location.");
+            match report.result.as_ref().err() {
+                Some(error) if complete_response_status(error).is_some() => read_failure(
+                    &mut summary, "pre_submit_read", error,
+                    "The listener settings could not be read. No listener change was sent. Check access to the selected device.",
+                ),
+                error => failure(
+                    &mut summary, error.map_or("management_error", error_label),
+                    "No listener change was sent. Check the selected device and the private receipt location.",
+                ),
+            }
             (1, summary)
         }
     }
@@ -439,10 +568,11 @@ async fn remove_device(directory: PathBuf, input: Input) -> (u8, Value) {
     let client = match Client::connect(options).await {
         Ok(client) => client,
         Err(error) => {
-            failure(
+            read_failure(
                 &mut summary,
-                error_label(&error),
-                "No removal was requested. Check the device, credentials and connection.",
+                "pre_submit_read",
+                &error,
+                "The selected device could not be checked. No removal was requested. Check the device, credentials and connection.",
             );
             return (1, summary);
         }
@@ -477,14 +607,20 @@ async fn remove_device(directory: PathBuf, input: Input) -> (u8, Value) {
     if let Some(event_log) = journal.finish_event_log() {
         summary["event_log"] = json!(event_log);
     }
+    if let ControlSubmission::Acknowledged { status } = report.receipt.submission() {
+        summary["http_status"] = json!(status);
+        summary["response_complete"] = json!(true);
+    }
     match report.result {
         Ok(observed) => {
             summary["configuration_absent"] = json!(observed.configuration_absent);
             summary["remaining_folder_count"] = json!(observed.remaining_folder_associations.len());
             if saved {
-                summary["message"] = json!(
-                    "Check whether the registration is still present before taking another action."
-                );
+                summary["message"] = json!(if observed.configuration_absent {
+                    "VerySync acknowledged the removal and the registration is now absent."
+                } else {
+                    "VerySync acknowledged the removal. The registration is currently present."
+                });
                 (0, summary)
             } else {
                 failure(&mut summary, "receipt_storage", "The final receipt could not be saved. Keep the earlier checkpoint and use observe-device to check the current registration.");
@@ -492,21 +628,78 @@ async fn remove_device(directory: PathBuf, input: Input) -> (u8, Value) {
             }
         }
         Err(error) => {
-            let uncertain = matches!(error, Error::MutationOutcomeUnknown { .. });
-            let message = if uncertain {
-                "The change could not be fully confirmed. Use observe-device to check the registration before sending another request."
-            } else if matches!(
-                error,
-                Error::Authentication { .. } | Error::AccessDenied { .. }
-            ) {
-                "VerySync rejected the removal request. Check which credentials have access to the selected device."
-            } else {
-                "No removal was requested. Check the selected peer and private receipt location."
-            };
-            failure(&mut summary, error_label(&error), message);
-            (if uncertain { 2 } else { 1 }, summary)
+            let code = report_device_failure(&mut summary, &report.receipt, &error);
+            (code, summary)
         }
     }
+}
+
+fn report_device_failure(
+    summary: &mut Value,
+    receipt: &ControlOperationReceipt,
+    error: &Error,
+) -> u8 {
+    let progress = receipt.device_removal_progress();
+    let prior_pause = progress.and_then(|progress| progress.pause_request);
+    let pause_acknowledged = matches!(prior_pause, Some(ControlSubmission::Acknowledged { .. }));
+    let code = match receipt.submission() {
+        ControlSubmission::Acknowledged { .. } => {
+            read_failure(summary, "post_submit_read", error,
+                "VerySync acknowledged the removal request. The current registration could not be confirmed. Use observe-device to check it before sending another request.");
+            2
+        }
+        ControlSubmission::PossiblySubmitted => write_failure(
+            summary,
+            "submit",
+            receipt.response_status(),
+            Some(error),
+            "device removal",
+            "Use observe-device to check the current registration before sending another request.",
+        ),
+        _ if prior_pause == Some(ControlSubmission::PossiblySubmitted) => {
+            let code = write_failure(
+                summary,
+                "pause_submit",
+                progress.and_then(|progress| progress.pause_response_status),
+                Some(error),
+                "peer pause",
+                "Read the peer status before sending another request.",
+            );
+            append_message(summary, "No removal was requested.");
+            code
+        }
+        _ if complete_response_status(error).is_some() => {
+            let stage = if pause_acknowledged && progress.is_some_and(|p| !p.disconnection_observed)
+            {
+                "pause_read"
+            } else {
+                "pre_submit_read"
+            };
+            read_failure(summary, stage, error,
+                "The selected device configuration could not be read. No removal was requested. Check access to the selected device.");
+            if matches!(error, Error::MutationOutcomeUnknown { .. }) {
+                2
+            } else {
+                1
+            }
+        }
+        _ => {
+            failure(
+                summary,
+                error_label(error),
+                "No removal was requested. Check the selected peer and private receipt location.",
+            );
+            if matches!(error, Error::MutationOutcomeUnknown { .. }) {
+                2
+            } else {
+                1
+            }
+        }
+    };
+    if pause_acknowledged {
+        append_message(summary, "VerySync acknowledged the earlier peer pause.");
+    }
+    code
 }
 
 async fn observe_device(directory: &Path, input: Input) -> (u8, Value) {

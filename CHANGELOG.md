@@ -4,11 +4,15 @@
 
 - Save and reopen private receipts for listener changes and device removal.
   Observe the current state on a trusted endpoint after a reply is lost.
+  Late storage checkpoints cannot replace a newer saved result. The examples
+  distinguish a refused write, an incomplete reply and a failed readback.
 - Resume folder observations from their last delivered event position and
   keep event gaps visible. Check whether a particular owned process exited
   after a previous wait expired.
 - Preview selected folder and listener settings before applying a change.
   The SDK checks the selected values again at commit and reports each result.
+  The example exits with an error after a complete refusal, even when a later
+  observation finds matching fields.
 - Check requirements for listener changes, upgrades and the Local-API
   pending-file list with named, read-only preflight methods.
 

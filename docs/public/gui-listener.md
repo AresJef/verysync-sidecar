@@ -166,15 +166,23 @@ endpoint to the connection you have selected for the readback. Use separate
 inputs so the new process can use current credentials and trust.
 
 The example keeps `receipt.json` in the private directory. It syncs each new file
-before replacing the saved checkpoint and syncs the directory on Unix. Keep the
-receipt private because it contains the intended setting. If you opt in with
+before replacing the saved checkpoint and syncs the directory on Unix. Receipt
+writes within an operation are ordered at replacement. A late checkpoint from a
+timed-out write cannot replace a newer receipt that was already installed.
+`final_receipt_saved` reports whether the example finished saving its final
+result. If the save failed, keep the last complete receipt for readback. Keep
+the directory private because the receipt contains the intended setting. If you opt in with
 `event_log: true` on submit, the separate `events.jsonl` stores up to eight
 progress entries plus a drop count. Repeated adjacent entries are combined. A
 slow or unavailable log does not hold up the change, and you can remove the log
 independently of the receipt.
 
-Submit exits with code 2 if the listener may have changed without a confirmed
-acknowledgement. Run observe with a trusted endpoint before making another
+Submit exits with code 1 for a complete HTTP 401 or 403 refusal. Check the
+management credentials for 401 and access to the selected device for 403.
+It exits with code 2 if the listener may have changed without a confirmed
+acknowledgement. The result records an observed write `http_status` and
+`response_complete` when available. A status header alone indicates that the
+reply started. Run observe with a trusted endpoint before making another
 change. Observe exits with code 0 when it reads the original device, even when
 the settings differ. Inspect `requested_fields_match` for the comparison.
 If the receipt is unreadable, the endpoint is unreachable or the connected

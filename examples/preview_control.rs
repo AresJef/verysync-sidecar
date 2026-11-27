@@ -4,15 +4,16 @@ use serde::Deserialize;
 use std::io::{self, BufRead, Read, Write};
 use std::process::ExitCode;
 use verysync_sidecar::{
-    ApiKey, Client, ConnectOptions, ControlSubmission, DeviceId, FolderId, FolderPatch,
+    ApiKey, Client, ConnectOptions, ControlSubmission, DeviceId, Error, FolderId, FolderPatch,
     GuiListenAddress, GuiListenerPatch, ManagementEndpoint, ManagementTransport, SettingsChange,
-    SettingsField, SettingsFieldState, SettingsTarget, SettingsValue,
+    SettingsField, SettingsFieldState, SettingsStepResult, SettingsTarget, SettingsValue,
 };
 
 const USAGE: &str = "Usage: preview_control [--help]\n\
 Send a single JSON line over a private input stream. Supply connection with \
 endpoint, api_key and expected_device_id, plus ca_pem if you need an HTTPS trust root. \
-Include folder with id and label or paused, or listener with bind. Supply readback \
+Include folder with id and label or paused, folders for additional ordered folders, \
+or listener with bind. Supply readback \
 with separate trusted connection settings if you want to check a listener change. \
 After inspecting the redacted preview, enter apply on a second line to submit it.";
 
@@ -45,6 +46,8 @@ impl Connection {
 struct Input {
     connection: Connection,
     folder: Option<Folder>,
+    #[serde(default)]
+    folders: Vec<Folder>,
     listener: Option<Listener>,
     readback: Option<Connection>,
 }
@@ -55,6 +58,19 @@ struct Folder {
     id: FolderId,
     label: Option<String>,
     paused: Option<bool>,
+}
+
+impl Folder {
+    fn patch(&self) -> FolderPatch {
+        let mut patch = FolderPatch::default();
+        if let Some(label) = &self.label {
+            patch = patch.label(label);
+        }
+        if let Some(paused) = self.paused {
+            patch = patch.paused(paused);
+        }
+        patch
+    }
 }
 
 #[derive(Deserialize)]
@@ -91,6 +107,46 @@ fn describe_value(value: &SettingsValue) -> &'static str {
     }
 }
 
+fn report_submission(step: &SettingsStepResult) -> bool {
+    let target = if step.target == SettingsTarget::GuiListener {
+        "listener change"
+    } else {
+        "folder change"
+    };
+    match (step.submission, step.error.as_ref()) {
+        (ControlSubmission::Acknowledged { .. }, error) => {
+            println!("VerySync acknowledged the {target}.");
+            if error.is_some() {
+                println!("The current fields could not be checked after that acknowledgement.");
+            }
+            error.is_none()
+        }
+        (ControlSubmission::PossiblySubmitted, Some(Error::Authentication { status })) => {
+            println!("VerySync could not authenticate this change (HTTP {status}).");
+            false
+        }
+        (ControlSubmission::PossiblySubmitted, Some(Error::AccessDenied { response })) => {
+            println!("VerySync refused this change (HTTP {}).", response.status());
+            false
+        }
+        (ControlSubmission::PossiblySubmitted, Some(Error::MutationOutcomeUnknown { .. })) => {
+            println!(
+                "VerySync may have received the {target}. The acknowledgement is still unknown."
+            );
+            true
+        }
+        (ControlSubmission::PossiblySubmitted, _) => {
+            println!("The {target} ended with an error. Check the current settings before sending another change.");
+            false
+        }
+        (_, Some(_)) => {
+            println!("No {target} was sent for this resource. Review a fresh preview.");
+            false
+        }
+        _ => true,
+    }
+}
+
 async fn run(reader: &mut impl BufRead) -> std::result::Result<bool, &'static str> {
     let input: Input = read_line(reader, 2 * 1024 * 1024)
         .ok()
@@ -102,7 +158,7 @@ async fn run(reader: &mut impl BufRead) -> std::result::Result<bool, &'static st
         .connection
         .options()
         .map_err(|_| "No settings were changed. Check the private connection settings.")?;
-    let readback = input
+    let mut readback = input
         .readback
         .as_ref()
         .map(Connection::options)
@@ -112,20 +168,16 @@ async fn run(reader: &mut impl BufRead) -> std::result::Result<bool, &'static st
         .await
         .map_err(|_| "No settings were changed. Check the selected device and connection.")?;
 
-    let mut changes = Vec::new();
-    let mut folder_patch = FolderPatch::default();
-    if let Some(folder) = &input.folder {
-        if let Some(label) = &folder.label {
-            folder_patch = folder_patch.label(label);
-        }
-        if let Some(paused) = folder.paused {
-            folder_patch = folder_patch.paused(paused);
-        }
-        changes.push(SettingsChange::Folder {
-            id: &folder.id,
-            patch: &folder_patch,
-        });
-    }
+    let folder_patches: Vec<_> = input
+        .folder
+        .iter()
+        .chain(&input.folders)
+        .map(|folder| (&folder.id, folder.patch()))
+        .collect();
+    let mut changes: Vec<_> = folder_patches
+        .iter()
+        .map(|(id, patch)| SettingsChange::Folder { id, patch })
+        .collect();
     let listener_patch;
     if let Some(listener) = &input.listener {
         listener_patch = GuiListenerPatch::default().address(
@@ -177,27 +229,21 @@ async fn run(reader: &mut impl BufRead) -> std::result::Result<bool, &'static st
         return Ok(true);
     }
 
-    let mut committed = client.commit_settings_preview(preview).await;
-    if let Some(options) = readback {
-        if let Some(listener) = committed.steps.iter_mut().find(|step| {
-            step.target == SettingsTarget::GuiListener && step.listener_receipt.is_some()
-        }) {
-            if listener.observe_listener(options).await.is_err() {
-                println!("The management listener could not be checked at the selected endpoint.");
-            }
+    let committed = client.commit_settings_preview(preview).await;
+    let multiple = committed.steps.len() > 1;
+    let mut successful = true;
+    for (index, mut step) in committed.steps.into_iter().enumerate() {
+        if multiple {
+            println!("Result for resource {}.", index + 1);
         }
-    }
-    let mut all_confirmed = true;
-    for step in committed.steps {
-        if step.target == SettingsTarget::GuiListener {
-            match step.submission {
-                ControlSubmission::Acknowledged { .. } => {
-                    println!("VerySync acknowledged the listener change.");
+        successful &= report_submission(&step);
+        if step.target == SettingsTarget::GuiListener && step.listener_receipt.is_some() {
+            if let Some(options) = readback.take() {
+                if step.observe_listener(options).await.is_err() {
+                    println!(
+                        "The management listener could not be checked at the selected endpoint."
+                    );
                 }
-                ControlSubmission::PossiblySubmitted => {
-                    println!("VerySync may have received the listener change. The acknowledgement is still unknown.");
-                }
-                _ => {}
             }
         }
         for field in step.fields {
@@ -212,11 +258,11 @@ async fn run(reader: &mut impl BufRead) -> std::result::Result<bool, &'static st
                     "No change was sent for this field.",
                 _ => "This value is still unconfirmed. Read the selected device before sending another change.",
             };
-            all_confirmed &= field.state == SettingsFieldState::Confirmed;
+            successful &= field.state == SettingsFieldState::Confirmed;
             println!("{}. {message}", describe_field(field.field));
         }
     }
-    Ok(all_confirmed)
+    Ok(successful)
 }
 
 #[tokio::main]

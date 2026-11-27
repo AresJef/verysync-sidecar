@@ -224,5 +224,10 @@ management device. The removal input also needs `peer_id`. Add
 `disconnect_timeout_ms` to require the explicit disconnect sequence. The
 observation input takes connection settings only. The example reports the
 current registration and association count without displaying credentials or
-folder IDs. If a write may have taken effect, keep the receipt and check
+folder IDs. A failed read before removal explains that the DELETE was never
+sent. A complete HTTP 401 or 403 response to DELETE gives exit code 1 and
+identifies the refusal. A status header with an incomplete reply gives exit
+code 2. If VerySync acknowledged DELETE and the read failed, the write status
+and any separate read HTTP status remain visible. The earlier peer pause is
+also recorded when acknowledged. If a write may have taken effect, keep the receipt and check
 the original device before sending any further changes.
