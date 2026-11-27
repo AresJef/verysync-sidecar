@@ -101,6 +101,9 @@ pub struct UpgradeReceipt {
     previous_program_sha256: Option<[u8; 32]>,
     owner_generation: Option<[u8; 32]>,
     archive_sha256: Option<[u8; 32]>,
+    target_program_sha256: Option<[u8; 32]>,
+    #[serde(skip)]
+    pub(crate) observation_scope: Option<crate::managed::UpgradeObservationScope>,
 }
 
 impl UpgradeReceipt {
@@ -148,6 +151,21 @@ impl UpgradeReceipt {
     /// This identifies the archive, not the executable inside it.
     pub fn archive_sha256(&self) -> Option<[u8; 32]> {
         self.archive_sha256
+    }
+    /// The preselected target executable digest, distinct from the archive digest.
+    pub fn target_program_sha256(&self) -> Option<[u8; 32]> {
+        self.target_program_sha256
+    }
+
+    pub(crate) fn bind_observation(
+        &mut self,
+        generation: [u8; 32],
+        scope: crate::managed::UpgradeObservationScope,
+    ) {
+        self.owner_generation = Some(generation);
+        self.previous_program_sha256 = Some(scope.previous);
+        self.target_program_sha256 = Some(scope.target);
+        self.observation_scope = Some(scope);
     }
 }
 
@@ -237,6 +255,8 @@ impl UpgradeAttempt {
                 previous_program_sha256: None,
                 owner_generation: None,
                 archive_sha256: None,
+                target_program_sha256: None,
+                observation_scope: None,
             },
             progress: UpgradeProgress(Arc::new(Mutex::new(Progress {
                 dispatch: UpgradeDispatch::Preparing,
@@ -249,12 +269,16 @@ impl UpgradeAttempt {
         self.receipt.owner_generation = Some(generation);
     }
 
-    pub(crate) fn with_archive<T>(
-        mut result: UpgradeOperationResult<T>,
-        sha256: [u8; 32],
-    ) -> UpgradeOperationResult<T> {
-        result.receipt.archive_sha256 = Some(sha256);
-        result
+    pub(crate) fn set_archive(&mut self, sha256: [u8; 32]) {
+        self.receipt.archive_sha256 = Some(sha256);
+    }
+
+    pub(crate) fn bind_observation(
+        &mut self,
+        generation: [u8; 32],
+        scope: crate::managed::UpgradeObservationScope,
+    ) {
+        self.receipt.bind_observation(generation, scope);
     }
 
     pub(crate) fn dispatch(&self) -> UpgradeDispatch {
@@ -274,7 +298,9 @@ impl UpgradeAttempt {
         let progress = self.progress.0.lock().unwrap_or_else(|e| e.into_inner());
         let receipt = &mut self.receipt;
         receipt.dispatch = progress.dispatch;
-        receipt.previous_program_sha256 = progress.previous_program_sha256;
+        if progress.previous_program_sha256.is_some() {
+            receipt.previous_program_sha256 = progress.previous_program_sha256;
+        }
         receipt.elapsed_millis = milliseconds(self.start.elapsed());
         receipt.outcome = match &result {
             Ok(value) => classify(value),

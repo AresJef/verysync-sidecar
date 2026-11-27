@@ -501,6 +501,8 @@ def main():
     suite.add_argument("--managed-repair-regressions", action="store_true",
                        help="run the isolated managed lifecycle regressions")
     suite.add_argument("--mechanism", choices=["macos", "linux", "windows"])
+    parser.add_argument("--upgrade-consumer", type=Path,
+                        help="separately unpacked crate consumer directory for the upgrade suite")
     parser.add_argument("--test-filter", help="run only tests matching this name in the selected suite")
     parser.add_argument("--allow-private-discovery", action="store_true",
                         help="route only allowlisted discovery CONNECTs to a nonce-selected loopback fixture")
@@ -519,6 +521,8 @@ def main():
         raise ValueError("a test filter requires an explicit Cargo test target")
     if args.allow_private_discovery and args.test_target != "network":
         raise ValueError("private discovery routing is restricted to the explicit network suite")
+    if args.upgrade_consumer and args.test_target != "upgrade_engine":
+        raise ValueError("the independent upgrade consumer requires the upgrade suite")
     if (args.allow_upgrade_metadata or args.serve_pinned_upgrade_archive) and args.test_target != "upgrade_engine":
         raise ValueError("upgrade routing is restricted to the explicit upgrade suite")
     if args.allow_wallpaper_source and args.test_target != "wallpaper_engine":
@@ -611,7 +615,8 @@ def main():
                 command = [sys.executable, str(Path(__file__).with_name(f"run-{args.mechanism}-lifetime-probes.py")),
                            "--toolchain", args.toolchain, "--evidence-dir", str(args.evidence_dir / "mechanism")]
             with log_path.open("w", encoding="utf-8") as log:
-                with subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1],
+                cwd = args.upgrade_consumer or Path(__file__).resolve().parents[1]
+                with subprocess.Popen(command, cwd=cwd,
                                       env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, encoding="utf-8", errors="replace") as process:
                     for line in process.stdout:

@@ -41,7 +41,12 @@ mod shutdown;
 pub(crate) use shutdown::ShutdownAdmission;
 mod state;
 mod upgrade;
+mod upgrade_observation;
 pub use upgrade::{KernelUpgradeCommand, KernelUpgradeExit};
+pub(crate) use upgrade_observation::UpgradeObservationScope;
+pub use upgrade_observation::{
+    UpgradeProgramMatch, UpgradeProgramObservation, UpgradeProgramUncertainty,
+};
 
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;

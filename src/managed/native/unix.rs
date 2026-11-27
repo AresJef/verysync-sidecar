@@ -434,6 +434,38 @@ pub(in crate::managed) fn open_snapshot_input(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
+pub(in crate::managed) fn open_observed_resource(path: &Path, directory: bool) -> io::Result<File> {
+    let file = options().read(true).open(path)?;
+    let metadata = file.metadata()?;
+    if if directory {
+        !metadata.is_dir()
+    } else {
+        !metadata.is_file()
+    } {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unexpected program resource type",
+        ));
+    }
+    Ok(file)
+}
+
+pub(in crate::managed) fn observed_file_stamp(file: &File) -> io::Result<super::FileStamp> {
+    let metadata = file.metadata()?;
+    let mut id = [0; 16];
+    id[..8].copy_from_slice(&metadata.ino().to_le_bytes());
+    Ok(super::FileStamp {
+        identity: super::FileIdentity {
+            volume: metadata.dev(),
+            file: id,
+        },
+        bytes: metadata.len(),
+        links: metadata.nlink(),
+        modified: [metadata.mtime(), metadata.mtime_nsec()],
+        changed: [metadata.ctime(), metadata.ctime_nsec()],
+    })
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod acl_tests {
     use super::*;

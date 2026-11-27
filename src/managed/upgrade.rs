@@ -1,10 +1,10 @@
 //! Explicit stopped-state CLI upgrades with exact child containment.
 use super::ManagedInstance;
 use crate::{
-    upgrade_receipt::UpgradeAttempt, Error, ProcessDiagnostic, Result, UpgradeAction,
-    UpgradeOperationResult, UpgradeOutcome,
+    upgrade_receipt::UpgradeAttempt, Error, OfficialProgram, ProcessDiagnostic, Result,
+    UpgradeAction, UpgradeOperationResult, UpgradeOutcome,
 };
-use std::{fmt, time::Duration};
+use std::{fmt, path::PathBuf, time::Duration};
 use url::Url;
 
 /// Explicit native CLI operation. Provider/from-URL modes can overwrite the
@@ -70,6 +70,72 @@ impl ManagedInstance {
         command: KernelUpgradeCommand,
         timeout: Duration,
     ) -> Result<UpgradeOperationResult<KernelUpgradeExit>> {
+        self.run_cli_upgrade_receipt_inner(command, timeout, None)
+            .await
+    }
+
+    /// Record a stopped CLI attempt and bind a trusted target executable
+    /// before it can modify the caller's dedicated program copy.
+    ///
+    /// Use the same stopped owner and its receipt with
+    /// [ManagedInstance::observe_upgrade_program] after an uncertain result.
+    /// The target identifies a program for later comparison. It does not
+    /// control which archive the explicit CLI command obtains.
+    pub async fn run_cli_upgrade_with_target_receipt(
+        &mut self,
+        command: KernelUpgradeCommand,
+        target: &OfficialProgram,
+        timeout: Duration,
+    ) -> Result<UpgradeOperationResult<KernelUpgradeExit>> {
+        self.run_cli_upgrade_receipt_inner(command, timeout, Some(target))
+            .await
+    }
+
+    /// Upload the selected fixed archive to this running owner and bind its
+    /// trusted executable digest to the same attempt. Use a dedicated, writable
+    /// local executable that no other application manages.
+    ///
+    /// After an uncertain result, use [ManagedInstance::observe_upgrade_program]
+    /// when the original tree and its state lease have finished naturally.
+    pub async fn upload_kernel_upgrade_with_target_receipt(
+        &self,
+        archive: impl Into<PathBuf>,
+        target: &OfficialProgram,
+        timeout: Duration,
+    ) -> Result<UpgradeOperationResult<()>> {
+        let generation = self.control_generation();
+        let mut attempt = UpgradeAttempt::new(
+            UpgradeAction::ManagementArchive,
+            self.client().instance().device_id.clone(),
+            timeout,
+        )?;
+        attempt.set_owner_generation(self.generation);
+        attempt.set_archive(target.archive_sha256());
+        let binding = async {
+            self.require_control_generation(&generation)?;
+            let scope = self
+                .bind_upgrade_observation(target, attempt.deadline)
+                .await?;
+            self.require_control_generation(&generation)?;
+            Ok(scope)
+        }
+        .await;
+        match binding {
+            Ok(scope) => attempt.bind_observation(self.generation, scope),
+            Err(source) => return Ok(attempt.finish(Err(source), |_| UpgradeOutcome::Acknowledged)),
+        }
+        Ok(self
+            .client()
+            .upload_kernel_upgrade_attempt(archive.into(), target, attempt)
+            .await)
+    }
+
+    async fn run_cli_upgrade_receipt_inner(
+        &mut self,
+        command: KernelUpgradeCommand,
+        timeout: Duration,
+        target: Option<&OfficialProgram>,
+    ) -> Result<UpgradeOperationResult<KernelUpgradeExit>> {
         let action = match &command {
             KernelUpgradeCommand::Check => UpgradeAction::CliCheck,
             KernelUpgradeCommand::Provider => UpgradeAction::CliProvider,
@@ -78,6 +144,26 @@ impl ManagedInstance {
         let mut attempt =
             UpgradeAttempt::new(action, self.client().instance().device_id.clone(), timeout)?;
         attempt.set_owner_generation(self.generation);
+        if let Some(target) = target {
+            if action.is_query() {
+                return Ok(attempt.finish(
+                    Err(Error::InvalidConfiguration {
+                        reason: "target receipts are for explicit modifying CLI commands",
+                    }),
+                    |_| UpgradeOutcome::Queried,
+                ));
+            }
+            attempt.set_archive(target.archive_sha256());
+            match self
+                .bind_upgrade_observation(target, attempt.deadline)
+                .await
+            {
+                Ok(scope) => attempt.bind_observation(self.generation, scope),
+                Err(source) => {
+                    return Ok(attempt.finish(Err(source), |_| UpgradeOutcome::Acknowledged))
+                }
+            }
+        }
         let result = self
             .run_cli_upgrade_inner(command, timeout, Some(&attempt))
             .await;

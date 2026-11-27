@@ -259,19 +259,7 @@ impl StateLease {
     }
 
     fn read_generation(&self) -> Result<GenerationRecord> {
-        let file = native::open_private(&self.path.join(GENERATION), true)
-            .map_err(|e| io_error("open stopped state record", e))?;
-        let mut bytes = Vec::new();
-        file.take(1025)
-            .read_to_end(&mut bytes)
-            .map_err(|e| io_error("read stopped state record", e))?;
-        let body = bytes
-            .strip_prefix(GENERATION_FORMAT)
-            .filter(|_| bytes.len() <= 1024)
-            .ok_or(Error::UnmanagedState)?;
-        serde_json::from_slice(body).map_err(|_| Error::ManagedFailure {
-            reason: "private state has no complete stopped run record",
-        })
+        read_generation(&self.path)
     }
 
     fn write_generation(&self, record: &GenerationRecord) -> Result<()> {
@@ -348,6 +336,79 @@ fn canonical(path: &Path) -> std::io::Result<PathBuf> {
     {
         fs::canonicalize(path)
     }
+}
+
+// Read-only observation must not create a directory, lease or generation
+// record. A shared lock excludes the startup and stopped CLI writers.
+pub(super) struct StoppedProgramObservation {
+    path: PathBuf,
+    _lease: File,
+    _engine_lock: Option<File>,
+    #[cfg(windows)]
+    _directory: File,
+}
+
+impl StoppedProgramObservation {
+    pub(super) fn acquire(path: &Path) -> Result<Self> {
+        let path = existing(path)?;
+        #[cfg(windows)]
+        let directory = native::retain_private_directory(&path)
+            .map_err(|e| io_error("retain existing private state", e))?;
+        let lease = native::open_private(&path.join(LEASE), true)
+            .map_err(|e| io_error("open existing state lease for observation", e))?;
+        lock_for_observation(&lease, crate::ManagedStateLock::LibraryLease)?;
+        let engine_path = path.join("verysync.lock");
+        let engine_lock = match native::open_snapshot_input(&engine_path) {
+            Ok(file) => {
+                lock_for_observation(&file, crate::ManagedStateLock::EngineLock)?;
+                Some(file)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(io_error("open existing core lock for observation", error)),
+        };
+        Ok(Self {
+            path,
+            _lease: lease,
+            _engine_lock: engine_lock,
+            #[cfg(windows)]
+            _directory: directory,
+        })
+    }
+
+    pub(super) fn matches_generation(
+        &self,
+        generation: Generation,
+        old_program: [u8; 32],
+    ) -> Result<bool> {
+        let record = read_generation(&self.path)?;
+        Ok(record.generation == generation && record.stopped_program == Some(old_program))
+    }
+}
+
+fn lock_for_observation(file: &File, lock: crate::ManagedStateLock) -> Result<()> {
+    FileExt::try_lock_shared(file).map_err(|error| {
+        if error.kind() == io::ErrorKind::WouldBlock || error.raw_os_error() == Some(33) {
+            Error::ManagedStateInUse { lock }
+        } else {
+            io_error("lock existing state for observation", error)
+        }
+    })
+}
+
+fn read_generation(path: &Path) -> Result<GenerationRecord> {
+    let file = native::open_private(&path.join(GENERATION), true)
+        .map_err(|e| io_error("open stopped state record", e))?;
+    let mut bytes = Vec::new();
+    file.take(1025)
+        .read_to_end(&mut bytes)
+        .map_err(|e| io_error("read stopped state record", e))?;
+    let body = bytes
+        .strip_prefix(GENERATION_FORMAT)
+        .filter(|_| bytes.len() <= 1024)
+        .ok_or(Error::UnmanagedState)?;
+    serde_json::from_slice(body).map_err(|_| Error::ManagedFailure {
+        reason: "private state has no complete stopped run record",
+    })
 }
 
 #[cfg(test)]

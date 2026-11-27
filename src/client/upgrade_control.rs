@@ -138,14 +138,30 @@ impl Client {
         program: &OfficialProgram,
         timeout: Duration,
     ) -> Result<UpgradeOperationResult<()>> {
-        self.upgrade_with_receipt(
+        let attempt = UpgradeAttempt::new(
+            UpgradeAction::ManagementArchive,
+            self.instance().device_id.clone(),
+            timeout,
+        )?;
+        Ok(self
+            .upload_kernel_upgrade_attempt(archive.into(), program, attempt)
+            .await)
+    }
+
+    pub(crate) async fn upload_kernel_upgrade_attempt(
+        &self,
+        archive: PathBuf,
+        program: &OfficialProgram,
+        mut attempt: UpgradeAttempt,
+    ) -> UpgradeOperationResult<()> {
+        attempt.set_archive(program.archive_sha256());
+        Self::run_upgrade_attempt(
+            attempt,
             UpgradeAction::ManagementArchive,
             "upload fixed kernel upgrade",
-            timeout,
-            |progress| self.upload_kernel_upgrade_inner(archive.into(), program, Some(progress)),
+            |progress| self.upload_kernel_upgrade_inner(archive, program, Some(progress)),
         )
         .await
-        .map(|result| UpgradeAttempt::with_archive(result, program.archive_sha256()))
     }
 
     async fn upload_kernel_upgrade_inner(
@@ -244,6 +260,18 @@ impl Client {
         F: std::future::Future<Output = Result<T>>,
     {
         let attempt = UpgradeAttempt::new(action, self.instance().device_id.clone(), timeout)?;
+        Ok(Self::run_upgrade_attempt(attempt, action, operation, run).await)
+    }
+
+    async fn run_upgrade_attempt<T, F>(
+        attempt: UpgradeAttempt,
+        action: UpgradeAction,
+        operation: &'static str,
+        run: impl FnOnce(UpgradeProgress) -> F,
+    ) -> UpgradeOperationResult<T>
+    where
+        F: std::future::Future<Output = Result<T>>,
+    {
         let deadline = tokio::time::Instant::from_std(attempt.deadline);
         let result = match tokio::time::timeout_at(deadline, run(attempt.progress.clone())).await {
             Ok(result) => result,
@@ -253,13 +281,13 @@ impl Client {
                 Error::Timeout { operation },
             )),
         };
-        Ok(attempt.finish(result, |_| {
+        attempt.finish(result, |_| {
             if action.is_query() {
                 UpgradeOutcome::Queried
             } else {
                 UpgradeOutcome::Acknowledged
             }
-        }))
+        })
     }
 }
 

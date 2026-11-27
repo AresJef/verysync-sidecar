@@ -455,6 +455,66 @@ pub(in crate::managed) fn open_snapshot_input(path: &Path) -> io::Result<File> {
     open_private(path, true)
 }
 
+pub(in crate::managed) fn open_observed_resource(path: &Path, directory: bool) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || if directory {
+            !metadata.is_dir()
+        } else {
+            !metadata.is_file()
+        }
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unexpected program resource type",
+        ));
+    }
+    Ok(file)
+}
+
+pub(in crate::managed) fn observed_file_stamp(file: &File) -> io::Result<super::FileStamp> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, FileIdInfo, FileStandardInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO,
+        FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS, FILE_STANDARD_INFO,
+    };
+    fn read<T: Default>(file: &File, class: FILE_INFO_BY_HANDLE_CLASS) -> io::Result<T> {
+        let mut record = T::default();
+        // SAFETY: The file handle remains open. The requested class and output
+        // struct match at the call sites, and the pointer is writable for sizeof(T).
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                class,
+                (&mut record as *mut T).cast(),
+                size_of::<T>() as u32,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(record)
+    }
+    let id: FILE_ID_INFO = read(file, FileIdInfo)?;
+    let standard: FILE_STANDARD_INFO = read(file, FileStandardInfo)?;
+    let basic: FILE_BASIC_INFO = read(file, FileBasicInfo)?;
+    let bytes = standard.EndOfFile.try_into().map_err(io::Error::other)?;
+    Ok(super::FileStamp {
+        identity: super::FileIdentity {
+            volume: id.VolumeSerialNumber,
+            file: id.FileId.Identifier,
+        },
+        bytes,
+        links: u64::from(standard.NumberOfLinks),
+        modified: [basic.LastWriteTime, 0],
+        changed: [basic.ChangeTime, 0],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

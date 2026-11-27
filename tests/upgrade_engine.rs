@@ -3,6 +3,8 @@
 mod full_index_upgrade_cases;
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/upgrade_receipt_native.rs"]
+mod upgrade_receipt_native;
 #[cfg(windows)]
 #[path = "common/windows_cleanup_diagnostic.rs"]
 mod windows_cleanup_diagnostic;

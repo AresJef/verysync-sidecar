@@ -253,6 +253,7 @@ pub use managed::{
     ManagedControlGeneration, ManagedExitObservation, ManagedExitObservationOutcome,
     ManagedGenerationStatus,
 };
+pub use managed::{UpgradeProgramMatch, UpgradeProgramObservation, UpgradeProgramUncertainty};
 pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
 pub use management_transport::{ManagementProxy, ManagementTransport};
 pub use network::{

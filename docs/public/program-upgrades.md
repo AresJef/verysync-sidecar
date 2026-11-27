@@ -223,3 +223,28 @@ provider-installation exit code 4 is preserved as observed; independently
 compare the executable before proceeding. The attempt can return an uncertain
 outcome after a timeout or a lost response. Preserve the receipt and verify the
 selected program before deciding whether to continue.
+
+## Check a dedicated executable after an uncertain upgrade
+
+Use `ManagedInstance::upload_kernel_upgrade_with_target_receipt` for a running
+owned instance or `run_cli_upgrade_with_target_receipt` with a modifying
+stopped-state command. These methods check the original executable and bind the
+trusted digest of the matching standard v2.33.2 executable before it can change.
+Keep the owning handle and the returned receipt together. Use your own
+writable copy of the program. Keep other applications from changing it.
+
+When you get `UpgradeOutcome::Unknown`, wait for the original owned tree and
+any upgrade helper to finish. Then call `observe_upgrade_program` with its
+receipt. The SDK checks the saved generation and reads the dedicated program
+under a time limit. It starts no processes and sends no requests.
+
+- `Target` means the current file matches the selected executable.
+- `Previous` means it still matches the original file.
+- `Other` means the current bytes match neither digest. Keep them for diagnosis.
+- `Unconfirmed` supplies a reason, such as a replaced owner, a still-busy state
+  directory, or a file that cannot be read safely.
+
+Keep the original unknown outcome even when the file now matches. A matching
+file does not establish that VerySync can start or that its data migrated.
+A serialized receipt is a record for review. Use the retained in-memory receipt
+with the owning handle for this observation.
