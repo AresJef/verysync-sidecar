@@ -70,6 +70,7 @@ pub use local_api::{
     LocalApiHistoryPage, LocalApiHistoryRecord, LocalApiPeer, LocalApiScanAcknowledgement,
     LocalApiUpgradeAcknowledgement,
 };
+pub(crate) use upgrade_control::{retry_delay, retryable_read};
 
 /// The policy applied to an engine version during connection.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -235,11 +236,20 @@ struct Connection<Authorization = ApiKey> {
 pub struct Client {
     connection: Connection,
     instance: InstanceInfo,
+    transient_read_retries: bool,
     #[cfg(all(test, feature = "engine-tests"))]
     shutdown_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Client {
+    /// Enable bounded transient reads for eligible high-level operations on this
+    /// handle and its clones. Legacy requests retain their single-attempt behavior.
+    /// Use [crate::OperationOptions::without_read_retry] to disable it for one call.
+    pub fn with_transient_read_retries(mut self) -> Self {
+        self.transient_read_retries = true;
+        self
+    }
+
     /// Borrow the exact selected management endpoint; this performs no discovery.
     pub fn endpoint(&self) -> &ManagementEndpoint {
         &self.connection.endpoint
@@ -652,6 +662,7 @@ impl Client {
         }
         Ok(Self {
             connection,
+            transient_read_retries: false,
             #[cfg(all(test, feature = "engine-tests"))]
             shutdown_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             instance: InstanceInfo {

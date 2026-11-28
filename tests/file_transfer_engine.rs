@@ -7,6 +7,8 @@ mod managed_fixture;
 mod resource_faults;
 #[path = "common/resource_fixture.rs"]
 mod resource_fixture;
+#[path = "common/single_file_version_probe.rs"]
+mod single_file_version_probe;
 use managed_fixture::{options, TestResult};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Read, path::Path, time::Duration};

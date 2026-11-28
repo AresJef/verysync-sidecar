@@ -2,6 +2,28 @@
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 
+use crate::{Error, UpgradeOperationResult, UpgradeReceipt};
+
+/// The original transient error when a second read was considered.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct FailedUpgradeRead {
+    /// What the SDK observed at the first attempt's request boundary.
+    pub receipt: UpgradeReceipt,
+    /// The first error, including its original typed causes.
+    pub source: Error,
+}
+
+/// The result of a running engine's release query.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct UpgradeQueryReport {
+    /// The initial failure if the operation entered its bounded retry phase.
+    pub first_failed_attempt: Option<FailedUpgradeRead>,
+    /// The only or last attempt. Inspect its receipt to see whether it dispatched.
+    pub final_attempt: UpgradeOperationResult<KernelUpgradeCheck>,
+}
+
 pub(crate) const NO_MATCHING_RELEASE: &[u8] = b"couldn't find a release to download";
 pub(crate) fn is_missing_release(response: &crate::ResponseDiagnostic) -> bool {
     response.status() == 500

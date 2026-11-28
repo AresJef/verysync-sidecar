@@ -41,8 +41,13 @@ mod shutdown;
 pub(crate) use shutdown::ShutdownAdmission;
 mod state;
 mod upgrade;
+mod upgrade_installation;
 mod upgrade_observation;
 pub use upgrade::{KernelUpgradeCommand, KernelUpgradeExit};
+pub use upgrade_installation::{
+    KernelInstallationOutcome, KernelInstallationReport, KernelReadinessOutcome,
+    KernelReadinessReport,
+};
 pub(crate) use upgrade_observation::UpgradeObservationScope;
 pub use upgrade_observation::{
     UpgradeProgramMatch, UpgradeProgramObservation, UpgradeProgramUncertainty,
@@ -95,6 +100,7 @@ pub struct ManagedOptions {
     pub(crate) lifetime: ManagedLifetime,
     pub(crate) version_policy: VersionPolicy,
     pub(crate) upgrade_checks: ManagedUpgradeChecks,
+    pub(crate) transient_read_retries: bool,
     pub(crate) transport: crate::ManagementTransport,
     pub(crate) local_api_enabled: Option<bool>,
 }
@@ -168,6 +174,7 @@ impl ManagedOptions {
             lifetime: ManagedLifetime::CallerOwned,
             version_policy: VersionPolicy::ValidatedOnly,
             upgrade_checks: ManagedUpgradeChecks::Disabled,
+            transient_read_retries: false,
             transport: crate::ManagementTransport::default(),
             local_api_enabled: None,
         })
@@ -199,6 +206,13 @@ impl ManagedOptions {
     /// replace its executable; use a dedicated mutable copy for such requests.
     pub fn upgrade_checks(mut self, checks: ManagedUpgradeChecks) -> Self {
         self.upgrade_checks = checks;
+        self
+    }
+
+    /// Enable bounded transient reads for eligible high-level operations.
+    /// Legacy requests retain their single-attempt behavior.
+    pub fn with_transient_read_retries(mut self) -> Self {
+        self.transient_read_retries = true;
         self
     }
 

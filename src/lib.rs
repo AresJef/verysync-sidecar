@@ -101,6 +101,7 @@ mod management_auth;
 mod management_transport;
 mod network;
 mod official_account;
+mod operation_options;
 mod operations;
 mod path;
 mod raw;
@@ -250,10 +251,14 @@ pub use managed::{
 #[cfg(feature = "download")]
 pub use managed::{DownloadOptions, PreparedProgram};
 pub use managed::{
+    KernelInstallationOutcome, KernelInstallationReport, KernelReadinessOutcome,
+    KernelReadinessReport, UpgradeProgramMatch, UpgradeProgramObservation,
+    UpgradeProgramUncertainty,
+};
+pub use managed::{
     ManagedControlGeneration, ManagedExitObservation, ManagedExitObservationOutcome,
     ManagedGenerationStatus,
 };
-pub use managed::{UpgradeProgramMatch, UpgradeProgramObservation, UpgradeProgramUncertainty};
 pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
 pub use management_transport::{ManagementProxy, ManagementTransport};
 pub use network::{
@@ -263,6 +268,7 @@ pub use network::{
 pub use official_account::{
     OfficialAccountChange, OfficialAccountCredentials, OfficialAccountState, OfficialAccountStatus,
 };
+pub use operation_options::{OperationOptions, OperationPhase};
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
@@ -304,7 +310,7 @@ pub use transports::{
 pub use upgrade_receipt::{
     UpgradeAction, UpgradeDispatch, UpgradeOperationResult, UpgradeOutcome, UpgradeReceipt,
 };
-pub use upgrades::KernelUpgradeCheck;
+pub use upgrades::{FailedUpgradeRead, KernelUpgradeCheck, UpgradeQueryReport};
 
 /// The fixed upstream version selected for initial compatibility acceptance.
 ///

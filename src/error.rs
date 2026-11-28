@@ -251,6 +251,11 @@ pub enum Error {
         /// The operation that timed out.
         operation: &'static str,
     },
+    /// The caller explicitly cancelled the wait for a business operation.
+    OperationWaitCancelled {
+        /// The operation the caller stopped waiting for.
+        operation: &'static str,
+    },
     /// The management response exceeded the configured buffer bound.
     ResponseTooLarge {
         /// The configured maximum number of bytes.
@@ -506,6 +511,8 @@ impl fmt::Display for Error {
                 }
                 return write!(formatter, "The time limit expired while trying to {operation}.");
             }
+            Self::OperationWaitCancelled { operation } =>
+                return write!(formatter, "You stopped waiting for VerySync to {operation}. Check the operation report for its last confirmed state."),
             Self::ResponseTooLarge { limit } =>
                 return write!(formatter, "The reply exceeded the configured limit of {limit} bytes."),
             Self::Http { response } =>

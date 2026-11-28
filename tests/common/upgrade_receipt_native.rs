@@ -7,7 +7,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -17,9 +17,11 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use verysync_sidecar::{
-    ApiKey, ConnectOptions, Error, KernelUpgradeCommand, LocalProgram, ManagedInstance,
-    ManagedOptions, ManagementEndpoint, UpgradeDispatch, UpgradeOutcome, UpgradeProgramMatch,
-    UpgradeProgramUncertainty, UpgradeReceipt, VersionPolicy,
+    ApiKey, Client, ConnectOptions, CreateFolderOptions, Error, FolderId,
+    KernelInstallationOutcome, KernelReadinessOutcome, KernelUpgradeCommand, LocalProgram,
+    ManagedInstance, ManagedOptions, ManagementEndpoint, OperationOptions, TargetPath,
+    UpgradeDispatch, UpgradeOutcome, UpgradeProgramMatch, UpgradeProgramUncertainty,
+    UpgradeReceipt, VersionPolicy,
 };
 
 async fn owned_old(
@@ -48,7 +50,8 @@ async fn owned_old(
         base.state_directory(),
         endpoint,
     )?
-    .version_policy(VersionPolicy::AllowUnverified);
+    .version_policy(VersionPolicy::AllowUnverified)
+    .with_transient_read_retries();
     let core = ManagedInstance::start(config.clone()).await?;
     assert_eq!(core.program_info().version, "v2.33.1");
     Ok((core, config, program))
@@ -73,7 +76,12 @@ fn now() -> TestResult<u64> {
 
 fn receipt_event(name: &str, stage: &str, detail: serde_json::Value) -> TestResult {
     println!(
-        "s29-upgrade {}",
+        "{}-upgrade {}",
+        if name.starts_with("s30-") {
+            "s30"
+        } else {
+            "s29"
+        },
         serde_json::json!({
             "case": name, "stage": stage, "unix_ns": now()?, "pid": std::process::id(),
             "detail": detail
@@ -448,6 +456,16 @@ async fn forwards_until_native_upload_reply(
         );
     }
     assert!(upload || method.starts_with("GET "));
+    forward_native_management(client, native, head, upload, "upload-drop").await
+}
+
+async fn forward_native_management(
+    mut client: TcpStream,
+    native: SocketAddr,
+    head: String,
+    upload: bool,
+    case: &str,
+) -> TestResult {
     let mut upstream = TcpStream::connect(native).await?;
     let rewritten = head
         .lines()
@@ -460,7 +478,28 @@ async fn forwards_until_native_upload_reply(
         tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
         return Ok(());
     }
-    let length: u64 = head
+    let length = fixed_upload_length(&head)?;
+    let transferred = tokio::io::copy(&mut (&mut client).take(length), &mut upstream).await?;
+    assert_eq!(transferred, length);
+    let mut reply = Vec::new();
+    upstream.take(65537).read_to_end(&mut reply).await?;
+    assert!(!reply.is_empty() && reply.len() <= 65536);
+    let http = std::str::from_utf8(&reply)?;
+    assert!(http.starts_with("HTTP/1.1 200 ") && http.contains("restarting"));
+    receipt_event(
+        case,
+        "native-response-withheld",
+        serde_json::json!({
+            "upstream_status":200, "forwarded_body_bytes":transferred, "downstream_bytes":0,
+            "native_response_sha256":hex(Sha256::digest(&reply).into())
+        }),
+    )?;
+    client.shutdown().await?;
+    Ok(())
+}
+
+fn fixed_upload_length(head: &str) -> TestResult<u64> {
+    let length = head
         .lines()
         .find_map(|line| {
             let (name, value) = line.split_once(':')?;
@@ -470,23 +509,395 @@ async fn forwards_until_native_upload_reply(
         .ok_or("missing fixed upload length")?
         .parse()?;
     assert!((1..=128 * 1024 * 1024).contains(&length));
-    let transferred = tokio::io::copy(&mut (&mut client).take(length), &mut upstream).await?;
-    assert_eq!(transferred, length);
-    let mut reply = Vec::new();
-    upstream.take(65537).read_to_end(&mut reply).await?;
-    assert!(!reply.is_empty() && reply.len() <= 65536);
-    let http = std::str::from_utf8(&reply)?;
-    assert!(http.starts_with("HTTP/1.1 200 ") && http.contains("restarting"));
+    Ok(length)
+}
+
+#[tokio::test]
+async fn native_business_install_reports_verified_target_after_lost_reply() -> TestResult {
+    let root = tempfile::Builder::new().prefix("u30h").tempdir()?;
+    let (mut core, settings, program) = owned_old(root.path(), true).await?;
+    let native = settings
+        .management_endpoint()
+        .http_url()
+        .and_then(|value| value.port())
+        .map(|p| SocketAddr::from((Ipv4Addr::LOCALHOST, p)))
+        .ok_or("private native port missing")?;
+    let old = hash(&program)?;
+    let target = hash(&pinned_program()?)?;
+    let asset = baseline_asset()?;
+    let archive =
+        PathBuf::from(std::env::var_os("VERYSYNC_TEST_ARCHIVE").ok_or("fixed archive missing")?);
+    let identity = core.client().instance().device_id.clone();
+    let sample = root.path().join("s30-retained.txt");
+    std::fs::write(
+        &sample,
+        b"s30 synthetic content retained across installation",
+    )?;
+    let before = hash(&sample)?;
+    let state_file = settings.state_directory().join("setting.dat");
+    let parsed = rmpv::decode::read_value(&mut std::fs::File::open(&state_file)?)?;
+    let key = ApiKey::new(parsed["4"]["6"].as_str().ok_or("private key missing")?)?;
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let proxy = ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?;
+    let armed = Arc::new(AtomicBool::new(false));
+    let apply_faults = Arc::clone(&armed);
+    let (requests, mut witnessed) = tokio::sync::mpsc::unbounded_channel();
+    let mut server = tokio::spawn(async move {
+        let mut versions = 0;
+        loop {
+            let (mut stream, _) = listener.accept().await?;
+            let head = bounded_request_head(&mut stream).await?;
+            let line = head.lines().next().ok_or("missing private request")?;
+            let mut fields = line.split_whitespace();
+            let routed = (
+                fields.next().ok_or("missing method")?,
+                fields.next().ok_or("missing path")?,
+            );
+            let upload = routed == ("POST", "/rest/system/upgrade/upload");
+            if apply_faults.load(Ordering::SeqCst) {
+                requests.send((routed.0.to_owned(), routed.1.to_owned()))?;
+                if routed == ("GET", "/rest/system/version") {
+                    versions += 1;
+                    if versions == 1 {
+                        // The normally polled connection is silent until the
+                        // SDK closes this timed-out first request.
+                        let _ = stream.read_u8().await;
+                        continue;
+                    }
+                }
+            }
+            forward_native_management(stream, native, head, upload, "s30-install-drop").await?;
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    });
+    core.reconnect_management(
+        ConnectOptions::new(proxy, key)
+            .version_policy(VersionPolicy::AllowUnverified)
+            .expected_device_id(identity.clone())
+            .request_timeout(Duration::from_secs(20))?,
+    )
+    .await?;
+    armed.store(true, Ordering::SeqCst);
+    let job = core.install_kernel_upgrade(
+        archive,
+        &asset,
+        OperationOptions::new(Duration::from_secs(18)),
+    );
+    let report = tokio::select! {
+        result = job => result?,
+        end = &mut server => { end??; return Err("native witness stopped before the report".into()); }
+    };
+    let actual: Vec<_> = std::iter::from_fn(|| witnessed.try_recv().ok()).collect();
+    let routes: Vec<_> = actual
+        .iter()
+        .map(|(method, path)| (method.as_str(), path.as_str()))
+        .collect();
+    assert_eq!(
+        routes,
+        [
+            ("GET", "/rest/system/version"),
+            ("GET", "/rest/system/version"),
+            ("GET", "/rest/system/status"),
+            ("POST", "/rest/system/upgrade/upload"),
+        ]
+    );
+    assert_eq!(report.outcome, KernelInstallationOutcome::Installed);
+    assert_eq!(report.admission_attempts, 2);
+    assert!(matches!(
+        report.first_admission_failure,
+        Some(Error::Timeout { .. })
+    ));
+    assert_eq!(
+        report.installation.receipt.outcome(),
+        UpgradeOutcome::Unknown
+    );
+    assert_eq!(
+        report.installation.receipt.dispatch(),
+        UpgradeDispatch::Http {
+            status: None,
+            complete: false
+        }
+    );
+    assert!(matches!(
+        report.installation.result,
+        Err(Error::MutationOutcomeUnknown { .. })
+    ));
+    assert_eq!(
+        report.installation.receipt.previous_program_sha256(),
+        Some(old)
+    );
+    assert_eq!(
+        report.installation.receipt.target_program_sha256(),
+        Some(target)
+    );
+    let disk = report.disk.ok_or("missing observed disk effect")?;
+    assert_eq!(disk.comparison, UpgradeProgramMatch::Target);
+    assert_eq!(disk.current_sha256, Some(target));
+    assert_eq!(
+        disk.operation_id,
+        report.installation.receipt.operation_id()
+    );
+    assert_eq!(hash(&program)?, target);
+    assert_eq!(hash(&sample)?, before);
+    let exit = report
+        .original_exit
+        .ok_or("missing original process exit")?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced);
+    assert!(exact_program_pids(&program).await?.is_empty());
     receipt_event(
-        "upload-drop",
-        "native-response-withheld",
+        "s30-install-drop",
+        "verified-within-original-call",
         serde_json::json!({
-            "upstream_status":200, "forwarded_body_bytes":transferred, "downstream_bytes":0,
-            "native_response_sha256":hex(Sha256::digest(&reply).into())
+            "routes": actual, "native_exit":exit.code,"target_sha256":hex(target),
+            "previous_sha256":hex(old), "payload_preserved":true,
+            "original_reply_unknown":true, "sdk_result":report.outcome.to_string()
         }),
     )?;
-    client.shutdown().await?;
-    Ok(())
+    server.abort();
+    assert!(server.await.is_err_and(|e| e.is_cancelled()));
+    drop(core);
+    root.close()?;
+    receipt_event(
+        "s30-install-drop",
+        "cleanup",
+        serde_json::json!({
+            "removed":true,"owned_program_pids":0
+        }),
+    )
+}
+
+#[tokio::test]
+async fn native_business_install_reports_previous_after_unanswered_upload() -> TestResult {
+    verify_non_target_after_unanswered_upload(false).await
+}
+
+#[tokio::test]
+async fn native_business_install_preserves_unknown_when_program_file_is_unavailable() -> TestResult
+{
+    verify_non_target_after_unanswered_upload(true).await
+}
+
+async fn verify_non_target_after_unanswered_upload(remove_program: bool) -> TestResult {
+    let case = if remove_program {
+        "s30-install-missing"
+    } else {
+        "s30-install-previous"
+    };
+    let root = tempfile::Builder::new().prefix("u30d").tempdir()?;
+    let (mut core, settings, program) = owned_old(root.path(), true).await?;
+    let old = hash(&program)?;
+    let target = baseline_asset()?;
+    let archive =
+        PathBuf::from(std::env::var_os("VERYSYNC_TEST_ARCHIVE").ok_or("fixed archive missing")?);
+    let identity = core.client().instance().device_id.clone();
+    let state = settings.state_directory().join("setting.dat");
+    let parsed = rmpv::decode::read_value(&mut std::fs::File::open(&state)?)?;
+    let key = ApiKey::new(
+        parsed["4"]["6"]
+            .as_str()
+            .ok_or("private fixture key missing")?,
+    )?;
+    let fixture_control = Client::connect(
+        ConnectOptions::new(settings.management_endpoint().clone(), key.clone())
+            .version_policy(VersionPolicy::AllowUnverified)
+            .expected_device_id(identity.clone()),
+    )
+    .await?;
+    let native_port = settings
+        .management_endpoint()
+        .http_url()
+        .and_then(|url| url.port())
+        .ok_or("private native port missing")?;
+    let native = SocketAddr::from((Ipv4Addr::LOCALHOST, native_port));
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let endpoint = ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?;
+    let (requests, mut observed) = tokio::sync::mpsc::unbounded_channel();
+    let position = program.clone();
+    let restored = program.with_file_name("owned-old-preserved");
+    let displaced = restored.clone();
+    let mut witness = tokio::spawn(async move {
+        loop {
+            let (mut conn, _) = listener.accept().await?;
+            let head = bounded_request_head(&mut conn).await?;
+            if !head.starts_with("POST /rest/system/upgrade/upload ") {
+                assert!(head.starts_with("GET "));
+                forward_native_management(conn, native, head, false, case).await?;
+                continue;
+            }
+            let length = fixed_upload_length(&head)?;
+            let received =
+                tokio::io::copy(&mut (&mut conn).take(length), &mut tokio::io::sink()).await?;
+            assert_eq!(received, length);
+            requests.send(received)?;
+            // Model an unanswered request which did not reach the engine; stop
+            // the fixture separately so the SDK can observe a settled program.
+            // This independent fixture client has its own mutation lock.
+            fixture_control.request_shutdown().await?;
+            tokio::time::timeout(Duration::from_secs(8), async {
+                while !exact_program_pids(&position).await?.is_empty() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            })
+            .await??;
+            if remove_program {
+                std::fs::rename(&position, &displaced)?;
+            }
+            receipt_event(
+                case,
+                "controlled-no-upstream-upload",
+                serde_json::json!({
+                    "sdk_uploads":1,"forwarded_uploads":0,"fixture_shutdowns":1,
+                    "input_bytes_consumed":received,"program_temporarily_unavailable":remove_program
+                }),
+            )?;
+            conn.shutdown().await?;
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    });
+    core.reconnect_management(
+        ConnectOptions::new(endpoint, key)
+            .version_policy(VersionPolicy::AllowUnverified)
+            .expected_device_id(identity),
+    )
+    .await?;
+    let run = core.install_kernel_upgrade(
+        archive,
+        &target,
+        OperationOptions::new(Duration::from_secs(30)),
+    );
+    let report = tokio::select! {
+        result = run => result?,
+        end = &mut witness => { end??; return Err("controlled witness stopped early".into()); }
+    };
+    assert!(matches!(
+        report.installation.result,
+        Err(Error::MutationOutcomeUnknown { .. })
+    ));
+    assert_eq!(
+        report.installation.receipt.outcome(),
+        UpgradeOutcome::Unknown
+    );
+    assert_eq!(report.admission_attempts, 1);
+    let disk = report.disk.ok_or("expected SDK disk observation")?;
+    if remove_program {
+        assert_eq!(report.outcome, KernelInstallationOutcome::Unconfirmed);
+        assert_eq!(
+            disk.comparison,
+            UpgradeProgramMatch::Unconfirmed(UpgradeProgramUncertainty::FileUnverified)
+        );
+        assert!(disk.current_sha256.is_none());
+        std::fs::rename(restored, &program)?;
+    } else {
+        assert_eq!(
+            report.outcome,
+            KernelInstallationOutcome::PreviousProgramRemains
+        );
+        assert_eq!(disk.comparison, UpgradeProgramMatch::Previous);
+        assert_eq!(disk.current_sha256, Some(old));
+    }
+    assert!(observed.try_recv()? > target.archive_bytes());
+    assert!(observed.try_recv().is_err());
+    assert_eq!(hash(&program)?, old);
+    let ended = report.original_exit.ok_or("missing owned exit")?;
+    assert!(ended.tree_stopped && ended.state_released && !ended.forced);
+    assert!(exact_program_pids(&program).await?.is_empty());
+    witness.abort();
+    assert!(witness.await.is_err_and(|error| error.is_cancelled()));
+    drop(core);
+    root.close()?;
+    receipt_event(
+        case,
+        "result-and-cleanup",
+        serde_json::json!({
+            "original_unknown":true, "later_comparison":format!("{:?}", disk.comparison),
+            "final_report":report.outcome.to_string(), "native_exit_code":ended.code,
+            "owned_program_pids":0, "removed":true
+        }),
+    )
+}
+
+#[tokio::test]
+async fn native_business_upgrade_and_ready_reuses_owned_data_and_same_device() -> TestResult {
+    let root = tempfile::Builder::new().prefix("u30r").tempdir()?;
+    let (mut core, _, program) = owned_old(root.path(), true).await?;
+    let previous = core.control_generation();
+    let device = core.client().instance().device_id.clone();
+    let target = baseline_asset()?;
+    let archive =
+        PathBuf::from(std::env::var_os("VERYSYNC_TEST_ARCHIVE").ok_or("fixed archive missing")?);
+    let path = root.path().join("retained");
+    std::fs::create_dir(&path)?;
+    let sample = path.join("synthetic.bin");
+    std::fs::write(&sample, b"owned upgrade data on disk")?;
+    let saved = hash(&sample)?;
+    let id = FolderId::parse("s30-upgrade-retained")?;
+    core.client()
+        .create_folder(&CreateFolderOptions::new(
+            id.clone(),
+            TargetPath::local(&path),
+        ))
+        .await?;
+    let before = core.client().folder(&id).await?;
+    let options = OperationOptions::new(Duration::from_secs(45));
+    let report = core
+        .upgrade_kernel_and_wait_ready(archive, &target, options.clone())
+        .await?;
+    assert_eq!(report.outcome, KernelReadinessOutcome::Ready, "{report:?}");
+    assert!(report.sdk_start_attempted);
+    assert_eq!(
+        report.installation.outcome,
+        KernelInstallationOutcome::Installed
+    );
+    assert_eq!(
+        report.installation.installation.receipt.outcome(),
+        UpgradeOutcome::Acknowledged
+    );
+    let transition = report
+        .transition
+        .ok_or("missing authenticated transition")?;
+    assert!(transition.previous_exit.tree_stopped && transition.previous_exit.state_released);
+    assert_eq!(transition.current_program.sha256, hash(&pinned_program()?)?);
+    assert_eq!(hash(&program)?, transition.current_program.sha256);
+    assert_ne!(core.control_generation(), previous);
+    assert_eq!(core.client().instance().device_id, device);
+    assert_eq!(
+        core.client().version().await?.version,
+        target.version().as_str()
+    );
+    let after = core.client().folder(&id).await?;
+    assert_eq!(after.id, before.id);
+    assert_eq!(after.path, before.path);
+    assert_eq!(hash(&sample)?, saved);
+    let ready = core.control_generation();
+    let zero = core
+        .upgrade_kernel_and_wait_ready(root.path().join("unneeded-archive.zip"), &target, options)
+        .await?;
+    assert_eq!(zero.outcome, KernelReadinessOutcome::AlreadyReady);
+    assert_eq!(
+        zero.installation.installation.receipt.dispatch(),
+        UpgradeDispatch::Preparing
+    );
+    assert!(!zero.sdk_start_attempted);
+    assert_eq!(core.control_generation(), ready);
+    let ended = core.shutdown(Duration::from_secs(15)).await?;
+    assert!(ended.tree_stopped && ended.state_released && !ended.forced);
+    assert!(exact_program_pids(&program).await?.is_empty());
+    drop(core);
+    root.close()?;
+    receipt_event(
+        "s30-ready",
+        "result-and-cleanup",
+        serde_json::json!({
+            "disk_target":true, "authenticated_target_generation":true, "original_device":true,
+            "folder_and_bytes_retained":true, "already_ready_without_upload_or_restart":true,
+            "original_native_exit":transition.previous_exit.code, "sdk_start_attempted":true,
+            "owned_program_pids":0, "removed":true
+        }),
+    )
 }
 
 #[tokio::test]

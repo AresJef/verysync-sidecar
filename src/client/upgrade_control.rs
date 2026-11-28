@@ -1,9 +1,11 @@
 //! Explicit kernel upgrade calls. No automatic selection, download or retry.
 use super::{checked_response, mutation_error, send_bounded_observing_headers, Client};
 use crate::{
+    operation_options::OperationContext,
     upgrade_receipt::{UpgradeAttempt, UpgradeProgress},
-    Error, KernelUpgradeCheck, OfficialProgram, ResponseDiagnostic, Result, UpgradeAction,
-    UpgradeDispatch, UpgradeOperationResult, UpgradeOutcome,
+    Error, FailedUpgradeRead, KernelUpgradeCheck, OfficialProgram, OperationOptions,
+    OperationPhase, ResponseDiagnostic, Result, UpgradeAction, UpgradeDispatch,
+    UpgradeOperationResult, UpgradeOutcome, UpgradeQueryReport,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -14,6 +16,93 @@ use std::{
 };
 
 impl Client {
+    /// Read the running engine's available release and keep the request evidence.
+    ///
+    /// A handle configured with [Client::with_transient_read_retries] can make
+    /// one extra read after an eligible timeout or connection interruption.
+    /// The first attempt uses up to two thirds of the total time when enabled.
+    /// Each attempt checks the selected version and device before querying the
+    /// release provider. The query does not install a release.
+    pub async fn query_kernel_upgrade(
+        &self,
+        options: OperationOptions,
+    ) -> Result<UpgradeQueryReport> {
+        let context = options.start()?;
+        let result = self
+            .query_kernel_upgrade_in(&context, context.deadline)
+            .await;
+        context.phase(OperationPhase::Finished);
+        result
+    }
+
+    async fn query_kernel_upgrade_in(
+        &self,
+        context: &OperationContext,
+        deadline: tokio::time::Instant,
+    ) -> Result<UpgradeQueryReport> {
+        let attempt = UpgradeAttempt::new(
+            UpgradeAction::ManagementCheck,
+            self.instance().device_id.clone(),
+            deadline.duration_since(context.started),
+        )?;
+        let retry = context.read_retries_enabled(self.transient_read_retries);
+        let first_deadline = if retry {
+            context.started + deadline.duration_since(context.started).mul_f64(2.0 / 3.0)
+        } else {
+            deadline
+        };
+        let result = self
+            .read_kernel_release(context, first_deadline, &attempt)
+            .await;
+        let delay = retry_delay(attempt.operation_id());
+        let retry = retry
+            && result.as_ref().is_err_and(|error| retryable_read(error))
+            && deadline.saturating_duration_since(tokio::time::Instant::now()) > delay;
+        if !retry {
+            return Ok(UpgradeQueryReport {
+                first_failed_attempt: None,
+                final_attempt: attempt.finish(result, |_| UpgradeOutcome::Queried),
+            });
+        }
+        let next = attempt.repeat_read();
+        let initial = attempt.finish(result, |_| UpgradeOutcome::Queried);
+        let first_failed_attempt = initial.result.err().map(|source| FailedUpgradeRead {
+            receipt: initial.receipt,
+            source,
+        });
+        context.phase(OperationPhase::WaitingToRetry);
+        let delay = context
+            .wait(deadline, "retry the kernel release check", async {
+                tokio::time::sleep(delay).await;
+                Ok(())
+            })
+            .await;
+        let result = match delay {
+            Ok(()) => self.read_kernel_release(context, deadline, &next).await,
+            Err(error) => Err(error),
+        };
+        Ok(UpgradeQueryReport {
+            first_failed_attempt,
+            final_attempt: next.finish(result, |_| UpgradeOutcome::Queried),
+        })
+    }
+
+    async fn read_kernel_release(
+        &self,
+        context: &OperationContext,
+        deadline: tokio::time::Instant,
+        attempt: &UpgradeAttempt,
+    ) -> Result<KernelUpgradeCheck> {
+        context
+            .wait(deadline, "check the kernel release", async {
+                context.phase(OperationPhase::Checking);
+                self.observe_control_identity().await?;
+                self.check_kernel_upgrade_response(Some(&attempt.progress))
+                    .await
+            })
+            .await
+    }
+
     /// Check the kernel's own release provider once. Managed instances disable
     /// this by default; explicitly select ManagedUpgradeChecks::Manual to allow
     /// checks while keeping periodic upgrade checks off. A 501 is retained as
@@ -42,6 +131,13 @@ impl Client {
         progress: Option<UpgradeProgress>,
     ) -> Result<KernelUpgradeCheck> {
         self.system_status().await?;
+        self.check_kernel_upgrade_response(progress.as_ref()).await
+    }
+
+    async fn check_kernel_upgrade_response(
+        &self,
+        progress: Option<&UpgradeProgress>,
+    ) -> Result<KernelUpgradeCheck> {
         let operation = "check kernel upgrade";
         let request = self.connection.authorized_request(
             reqwest::Method::GET,
@@ -49,7 +145,7 @@ impl Client {
             None,
         );
         let (status, body) = self
-            .send_upgrade(operation, request, false, progress.as_ref())
+            .send_upgrade(operation, request, false, progress)
             .await
             .map_err(classify_release_unavailable)?;
         let value: KernelUpgradeCheck =
@@ -170,7 +266,17 @@ impl Client {
         program: &OfficialProgram,
         progress: Option<UpgradeProgress>,
     ) -> Result<()> {
-        let operation = "upload fixed kernel upgrade";
+        let file = Self::prepare_kernel_archive(path, program).await?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        self.system_status().await?;
+        self.upload_prepared_kernel_archive(file, program, progress.as_ref(), None)
+            .await
+    }
+
+    pub(crate) async fn prepare_kernel_archive(
+        path: PathBuf,
+        program: &OfficialProgram,
+    ) -> Result<File> {
         if program.archive_bytes() > 128 * 1024 * 1024 {
             return Err(Error::ProgramRejected {
                 reason: "archive exceeds the kernel upload bound",
@@ -183,17 +289,28 @@ impl Client {
         }
         let expected_len = program.archive_bytes();
         let expected_sha = program.archive_sha256();
-        let file =
-            tokio::task::spawn_blocking(move || prepare_archive(&path, expected_len, expected_sha))
-                .await
-                .map_err(|_| Error::ManagedFailure {
-                    reason: "archive verification worker did not complete",
-                })??;
-        let _guard = self.connection.mutation_lock.lock().await;
-        self.system_status().await?;
+        tokio::task::spawn_blocking(move || prepare_archive(&path, expected_len, expected_sha))
+            .await
+            .map_err(|_| Error::ManagedFailure {
+                reason: "archive verification worker did not complete",
+            })?
+    }
+
+    pub(crate) async fn lock_for_kernel_upgrade(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.connection.mutation_lock.lock().await
+    }
+
+    pub(crate) async fn upload_prepared_kernel_archive(
+        &self,
+        file: File,
+        program: &OfficialProgram,
+        progress: Option<&UpgradeProgress>,
+        context: Option<&OperationContext>,
+    ) -> Result<()> {
+        let operation = "upload fixed kernel upgrade";
         let part = reqwest::multipart::Part::stream_with_length(
             reqwest::Body::from(tokio::fs::File::from_std(file)),
-            expected_len,
+            program.archive_bytes(),
         )
         .file_name(program.archive_filename().to_owned());
         let request = self
@@ -205,8 +322,11 @@ impl Client {
             )
             .header("X-API-Key", self.connection.key.header())
             .multipart(reqwest::multipart::Form::new().part("file", part));
+        if let Some(context) = context {
+            context.phase(OperationPhase::Submitting);
+        }
         let (status, body) = self
-            .send_upgrade(operation, request, true, progress.as_ref())
+            .send_upgrade(operation, request, true, progress)
             .await?;
         acknowledge(operation, status, body)
     }
@@ -288,6 +408,33 @@ impl Client {
                 UpgradeOutcome::Acknowledged
             }
         })
+    }
+}
+
+pub(crate) fn retry_delay(operation_id: [u8; 16]) -> Duration {
+    Duration::from_millis(5 + u64::from(operation_id[0] & 0x0f))
+}
+
+pub(crate) fn retryable_read(error: &Error) -> bool {
+    use std::{error::Error as _, io::ErrorKind};
+    match error {
+        Error::Timeout { .. } => true,
+        Error::Transport { source, .. } if source.is_connect() => {
+            let mut cause = source.source();
+            while let Some(error) = cause {
+                if let Some(io) = error.downcast_ref::<std::io::Error>() {
+                    return matches!(
+                        io.kind(),
+                        ErrorKind::ConnectionRefused
+                            | ErrorKind::ConnectionReset
+                            | ErrorKind::ConnectionAborted
+                    );
+                }
+                cause = error.source();
+            }
+            false
+        }
+        _ => false,
     }
 }
 

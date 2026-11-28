@@ -265,6 +265,23 @@ impl UpgradeAttempt {
         })
     }
 
+    pub(crate) fn repeat_read(&self) -> Self {
+        debug_assert!(self.receipt.action.is_query());
+        Self {
+            deadline: self.deadline,
+            start: self.start,
+            receipt: self.receipt.clone(),
+            progress: UpgradeProgress(Arc::new(Mutex::new(Progress {
+                dispatch: UpgradeDispatch::Preparing,
+                previous_program_sha256: None,
+            }))),
+        }
+    }
+
+    pub(crate) fn operation_id(&self) -> [u8; 16] {
+        self.receipt.operation_id
+    }
+
     pub(crate) fn set_owner_generation(&mut self, generation: [u8; 32]) {
         self.receipt.owner_generation = Some(generation);
     }

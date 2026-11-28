@@ -15,6 +15,61 @@ authentication, configuration-schema or platform checks. Startup compares actual
 CLI and authenticated management versions. A successful version change does not
 establish compatibility with every previous database format.
 
+## Install and verify a fixed kernel
+
+Select a locally available official archive and its matching catalog entry.
+The archive must stay unchanged while the SDK reads it. Use a dedicated
+managed executable and keep a normal stopped-state backup before upgrading.
+
+`install_kernel_upgrade` submits at most one upload. It waits for the original
+owner to exit and verifies the executable on disk against the target digest.
+A verified installation can be reported even if the upload reply was lost.
+The report retains both the original request and the later disk observation.
+This call starts no SDK-owned process. The kernel can request its own restart
+as part of its upgrade procedure.
+
+`upgrade_kernel_and_wait_ready` adds permission to start the verified program
+on the same private state. Its readiness report verifies the target digest,
+version and device identity. If the target file was already installed and the
+same instance was ready, the SDK skips both the upload and startup. Verify
+application-specific files or migrations separately.
+
+```rust,no_run
+# async fn install(core: &verysync_sidecar::ManagedInstance,
+#     archive: std::path::PathBuf, target: &verysync_sidecar::OfficialProgram)
+#     -> verysync_sidecar::Result<()> {
+use std::time::Duration;
+use verysync_sidecar::{KernelInstallationOutcome, OperationOptions};
+
+let report = core
+    .install_kernel_upgrade(archive, target, OperationOptions::new(Duration::from_secs(45)))
+    .await?;
+println!("{}", report.outcome);
+if !matches!(
+    report.outcome,
+    KernelInstallationOutcome::AlreadyInstalled | KernelInstallationOutcome::Installed
+) {
+    // Present the specific original or verification error when available.
+    if let Some(error) = report.verification_error.as_ref()
+        .or_else(|| report.installation.result.as_ref().err())
+    {
+        eprintln!("{error}");
+    }
+}
+# Ok(())
+# }
+```
+
+Set one total timeout with `OperationOptions`. Add
+`ManagedOptions::with_transient_read_retries` to permit one extra read of the
+running version and device after a recognized transient failure. For the
+standalone `Client::query_kernel_upgrade`, set the same preference on the
+client handle. `OperationOptions::without_read_retry` disables it for one
+call. Legacy upgrade methods retain their original behavior. To stop waiting,
+pass a cancellation channel with `cancel_wait_on` and send `true`. The
+returned report says how far the SDK got. The native operation may continue
+after an upload was dispatched, so inspect the report before trying again.
+
 ## Stop, snapshot and select a program
 
 `restart_with_program` normally stops the owned tree, retains the explicit new

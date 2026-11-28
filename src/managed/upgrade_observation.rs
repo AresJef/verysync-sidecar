@@ -79,9 +79,18 @@ impl ManagedInstance {
         target: &OfficialProgram,
         deadline: Instant,
     ) -> Result<UpgradeObservationScope> {
+        self.bind_upgrade_position(target, deadline, false).await
+    }
+
+    pub(super) async fn bind_upgrade_position(
+        &self,
+        target: &OfficialProgram,
+        deadline: Instant,
+        accept_current: bool,
+    ) -> Result<UpgradeObservationScope> {
         let target = fixed_program_digest(target, &self.client().instance().version)?;
         let previous = self.program_info().sha256;
-        if previous == target {
+        if previous == target && !accept_current {
             return Err(Error::InvalidConfiguration {
                 reason: "the candidate executable must differ from the previous executable",
             });
@@ -126,6 +135,16 @@ impl ManagedInstance {
         receipt: &UpgradeReceipt,
         timeout: Duration,
     ) -> Result<UpgradeProgramObservation> {
+        self.observe_bound_upgrade_program(receipt, timeout, false)
+            .await
+    }
+
+    pub(super) async fn observe_bound_upgrade_program(
+        &self,
+        receipt: &UpgradeReceipt,
+        timeout: Duration,
+        include_acknowledged: bool,
+    ) -> Result<UpgradeProgramObservation> {
         use UpgradeProgramMatch::*;
         use UpgradeProgramUncertainty::*;
 
@@ -144,7 +163,9 @@ impl ManagedInstance {
             report.observed_at = SystemTime::now();
             Ok(report)
         };
-        if outcome != UpgradeOutcome::Unknown {
+        if outcome != UpgradeOutcome::Unknown
+            && !(include_acknowledged && outcome == UpgradeOutcome::Acknowledged)
+        {
             return finish(report, Unconfirmed(OriginalOutcomeIsKnown));
         }
         let Some(scope) = receipt.observation_scope.clone() else {

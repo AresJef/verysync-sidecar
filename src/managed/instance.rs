@@ -160,6 +160,11 @@ impl ManagedInstance {
                     reason: "management version differs from the selected program's CLI version",
                 });
             }
+            let client = if options.transient_read_retries {
+                client.with_transient_read_retries()
+            } else {
+                client
+            };
             committed.store(true, Ordering::Release);
             Ok(Self {
                 options,
