@@ -1101,6 +1101,22 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
         report.before,
         Some(verysync_sidecar::FilePriorityState::Waiting)
     );
+    let selected_positions = |page: &verysync_sidecar::NeedPage| {
+        json!({
+            "queued":page.queued.iter().position(|item|item.name==target),
+            "in_progress":page.progress.iter().any(|item|item.name==target),
+            "outside_active_queue":page.rest.iter().any(|item|item.name==target),
+        })
+    };
+    println!(
+        "native priority selected-file observations: {}",
+        json!({
+            "starting_queue":selected_positions(&need),
+            "original_prio_reply":report.original.as_ref().ok().and_then(Option::as_ref).map(selected_positions),
+            "later_independent_need":report.current_need.as_ref().map(selected_positions),
+            "readback_completed":report.completion()==verysync_sidecar::OperationCompletion::Completed
+        })
+    );
     assert_eq!(
         report.completion(),
         verysync_sidecar::OperationCompletion::Completed,

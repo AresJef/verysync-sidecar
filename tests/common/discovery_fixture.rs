@@ -27,7 +27,9 @@ impl DiscoveryFixture {
     ) -> TestResult<Self> {
         tokio::task::spawn_blocking(move || -> TestResult<Self> {
             let root = tempfile::Builder::new().prefix("vsds-").tempdir()?;
-            let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+            let interpreter = std::env::var_os("VERYSYNC_TEST_PYTHON")
+                .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into());
+            let mut command = Command::new(interpreter);
             command
                 .arg(
                     Path::new(env!("CARGO_MANIFEST_DIR"))

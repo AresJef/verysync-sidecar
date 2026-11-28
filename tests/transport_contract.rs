@@ -7708,71 +7708,96 @@ async fn file_priority_workflow_observes_delayed_queue_change_after_one_post() -
             serde_json::json!({"page":1,"perpage":20,"queued":queue,"rest":[],"progress":[]}),
         )
     };
-    let receiver = ScriptedServer::start(vec![
-        version(),
-        status(), // connection
-        version(),
-        status(),
-        status(),
-        folder(), // preflight
-        status(),
-        folder(),
-        need(false), // original queue
-        folder(),
-        status(),   // recheck the target before the write
-        need(true), // one successful original POST with its own page
-        folder(),
-        status(),
-        status(),
-        folder(),
-        need(false),
-        folder(),
-        status(), // later queue still waiting
-        folder(),
-        status(),
-        status(),
-        folder(),
-        need(true),
-        folder(),
-        status(), // verified delayed head
-    ])
-    .await?;
-    let client = Client::connect(receiver.options()?).await?;
-    let report = client
-        .prioritize_file_and_verify(
-            &FolderId::parse("reviewed")?,
-            &TargetPath::remote(verysync_sidecar::PathStyle::Unix, "selected.bin")?,
-            ListPage::new(1, 20)?,
-            OperationOptions::new(Duration::from_secs(8)),
-        )
-        .await?;
-    assert_eq!(report.before, Some(FilePriorityState::Waiting));
-    assert_eq!(
-        report.completion(),
-        OperationCompletion::Completed,
-        "{report:?}"
-    );
-    assert_eq!(report.current, Some(FilePriorityState::FirstQueued));
-    assert!(report.write.dispatched && report.write.response_complete);
-    assert_eq!(
-        report.original?.expect("original selected file").queued[0].name,
-        "selected.bin"
-    );
-    let requests = receiver.finish().await?;
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|r| r.starts_with("POST /prefix/rest/db/prio?"))
-            .count(),
-        1
-    );
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|r| r.starts_with("GET /prefix/rest/db/need?"))
-            .count(),
-        3
-    );
-    println!("file priority: one original POST, first independent page still waiting, second independent page confirmed the selected file at the queue head");
+    for (label, ack_status, later_pages, expected_state, expected_completion) in [
+        (
+            "delayed",
+            200,
+            vec![false, true],
+            Some(FilePriorityState::FirstQueued),
+            OperationCompletion::Completed,
+        ),
+        (
+            "still waiting",
+            200,
+            vec![false; 4],
+            Some(FilePriorityState::Waiting),
+            OperationCompletion::GoalNotMet,
+        ),
+        ("denied", 403, vec![], None, OperationCompletion::GoalNotMet),
+    ] {
+        let mut replies = vec![
+            version(),
+            status(), // connect
+            version(),
+            status(),
+            status(),
+            folder(), // preflight
+            status(),
+            folder(),
+            need(false), // original queue
+            folder(),
+            status(), // recheck the target before the write
+            Reply {
+                status: ack_status,
+                ..need(true)
+            }, // one original POST with its own reply
+        ];
+        for &selected_is_first in &later_pages {
+            replies.extend([
+                folder(),
+                status(),
+                status(),
+                folder(),
+                need(selected_is_first),
+                folder(),
+                status(),
+            ]);
+        }
+        let receiver = ScriptedServer::start(replies).await?;
+        let client = Client::connect(receiver.options()?).await?;
+        let report = client
+            .prioritize_file_and_verify(
+                &FolderId::parse("reviewed")?,
+                &TargetPath::remote(verysync_sidecar::PathStyle::Unix, "selected.bin")?,
+                ListPage::new(1, 20)?,
+                OperationOptions::new(Duration::from_secs(8)),
+            )
+            .await?;
+        assert_eq!(report.before, Some(FilePriorityState::Waiting));
+        assert_eq!(
+            report.completion(),
+            expected_completion,
+            "{label}: {report:?}"
+        );
+        assert_eq!(report.current, expected_state, "{label}");
+        assert!(report.write.dispatched && report.write.response_complete);
+        assert_eq!(report.write.status, Some(ack_status));
+        if ack_status == 403 {
+            assert!(matches!(report.original, Err(Error::AccessDenied { .. })));
+        } else {
+            assert_eq!(
+                report.original?.expect("original selected file").queued[0].name,
+                "selected.bin"
+            );
+        }
+        let requests = receiver.finish().await?;
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("POST /prefix/rest/db/prio?"))
+                .count(),
+            1,
+            "{label}"
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("GET /prefix/rest/db/need?"))
+                .count(),
+            1 + later_pages.len(),
+            "{label}"
+        );
+        println!("file priority case {label}: one original POST, {} qualified observations after the reply", later_pages.len());
+    }
     Ok(())
 }

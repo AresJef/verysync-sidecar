@@ -22,6 +22,17 @@
   compare the current executable with the trusted old and target digests.
 - The managed shutdown example can observe the original process within the
   caller's remaining time after one shutdown request.
+- Use `install_kernel_upgrade` to check the installed executable and
+  `upgrade_kernel_and_wait_ready` when you also need the managed instance
+  to start and become ready. An opt-in policy can repeat selected transient
+  reads within the original deadline. Installation remains a single request.
+- Use the [SDK operations guide](docs/public/sdk-operations.md) to find the
+  operation for a folder, device, file, account, or Local Sync job. Reports
+  keep the original reply separate from the current state. Delivery checks
+  can compare the expected length and SHA-256 at each authorized receiver.
+- Verify regular-file transfer and historical restore by content. An explicit
+  download option can preserve a managed partial file across a transport
+  interruption and resume from a checked offset when the source still matches.
 
 ## 0.1.1
 

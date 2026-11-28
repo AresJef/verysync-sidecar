@@ -374,9 +374,17 @@ async fn verified_download_native_resumes_only_matching_versions() -> TestResult
                     report.completed.as_ref().map(|r| (r.bytes, r.sha256)),
                     Some((TOTAL, expected))
                 );
-                assert_eq!(
-                    resource_faults::verify_pattern(&destination, &pattern, TOTAL)?,
-                    (TOTAL, expected)
+                let destination_file = resource_faults::verify_pattern(&destination, &pattern, TOTAL)?;
+                let source_file = resource_faults::verify_pattern(&source, &pattern, TOTAL)?;
+                assert_eq!(destination_file, source_file);
+                assert_eq!(source_file, (TOTAL, expected));
+                let hash = |bytes: &[u8; 32]| {
+                    bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+                };
+                println!(
+                    "Verified single-file effect: case={label} {}",
+                    serde_json::json!({"source": {"bytes":source_file.0,"sha256":hash(&source_file.1)},
+                        "destination": {"bytes":destination_file.0,"sha256":hash(&destination_file.1)}})
                 );
             } else {
                 assert!(!destination.exists());
