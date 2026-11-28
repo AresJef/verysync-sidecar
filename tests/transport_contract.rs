@@ -7519,3 +7519,164 @@ async fn native_error_envelopes_require_objects_not_struct_shaped_arrays() -> Te
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn delivery_workflow_keeps_one_scan_when_the_receiver_denies_post_write_readback(
+) -> TestResult {
+    use verysync_sidecar::{
+        DeliveryBatch, DeliveryEvidenceSource, DeliveryFile, DeliveryFileOutcome,
+        DeliveryVerification, DeviceId, FolderId, OperationCompletion, OperationOptions,
+    };
+    let receiver_id = ID.replacen('A', "B", 1);
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let source_status = || Reply::json(serde_json::json!({"myID":ID,"startTime":"private-sender"}));
+    let receiver_status =
+        || Reply::json(serde_json::json!({"myID":receiver_id,"startTime":"private-receiver"}));
+    let folders = || {
+        Reply::json(serde_json::json!({"folders":[{
+            "id":"source","label":"synthetic sender","path":"/source","paused":false,
+            "devices":[{"deviceID":receiver_id}]
+        }]}))
+    };
+    let receiver_folders = || {
+        Reply::json(serde_json::json!({"folders":[{
+            "id":"recipient","label":"synthetic receiver","path":"/recipient","paused":false
+        }]}))
+    };
+    let volumes = || {
+        Reply::json(serde_json::json!([{"id":"owned","path":"/","name":"private","kind":"local"}]))
+    };
+    let completion = || Reply::json(serde_json::json!({}));
+    let file = || {
+        Reply::json(serde_json::json!({
+            "path":"/source","name":"selected.bin","size":5,"mode":420,"modified":"native","isDir":false,
+            "checksums":{"sha256":"11".repeat(32)}
+        }))
+    };
+    let missing = || Reply {
+        status: 404,
+        ..completion()
+    };
+    let denied = || Reply {
+        status: 403,
+        ..completion()
+    };
+    let sender = ScriptedServer::start(vec![
+        version(),
+        source_status(), // connection
+        source_status(), // scan generation
+        version(),
+        source_status(),
+        folders(), // admit source
+        source_status(),
+        folders(),
+        completion(), // preflight source progress
+        version(),
+        source_status(),
+        folders(), // dispatch admission and associations
+        folders(),
+        source_status(),
+        volumes(), // initial bound source mount
+        source_status(),
+        file(), // file length and digest
+        folders(),
+        source_status(),
+        volumes(),
+        folders(),
+        source_status(), // final write guards
+        completion(),    // original scan reply
+        source_status(), // recheck generation
+        version(),
+        source_status(),
+        folders(), // post-write admission
+        source_status(),
+        folders(),
+        completion(),    // post-write source progress
+        source_status(), // recheck generation after observation
+    ])
+    .await?;
+    let receiver = ScriptedServer::start(vec![
+        version(),
+        receiver_status(), // connection
+        version(),
+        receiver_status(),
+        receiver_status(), // read admission and original generation
+        receiver_folders(),
+        receiver_status(),
+        volumes(),
+        receiver_status(),
+        missing(), // receiving file is genuinely absent in the first snapshot
+        receiver_folders(),
+        receiver_status(),
+        volumes(),
+        version(),
+        receiver_status(),
+        receiver_status(), // retained receiver identity/scope
+        denied(),          // complete readback rejection after the sender was already answered
+    ])
+    .await?;
+    let source = Client::connect(sender.options()?).await?;
+    let target = Client::connect(receiver.options()?).await?;
+    let target_id = DeviceId::parse(&receiver_id)?;
+    let batch = DeliveryBatch::new(
+        DeviceId::parse(ID)?,
+        FolderId::parse("source")?,
+        vec![DeliveryFile::new("selected.bin", 5, [0x11; 32])?],
+        [(target_id.clone(), FolderId::parse("recipient")?)],
+    )?;
+    let report = source
+        .scan_delivery_batch_and_verify(
+            &batch,
+            &[&target],
+            &[],
+            std::time::SystemTime::now(),
+            DeliveryVerification::RequireReceiverReads,
+            OperationOptions::new(Duration::from_secs(10)),
+        )
+        .await?;
+    assert_eq!(
+        report.completion(),
+        OperationCompletion::Unconfirmed,
+        "{report:#?}"
+    );
+    assert!(report.write.dispatched && report.write.response_complete);
+    assert_eq!(
+        report
+            .original
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map(|ack| ack.status()),
+        Some(200)
+    );
+    let first = &report.before.recipients[&target_id].files[0];
+    assert_eq!(first.outcome, DeliveryFileOutcome::Differs);
+    assert_eq!(
+        first.evidence[0].source,
+        DeliveryEvidenceSource::RecipientRead
+    );
+    let latest = &report
+        .observed
+        .as_ref()
+        .ok_or("no post-write receiver observation")?
+        .recipients[&target_id];
+    assert!(matches!(
+        latest.read_error,
+        Some(Error::AccessDenied { .. })
+    ));
+    assert_eq!(latest.files[0].outcome, DeliveryFileOutcome::Unobserved);
+    let sent = sender.finish().await?;
+    let received = receiver.finish().await?;
+    assert_eq!(
+        sent.iter().filter(|line| line.starts_with("POST ")).count(),
+        1
+    );
+    assert!(sent[22].starts_with("POST /prefix/rest/db/scan?folder=source&sub=selected.bin "));
+    assert!(received
+        .last()
+        .is_some_and(|line| line.starts_with("GET /prefix/rest/system/version ")));
+    assert!(received.iter().all(|line| line.starts_with("GET ")));
+    println!("delivery verification: native-shaped sender replied HTTP 200 to exactly one scan, initial receiver observation proved absence, later receiver HTTP 403 left delivery unconfirmed");
+    Ok(())
+}

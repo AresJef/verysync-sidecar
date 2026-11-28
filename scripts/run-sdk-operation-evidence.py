@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import subprocess
@@ -21,6 +22,11 @@ ISOLATED_CASES = {
         ("--allow-private-discovery",),
     ("upgrade_engine", "stopped_owner_cli_detailed_records_check_provider_and_url_exits"):
         ("--allow-upgrade-metadata", "--serve-pinned-upgrade-archive"),
+}
+RUNNERS = {
+    f"{system}-{arch}-standard": (actual_system, actual_arch)
+    for system, actual_system in (("linux", "Linux"), ("macos", "Darwin"), ("windows", "Windows"))
+    for arch, actual_arch in (("amd64", "AMD64"), ("arm64", "ARM64"))
 }
 STARTED = re.compile(r"^test ([A-Za-z0-9_:]+) \.\.\.")
 TOTAL = re.compile(r"^test result: ok\. (\d+) passed; 0 failed; 0 ignored;")
@@ -149,9 +155,30 @@ def bind_consumer(args):
     return present, package_record
 
 
+def runner_identity(args):
+    uname = platform.uname()
+    arch = {"x86_64": "AMD64", "amd64": "AMD64",
+            "arm64": "ARM64", "aarch64": "ARM64"}.get(uname.machine.lower())
+    if args.platform and (uname.system, arch) != RUNNERS[args.platform]:
+        raise ValueError(f"{args.platform} does not match the actual runner: {uname.system} {uname.machine}")
+    if uname.system == "Darwin":
+        version = {"macos": platform.mac_ver()[0], "kernel_release": uname.release}
+    elif uname.system == "Windows":
+        version = {"win32": platform.win32_ver(), "edition": platform.win32_edition()}
+    else:
+        version = {"release": platform.freedesktop_os_release(), "kernel_release": uname.release}
+    rust = subprocess.check_output(["rustc", "+" + args.toolchain, "-vV"], text=True,
+                                   timeout=30).splitlines()
+    return {"label": args.platform, "system": uname.system, "architecture": arch,
+            "actual_machine": uname.machine, "version": version, "os_build": uname.version,
+            "rust": rust, "hosted_image": os.environ.get("ImageOS"),
+            "hosted_image_version": os.environ.get("ImageVersion")}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--toolchain", required=True)
+    parser.add_argument("--platform", choices=sorted(RUNNERS))
     for flag in ("output", "consumer", "package-identity", "consumer-identity", "crate"):
         parser.add_argument("--" + flag, required=True, type=Path)
     parser.add_argument("--only", action="append", default=[], metavar="TEST_TARGET",
@@ -161,6 +188,7 @@ def main():
         setattr(args, name, getattr(args, name).resolve())
     contract_path, identity = bind_consumer(args)
     contract = read_contract(contract_path)
+    host = runner_identity(args)
     args.output.mkdir(mode=0o700, parents=True)
     listings = args.output / "listings"
     listings.mkdir()
@@ -216,7 +244,7 @@ def main():
     report = {
         "source": identity["source"], "tree": identity["tree"], "version": identity["version"],
         "crate_sha256": identity["candidate_crate_sha256"], "contract_sha256": sha256(contract_path),
-        "toolchain": args.toolchain, "job_sha": os.environ.get("GITHUB_SHA"),
+        "toolchain": args.toolchain, "host": host, "job_sha": os.environ.get("GITHUB_SHA"),
         "run_id": os.environ.get("GITHUB_RUN_ID"), "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
         "selected_targets": args.only, "complete_groups": complete, "errors": errors,
         "named_tests_passed": len(observed), "operation_groups": records,

@@ -91,10 +91,16 @@ async fn native_receive_encrypted_group_keeps_registration_and_peer_setting() ->
     let synthetic_password = "private isolated receive-encrypted fixture password";
     let encryption = sender
         .client()
-        .set_folder_peer_encryption_password(&send.id, &receiver_id, Some(synthetic_password))
+        .change_folder_peer_and_verify(
+            &send.id,
+            &receiver_id,
+            FolderPeerChange::EncryptionPassword(Some(synthetic_password)),
+            OperationOptions::new(Duration::from_secs(15)),
+        )
         .await?;
-    let retained =
-        encryption.requested_password_matches && encryption.password_is_set == Some(true);
+    assert!(encryption.write.dispatched && encryption.write.response_complete);
+    let retained = encryption.completion() == OperationCompletion::Completed
+        && encryption.password_is_set == Some(true);
     let sample = b"isolated source cleartext sample";
     let fixture = sample.repeat(4096);
     let name = "contains-plain-source.bin";

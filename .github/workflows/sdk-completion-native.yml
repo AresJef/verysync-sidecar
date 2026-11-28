@@ -321,6 +321,7 @@ jobs:
         if: always() && steps.external_consumer.outcome == 'success' && steps.storage_peers.outcome == 'success'
         run: |
           python scripts/run-sdk-operation-evidence.py --toolchain "$TEST_TOOLCHAIN" \
+            --platform "${{ matrix.package }}" \
             --consumer "$RUNNER_TEMP/sdk-upgrade-consumer/consumer" \
             --consumer-identity "$RUNNER_TEMP/sdk-upgrade-evidence/consumer.json" \
             --package-identity "$RUNNER_TEMP/sdk-completion-package/package.json" \
