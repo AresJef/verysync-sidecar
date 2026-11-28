@@ -42,7 +42,7 @@ jobs:
     name: Public API compatibility with the published crate and SDK baseline
     needs: package
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -87,6 +87,34 @@ jobs:
             --baseline "$RUNNER_TEMP/sdk-rc10-target/package/verysync-sidecar-0.1.2-rc.10.crate" \
             --baseline-identity sdk-completion-rc10 --checker "$VERYSYNC_SEMVER_CHECKER" \
             --cargo "$(command -v cargo)" --parent "$RUNNER_TEMP" --evidence "$RUNNER_TEMP/sdk-api/rc10"
+      - name: Run independently unpacked examples under all three feature profiles
+        if: always() && env.VERYSYNC_SEMVER_CHECKER != ''
+        run: |
+          set -o pipefail
+          for profile in minimal default all; do
+            proof="$RUNNER_TEMP/sdk-api/profiles/$profile"
+            settings="$RUNNER_TEMP/sdk-example-$profile.env"
+            python scripts/prepare-control-reliability-consumer.py --toolchain 1.85.0 \
+              --candidate "$RUNNER_TEMP/sdk-completion-package/candidate.crate" \
+              --candidate-identity "$RUNNER_TEMP/sdk-completion-package/package.json" \
+              --work "$RUNNER_TEMP/sdk-example-$profile" --evidence "$proof" \
+              --github-env "$settings" --profile "$profile"
+            set -a
+            source "$settings"
+            set +a
+            for program in "$VERYSYNC_TEST_RECOVERY_EXAMPLE" "$VERYSYNC_TEST_OBSERVATION_EXAMPLE" "$VERYSYNC_TEST_PREVIEW_EXAMPLE" "$VERYSYNC_TEST_PREFLIGHT_EXAMPLE" "$VERYSYNC_TEST_MANAGED_EXAMPLE"; do
+              "$program" --help | tee "$proof/$(basename "$program").help"
+            done
+            cargo +1.85.0 test --locked --offline --features engine-tests --test control_reliability_engine \
+              package_consumer_distinguishes_acknowledgement_loss_and_later_changes -- --nocapture \
+              | tee "$proof/control-recovery.log"
+            cargo +1.85.0 test --locked --offline --test control_preview_contract \
+              package_consumer_requires_approval_before_one_scoped_write -- --nocapture \
+              | tee "$proof/control-preview.log"
+            python scripts/check-control-corrections-output.py \
+              --listener "$VERYSYNC_TEST_RECOVERY_EXAMPLE" --preview "$VERYSYNC_TEST_PREVIEW_EXAMPLE" \
+              | tee "$proof/control-corrections-output.jsonl"
+          done
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
@@ -103,17 +131,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {package: linux-amd64-standard, runner: ubuntu-24.04, rust: x86_64-unknown-linux-gnu}
-          - {package: linux-arm64-standard, runner: ubuntu-24.04-arm, rust: aarch64-unknown-linux-gnu}
-          - {package: macos-amd64-standard, runner: macos-15-intel, rust: x86_64-apple-darwin}
-          - {package: macos-arm64-standard, runner: macos-15, rust: aarch64-apple-darwin}
-          - {package: windows-amd64-standard, runner: windows-2022, rust: x86_64-pc-windows-msvc}
-          - {package: windows-arm64-standard, runner: windows-11-arm, rust: aarch64-pc-windows-msvc}
+          - {package: linux-amd64-standard, runner: ubuntu-24.04, rust: x86_64-unknown-linux-gnu, observe: '1'}
+          - {package: linux-arm64-standard, runner: ubuntu-24.04-arm, rust: aarch64-unknown-linux-gnu, observe: '1'}
+          - {package: macos-amd64-standard, runner: macos-15-intel, rust: x86_64-apple-darwin, observe: '1'}
+          - {package: macos-arm64-standard, runner: macos-15, rust: aarch64-apple-darwin, observe: '1'}
+          - {package: windows-amd64-standard, runner: windows-2022, rust: x86_64-pc-windows-msvc, observe: '0'}
+          - {package: windows-arm64-standard, runner: windows-11-arm, rust: aarch64-pc-windows-msvc, observe: '0'}
     defaults:
       run:
         shell: bash
     env:
       TEST_TOOLCHAIN: 1.85.0-${{ matrix.rust }}
+      VERYSYNC_TEST_REQUIRE_DIRECT_REQUEST_CAPTURE: ${{ matrix.observe }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -146,6 +175,14 @@ jobs:
             --crate "$RUNNER_TEMP/sdk-completion-package/candidate.crate" \
             --sdk-completion \
             | tee "$RUNNER_TEMP/sdk-upgrade-evidence/consumer.json"
+      - name: Build the exact examples for independent application processes
+        id: external_examples
+        run: |
+          python scripts/prepare-control-reliability-consumer.py --toolchain "$TEST_TOOLCHAIN" \
+            --candidate "$RUNNER_TEMP/sdk-completion-package/candidate.crate" \
+            --candidate-identity "$RUNNER_TEMP/sdk-completion-package/package.json" \
+            --work "$RUNNER_TEMP/sdk-example-client" \
+            --evidence "$RUNNER_TEMP/sdk-upgrade-evidence/example-client" --github-env "$GITHUB_ENV"
       - name: Verify the query and retry contract from the unpacked candidate
         run: |
           set -o pipefail
@@ -375,7 +412,8 @@ jobs:
             --sdk-completion-consumer "$RUNNER_TEMP/sdk-upgrade-consumer/consumer" \
             --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/local-sync-controls-native"
       - name: Bind all 74 operations to exact tests of the external crate
-        if: always() && steps.external_consumer.outcome == 'success' && steps.storage_peers.outcome == 'success'
+        if: always() && steps.external_consumer.outcome == 'success' &&
+          steps.external_examples.outcome == 'success' && steps.storage_peers.outcome == 'success'
         run: |
           python scripts/run-sdk-operation-evidence.py --toolchain "$TEST_TOOLCHAIN" \
             --platform "${{ matrix.package }}" \

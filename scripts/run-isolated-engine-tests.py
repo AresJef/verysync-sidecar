@@ -160,7 +160,7 @@ def mount_namespace_identity():
     return os.readlink("/proc/self/ns/mnt")
 
 
-def isolate_linux_browser(command, evidence_dir, env):
+def isolate_linux_browser(command, evidence_dir, env, cwd=None):
     if env.get("GITHUB_ACTIONS") != "true" or env.get("RUNNER_OS") != "Linux" or os.getuid() == 0:
         raise ValueError("browser mount isolation requires an unprivileged isolated GitHub Linux VM")
     runner_temp = Path(env["RUNNER_TEMP"]).resolve(strict=True)
@@ -181,7 +181,7 @@ def isolate_linux_browser(command, evidence_dir, env):
                "VERYSYNC_TEST_BROWSER_HOLD", "VERYSYNC_TEST_BROWSER_ISOLATION", "BROWSER"}
     plan = {"uid": os.getuid(), "gid": os.getgid(), "groups": os.getgroups(), "caller_pid": os.getpid(),
             "parent_namespace": mount_namespace_identity(), "invalid_source": str(invalid),
-            "command": command, "cwd": str(Path(__file__).resolve().parents[1]),
+            "command": command, "cwd": str(cwd or Path(__file__).resolve().parents[1]),
             "receipt": str(evidence_dir / "browser-mount-namespace.json"),
             "env": {key: value for key, value in env.items() if key in allowed}}
     payload = evidence_dir / "private-browser-mount-plan.json"
@@ -191,10 +191,10 @@ def isolate_linux_browser(command, evidence_dir, env):
             sys.executable, str(Path(__file__).with_name("browser-linux-namespace.py")), str(payload)]
 
 
-def isolate_browser_command(command, evidence_dir, env):
+def isolate_browser_command(command, evidence_dir, env, cwd=None):
     """Test-only pinned macOS native Chrome rejection and owned open fallback."""
     if sys.platform == "linux":
-        return isolate_linux_browser(command, evidence_dir, env)
+        return isolate_linux_browser(command, evidence_dir, env, cwd)
     if sys.platform != "darwin":
         raise ValueError("native browser selector isolation not verified on this platform")
     profile = evidence_dir / "browser-exec.sb"
@@ -664,7 +664,7 @@ def main():
                 if args.blocked_upgrade_check:
                     command += ["--ignored"]
                 if args.test_target == "browser_engine":
-                    command = isolate_browser_command(command, args.evidence_dir, env)
+                    command = isolate_browser_command(command, args.evidence_dir, env, args.sdk_completion_consumer)
             else:
                 command = [sys.executable, str(Path(__file__).with_name(f"run-{args.mechanism}-lifetime-probes.py")),
                            "--toolchain", args.toolchain, "--evidence-dir", str(args.evidence_dir / "mechanism")]

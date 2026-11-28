@@ -104,7 +104,26 @@ def verified_lines(log, expected, exit_code):
 def measure_suite(args, kind, suite, cases, fixture_set):
     root = args.output / suite / fixture_set
     log_path = root / (suite.replace("_", "-") + ".log")
-    if kind == "native":
+    if kind == "native" and suite == "browser_engine" and sys.platform == "win32":
+        cargo = shutil.which("cargo")
+        if not cargo or len(cases) != 1 or not cases[0].startswith("actual_windows_native_browser"):
+            raise ValueError("select the one explicit Windows native browser acceptance case")
+        root.parent.mkdir(parents=True, exist_ok=True)
+        command = [sys.executable, str(RUN_NATIVE.with_name("run-windows-browser-tests.py")),
+                   "--toolchain", args.toolchain, "--cargo", cargo, "--evidence-dir", str(root)]
+        code = capture(command, args.consumer, root.parent / (fixture_set + "-runner.log"))
+        receipt = root / "observations.json"
+        windows = json.loads(receipt.read_text(encoding="utf-8"))
+        if (code or not windows["registry_restored"] or not windows["native_sdk_effects_verified"]
+                or not windows["owned_capture_removed_after_exit_and_registry_restore"]
+                or not windows["proxy"]["listener_loopback_only"]):
+            raise ValueError("owned Windows browser effects or registry restoration were not verified")
+        (root / "proxy-observations.json").write_text(json.dumps({
+            "package_consumer": True, "test_target": suite, "exact_cases": cases,
+            "listener_loopback_only": True, "test_exit_code": code,
+            "windows_browser_original_sha256": sha256(receipt),
+        }) + "\n", encoding="utf-8")
+    elif kind == "native":
         command = [
             sys.executable, str(RUN_NATIVE), "--toolchain", args.toolchain, "--test-target", suite,
             "--sdk-completion-consumer", str(args.consumer), "--evidence-dir", str(root),

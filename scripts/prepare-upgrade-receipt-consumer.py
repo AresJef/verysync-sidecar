@@ -48,7 +48,7 @@ def prepare(args):
     test_files = ["upgrade_engine.rs", "upgrade_receipt_contract.rs"]
     if args.sdk_completion:
         test_files.extend((
-            "authentication_engine.rs", "cache_engine.rs", "configuration_engine.rs",
+            "authentication_engine.rs", "browser_engine.rs", "cache_engine.rs", "configuration_engine.rs",
             "control_observation_engine.rs", "control_preview_engine.rs", "control_reliability_engine.rs",
             "devices.rs", "download_engine.rs", "engine_control.rs", "events.rs", "events_contract.rs",
             "file_history_engine.rs", "file_mutation_engine.rs", "file_transfer_engine.rs", "files_engine.rs",

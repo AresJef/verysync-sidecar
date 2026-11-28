@@ -452,7 +452,9 @@ impl Drop for Host {
 async fn inventory(binary: &Path) -> TestResult<Vec<u32>> {
     let binary = binary.to_owned();
     tokio::task::spawn_blocking(move || -> TestResult<_> {
-        let output = Command::new("python3")
+        let python = std::env::var_os("VERYSYNC_TEST_PYTHON")
+            .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into());
+        let output = Command::new(python)
             .arg(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("scripts")
