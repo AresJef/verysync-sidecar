@@ -2,7 +2,7 @@ name: Quality
 
 on:
   push:
-    branches: [main, 'ci/formal-candidate/**']
+    branches: [main, 'ci/formal-candidate/**', 'ci/sdk-completion-full-20261128-p1']
   pull_request:
   workflow_dispatch:
 

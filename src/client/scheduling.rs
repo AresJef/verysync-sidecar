@@ -8,6 +8,7 @@ use crate::{
 };
 use reqwest::{Method, Url};
 use serde::Deserialize;
+use std::time::Duration;
 use tokio::time::Instant;
 impl Client {
     /// Read actual global byte-rate settings, without starting a transfer.
@@ -122,8 +123,10 @@ impl Client {
     }
     /// Prioritize one visible waiting file once and independently read its
     /// current queue position. Use page one with a limit that includes that
-    /// file. An active or first-queued file requires no write. If the file
-    /// leaves the page, check its contents separately.
+    /// file. An active or first-queued file requires no write. After a
+    /// successful reply, read the queue up to four times within the original
+    /// deadline while the selected file is still waiting. If it leaves the
+    /// page, check its contents separately.
     pub async fn prioritize_file_and_verify(
         &self,
         folder: &FolderId,
@@ -182,7 +185,13 @@ impl Client {
                     decode_priority_page(reply.status, reply.body).map(Some)
                 })
                 .await;
+        drop(guard);
         let original = workflow_write_result(WRITE, write, original);
+        let later_reads = if matches!(original, Ok(Some(_))) {
+            4
+        } else {
+            1
+        };
         let refused = write.response_complete
             && matches!(
                 original,
@@ -204,13 +213,24 @@ impl Client {
             context.phase(OperationPhase::Verifying);
             let observed = context
                 .wait(context.deadline, CHECK, async {
-                    self.verify_priority_scope(folder, &path, &generation)
-                        .await?;
-                    let need = self.folder_need(folder, page).await?;
-                    let state = file_priority(&need, relative, page)?;
-                    self.verify_priority_scope(folder, &path, &generation)
-                        .await?;
-                    Ok((state, need))
+                    let interval = Duration::from_millis(250);
+                    let mut remaining_reads = later_reads;
+                    loop {
+                        self.verify_priority_scope(folder, &path, &generation)
+                            .await?;
+                        let need = self.folder_need(folder, page).await?;
+                        let state = file_priority(&need, relative, page)?;
+                        self.verify_priority_scope(folder, &path, &generation)
+                            .await?;
+                        remaining_reads -= 1;
+                        if state != FilePriorityState::Waiting
+                            || remaining_reads == 0
+                            || Instant::now() + interval >= context.deadline
+                        {
+                            return Ok((state, need));
+                        }
+                        tokio::time::sleep(interval).await;
+                    }
                 })
                 .await;
             match observed {
@@ -221,7 +241,6 @@ impl Client {
                 Err(source) => report.observation_error = Some(source),
             }
         }
-        drop(guard);
         context.phase(OperationPhase::Finished);
         Ok(report)
     }

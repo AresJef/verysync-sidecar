@@ -47,6 +47,11 @@ def check(args):
             "1c1f4956aa850b9ff662e07de910c49e0c9320a1",
             "bad8ef3207c34ba0d3078d5a8866df3440aecff9fb25f7d26159077dc9e2e71e",
         ),
+        "sdk-completion-rc10": (
+            "0.1.2-rc.10",
+            "5d2e04f8ed8ce0e0ed5978613ffab10cb26c02ab",
+            "c58684b657e51db3052ac309740e7b84f32f7dce7dfc4ae058cde61590b9759d",
+        ),
     }[args.baseline_identity]
     candidate = json.loads(args.identity.read_text(encoding="utf8"))
     baseline_hash = sha256(args.baseline)
@@ -97,5 +102,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("identity", "baseline", "candidate", "checker", "cargo", "parent", "evidence"):
         parser.add_argument("--" + name, required=True, type=Path)
-    parser.add_argument("--baseline-identity", choices=["0.1.1", "0.1.2-development"], default="0.1.1")
+    parser.add_argument("--baseline-identity", choices=["0.1.1", "0.1.2-development", "sdk-completion-rc10"], default="0.1.1")
     check(parser.parse_args())

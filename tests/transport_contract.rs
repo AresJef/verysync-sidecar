@@ -7680,3 +7680,99 @@ async fn delivery_workflow_keeps_one_scan_when_the_receiver_denies_post_write_re
     println!("delivery verification: native-shaped sender replied HTTP 200 to exactly one scan, initial receiver observation proved absence, later receiver HTTP 403 left delivery unconfirmed");
     Ok(())
 }
+
+#[tokio::test]
+async fn file_priority_workflow_observes_delayed_queue_change_after_one_post() -> TestResult {
+    use verysync_sidecar::{
+        FilePriorityState, FolderId, ListPage, OperationCompletion, OperationOptions, TargetPath,
+    };
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let status =
+        || Reply::json(serde_json::json!({"myID":ID,"startTime":"private-priority-engine"}));
+    let folder = || {
+        Reply::json(
+            serde_json::json!({"folders":[{"id":"reviewed","label":"synthetic","path":"/owned","paused":false}]}),
+        )
+    };
+    let item = |name| serde_json::json!({"name":name,"type":"FILE_INFO_TYPE_FILE","size":5});
+    let need = |first: bool| {
+        let other = item("other.bin");
+        let selected = item("selected.bin");
+        let queue = if first {
+            vec![selected, other]
+        } else {
+            vec![other, selected]
+        };
+        Reply::json(
+            serde_json::json!({"page":1,"perpage":20,"queued":queue,"rest":[],"progress":[]}),
+        )
+    };
+    let receiver = ScriptedServer::start(vec![
+        version(),
+        status(), // connection
+        version(),
+        status(),
+        status(),
+        folder(), // preflight
+        status(),
+        folder(),
+        need(false), // original queue
+        folder(),
+        status(),   // recheck the target before the write
+        need(true), // one successful original POST with its own page
+        folder(),
+        status(),
+        status(),
+        folder(),
+        need(false),
+        folder(),
+        status(), // later queue still waiting
+        folder(),
+        status(),
+        status(),
+        folder(),
+        need(true),
+        folder(),
+        status(), // verified delayed head
+    ])
+    .await?;
+    let client = Client::connect(receiver.options()?).await?;
+    let report = client
+        .prioritize_file_and_verify(
+            &FolderId::parse("reviewed")?,
+            &TargetPath::remote(verysync_sidecar::PathStyle::Unix, "selected.bin")?,
+            ListPage::new(1, 20)?,
+            OperationOptions::new(Duration::from_secs(8)),
+        )
+        .await?;
+    assert_eq!(report.before, Some(FilePriorityState::Waiting));
+    assert_eq!(
+        report.completion(),
+        OperationCompletion::Completed,
+        "{report:?}"
+    );
+    assert_eq!(report.current, Some(FilePriorityState::FirstQueued));
+    assert!(report.write.dispatched && report.write.response_complete);
+    assert_eq!(
+        report.original?.expect("original selected file").queued[0].name,
+        "selected.bin"
+    );
+    let requests = receiver.finish().await?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("POST /prefix/rest/db/prio?"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("GET /prefix/rest/db/need?"))
+            .count(),
+        3
+    );
+    println!("file priority: one original POST, first independent page still waiting, second independent page confirmed the selected file at the queue head");
+    Ok(())
+}

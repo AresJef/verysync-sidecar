@@ -38,6 +38,62 @@ jobs:
           path: ${{ runner.temp }}/sdk-package
           if-no-files-found: error
 
+  api-compatibility:
+    name: Public API compatibility with the published crate and SDK baseline
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v4
+        with:
+          name: sdk-completion-package
+          path: ${{ runner.temp }}/sdk-completion-package
+      - name: Prepare pinned compilers and the exact API checker
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup toolchain install 1.99.1 --profile minimal
+          cargo +1.85.0 fetch --locked
+          python scripts/prepare-api-compatibility-tool.py --parent "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+      - name: Check minimal, default, and all features against the published package
+        run: |
+          curl --fail --silent --show-error --location --max-time 60 \
+            https://static.crates.io/crates/verysync-sidecar/verysync-sidecar-0.1.1.crate \
+            --output "$RUNNER_TEMP/published-0.1.1.crate"
+          python scripts/check-control-candidate-compatibility.py \
+            --candidate "$RUNNER_TEMP/sdk-completion-package/candidate.crate" \
+            --identity "$RUNNER_TEMP/sdk-completion-package/package.json" \
+            --baseline "$RUNNER_TEMP/published-0.1.1.crate" --checker "$VERYSYNC_SEMVER_CHECKER" \
+            --cargo "$(command -v cargo)" --parent "$RUNNER_TEMP" --evidence "$RUNNER_TEMP/sdk-api/published"
+      - name: Check the same profiles against the exact RC10 starting crate
+        if: always() && env.VERYSYNC_SEMVER_CHECKER != ''
+        run: |
+          baseline=5d2e04f8ed8ce0e0ed5978613ffab10cb26c02ab
+          git fetch --no-tags --depth=1 https://github.com/AresJef/verysync-sidecar.git "$baseline"
+          git worktree add --detach "$RUNNER_TEMP/sdk-rc10" "$baseline"
+          trap 'git worktree remove "$RUNNER_TEMP/sdk-rc10"' EXIT
+          (
+            cd "$RUNNER_TEMP/sdk-rc10"
+            cargo +1.85.0 package --locked --offline --no-verify --target-dir "$RUNNER_TEMP/sdk-rc10-target"
+          )
+          python scripts/check-control-candidate-compatibility.py \
+            --candidate "$RUNNER_TEMP/sdk-completion-package/candidate.crate" \
+            --identity "$RUNNER_TEMP/sdk-completion-package/package.json" \
+            --baseline "$RUNNER_TEMP/sdk-rc10-target/package/verysync-sidecar-0.1.2-rc.10.crate" \
+            --baseline-identity sdk-completion-rc10 --checker "$VERYSYNC_SEMVER_CHECKER" \
+            --cargo "$(command -v cargo)" --parent "$RUNNER_TEMP" --evidence "$RUNNER_TEMP/sdk-api/rc10"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: sdk-completion-api-compatibility
+          path: ${{ runner.temp }}/sdk-api
+          if-no-files-found: error
+
   native-upgrade:
     name: SDK upgrade workflow (${{ matrix.package }})
     needs: package
@@ -247,10 +303,11 @@ jobs:
           result=0
           consumer="$RUNNER_TEMP/sdk-upgrade-consumer/consumer"
           while read -r target selector; do
+            evidence_name="${selector%::}"
             python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
               --test-target "$target" --test-filter "$selector" \
               --sdk-completion-consumer "$consumer" \
-              --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/$selector" || result=1
+              --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/$evidence_name" || result=1
           done <<'CASES'
           configuration_engine native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart
           network actual_private_udp_only_peers_and_disabled_tracker_nat_observations
