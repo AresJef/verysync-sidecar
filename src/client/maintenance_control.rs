@@ -334,18 +334,7 @@ impl Client {
         &self,
         levels: &BTreeMap<String, CoreLogLevel>,
     ) -> Result<CoreLogLevelUpdate> {
-        if !(1..=128).contains(&levels.len())
-            || levels.iter().any(|(name, level)| {
-                name.is_empty()
-                    || name.len() > 128
-                    || name.chars().any(char::is_control)
-                    || level.wire().is_none()
-            })
-        {
-            return Err(invalid(
-                "core log update requires bounded existing package names and verified levels",
-            ));
-        }
+        let body = core_log_level_body(levels)?;
         let operation = "set core log levels";
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
@@ -358,15 +347,6 @@ impl Client {
                 "a requested package is absent from active native log levels",
             ));
         }
-        let body: BTreeMap<&str, &str> = levels
-            .iter()
-            .map(|(name, level)| {
-                level
-                    .wire()
-                    .map(|value| (name.as_str(), value))
-                    .ok_or_else(|| invalid("unmodeled core log level cannot be submitted"))
-            })
-            .collect::<Result<_>>()?;
         let url = self
             .connection
             .management_url("rest/system/loglevels", &[])?;
@@ -452,19 +432,54 @@ impl Client {
             .connection
             .request_prepared(operation, request, true)
             .await?;
-        if !bytes.is_empty() {
-            return Err(mutation_error(
-                operation,
-                true,
-                Error::InvalidResponse {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                },
-            ));
-        }
-        Ok(())
+        verify_empty_maintenance_reply(operation, status, &bytes)
     }
 }
 fn invalid(reason: &'static str) -> Error {
     Error::InvalidConfiguration { reason }
+}
+
+pub(super) fn core_log_level_body(
+    levels: &BTreeMap<String, CoreLogLevel>,
+) -> Result<BTreeMap<&str, &str>> {
+    if !(1..=128).contains(&levels.len())
+        || levels.iter().any(|(name, level)| {
+            name.is_empty()
+                || name.len() > 128
+                || name.chars().any(char::is_control)
+                || level.wire().is_none()
+        })
+    {
+        return Err(invalid(
+            "core log update requires bounded existing package names and verified levels",
+        ));
+    }
+    let body: BTreeMap<&str, &str> = levels
+        .iter()
+        .map(|(name, level)| {
+            level
+                .wire()
+                .map(|value| (name.as_str(), value))
+                .ok_or_else(|| invalid("unmodeled core log level cannot be submitted"))
+        })
+        .collect::<Result<_>>()?;
+    Ok(body)
+}
+
+pub(super) fn verify_empty_maintenance_reply(
+    operation: &'static str,
+    status: u16,
+    bytes: &[u8],
+) -> Result<()> {
+    if !bytes.is_empty() {
+        return Err(mutation_error(
+            operation,
+            true,
+            Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes.to_vec()),
+            },
+        ));
+    }
+    Ok(())
 }

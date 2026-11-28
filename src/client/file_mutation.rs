@@ -25,12 +25,7 @@ impl Client {
         if self.optional_resource(path).await?.is_some() {
             return Err(Error::ResourceAlreadyExists);
         }
-        let mut url = self.resource_url("rest/f/api/resources", path)?;
-        // A directory requires native POST with a real trailing URL separator.
-        // PUT is destructive file editing; an encoded slash alone is insufficient.
-        let mut directory = url.path().to_owned();
-        directory.push('/');
-        url.set_path(&directory);
+        let url = resource_directory_url(self.resource_url("rest/f/api/resources", path)?);
         let request = self
             .connection
             .http
@@ -711,7 +706,20 @@ fn removed_children(previous: &ResourceInfo, current: &ResourceInfo) -> Option<u
     Some(before.difference(&after).count())
 }
 
-fn verify_mutation_ack(operation: &'static str, status: u16, body: Vec<u8>) -> Result<()> {
+pub(super) fn resource_directory_url(mut url: url::Url) -> url::Url {
+    // The native POST requires a real trailing URL separator. An encoded slash
+    // is insufficient, and PUT is a different file-editing operation.
+    let mut directory = url.path().to_owned();
+    directory.push('/');
+    url.set_path(&directory);
+    url
+}
+
+pub(super) fn verify_mutation_ack(
+    operation: &'static str,
+    status: u16,
+    body: Vec<u8>,
+) -> Result<()> {
     if body == b"200 OK\n" {
         Ok(())
     } else {

@@ -1058,17 +1058,41 @@ async fn gui_password_sessions_logout_and_api_key_management_are_independent() -
     let password: String = entropy.iter().map(|b| format!("{b:02x}")).collect();
     let credentials = GuiCredentials::new("synthetic-gui-user", password.clone())?;
     let changed = core
-        .set_local_gui_credentials(&credentials, Duration::from_secs(10))
+        .client()
+        .clone()
+        .with_transient_read_retries()
+        .set_local_gui_credentials_and_verify(
+            &credentials,
+            OperationOptions::new(Duration::from_secs(15)),
+        )
         .await?;
-    assert!(changed.username_matches && changed.configuration.password_is_set());
-    assert!(matches!(changed.configuration.mode, GuiAuthMode::Static));
+    assert_eq!(
+        changed.completion(),
+        OperationCompletion::Completed,
+        "{changed:?}"
+    );
+    assert!(changed.write.dispatched && changed.write.response_complete);
+    assert!(changed
+        .configuration
+        .as_ref()
+        .is_some_and(|configuration| configuration.password_is_set()
+            && configuration.mode == GuiAuthMode::Static));
+    assert!((1..=2).contains(&changed.reconnect_attempts));
+    println!(
+        "native_gui_credential_reauthentication attempts={} initial_failure={} decision={:?}",
+        changed.reconnect_attempts,
+        changed.first_reconnect_error.is_some(),
+        changed.retry_decision
+    );
+    let session = changed
+        .login
+        .ok_or("independent verified GUI login missing")??;
     let configured = core.client().configuration().await?;
     assert!(configured.native_document()["gui"]["password"]
         .as_str()
         .is_some_and(|s| s.starts_with("$2") && s != password));
     let login =
         GuiLoginOptions::new(endpoint.clone(), credentials).expected_device_id(identity.clone());
-    let session = GuiSession::login(login.clone()).await?;
     let second = GuiSession::login(login).await?;
     assert_eq!(session.system_status().await?.device_id, identity);
     assert_eq!(session.version().await?.version, "v2.33.2");
@@ -1113,7 +1137,7 @@ async fn gui_password_sessions_logout_and_api_key_management_are_independent() -
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
     root.close()?;
-    println!("native_gui_authentication_effects=14; verified workflow refused original cookie; fresh read before repeated goal prevented a second logout; other session and API key remained usable; fixture removed");
+    println!("native_gui_authentication_effects=14; credential update and separate fresh session verified; verified workflow refused original cookie; fresh read before repeated goal prevented a second logout; other session and API key remained usable; fixture removed");
     Ok(())
 }
 

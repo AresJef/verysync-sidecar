@@ -6,7 +6,8 @@ use reqwest::Method;
 use tokio::time::Instant;
 
 use super::local_sync_control::{
-    decode_local_sync_json, local_sync_control_route, requested_subset,
+    decode_local_sync_json, local_sync_control_route, local_sync_job_patch_body,
+    local_sync_job_patch_matches, requested_subset,
 };
 use super::{mutation_error, workflow_write_result, Client};
 use crate::{
@@ -19,8 +20,9 @@ use crate::{
 use crate::{
     CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncConflictReport,
     LocalSyncConflictResolution, LocalSyncJob, LocalSyncOperationControl, LocalSyncOperationId,
-    LocalSyncRegistrationOutcome, LocalSyncRegistrationReport, LocalSyncRunControlOutcome,
-    LocalSyncRunControlReport, LocalSyncRunId, LocalSyncStatus, OperationOptions,
+    LocalSyncRegistrationChange, LocalSyncRegistrationChangeReport, LocalSyncRegistrationOutcome,
+    LocalSyncRegistrationReport, LocalSyncRunControlOutcome, LocalSyncRunControlReport,
+    LocalSyncRunId, LocalSyncStatus, OperationOptions,
 };
 
 const RUN: &str = "submit the selected Local Sync preview for execution";
@@ -432,10 +434,16 @@ impl Client {
         let mut guard = None;
         let mut write = ManagementWriteEvidence::default();
         let mut before = HashSet::new();
+        let mut generation = None;
         let submission = context
             .wait(deadline, REGISTER, async {
                 context.phase(OperationPhase::Checking);
                 guard = Some(self.connection.mutation_lock.lock().await);
+                self.observe_control_identity().await?;
+                let start =
+                    self.system_status().await?.start_time.ok_or_else(|| {
+                        invalid("the selected engine did not report its start time")
+                    })?;
                 for job in self.local_sync_jobs().await? {
                     if !before.insert(job.job_id.as_str().to_owned()) {
                         return Err(invalid(
@@ -443,13 +451,14 @@ impl Client {
                         ));
                     }
                 }
-                self.system_status().await?;
+                self.require_configuration_generation(&start).await?;
                 let url = self.local_sync_url(&["jobs"], &[])?;
                 if Instant::now() >= deadline {
                     return Err(Error::Timeout {
                         operation: REGISTER,
                     });
                 }
+                generation = Some(start);
                 let outgoing = self
                     .connection
                     .authorized_request(Method::POST, url, Some(&body));
@@ -492,6 +501,10 @@ impl Client {
             context.phase(OperationPhase::Verifying);
             let completion = context
                 .wait(context.deadline, VERIFY, async {
+                    let start = generation.as_deref().ok_or_else(|| {
+                        invalid("the original engine generation was not recorded")
+                    })?;
+                    self.require_configuration_generation(start).await?;
                     if let Ok(accepted) = &report.original {
                         let observed = self.local_sync_job(&accepted.job_id).await?;
                         let outcome = if local_job_matches(&body, &observed)? {
@@ -499,6 +512,7 @@ impl Client {
                         } else {
                             Outcome::CurrentDiffers
                         };
+                        self.require_configuration_generation(start).await?;
                         return Ok((outcome, observed));
                     }
                     let mut latest = HashSet::new();
@@ -525,6 +539,7 @@ impl Client {
                     if !local_job_matches(&body, &observed)? {
                         return Err(Error::ConfigurationChanged);
                     }
+                    self.require_configuration_generation(start).await?;
                     Ok((Outcome::MatchingNewRegistrationObserved, observed))
                 })
                 .await;
@@ -542,6 +557,184 @@ impl Client {
         drop(guard);
         context.phase(OperationPhase::Finished);
         Ok(report)
+    }
+
+    /// Update or remove one reviewed registration and verify that exact ID.
+    /// Reject a changed registration before sending a PUT or DELETE. A
+    /// matching update or absent registration requires no write. Automatic
+    /// execution follows the selected native settings. Removing a job does
+    /// not establish that an existing run stopped or that files were removed.
+    pub async fn change_local_sync_registration_and_verify(
+        &self,
+        change: LocalSyncRegistrationChange<'_>,
+        options: OperationOptions,
+    ) -> Result<LocalSyncRegistrationChangeReport> {
+        const SUBMIT: &str = "change the selected Local Sync job";
+        const READ: &str = "verify the selected Local Sync job";
+        let (expected, patch) = match change {
+            LocalSyncRegistrationChange::Update { expected, patch } => {
+                self.validate_local_sync_job_patch(patch)?;
+                (expected, Some(patch))
+            }
+            LocalSyncRegistrationChange::Remove(expected) => (expected, None),
+        };
+        let id = &expected.job_id;
+        let style = self.folder_path_style()?;
+        expected.side_a.validate_target(style)?;
+        expected.side_b.validate_target(style)?;
+        let snapshot = local_job_document(expected)?;
+        let url = self.local_sync_url(&["jobs", id.as_str()], &[])?;
+        let context = options.start()?;
+        let mut write = Default::default();
+        let mut guard = None;
+        let mut selected = None;
+        let mut unchanged = None;
+        let attempted = context
+            .wait(context.dispatch_deadline(), SUBMIT, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                self.observe_control_identity().await?;
+                let generation =
+                    self.system_status().await?.start_time.ok_or_else(|| {
+                        invalid("the selected engine did not report its start time")
+                    })?;
+                let current = self.read_selected_local_sync_job(id).await?;
+                self.require_configuration_generation(&generation).await?;
+                let Some(current) = current else {
+                    return if patch.is_none() {
+                        unchanged = Some(None);
+                        Ok(None)
+                    } else {
+                        Err(Error::ConfigurationChanged)
+                    };
+                };
+                if local_job_document(&current)? != snapshot {
+                    return Err(Error::ConfigurationChanged);
+                }
+                let (method, body) = if let Some(patch) = patch {
+                    if local_sync_job_patch_matches(patch, &current)? {
+                        unchanged = Some(Some(current));
+                        return Ok(None);
+                    }
+                    (
+                        Method::PUT,
+                        Some(local_sync_job_patch_body(patch, current)?),
+                    )
+                } else {
+                    (Method::DELETE, None)
+                };
+                if Instant::now() >= context.dispatch_deadline() {
+                    return Err(Error::Timeout { operation: SUBMIT });
+                }
+                selected = Some(generation);
+                let request = self
+                    .connection
+                    .authorized_request(method, url, body.as_ref());
+                let reply = self
+                    .connection
+                    .send_workflow_write(SUBMIT, request, &context, &mut write)
+                    .await?;
+                let parsed: serde_json::Value =
+                    decode_local_sync_json(SUBMIT, reply.status, reply.body.clone(), true, false)?;
+                if patch.is_none() {
+                    if parsed.as_object().is_none_or(|body| !body.is_empty()) {
+                        return Err(mutation_error(
+                            SUBMIT,
+                            true,
+                            invalid("native job removal did not acknowledge the selected request"),
+                        ));
+                    }
+                } else {
+                    let current: LocalSyncJob = serde_json::from_value(parsed).map_err(|_| {
+                        mutation_error(
+                            SUBMIT,
+                            true,
+                            invalid("native job update did not report a registration"),
+                        )
+                    })?;
+                    if current.job_id != *id {
+                        return Err(mutation_error(
+                            SUBMIT,
+                            true,
+                            invalid("native job update acknowledged a different ID"),
+                        ));
+                    }
+                }
+                Ok(Some(crate::ResponseDiagnostic::new(
+                    reply.status,
+                    reply.body,
+                )))
+            })
+            .await;
+        let original = workflow_write_result(SUBMIT, write, attempted);
+        let refused = write.response_complete
+            && matches!(
+                original,
+                Err(Error::Authentication { .. }
+                    | Error::AccessDenied { .. }
+                    | Error::LicenseRequired { .. })
+            );
+        let mut report = LocalSyncRegistrationChangeReport {
+            write,
+            original,
+            registration_present: unchanged.as_ref().map(Option::is_some),
+            requested_fields_match: unchanged
+                .as_ref()
+                .and_then(|current| current.as_ref().map(|_| true)),
+            current: unchanged.flatten(),
+            observation_error: None,
+            remove: patch.is_none(),
+        };
+        if let Some(generation) = selected.filter(|_| write.dispatched && !refused) {
+            context.phase(OperationPhase::Verifying);
+            let verified = context
+                .wait(context.deadline, READ, async {
+                    self.require_configuration_generation(&generation).await?;
+                    let current = self.read_selected_local_sync_job(id).await?;
+                    let matched = patch
+                        .map(|patch| {
+                            current
+                                .as_ref()
+                                .map_or(Ok(false), |job| local_sync_job_patch_matches(patch, job))
+                        })
+                        .transpose()?;
+                    self.require_configuration_generation(&generation).await?;
+                    Ok((current, matched))
+                })
+                .await;
+            match verified {
+                Ok((current, matched)) => {
+                    report.registration_present = Some(current.is_some());
+                    report.current = current;
+                    report.requested_fields_match = matched;
+                }
+                Err(error) => report.observation_error = Some(error),
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn read_selected_local_sync_job(
+        &self,
+        id: &LocalSyncJobId,
+    ) -> Result<Option<LocalSyncJob>> {
+        let listed = self.local_sync_jobs().await?;
+        let mut found = listed.iter().filter(|job| job.job_id == *id);
+        let Some(job) = found.next() else {
+            return Ok(None);
+        };
+        if found.next().is_some() {
+            return Err(invalid(
+                "the current Local Sync list contains duplicate job IDs",
+            ));
+        }
+        let current = self.local_sync_job(id).await?;
+        if local_job_document(job)? != local_job_document(&current)? {
+            return Err(Error::ConfigurationChanged);
+        }
+        Ok(Some(current))
     }
 
     /// Execute an already reviewed preview once and observe its terminal run.
@@ -990,4 +1183,8 @@ fn same_terminal_run(a: &LocalSyncRun, b: &LocalSyncRun) -> bool {
         && a.summary.completed == b.summary.completed
         && a.summary.failed == b.summary.failed
         && a.summary.skipped == b.summary.skipped
+}
+
+fn local_job_document(job: &LocalSyncJob) -> Result<serde_json::Value> {
+    serde_json::to_value(job).map_err(|_| invalid("Local Sync registration cannot be encoded"))
 }

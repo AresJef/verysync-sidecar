@@ -106,3 +106,10 @@ support. Enabling discovery in an application can emit network traffic.
 Official tracker registration and controlled disconnect use an explicitly opted-in
 specialist fixture; see [official tracker validation](https://github.com/AresJef/verysync-sidecar/blob/v0.1.0/docs/public/official-tracker-validation.md).
 They remain separate from private-peer networking and cross-WAN acceptance.
+
+
+Use `change_preferences_and_verify` with `PreferenceChange::Network`,
+`Transport`, or `Bandwidth` to see which requested fields the original
+instance currently reports. Its live readings describe the native listeners,
+connections, discovery cache, tracker, or NAT status for that scope. To confirm
+reachability or delivery, observe the selected peer and verify its files.

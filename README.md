@@ -8,7 +8,8 @@ with its own files only when your application should manage its lifetime.
 All development and maintenance now use `main` at version 0.1.2.
 This version is unreleased. The latest release on crates.io is 0.1.1.
 
-Start with the [connection example](docs/public/getting-started.md). The
+Start with the [connection example](docs/public/getting-started.md) or find
+an entry in the [SDK operation guide](docs/public/sdk-operations.md). The
 [stable 0.1.1 guide](https://github.com/AresJef/verysync-sidecar/blob/v0.1.1/docs/public/getting-started.md)
 is also available directly from the package page. A setting read back from the
 instance confirms the reported configuration. Check files and peer activity

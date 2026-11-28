@@ -706,8 +706,63 @@ async fn public_core_errors_logs_levels_and_owned_diagnostics() -> TestResult {
         .iter()
         .any(|e| e.message == native_message)
         && entries.iter().any(|e| e.message.contains(second))));
-    assert!(core.client().clear_core_errors().await?.is_empty());
-    assert!(core.client().core_errors().await?.is_empty());
+    use verysync_sidecar::{
+        CoreLogChange, CoreLogObservation, OperationCompletion, OperationOptions,
+    };
+    let bounded = || OperationOptions::new(Duration::from_secs(12));
+    let record = || CoreLogChange::Record {
+        message: "synthetic correlated report",
+        correlation: "native-acceptance-record-1",
+    };
+    let observed = core
+        .client()
+        .change_core_logging_and_verify(record(), bounded())
+        .await?;
+    assert!(observed.write.dispatched && observed.write.response_complete);
+    assert_eq!(
+        observed.completion(),
+        OperationCompletion::Completed,
+        "{observed:?}"
+    );
+    assert!(matches!(
+        observed.current,
+        Some(CoreLogObservation::Recorded { matches: 1, .. })
+    ));
+    let repeat = core
+        .client()
+        .change_core_logging_and_verify(record(), bounded())
+        .await?;
+    assert!(!repeat.write.dispatched && repeat.original.is_err());
+    let clear = core
+        .client()
+        .change_core_logging_and_verify(CoreLogChange::ClearErrors, bounded())
+        .await?;
+    assert!(clear.write.dispatched && clear.write.response_complete);
+    assert!(matches!(
+        clear.current,
+        Some(CoreLogObservation::Cleared {
+            previous: 3,
+            remaining: 0,
+            new_entries: 0,
+            ..
+        })
+    ));
+    let empty = core
+        .client()
+        .change_core_logging_and_verify(CoreLogChange::ClearErrors, bounded())
+        .await?;
+    assert!(!empty.write.dispatched && empty.original?.is_none());
+    assert_eq!(
+        core.client()
+            .core_errors()
+            .await?
+            .errors
+            .as_deref()
+            .unwrap_or_default()
+            .len(),
+        0
+    );
+    println!("verified_core_error_log exact_label=true duplicate_zero_write=true cleared_three=true repeated_empty_zero_write=true");
 
     let initial = core.client().core_log_levels().await?;
     assert_eq!(initial.levels.get("main"), Some(&CoreLogLevel::Info));
@@ -718,19 +773,33 @@ async fn public_core_errors_logs_levels_and_owned_diagnostics() -> TestResult {
         CoreLogLevel::Error,
         CoreLogLevel::Info,
     ] {
+        let requested = BTreeMap::from([("main".to_owned(), level.clone())]);
         let changed = core
             .client()
-            .set_core_log_levels(&BTreeMap::from([("main".to_owned(), level.clone())]))
+            .change_core_logging_and_verify(CoreLogChange::Levels(&requested), bounded())
             .await?;
-        assert!(changed.requested_levels_match);
-        assert_eq!(changed.configuration.levels.get("main"), Some(&level));
-        assert_eq!(changed.configuration.packages, initial.packages);
-        assert_eq!(changed.configuration.levels.len(), initial.levels.len());
+        assert_eq!(
+            changed.completion(),
+            OperationCompletion::Completed,
+            "{changed:?}"
+        );
+        assert!(changed.write.dispatched && changed.write.response_complete);
+        let Some(CoreLogObservation::Levels {
+            selected: 1,
+            matching: 1,
+            current,
+        }) = changed.current
+        else {
+            return Err("the selected live log level was not observed".into());
+        };
+        assert_eq!(current.levels.get("main"), Some(&level));
+        assert_eq!(current.packages, initial.packages);
+        assert_eq!(current.levels.len(), initial.levels.len());
         assert!(initial
             .levels
             .iter()
             .filter(|(k, _)| k.as_str() != "main")
-            .all(|(name, old)| changed.configuration.levels.get(name) == Some(old)));
+            .all(|(name, old)| current.levels.get(name) == Some(old)));
     }
     let restored = core.client().core_log_levels().await?;
     assert_eq!(restored.levels, initial.levels);

@@ -2033,9 +2033,35 @@ async fn actual_receiveonly_revert_and_marker_repair_restore_owned_data() -> Tes
         .files
         .iter()
         .any(|f| f.name == "deleted.bin"));
-    b.client()
-        .request_revert_local_changes(&bf.configuration.id)
-        .await?;
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{DeliveryFile, FolderRecovery, OperationCompletion};
+    let files = [DeliveryFile::new(
+        "revert.bin",
+        original.len() as u64,
+        Sha256::digest(original).into(),
+    )?];
+    let expected_target = TargetPath::local(&receiver);
+    for expected_write in [true, false] {
+        let checked = b
+            .client()
+            .recover_folder_and_verify(
+                &expected_target,
+                FolderRecovery::Revert {
+                    folder: &bf.configuration.id,
+                    files: &files,
+                },
+                OperationOptions::new(Duration::from_secs(15)),
+            )
+            .await?;
+        assert_eq!(checked.write.dispatched, expected_write, "{checked:?}");
+        assert_eq!(
+            checked.completion(),
+            OperationCompletion::Completed,
+            "{checked:?}"
+        );
+        assert_eq!(checked.original?.is_some(), expected_write);
+    }
+    println!("verified_recovery_readback=receive-only actual_reverted_file=true already_matched_zero_write=true");
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if std::fs::read(receiver.join("revert.bin")).is_ok_and(|v| v == original)
@@ -2284,9 +2310,58 @@ async fn actual_sendonly_override_restores_remote_data_and_preserves_authority()
     })
     .await??;
     assert_eq!(std::fs::read(source.join("override.bin"))?, original);
-    a.client()
-        .request_override_remote_changes(&af.configuration.id)
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        DeliveryBatch, DeliveryFile, DeliveryVerification, FolderRecovery, OperationCompletion,
+    };
+    let batch = DeliveryBatch::new(
+        a_id.clone(),
+        af.configuration.id.clone(),
+        vec![DeliveryFile::new(
+            "override.bin",
+            original.len() as u64,
+            Sha256::digest(original).into(),
+        )?],
+        [(b_id.clone(), bf.configuration.id.clone())],
+    )?;
+    let expected = TargetPath::local(&source);
+    let no_receiver = a
+        .client()
+        .recover_folder_and_verify(
+            &expected,
+            FolderRecovery::Override {
+                batch: &batch,
+                receivers: &[],
+                verification: DeliveryVerification::RequireReceiverReads,
+            },
+            OperationOptions::new(Duration::from_secs(12)),
+        )
         .await?;
+    assert!(!no_receiver.write.dispatched && no_receiver.original.is_err());
+    assert_eq!(std::fs::read(other.join("override.bin"))?, remote);
+    let checked = a
+        .client()
+        .recover_folder_and_verify(
+            &expected,
+            FolderRecovery::Override {
+                batch: &batch,
+                receivers: &[b.client()],
+                verification: DeliveryVerification::RequireReceiverReads,
+            },
+            OperationOptions::new(Duration::from_secs(15)),
+        )
+        .await?;
+    assert!(
+        checked.write.dispatched && checked.write.response_complete,
+        "{checked:?}"
+    );
+    assert_eq!(
+        checked.completion(),
+        OperationCompletion::Completed,
+        "{checked:?}"
+    );
+    assert!(checked.original?.is_some());
+    println!("verified_recovery_readback=send-only actual_remote_file=true strict_missing_reader_zero_write=true");
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if std::fs::read(other.join("override.bin")).is_ok_and(|v| v == original) {

@@ -455,7 +455,10 @@ async fn actual_builtin_discovery_client_uses_isolated_service_and_populates_cac
 
 #[tokio::test]
 async fn actual_private_udp_only_peers_and_disabled_tracker_nat_observations() -> TestResult {
-    use verysync_sidecar::TransportPatch;
+    use verysync_sidecar::{
+        OperationCompletion, OperationOptions, PreferenceChange, PreferenceReadback,
+        PreferenceRuntime, TransportPatch,
+    };
     let root = tempfile::Builder::new().prefix("vsnu-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
     let mut b = ManagedInstance::start(options(&root.join("b"))?).await?;
@@ -491,25 +494,42 @@ async fn actual_private_udp_only_peers_and_disabled_tracker_nat_observations() -
                 .requested_fields_match
         );
         let before = instance.client().transport_configuration().await?;
+        let patch = TransportPatch::default()
+            .tracker(false)
+            .udp(true)
+            .udp_port(port)
+            .nat_mapping(false)
+            .relay_client(false)
+            .tcp_punching(false)
+            .stun_servers(Vec::new())
+            .relay_addresses(Vec::new())
+            .nat_lease_minutes(120)
+            .nat_renewal_minutes(60)
+            .nat_timeout_seconds(7);
         let updated = instance
             .client()
-            .update_transport_configuration(
-                &TransportPatch::default()
-                    .tracker(false)
-                    .udp(true)
-                    .udp_port(port)
-                    .nat_mapping(false)
-                    .relay_client(false)
-                    .tcp_punching(false)
-                    .stun_servers(Vec::new())
-                    .relay_addresses(Vec::new())
-                    .nat_lease_minutes(120)
-                    .nat_renewal_minutes(60)
-                    .nat_timeout_seconds(7),
+            .change_preferences_and_verify(
+                PreferenceChange::Transport(&patch),
+                OperationOptions::new(Duration::from_secs(15)),
             )
             .await?;
-        assert!(updated.requested_fields_match);
-        assert_eq!(updated.configuration.extra, before.extra);
+        assert_eq!(
+            updated.completion(),
+            OperationCompletion::Completed,
+            "{updated:?}"
+        );
+        assert!(updated.write.dispatched && updated.write.response_complete);
+        assert!(matches!(
+            updated.runtime,
+            Some(Ok(PreferenceRuntime::Transport {
+                status: Ok(_),
+                connections: Ok(_)
+            }))
+        ));
+        let Some(PreferenceReadback::Transport(configuration)) = updated.current else {
+            return Err("transport policy readback absent".into());
+        };
+        assert_eq!(configuration.extra, before.extra);
         instance.restart(Duration::from_secs(30)).await?;
         let persisted = instance.client().transport_configuration().await?;
         assert!(
@@ -665,7 +685,8 @@ async fn wait_for_relay_traffic(client: &Client, previous_bytes: u64) -> TestRes
 async fn actual_owned_private_relay_session_with_tcp_and_udp_disabled() -> TestResult {
     use sha2::{Digest, Sha256};
     use verysync_sidecar::{
-        JoinFolderOptions, RelayProbeResult, RelayServerPatch, TargetPath, TransportPatch,
+        JoinFolderOptions, OperationCompletion, OperationOptions, PreferenceChange,
+        PreferenceRuntime, RelayProbeResult, RelayServerPatch, TargetPath, TransportPatch,
     };
     let root = tempfile::Builder::new().prefix("vsnr-").tempdir()?.keep();
     let mut relay = ManagedInstance::start(options(&root.join("relay"))?).await?;
@@ -685,25 +706,36 @@ async fn actual_owned_private_relay_session_with_tcp_and_udp_disabled() -> TestR
     assert_ne!(status.port(), 18886);
     drop(first);
     drop(second);
+    let patch = RelayServerPatch::default()
+        .enabled(true)
+        .listen(listen.to_string())
+        .status_address(status.to_string())
+        .public(false)
+        .pool_addresses("")
+        .nat_mapping(false)
+        .authentication(false)
+        .token("")
+        .provided_by("verysync-sidecar private acceptance")
+        .network_timeout_seconds(11)
+        .ping_interval_seconds(3)
+        .message_timeout_seconds(7);
     let enabled = relay
         .client()
-        .update_relay_server_configuration(
-            &RelayServerPatch::default()
-                .enabled(true)
-                .listen(listen.to_string())
-                .status_address(status.to_string())
-                .public(false)
-                .pool_addresses("")
-                .nat_mapping(false)
-                .authentication(false)
-                .token("")
-                .provided_by("verysync-sidecar private acceptance")
-                .network_timeout_seconds(11)
-                .ping_interval_seconds(3)
-                .message_timeout_seconds(7),
+        .change_preferences_and_verify(
+            PreferenceChange::RelayServer(&patch),
+            OperationOptions::new(Duration::from_secs(12)),
         )
         .await?;
-    assert!(enabled.requested_fields_match);
+    assert_eq!(
+        enabled.completion(),
+        OperationCompletion::Completed,
+        "{enabled:?}"
+    );
+    assert!(enabled.write.dispatched && enabled.write.response_complete);
+    assert!(matches!(
+        enabled.runtime,
+        Some(Ok(PreferenceRuntime::RelayServer(_)))
+    ));
     let runtime = relay_ready(relay.client(), listen).await?;
     let effective = runtime
         .options
@@ -876,7 +908,7 @@ async fn actual_owned_private_relay_session_with_tcp_and_udp_disabled() -> TestR
         json!({
             "first_file_bytes":first.bytes,
             "first_file_sha256":first.file_sha256,
-            "first_authenticated_relay_types":[first.sender.peer_connection_type,first.receiver.peer_connection_type],
+            "typed_relay_preferences_and_runtime_readback":true,"first_authenticated_relay_types":[first.sender.peer_connection_type,first.receiver.peer_connection_type],
             "recovered_file_bytes":recovered.bytes,
             "recovered_file_sha256":recovered.file_sha256,
             "recovered_authenticated_relay_types":[recovered.sender.peer_connection_type,recovered.receiver.peer_connection_type],

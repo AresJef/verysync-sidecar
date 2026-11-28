@@ -286,6 +286,55 @@ pub struct FolderVersioningUpdate {
     pub requested_fields_match: bool,
 }
 
+/// The scope whose native versioner settings should change.
+#[derive(Clone, Copy)]
+#[non_exhaustive]
+pub enum VersioningTarget<'a> {
+    /// One already configured folder.
+    Folder(&'a crate::FolderId),
+    /// The versioning template for future folder registrations.
+    FutureFolders,
+}
+
+/// Original versioner change and independently observed configuration.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct VersioningChangeReport {
+    /// Dispatch and response facts for the optional configuration PATCH.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original result. An empty successful reply means no change was necessary.
+    pub original: Result<Option<crate::ResponseDiagnostic>>,
+    /// Actual settings from the selected scope.
+    pub current: Option<FolderVersioningConfiguration>,
+    /// Whether the entire expected versioner configuration was observed.
+    pub settings_match: Option<bool>,
+    /// Why the selected settings could not be independently verified.
+    pub observation_error: Option<Error>,
+    /// One separately observed total archive inventory for an existing folder.
+    pub archive: Option<Result<FolderVersionHistory>>,
+}
+
+impl VersioningChangeReport {
+    /// Classify configuration only. Inspect the archive observation separately.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        use crate::OperationCompletion as Completion;
+        match self.settings_match {
+            Some(true) => Completion::Completed,
+            Some(false) => Completion::GoalNotMet,
+            None if !self.write.dispatched
+                || (self.write.response_complete
+                    && matches!(
+                        self.original,
+                        Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+                    )) =>
+            {
+                Completion::GoalNotMet
+            }
+            None => Completion::Unconfirmed,
+        }
+    }
+}
+
 /// One archived version. Its native timestamp is retained as an exact selection
 /// token. Typed restore preflight compares its RFC3339 instant with the target's
 /// clock without converting or rewriting it in the controller's timezone.
@@ -392,6 +441,107 @@ pub enum DirectoryVersionOrder {
     /// Request the native planner's oldest archived version for each path.
     Oldest,
 }
+/// Expected regular file bytes on the selected instance after restoration.
+///
+/// The caller obtains these values from trusted archive or backup evidence.
+/// Only length and SHA-256 are compared. No controller path is opened.
+#[derive(Clone)]
+pub struct RestoreFileExpectation {
+    /// File relative to the configured folder, in target syntax.
+    pub path: TargetPath,
+    /// Expected byte length.
+    pub bytes: u64,
+    /// Expected SHA-256 of the complete restored file.
+    pub sha256: [u8; 32],
+}
+
+/// An exact historical restore and its independently known contents.
+#[non_exhaustive]
+pub enum VerifiedRestoreSelection<'a> {
+    /// Select exact path/timestamp pairs and require one checksum for each.
+    Files {
+        /// Path and native timestamp for each selected version.
+        versions: &'a [FileVersionRestore],
+        /// Expected complete file contents for the same paths.
+        expected: &'a [RestoreFileExpectation],
+    },
+    /// Select a native directory planner and cover all inventoried files.
+    Directory {
+        /// Explicit directory or configured folder root.
+        scope: &'a VersionedDirectory,
+        /// Version order for the native directory planner.
+        order: DirectoryVersionOrder,
+        /// Expected complete file contents for the exact inventory below this scope.
+        expected: &'a [RestoreFileExpectation],
+    },
+}
+
+/// Byte-level restoration observations for one selected file.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct RestoreFileObservation {
+    /// Whether the expected bytes were already there before submission.
+    pub already_matched: bool,
+    /// Whether the latest trusted read matches both expected length and SHA-256.
+    pub current_matches: Option<bool>,
+    /// Why these bytes could not be checked after the request.
+    pub observation_error: Option<Error>,
+}
+
+/// The original native restore response and independent reads of selected files.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct VerifiedRestoreReport {
+    /// Dispatch and response evidence for the optional native restore.
+    pub write: crate::ManagementWriteEvidence,
+    /// Initial response. An inner empty value means the selected bytes were already present.
+    pub original: Result<Option<FileVersionRestoreReport>>,
+    /// One result for each expected file after trusted scope checks, in supplied order.
+    pub files: Vec<RestoreFileObservation>,
+    /// Why shared scope or timing could not be verified after submission.
+    pub observation_error: Option<Error>,
+}
+
+impl VerifiedRestoreReport {
+    /// Classify only the selected file bytes on this instance.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        use crate::OperationCompletion as Completion;
+        let matched = self
+            .files
+            .iter()
+            .filter(|file| file.current_matches == Some(true))
+            .count();
+        let native_errors = self.original.as_ref().is_ok_and(|response| {
+            response
+                .as_ref()
+                .is_some_and(|report| report.error_count() != 0)
+        });
+        if matched != 0 {
+            if !native_errors && matched == self.files.len() {
+                Completion::Completed
+            } else {
+                Completion::PartiallyCompleted
+            }
+        } else if !self.write.dispatched
+            || native_errors
+            || (self.write.response_complete
+                && matches!(
+                    self.original,
+                    Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+                ))
+            || (!self.files.is_empty()
+                && self
+                    .files
+                    .iter()
+                    .all(|file| file.current_matches == Some(false)))
+        {
+            Completion::GoalNotMet
+        } else {
+            Completion::Unconfirmed
+        }
+    }
+}
+
 impl FileVersionRestoreReport {
     /// Number of non-null native errors. Error strings can contain target paths.
     pub fn error_count(&self) -> usize {

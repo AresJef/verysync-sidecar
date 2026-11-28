@@ -1,19 +1,25 @@
 //! Explicit versioning policies and native archive operations, without retries.
-use super::{mutation_error, workflow_write_result, Client};
+use super::{delivery::same_resource, mutation_error, workflow_write_result, Client};
 use crate::{
     AuditHistoryPage, AuditHistoryResetOutcome, AuditHistoryResetReport, AuditHistorySettings,
     AuditHistoryUpdate, OperationOptions, OperationPhase,
 };
-use crate::{DirectoryVersionOrder, VersionArchiveLocation, VersionedDirectory};
+use crate::{
+    DirectoryVersionOrder, VersionArchiveLocation, VersionedDirectory, VersioningChangeReport,
+    VersioningTarget,
+};
 use crate::{
     Error, FileVersionRestore, FileVersionRestoreReport, FolderId, FolderVersionHistory,
     FolderVersioningConfiguration, FolderVersioningPolicy, FolderVersioningUpdate,
-    ResponseDiagnostic, Result, TargetPath,
+    ResourceFileState, ResourcePath, ResponseDiagnostic, RestoreFileObservation, Result,
+    TargetPath, VerifiedRestoreReport, VerifiedRestoreSelection,
 };
+use reqwest::Method;
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
 };
+use tokio::time::Instant;
 
 fn restore_precondition(reason: &'static str) -> Error {
     Error::ArchiveRestorePrecondition { reason }
@@ -97,10 +103,17 @@ impl Client {
             .await?;
         Ok(FolderVersionHistory(records))
     }
-    async fn require_past_archive_second(&self, latest: i64) -> Result<()> {
+    async fn require_past_archive_second(
+        &self,
+        latest: i64,
+        generation: Option<&str>,
+    ) -> Result<()> {
         // Use the target's fresh clock immediately before writing. Never use
         // controller wall time or rewrite the native token submitted in POST.
         let status = self.system_status().await?;
+        if generation.is_some() && status.start_time.as_deref() != generation {
+            return Err(Error::ConfigurationChanged);
+        }
         let now = archive_second(
             status
                 .now_time
@@ -114,11 +127,11 @@ impl Client {
         }
         Ok(())
     }
-    async fn directory_archive_second(
+    async fn directory_restore_inventory(
         &self,
         folder: &FolderId,
         scope: &VersionedDirectory,
-    ) -> Result<i64> {
+    ) -> Result<(i64, BTreeSet<Vec<String>>)> {
         let style = self.folder_path_style()?;
         let selected = match scope {
             VersionedDirectory::FolderRoot => Vec::new(),
@@ -126,6 +139,7 @@ impl Client {
         };
         let mut stack = vec![(None, Vec::<String>::new())];
         let mut seen = BTreeSet::from([Vec::<String>::new()]);
+        let mut files = BTreeSet::new();
         let mut scope_found = selected.is_empty();
         let mut latest = None::<i64>;
         let mut count = 0usize;
@@ -164,6 +178,7 @@ impl Client {
                         ));
                     }
                     if components.starts_with(&selected) {
+                        files.insert(components);
                         for version in versions {
                             count = count.saturating_add(1);
                             logical_bytes =
@@ -185,9 +200,10 @@ impl Client {
                 "explicit archive directory was not observed",
             ));
         }
-        latest.ok_or_else(|| {
+        let latest = latest.ok_or_else(|| {
             restore_precondition("no archived file was observed in the explicit directory scope")
-        })
+        })?;
+        Ok((latest, files))
     }
     /// Request the native directory version restore planner for one explicit
     /// root/directory scope. Current files can be overwritten and errors can be
@@ -212,59 +228,254 @@ impl Client {
         scope: &VersionedDirectory,
         order: DirectoryVersionOrder,
     ) -> Result<FileVersionRestoreReport> {
-        let path = match scope {
-            VersionedDirectory::FolderRoot => ".",
-            VersionedDirectory::Path(path) => {
-                crate::scans::validate_subpath(path, self.folder_path_style()?)?
-            }
-        };
-        if path.len() > 65536 {
-            return Err(Error::InvalidConfiguration {
-                reason: "directory version selection exceeds 64 KiB",
-            });
-        }
-        let action = match order {
-            DirectoryVersionOrder::Newest => "latest",
-            DirectoryVersionOrder::Oldest => "oldest",
-        };
+        let body = directory_restore_body(self.folder_path_style()?, scope, order)?;
         let operation = "restore archived directory versions";
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
         if self.folder(folder).await?.paused {
             return Err(Error::FolderPaused { id: folder.clone() });
         }
-        let latest = tokio::time::timeout(
+        let (latest, _) = tokio::time::timeout(
             Duration::from_secs(30),
-            self.directory_archive_second(folder, scope),
+            self.directory_restore_inventory(folder, scope),
         )
         .await
         .map_err(|_| Error::Timeout { operation })??;
-        self.require_past_archive_second(latest).await?;
+        self.require_past_archive_second(latest, None).await?;
         let url = self.connection.management_url(
             "rest/folder/versions/restore",
             &[("folder", folder.as_str())],
         )?;
         let (status, bytes) = self
             .connection
-            .request_bytes(
-                operation,
-                reqwest::Method::POST,
-                url,
-                Some(&serde_json::json!({"items":[{"path":path,"action":action}]})),
-                true,
-            )
+            .request_bytes(operation, reqwest::Method::POST, url, Some(&body), true)
             .await?;
-        serde_json::from_slice(&bytes).map_err(|_| {
-            mutation_error(
-                operation,
-                true,
-                Error::InvalidResponse {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                },
-            )
-        })
+        decode_restore_reply(operation, status, bytes)
     }
+    /// Restore an exact historical selection once and verify the bytes on the
+    /// original instance. Supply full length and SHA-256 evidence for every
+    /// selected file, including the complete inventory for a directory.
+    /// This can overwrite current files. Keep separate copies and coordinate
+    /// other writers and peers. A known-good current selection needs no write.
+    /// After an uncertain reply the SDK only reads the same instance and paths.
+    pub async fn restore_versions_and_verify(
+        &self,
+        folder: &FolderId,
+        selection: VerifiedRestoreSelection<'_>,
+        options: OperationOptions,
+    ) -> Result<VerifiedRestoreReport> {
+        const WRITE: &str = "restore the selected historical files";
+        const CHECK: &str = "verify the selected restored files";
+        let style = self.folder_path_style()?;
+        let (route, body, expected, files, directory) = match selection {
+            VerifiedRestoreSelection::Files { versions, expected } => {
+                let (body, latest) = file_restore_body(style, versions)?;
+                let files = versions
+                    .iter()
+                    .map(|item| archive_components(item.path.to_protocol()?, style))
+                    .collect::<Result<BTreeSet<_>>>()?;
+                (
+                    "rest/folder/versions",
+                    body,
+                    expected,
+                    Some((latest, files)),
+                    None,
+                )
+            }
+            VerifiedRestoreSelection::Directory {
+                scope,
+                order,
+                expected,
+            } => {
+                let body = directory_restore_body(style, scope, order)?;
+                (
+                    "rest/folder/versions/restore",
+                    body,
+                    expected,
+                    None,
+                    Some(scope),
+                )
+            }
+        };
+        if !(1..=1024).contains(&expected.len()) {
+            return Err(restore_precondition(
+                "restore verification needs 1 through 1024 explicit checksums",
+            ));
+        }
+        let mut names = BTreeSet::new();
+        let mut total = 0usize;
+        let mut paths = Vec::with_capacity(expected.len());
+        for file in expected {
+            let path = crate::scans::validate_subpath(&file.path, style)?;
+            total = total.saturating_add(path.len());
+            let components = archive_components(path, style)?;
+            if total > 65536 || !names.insert(components.clone()) {
+                return Err(restore_precondition(
+                    "restore verification paths must be unique and bounded",
+                ));
+            }
+            paths.push(components);
+        }
+        let url = self
+            .connection
+            .management_url(route, &[("folder", folder.as_str())])?;
+        let context = options.start()?;
+        let mut write = Default::default();
+        let mut guard = None;
+        let mut chosen = None;
+        let mut observations = Vec::new();
+        let attempted = context
+            .wait(context.dispatch_deadline(), WRITE, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                self.observe_control_identity().await?;
+                let generation = self.system_status().await?.start_time.ok_or_else(|| {
+                    restore_precondition("the selected instance did not report its start time")
+                })?;
+                let config = self.folder(folder).await?;
+                if config.paused {
+                    return Err(Error::FolderPaused { id: folder.clone() });
+                }
+                let (latest, inventory) = if let Some(scope) = directory {
+                    tokio::time::timeout(
+                        Duration::from_secs(30),
+                        self.directory_restore_inventory(folder, scope),
+                    )
+                    .await
+                    .map_err(|_| Error::Timeout { operation: WRITE })??
+                } else {
+                    files.ok_or_else(|| restore_precondition("restore scope was not selected"))?
+                };
+                if inventory != names {
+                    return Err(restore_precondition(
+                        "expected checksums do not cover exactly the selected historical files",
+                    ));
+                }
+                let base = self.local_file_manager_base(&config.path).await?;
+                let resources = paths
+                    .iter()
+                    .map(|components| {
+                        components
+                            .iter()
+                            .try_fold(base.clone(), |parent, item| parent.child(item))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let mut matched = Vec::with_capacity(resources.len());
+                for (path, file) in resources.iter().zip(expected) {
+                    let current = self.resource_file_state(path).await?;
+                    if current == ResourceFileState::OtherKind {
+                        return Err(restore_precondition(
+                            "a selected restoration path contains a different resource kind",
+                        ));
+                    }
+                    matched.push(
+                        current
+                            == (ResourceFileState::Present {
+                                bytes: file.bytes,
+                                sha256: file.sha256,
+                            }),
+                    );
+                }
+                self.verify_restore_scope(folder, &config.path, &base, &generation)
+                    .await?;
+                self.require_past_archive_second(latest, Some(&generation))
+                    .await?;
+                let already = matched.iter().all(|entry| *entry);
+                observations = matched
+                    .into_iter()
+                    .map(|already_matched| RestoreFileObservation {
+                        already_matched,
+                        current_matches: already.then_some(true),
+                        observation_error: None,
+                    })
+                    .collect();
+                if already {
+                    return Ok(None);
+                }
+                if Instant::now() >= context.dispatch_deadline() {
+                    return Err(Error::Timeout { operation: WRITE });
+                }
+                chosen = Some((config.path, base, generation, resources));
+                let request = self
+                    .connection
+                    .authorized_request(Method::POST, url, Some(&body));
+                let reply = self
+                    .connection
+                    .send_workflow_write(WRITE, request, &context, &mut write)
+                    .await?;
+                decode_restore_reply(WRITE, reply.status, reply.body).map(Some)
+            })
+            .await;
+        let original = workflow_write_result(WRITE, write, attempted);
+        let refused = write.response_complete
+            && matches!(
+                original,
+                Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+            );
+        let mut report = VerifiedRestoreReport {
+            write,
+            original,
+            files: observations,
+            observation_error: None,
+        };
+        if let Some((path, base, generation, resources)) =
+            chosen.filter(|_| write.dispatched && !refused)
+        {
+            context.phase(OperationPhase::Verifying);
+            let observed = context
+                .wait(context.deadline, CHECK, async {
+                    self.verify_restore_scope(folder, &path, &base, &generation)
+                        .await?;
+                    let mut observed = Vec::with_capacity(resources.len());
+                    for (path, file) in resources.iter().zip(expected) {
+                        observed.push(self.resource_file_state(path).await.map(|current| {
+                            current
+                                == (ResourceFileState::Present {
+                                    bytes: file.bytes,
+                                    sha256: file.sha256,
+                                })
+                        }));
+                    }
+                    self.verify_restore_scope(folder, &path, &base, &generation)
+                        .await?;
+                    Ok(observed)
+                })
+                .await;
+            match observed {
+                Ok(observed) => {
+                    for (file, state) in report.files.iter_mut().zip(observed) {
+                        match state {
+                            Ok(matched) => file.current_matches = Some(matched),
+                            Err(source) => file.observation_error = Some(source),
+                        }
+                    }
+                }
+                Err(error) => report.observation_error = Some(error),
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn verify_restore_scope(
+        &self,
+        folder: &FolderId,
+        path: &TargetPath,
+        base: &ResourcePath,
+        generation: &str,
+    ) -> Result<()> {
+        let current = self.folder(folder).await?;
+        if current.paused
+            || &current.path != path
+            || !same_resource(base, &self.local_file_manager_base(&current.path).await?)
+            || self.system_status().await?.start_time.as_deref() != Some(generation)
+        {
+            return Err(Error::ConfigurationChanged);
+        }
+        Ok(())
+    }
+
     /// Read native audit-log settings, without inferring actual entitlement or
     /// successful recording from an enabled flag alone.
     pub async fn audit_history_settings(&self) -> Result<AuditHistorySettings> {
@@ -458,18 +669,175 @@ impl Client {
         &self,
         folder: &FolderId,
     ) -> Result<FolderVersioningConfiguration> {
-        let config = self.folder(folder).await?;
-        let value = config
-            .extra
-            .get("versioning")
-            .cloned()
-            .ok_or(Error::InvalidConfiguration {
-                reason: "native folder versioning configuration is absent",
-            })?;
-        serde_json::from_value(value).map_err(|_| Error::InvalidConfiguration {
-            reason: "native folder versioning configuration has an unknown schema",
-        })
+        versioner_from_folder(&self.folder(folder).await?)
     }
+
+    /// Change the selected versioner policy or archive location in one request.
+    /// The readback covers the actual folder or future template, preserving
+    /// settings outside the requested fields. If they already match, no PATCH
+    /// is required. An inventory, when available, is a separate snapshot.
+    /// Native retention or external commands can affect future archives. Keep
+    /// any earlier archives you need before switching location or policy.
+    pub async fn change_versioning_and_verify(
+        &self,
+        target: VersioningTarget<'_>,
+        policy: Option<&FolderVersioningPolicy>,
+        location: Option<&VersionArchiveLocation>,
+        options: OperationOptions,
+    ) -> Result<VersioningChangeReport> {
+        const CHANGE: &str = "change the selected versioning configuration";
+        const READ: &str = "verify the selected versioning configuration";
+        if policy.is_none() && location.is_none() {
+            return Err(Error::InvalidConfiguration {
+                reason: "select a versioning policy or archive location",
+            });
+        }
+        if let Some(policy) = policy {
+            policy.validate()?;
+        }
+        let style = self.folder_path_style()?;
+        let location = location
+            .map(|location| Ok::<_, Error>((location.protocol(style)?, location.filesystem_type())))
+            .transpose()?;
+        let url = match target {
+            VersioningTarget::Folder(folder) => self.connection.folder_url(folder)?,
+            VersioningTarget::FutureFolders => self
+                .connection
+                .management_url("rest/config/defaults/folder", &[])?,
+        };
+        let context = options.start()?;
+        let mut guard = None;
+        let mut write = Default::default();
+        let mut selected = None;
+        let mut unchanged = None;
+        let attempted =
+            context
+                .wait(context.dispatch_deadline(), CHANGE, async {
+                    context.phase(OperationPhase::Checking);
+                    guard = Some(self.connection.mutation_lock.lock().await);
+                    self.observe_control_identity().await?;
+                    let generation = self.system_status().await?.start_time.ok_or(
+                        Error::InvalidConfiguration {
+                            reason: "the selected engine did not report its start time",
+                        },
+                    )?;
+                    let (path, current) = self.read_versioning_scope(target).await?;
+                    let mut expected = current.clone();
+                    if let Some(policy) = policy {
+                        policy.apply(&mut expected)?;
+                    }
+                    if let Some((archive, backend)) = location {
+                        expected.filesystem_path = archive.to_owned();
+                        expected.filesystem_type = backend.to_owned();
+                    }
+                    self.require_configuration_generation(&generation).await?;
+                    let no_change = expected == current;
+                    let body = serde_json::json!({"versioning":expected});
+                    if no_change {
+                        unchanged = Some(current);
+                        selected = Some((generation, path, expected));
+                        return Ok(None);
+                    }
+                    if Instant::now() >= context.dispatch_deadline() {
+                        return Err(Error::Timeout { operation: CHANGE });
+                    }
+                    selected = Some((generation, path, expected));
+                    let request =
+                        self.connection
+                            .authorized_request(Method::PATCH, url, Some(&body));
+                    let reply = self
+                        .connection
+                        .send_workflow_write(CHANGE, request, &context, &mut write)
+                        .await?;
+                    Ok(Some(ResponseDiagnostic::new(reply.status, reply.body)))
+                })
+                .await;
+        let original = workflow_write_result(CHANGE, write, attempted);
+        let refused = write.response_complete
+            && matches!(
+                original,
+                Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+            );
+        let mut report = VersioningChangeReport {
+            write,
+            original,
+            settings_match: unchanged.as_ref().map(|_| true),
+            current: unchanged,
+            observation_error: None,
+            archive: None,
+        };
+        if let Some((generation, path, expected)) = selected.filter(|_| !refused) {
+            context.phase(OperationPhase::Verifying);
+            if write.dispatched {
+                let verified = context
+                    .wait(context.deadline, READ, async {
+                        self.require_configuration_generation(&generation).await?;
+                        let (current_path, configuration) =
+                            self.read_versioning_scope(target).await?;
+                        if path != current_path {
+                            return Err(Error::ConfigurationChanged);
+                        }
+                        self.require_configuration_generation(&generation).await?;
+                        Ok(configuration)
+                    })
+                    .await;
+                match verified {
+                    Ok(configuration) => {
+                        report.settings_match = Some(configuration == expected);
+                        report.current = Some(configuration);
+                    }
+                    Err(error) => report.observation_error = Some(error),
+                }
+            }
+            if let VersioningTarget::Folder(folder) = target {
+                if let Some(current) = report
+                    .current
+                    .as_ref()
+                    .filter(|current| !current.kind.is_empty())
+                {
+                    report.archive = Some(
+                        context
+                            .wait(
+                                context.deadline,
+                                "read the selected archive inventory",
+                                async {
+                                    let archive = self.folder_version_inventory(folder).await?;
+                                    let (current_path, configuration) =
+                                        self.read_versioning_scope(target).await?;
+                                    if path != current_path || &configuration != current {
+                                        return Err(Error::ConfigurationChanged);
+                                    }
+                                    self.require_configuration_generation(&generation).await?;
+                                    Ok(archive)
+                                },
+                            )
+                            .await,
+                    );
+                }
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn read_versioning_scope(
+        &self,
+        target: VersioningTarget<'_>,
+    ) -> Result<(Option<TargetPath>, FolderVersioningConfiguration)> {
+        match target {
+            VersioningTarget::Folder(folder) => {
+                let config = self.folder(folder).await?;
+                let versioning = versioner_from_folder(&config)?;
+                Ok((Some(config.path), versioning))
+            }
+            VersioningTarget::FutureFolders => Ok((
+                None,
+                self.folder_defaults().await?.versioning_configuration()?,
+            )),
+        }
+    }
+
     /// Change only the native policy, preserving the actual archive location
     /// and unknown/inactive parameters. Native PATCH merges parameter maps;
     /// disabling a policy therefore retains its unused parameter values.
@@ -598,38 +966,15 @@ impl Client {
         folder: &FolderId,
         items: &[FileVersionRestore],
     ) -> Result<FileVersionRestoreReport> {
-        if !(1..=1024).contains(&items.len()) {
-            return Err(Error::InvalidConfiguration {
-                reason: "restore requires between one and 1024 explicit file versions",
-            });
-        }
-        let style = self.folder_path_style()?;
-        let mut selected = BTreeMap::new();
-        let mut latest = i64::MIN;
-        let mut bytes = 0usize;
-        for item in items {
-            latest = latest.max(archive_second(&item.version_time)?);
-            let path = crate::scans::validate_subpath(&item.path, style)?;
-            bytes = bytes
-                .saturating_add(path.len())
-                .saturating_add(item.version_time.len());
-            if selected.insert(path, item.version_time.as_str()).is_some() || bytes > 65536 {
-                return Err(Error::InvalidConfiguration {
-                    reason: "restore paths must be unique within a 64 KiB logical selection bound",
-                });
-            }
-        }
+        let (body, latest) = file_restore_body(self.folder_path_style()?, items)?;
         let operation = "restore explicit file versions";
-        let body = serde_json::to_value(selected).map_err(|_| Error::InvalidConfiguration {
-            reason: "restore selection cannot be encoded",
-        })?;
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
         let config = self.folder(folder).await?;
         if config.paused {
             return Err(Error::FolderPaused { id: folder.clone() });
         }
-        self.require_past_archive_second(latest).await?;
+        self.require_past_archive_second(latest, None).await?;
         let url = self
             .connection
             .management_url("rest/folder/versions", &[("folder", folder.as_str())])?;
@@ -637,17 +982,89 @@ impl Client {
             .connection
             .request_bytes(operation, reqwest::Method::POST, url, Some(&body), true)
             .await?;
-        serde_json::from_slice(&bytes).map_err(|_| {
-            mutation_error(
-                operation,
-                true,
-                Error::InvalidResponse {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                },
-            )
-        })
+        decode_restore_reply(operation, status, bytes)
     }
+}
+
+fn versioner_from_folder(config: &crate::FolderConfig) -> Result<FolderVersioningConfiguration> {
+    let value = config
+        .extra
+        .get("versioning")
+        .cloned()
+        .ok_or(Error::InvalidConfiguration {
+            reason: "native folder versioning configuration is absent",
+        })?;
+    serde_json::from_value(value).map_err(|_| Error::InvalidConfiguration {
+        reason: "native folder versioning configuration has an unknown schema",
+    })
+}
+
+fn file_restore_body(
+    style: crate::PathStyle,
+    items: &[FileVersionRestore],
+) -> Result<(serde_json::Value, i64)> {
+    if !(1..=1024).contains(&items.len()) {
+        return Err(Error::InvalidConfiguration {
+            reason: "restore requires between one and 1024 explicit file versions",
+        });
+    }
+    let mut selected = BTreeMap::new();
+    let mut latest = i64::MIN;
+    let mut bytes = 0usize;
+    for item in items {
+        latest = latest.max(archive_second(&item.version_time)?);
+        let path = crate::scans::validate_subpath(&item.path, style)?;
+        bytes = bytes
+            .saturating_add(path.len())
+            .saturating_add(item.version_time.len());
+        if selected.insert(path, item.version_time.as_str()).is_some() || bytes > 65536 {
+            return Err(Error::InvalidConfiguration {
+                reason: "restore paths must be unique within a 64 KiB logical selection bound",
+            });
+        }
+    }
+    let body = serde_json::to_value(selected).map_err(|_| Error::InvalidConfiguration {
+        reason: "restore selection cannot be encoded",
+    })?;
+    Ok((body, latest))
+}
+
+fn directory_restore_body(
+    style: crate::PathStyle,
+    scope: &VersionedDirectory,
+    order: DirectoryVersionOrder,
+) -> Result<serde_json::Value> {
+    let path = match scope {
+        VersionedDirectory::FolderRoot => ".",
+        VersionedDirectory::Path(path) => crate::scans::validate_subpath(path, style)?,
+    };
+    if path.len() > 65536 {
+        return Err(Error::InvalidConfiguration {
+            reason: "directory version selection exceeds 64 KiB",
+        });
+    }
+    let action = match order {
+        DirectoryVersionOrder::Newest => "latest",
+        DirectoryVersionOrder::Oldest => "oldest",
+    };
+    Ok(serde_json::json!({"items":[{"path":path,"action":action}]}))
+}
+
+fn decode_restore_reply(
+    operation: &'static str,
+    status: u16,
+    bytes: Vec<u8>,
+) -> Result<FileVersionRestoreReport> {
+    serde_json::from_slice(&bytes).map_err(|_| {
+        mutation_error(
+            operation,
+            true,
+            Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes),
+            },
+        )
+    })
 }
 
 #[cfg(test)]

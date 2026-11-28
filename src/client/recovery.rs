@@ -1,13 +1,221 @@
 //! Explicit potentially destructive recovery requests without write retries.
-use super::{delivery::same_resource, workflow_write_result, Client};
+use super::{
+    delivery::{delivery_resource_path, same_resource},
+    workflow_write_result, Client,
+};
+use crate::{
+    operation_options::OperationContext, DeliveryEvidenceSource, DeliveryFile, DeliveryFileOutcome,
+    DeliveryVerification, FolderConfig, FolderRecovery, FolderRecoveryReport, OperationCompletion,
+    RecoveredFile, RecoveryReadback, ResourceFileState,
+};
 use crate::{
     Error, FolderId, MarkerRepairReport, MarkerRepairResult, OperationOptions, OperationPhase,
     ResourcePath, ResponseDiagnostic, Result, TargetPath,
 };
 use reqwest::Method;
+use std::collections::BTreeSet;
+use std::time::{Duration, SystemTime};
 use tokio::time::Instant;
 
 impl Client {
+    /// Request a whole-folder receive-only revert or send-only override once.
+    /// Review the folder's role and keep copies of edits before confirming it.
+    /// The engine may change files beyond those listed for verification. The
+    /// report compares only the selected bytes, using the original namespace
+    /// and explicit connections. It does not pause peers or replay recovery.
+    pub async fn recover_folder_and_verify(
+        &self,
+        expected_path: &TargetPath,
+        recovery: FolderRecovery<'_>,
+        options: OperationOptions,
+    ) -> Result<FolderRecoveryReport> {
+        const RECOVER: &str = "request selected native folder recovery";
+        const VERIFY: &str = "verify selected recovered folder files";
+        let (folder, files, mode, route) = match &recovery {
+            FolderRecovery::Revert { folder, files } => {
+                (*folder, *files, "receiveonly", "rest/db/revert")
+            }
+            FolderRecovery::Override { batch, .. } => {
+                self.require_delivery_source(batch)?;
+                (
+                    &batch.folder,
+                    batch.files.as_slice(),
+                    "sendonly",
+                    "rest/db/override",
+                )
+            }
+        };
+        let unique: BTreeSet<_> = files.iter().map(|file| file.components()).collect();
+        if !(1..=1024).contains(&files.len()) || unique.len() != files.len() {
+            return Err(Error::InvalidConfiguration {
+                reason: "recovery requires 1 through 1024 distinct files to verify",
+            });
+        }
+        let context = options.start()?;
+        let url = self
+            .connection
+            .management_url(route, &[("folder", folder.as_str())])?;
+        let mut guard = None;
+        let mut write = Default::default();
+        let mut before = None;
+        let mut selected = None;
+        let attempted = context.wait(context.dispatch_deadline(), RECOVER, async {
+            context.phase(OperationPhase::Checking);
+            guard = Some(self.connection.mutation_lock.lock().await);
+            self.observe_control_identity().await?;
+            let generation = self.system_status().await?.start_time.ok_or(Error::InvalidConfiguration {
+                reason: "the selected engine did not report its start time",
+            })?;
+            let config = self.folder(folder).await?;
+            if config.paused {
+                return Err(Error::FolderPaused { id: folder.clone() });
+            }
+            if config.extra.get("type").and_then(serde_json::Value::as_str) != Some(mode)
+                || config.path.style() != expected_path.style()
+                || config.path.to_protocol()? != expected_path.to_protocol()?
+            {
+                return Err(Error::ConfigurationChanged);
+            }
+            let base = self.local_file_manager_base(&config.path).await?;
+            let round = self.recovery_readback(&recovery, &base, &context, context.dispatch_deadline()).await?;
+            let complete = round.completion() == OperationCompletion::Completed;
+            let readable = recovery_readable(&round);
+            before = Some(round);
+            self.require_recovery_scope(folder, &config, &base, &generation).await?;
+            if complete {
+                return Ok(None);
+            }
+            if !readable && !matches!(&recovery, FolderRecovery::Override { verification: DeliveryVerification::BestEffort, .. }) {
+                return Err(Error::InvalidConfiguration { reason: "at least one selected file cannot be verified with the supplied access" });
+            }
+            if let FolderRecovery::Override { batch, .. } = &recovery {
+                let peers = config.extra.get("devices").and_then(serde_json::Value::as_array)
+                    .ok_or(Error::InvalidConfiguration { reason: "the selected authority folder has no observable peer list" })?;
+                if batch.targets.keys().any(|id| !peers.iter().any(|peer| peer["deviceID"].as_str() == Some(id.as_str()))) {
+                    return Err(Error::ConfigurationChanged);
+                }
+                for file in files {
+                    let path = delivery_resource_path(&base, file.components())?;
+                    if !recovery_matches(self.resource_file_state(&path).await?, file) {
+                        return Err(Error::InvalidConfiguration { reason: "an authority file differs from the expected content" });
+                    }
+                }
+                self.require_recovery_scope(folder, &config, &base, &generation).await?;
+            }
+            if Instant::now() >= context.dispatch_deadline() {
+                return Err(Error::Timeout { operation: RECOVER });
+            }
+            selected = Some((generation, config, base));
+            let request = self.connection.authorized_request(Method::POST, url, None);
+            let reply = self.connection.send_workflow_write(RECOVER, request, &context, &mut write).await?;
+            validate_recovery_reply(RECOVER, reply.status, &reply.body)?;
+            Ok(Some(ResponseDiagnostic::new(reply.status, reply.body)))
+        }).await;
+        let original = workflow_write_result(RECOVER, write, attempted);
+        let refused = write.response_complete
+            && matches!(
+                original,
+                Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+            );
+        let mut report = FolderRecoveryReport {
+            write,
+            original,
+            before,
+            current: None,
+            observation_error: None,
+        };
+        if let Some((generation, config, base)) = selected.filter(|_| write.dispatched && !refused)
+        {
+            context.phase(OperationPhase::Verifying);
+            report.observation_error = context
+                .wait(context.deadline, VERIFY, async {
+                    loop {
+                        self.require_recovery_scope(folder, &config, &base, &generation)
+                            .await?;
+                        let round = self
+                            .recovery_readback(&recovery, &base, &context, context.deadline)
+                            .await?;
+                        self.require_recovery_scope(folder, &config, &base, &generation)
+                            .await?;
+                        let stop = round.completion() == OperationCompletion::Completed
+                            || !recovery_readable(&round);
+                        report.current = Some(round);
+                        if stop {
+                            return Ok(());
+                        }
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
+                })
+                .await
+                .err();
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn require_recovery_scope(
+        &self,
+        folder: &FolderId,
+        initial: &FolderConfig,
+        mount: &ResourcePath,
+        generation: &str,
+    ) -> Result<()> {
+        let now = self.folder(folder).await?;
+        if now.paused
+            || now.path != initial.path
+            || now.extra.get("type") != initial.extra.get("type")
+            || now.extra.get("devices") != initial.extra.get("devices")
+            || !same_resource(mount, &self.local_file_manager_base(&now.path).await?)
+        {
+            return Err(Error::ConfigurationChanged);
+        }
+        self.require_configuration_generation(generation).await
+    }
+
+    async fn recovery_readback(
+        &self,
+        recovery: &FolderRecovery<'_>,
+        base: &ResourcePath,
+        context: &OperationContext,
+        deadline: Instant,
+    ) -> Result<RecoveryReadback> {
+        match recovery {
+            FolderRecovery::Override {
+                batch, receivers, ..
+            } => Ok(RecoveryReadback::Receivers(
+                self.delivery_observation_round(
+                    batch,
+                    receivers,
+                    &[],
+                    SystemTime::now(),
+                    context,
+                    deadline,
+                )
+                .await?,
+            )),
+            FolderRecovery::Revert { files, .. } => {
+                let mut observed = Vec::with_capacity(files.len());
+                for (file_index, file) in files.iter().enumerate() {
+                    let path = delivery_resource_path(base, file.components())?;
+                    let (matches, error) = match self.resource_file_state(&path).await {
+                        Ok(ResourceFileState::OtherKind) => {
+                            (None, Some(Error::ResourceAlreadyExists))
+                        }
+                        Ok(state) => (Some(recovery_matches(state, file)), None),
+                        Err(error) => (None, Some(error)),
+                    };
+                    observed.push(RecoveredFile {
+                        file_index,
+                        matches,
+                        error,
+                    });
+                }
+                Ok(RecoveryReadback::Local(observed))
+            }
+        }
+    }
+
     /// Verify the exact folder path and its native local mount before asking
     /// VerySync to repair a missing marker. An existing marker requires no
     /// write. The report separates the marker directory from folder activity.
@@ -226,17 +434,9 @@ impl Client {
             .connection
             .request_bytes(operation, reqwest::Method::POST, url, None, true)
             .await?;
-        if !bytes.is_empty() {
-            return Err(Error::MutationOutcomeUnknown {
-                operation,
-                source: Box::new(Error::InvalidResponse {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                }),
-            });
-        }
-        Ok(())
+        validate_recovery_reply(operation, status, &bytes)
     }
+
     /// Ask the engine to repair this configured folder's marker. The SDK never
     /// inspects, removes or creates paths itself. Inspect actual folder state
     /// afterward; a reported success is distinct from restored data/identity.
@@ -279,4 +479,42 @@ fn decode_marker_reply(
         });
     }
     Ok(result)
+}
+
+fn validate_recovery_reply(operation: &'static str, status: u16, bytes: &[u8]) -> Result<()> {
+    if !bytes.is_empty() {
+        return Err(Error::MutationOutcomeUnknown {
+            operation,
+            source: Box::new(Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes.to_vec()),
+            }),
+        });
+    }
+    Ok(())
+}
+
+fn recovery_matches(state: ResourceFileState, file: &DeliveryFile) -> bool {
+    state
+        == ResourceFileState::Present {
+            bytes: file.bytes(),
+            sha256: *file.sha256(),
+        }
+}
+
+fn recovery_readable(readback: &RecoveryReadback) -> bool {
+    match readback {
+        RecoveryReadback::Local(files) => files.iter().all(|file| file.error.is_none()),
+        RecoveryReadback::Receivers(report) => {
+            report.observation_error.is_none()
+                && report.recipients.values().all(|receiver| {
+                    receiver.files.iter().all(|file| {
+                        file.outcome != DeliveryFileOutcome::Conflicting
+                            && file.evidence.iter().any(|record| {
+                                record.source == DeliveryEvidenceSource::RecipientRead
+                            })
+                    })
+                })
+        }
+    }
 }

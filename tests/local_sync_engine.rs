@@ -116,6 +116,9 @@ async fn local_sync_business_native_executes_reviewed_preview_and_reads_exact_ru
 #[tokio::test]
 async fn public_local_sync_preview_execution_and_registration_changes_preserve_actual_data(
 ) -> TestResult {
+    use verysync_sidecar::{
+        Error, LocalSyncRegistrationChange, OperationCompletion, OperationOptions,
+    };
     let root = tempfile::Builder::new()
         .prefix("vls-public-")
         .tempdir()?
@@ -142,9 +145,28 @@ async fn public_local_sync_preview_execution_and_registration_changes_preserve_a
         .entries
         .iter()
         .any(|e| e.path == "nested" && e.directory));
-    core.client()
-        .create_storage_directory(&a, "nested", "created 中文 %")
-        .await?;
+    use verysync_sidecar::DirectoryTarget;
+    for expect_write in [true, false] {
+        let report = core
+            .client()
+            .create_directory_and_verify(
+                DirectoryTarget::LocalSync {
+                    endpoint: &a,
+                    parent: "nested",
+                    name: "created 中文 %",
+                },
+                OperationOptions::new(Duration::from_secs(10)),
+            )
+            .await?;
+        assert_eq!(
+            report.completion(),
+            OperationCompletion::Completed,
+            "{report:?}"
+        );
+        assert_eq!(report.write.dispatched, expect_write);
+        assert_eq!(report.original?.is_some(), expect_write);
+    }
+    println!("verified_directory_namespace=local-sync original_and_readback=true repeated_zero_write=true");
     assert!(source.join("nested").join("created 中文 %").is_dir());
     let options = CreateLocalSyncJob::new(
         "explicit synthetic job",
@@ -246,14 +268,54 @@ async fn public_local_sync_preview_execution_and_registration_changes_preserve_a
     assert!(history.records.iter().all(|r| r.job_id == job.job_id));
     let original = serde_json::to_value(&job)?;
     let patch = LocalSyncJobPatch::default().label("renamed explicit job")?;
+    let change = LocalSyncRegistrationChange::Update {
+        expected: &job,
+        patch: &patch,
+    };
     let updated = core
         .client()
-        .update_local_sync_job(&job.job_id, &patch)
+        .change_local_sync_registration_and_verify(
+            change,
+            OperationOptions::new(Duration::from_secs(15)),
+        )
         .await?;
-    assert!(updated.requested_fields_match);
+    assert_eq!(
+        updated.completion(),
+        OperationCompletion::Completed,
+        "{updated:?}"
+    );
+    assert!(updated.write.dispatched && updated.write.response_complete);
+    let updated = updated
+        .current
+        .ok_or("verified native registration was missing")?;
     let mut expected = original;
     expected["label"] = serde_json::json!("renamed explicit job");
-    assert_eq!(serde_json::to_value(&updated.configuration)?, expected);
+    assert_eq!(serde_json::to_value(&updated)?, expected);
+    let current = core
+        .client()
+        .change_local_sync_registration_and_verify(
+            LocalSyncRegistrationChange::Update {
+                expected: &updated,
+                patch: &patch,
+            },
+            OperationOptions::new(Duration::from_secs(15)),
+        )
+        .await?;
+    assert!(!current.write.dispatched && current.original?.is_none());
+    assert_eq!(current.requested_fields_match, Some(true));
+    let stale = core
+        .client()
+        .change_local_sync_registration_and_verify(
+            LocalSyncRegistrationChange::Remove(&job),
+            OperationOptions::new(Duration::from_secs(15)),
+        )
+        .await?;
+    assert!(matches!(stale.original, Err(Error::ConfigurationChanged)));
+    assert!(!stale.write.dispatched);
+    assert_eq!(
+        serde_json::to_value(core.client().local_sync_job(&job.job_id).await?)?,
+        expected
+    );
     let grouped = core
         .client()
         .update_local_sync_job(
@@ -276,7 +338,23 @@ async fn public_local_sync_preview_execution_and_registration_changes_preserve_a
     assert_eq!(serde_json::to_value(&ungrouped.configuration)?, expected);
     assert!(!format!("{job:?} {preview:?} {run:?} {a:?} {history:?}")
         .contains(source.to_str().ok_or("private source UTF8")?));
-    core.client().delete_local_sync_job(&job.job_id).await?;
+    for dispatch in [true, false] {
+        let result = core
+            .client()
+            .change_local_sync_registration_and_verify(
+                LocalSyncRegistrationChange::Remove(&ungrouped.configuration),
+                OperationOptions::new(Duration::from_secs(15)),
+            )
+            .await?;
+        assert_eq!(result.write.dispatched, dispatch);
+        assert_eq!(
+            result.completion(),
+            OperationCompletion::Completed,
+            "{result:?}"
+        );
+        assert_eq!(result.registration_present, Some(false));
+    }
+    println!("verified_sync_registration original_update=true current_update=true repeated_update_zero=true stale_remove_zero=true removal_verified=true repeat_removal_zero=true");
     assert!(core.client().local_sync_jobs().await?.is_empty());
     assert_eq!(
         std::fs::read(target.join("nested").join("file %.txt"))?,

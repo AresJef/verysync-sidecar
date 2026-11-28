@@ -645,3 +645,12 @@ producer `329e6680abd7dc5424e263ad2f41642112700642`, tree
 `5ab134ee957f7208391c2d99e8930c317049e5ac`. Other cases in that full run failed;
 these selected authentication effects retain their original producer and do not
 establish full final-source or minimum-system acceptance.
+
+
+Use `change_local_sync_registration_and_verify` when editing or removing a
+reviewed job. Keep its last observed configuration as the expected starting
+state. If the registered job has changed, review its latest configuration before
+trying again. A matching edit or an already absent job requires no write.
+The report ties the original request to the exact job ID and its later
+registration. Check the run and files separately before assuming work stopped
+or data changed.

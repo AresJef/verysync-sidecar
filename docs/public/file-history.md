@@ -333,3 +333,22 @@ archive retention, explicit restore, refusal to restore an archive from the
 target's current clock second and normal owned shutdown. Positive generation,
 paging and deletion of licensed global audit records remain deferred.
 [Native test run](https://github.com/AresJef/verysync-sidecar/actions/runs/44998190581)
+
+
+Use `restore_versions_and_verify` when you have the expected length and
+SHA-256 of every selected version. Supply one checksum per path and native
+archive timestamp for a file selection. For a directory, supply checksums for
+the complete set of files in the archive inventory under that directory.
+The SDK checks the selected paths and target's clock before it sends a request.
+It then reads the files through the same VerySync instance and reports each
+comparison separately. If all the selected files already have the expected
+bytes, it leaves them and the archive unchanged. These checks describe the
+selected device. Verify any intended updates on other devices separately.
+
+
+Use `change_versioning_and_verify` to edit the policy, archive location, or
+both in one request. Choose an existing folder or the future-folder template.
+If the selected settings already match, there is no write. Check the
+independent archive inventory for an existing folder when it is available.
+Changing location affects where VerySync looks for versions. Keep a separate
+copy of any earlier archives you need.

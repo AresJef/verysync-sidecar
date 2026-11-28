@@ -310,3 +310,112 @@ impl fmt::Debug for CoreMetricsSnapshot {
             .finish_non_exhaustive()
     }
 }
+
+/// A separately scoped change to the selected engine's runtime log.
+#[non_exhaustive]
+pub enum CoreLogChange<'a> {
+    /// Append one error with a distinct caller-selected correlation identifier.
+    Record {
+        /// Error text to submit to the native process.
+        message: &'a str,
+        /// Unique, non-secret ASCII letters, digits, hyphens or underscores.
+        /// The SDK appends it as a label to the native message.
+        correlation: &'a str,
+    },
+    /// Clear the current error log once.
+    ClearErrors,
+    /// Change selected active package levels.
+    Levels(&'a BTreeMap<String, CoreLogLevel>),
+}
+
+/// Independent native results for a selected logging change.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CoreLogObservation {
+    /// Entries containing the exact correlation label.
+    Recorded {
+        /// Count of current entries with the supplied label.
+        matches: usize,
+        /// Current native error log.
+        log: CoreErrorLog,
+    },
+    /// Compare the original and current logs while retaining new errors.
+    Cleared {
+        /// Number of entries observed before clearing.
+        previous: usize,
+        /// Original entries also observed in the later snapshot.
+        remaining: usize,
+        /// Later entries outside the original snapshot.
+        new_entries: usize,
+        /// Current error log, which can already contain new errors.
+        log: CoreErrorLog,
+    },
+    /// Current levels for the requested packages.
+    Levels {
+        /// Packages explicitly selected.
+        selected: usize,
+        /// Selected packages with the requested actual level.
+        matching: usize,
+        /// Full current native level settings.
+        current: CoreLogLevels,
+    },
+}
+
+impl CoreLogObservation {
+    /// Classify the visible native logging result.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        use crate::OperationCompletion as Result;
+        match self {
+            Self::Recorded { matches: 1, .. } | Self::Cleared { remaining: 0, .. } => {
+                Result::Completed
+            }
+            Self::Recorded { matches: 0, .. } => Result::GoalNotMet,
+            Self::Recorded { .. } => Result::Unconfirmed,
+            Self::Cleared {
+                previous,
+                remaining,
+                ..
+            } if previous == remaining => Result::GoalNotMet,
+            Self::Cleared { .. } => Result::PartiallyCompleted,
+            Self::Levels {
+                selected, matching, ..
+            } if selected == matching => Result::Completed,
+            Self::Levels { matching: 0, .. } => Result::GoalNotMet,
+            Self::Levels { .. } => Result::PartiallyCompleted,
+        }
+    }
+}
+
+/// The original native logging request and independent current observations.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct CoreLogChangeReport {
+    /// Dispatch and response evidence for the optional change.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original result. An empty success means the state already matched.
+    pub original: crate::Result<Option<crate::ResponseDiagnostic>>,
+    /// Current logging observation on the original engine generation.
+    pub current: Option<CoreLogObservation>,
+    /// Why the later logging facts could not be verified.
+    pub observation_error: Option<crate::Error>,
+}
+
+impl CoreLogChangeReport {
+    /// Classify the selected logging outcome.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        use crate::{Error, OperationCompletion as Result};
+        if let Some(current) = &self.current {
+            current.completion()
+        } else if !self.write.dispatched
+            || (self.write.response_complete
+                && matches!(
+                    self.original,
+                    Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+                ))
+        {
+            Result::GoalNotMet
+        } else {
+            Result::Unconfirmed
+        }
+    }
+}

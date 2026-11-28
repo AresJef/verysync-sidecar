@@ -36,24 +36,32 @@ async fn native_default_versioning_inheritance_selects_real_archives_and_retains
     }
     let old = join(&core, &old_path, true).await?;
     let old_policy = core.client().folder_versioning(&old.id).await?;
-    assert!(
-        core.client()
-            .set_folder_default_versioning(FolderVersioningPolicy::Simple {
-                keep: 2,
-                cleanout_days: 0,
-                cleanup_interval_seconds: 3600,
-            })
-            .await?
-            .requested_fields_match
-    );
-    assert!(
-        core.client()
-            .set_folder_default_archive_location(&VersionArchiveLocation::BasicDirectory(
-                TargetPath::local(archive.clone())
-            ))
-            .await?
-            .requested_fields_match
-    );
+    let policy = FolderVersioningPolicy::Simple {
+        keep: 2,
+        cleanout_days: 0,
+        cleanup_interval_seconds: 3600,
+    };
+    let location = VersionArchiveLocation::BasicDirectory(TargetPath::local(&archive));
+    for expected_write in [true, false] {
+        let report = core
+            .client()
+            .change_versioning_and_verify(
+                VersioningTarget::FutureFolders,
+                Some(&policy),
+                Some(&location),
+                OperationOptions::new(Duration::from_secs(10)),
+            )
+            .await?;
+        assert_eq!(report.write.dispatched, expected_write);
+        assert_eq!(
+            report.completion(),
+            OperationCompletion::Completed,
+            "{report:?}"
+        );
+        assert_eq!(report.original?.is_some(), expected_write);
+        assert!(report.archive.is_none());
+    }
+    println!("native_versioner_template original_and_exact_readback=true repeat_zero=true");
     assert_eq!(core.client().folder_versioning(&old.id).await?, old_policy);
     std::fs::write(
         fresh_path.join("versioned.txt"),

@@ -251,11 +251,22 @@ jobs:
               --sdk-completion-consumer "$consumer" \
               --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/$selector" || result=1
           done <<'CASES'
+          configuration_engine native_general_preferences_preserve_sections_disable_progress_and_change_priority_after_restart
+          network actual_private_udp_only_peers_and_disabled_tracker_nat_observations
+          network actual_owned_private_relay_session_with_tcp_and_udp_disabled
+          p2p_three_nodes introducer_cases::
+          file_history_engine public_version_policy_archives_remote_changes_and_restores_old_bytes
+          file_history_engine public_directory_restore_selects_nested_and_explicit_root_versions
+          local_sync_engine public_local_sync_preview_execution_and_registration_changes_preserve_actual_data
+          engine_control actual_target_directory_helpers_create_read_and_retain_only_explicit_synthetic_paths
+          configuration_engine native_default_versioning_inheritance_selects_real_archives_and_retains_old_folders
+          maintenance_engine public_core_errors_logs_levels_and_owned_diagnostics
           upgrade_engine offline_backup_restore_preserves_old_index_and_rejects_corruption
           invitations actual_folder_offer_dismiss_ignore_unignore_and_explicit_read_only_acceptance
           sync_observation actual_ignore_replace_parse_rejection_reset_and_restart_preserve_files
           configuration_engine native_default_ignore_template_and_explicit_application_preserve_rules_files_and_restart
           sync_observation actual_receiveonly_revert_and_marker_repair_restore_owned_data
+          sync_observation actual_sendonly_override_restores_remote_data_and_preserves_authority
           sync_observation actual_folder_order_and_specific_priority_change_preserve_samples
           CASES
           exit "$result"

@@ -29,6 +29,7 @@ async fn local_sync_registration_never_adopts_old_id_or_same_label_with_other_en
         StorageEndpoint::local(TargetPath::remote(PathStyle::Unix, "/fixture/to")?)?,
         LocalSyncMode::MirrorAToB,
     )?;
+    let generation = || Reply::json(json!({"myID":ID,"startTime":"generation-one"}));
     let expected = serde_json::to_value(&input)?;
     let job = |id: &str, correct_fields: bool| {
         let mut fields = expected.clone();
@@ -51,14 +52,18 @@ async fn local_sync_registration_never_adopts_old_id_or_same_label_with_other_en
         let different = job("same-label-different-path", false);
         let mut replies = connection();
         replies.extend([
-            identity(),
+            Reply::json(json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            generation(),
+            generation(),
+            generation(),
             Reply::json(json!([old])),
-            identity(),
+            generation(),
             Reply {
                 status: 0,
                 ..Reply::json(json!({}))
             },
-            identity(),
+            generation(),
+            generation(),
         ]);
         replies.push(Reply::json(match name {
             "one exact candidate" => json!([old, new, different]),
@@ -66,7 +71,7 @@ async fn local_sync_registration_never_adopts_old_id_or_same_label_with_other_en
             _ => json!([old, different]),
         }));
         if want == Outcome::MatchingNewRegistrationObserved {
-            replies.extend([identity(), Reply::json(new)]);
+            replies.extend([generation(), Reply::json(new), generation()]);
         }
         let server = ScriptedServer::start(replies).await?;
         let client = Client::connect(server.options()?).await?;

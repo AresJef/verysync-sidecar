@@ -243,7 +243,7 @@ impl Client {
         Ok(report)
     }
 
-    async fn require_configuration_generation(&self, generation: &str) -> Result<()> {
+    pub(super) async fn require_configuration_generation(&self, generation: &str) -> Result<()> {
         if self.system_status().await?.start_time.as_deref() != Some(generation) {
             return Err(Error::ConfigurationChanged);
         }

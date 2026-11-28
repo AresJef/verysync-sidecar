@@ -9,6 +9,66 @@ use crate::{
     LocalSyncSummary, ManagementWriteEvidence, OperationCompletion, OperationOptions, Result,
 };
 
+/// Apply one change to a reviewed exact Local Sync registration.
+#[non_exhaustive]
+pub enum LocalSyncRegistrationChange<'a> {
+    /// Update explicitly selected job settings.
+    Update {
+        /// Reviewed job and endpoints.
+        expected: &'a LocalSyncJob,
+        /// Exact fields to change.
+        patch: &'a crate::LocalSyncJobPatch,
+    },
+    /// Remove the reviewed registration while keeping its ordinary files.
+    Remove(&'a LocalSyncJob),
+}
+
+/// A Local Sync registration change and separately observed current state.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct LocalSyncRegistrationChangeReport {
+    /// Original PUT or DELETE dispatch facts.
+    pub write: ManagementWriteEvidence,
+    /// Original result. An empty reply means the registration already matched.
+    pub original: Result<Option<crate::ResponseDiagnostic>>,
+    /// Whether the exact job ID is currently registered on the original engine.
+    pub registration_present: Option<bool>,
+    /// Whether the selected update fields match, when applicable.
+    pub requested_fields_match: Option<bool>,
+    /// Actual current registration, when available.
+    pub current: Option<LocalSyncJob>,
+    /// Why the registration could not be independently checked after submission.
+    pub observation_error: Option<Error>,
+    pub(crate) remove: bool,
+}
+
+impl LocalSyncRegistrationChangeReport {
+    /// Classify the selected registration change without inferring file effects.
+    pub fn completion(&self) -> OperationCompletion {
+        let matches = if self.remove {
+            self.registration_present.map(|present| !present)
+        } else {
+            self.requested_fields_match
+        };
+        match matches {
+            Some(true) => OperationCompletion::Completed,
+            Some(false) => OperationCompletion::GoalNotMet,
+            None if !self.write.dispatched
+                || (self.write.response_complete
+                    && matches!(
+                        self.original,
+                        Err(Error::Authentication { .. }
+                            | Error::AccessDenied { .. }
+                            | Error::LicenseRequired { .. })
+                    )) =>
+            {
+                OperationCompletion::GoalNotMet
+            }
+            None => OperationCompletion::Unconfirmed,
+        }
+    }
+}
+
 /// Observed outcome of one command for a selected Local Sync run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]

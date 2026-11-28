@@ -1,7 +1,9 @@
 //! Native picker locations, directory contents and explicit filesystem effects.
 use super::managed_fixture::{options, TestResult};
 use std::time::Duration;
-use verysync_sidecar::{Error, ManagedInstance, TargetPath};
+use verysync_sidecar::{
+    DirectoryTarget, Error, ManagedInstance, OperationCompletion, OperationOptions, TargetPath,
+};
 
 #[tokio::test]
 async fn actual_target_directory_helpers_create_read_and_retain_only_explicit_synthetic_paths(
@@ -31,13 +33,39 @@ async fn actual_target_directory_helpers_create_read_and_retain_only_explicit_sy
     assert!(!format!("{:?}", entries[0]).contains("child"));
     let added = data.join("new & + % 测试");
     assert!(!added.exists());
-    let created = owner
+    let requested = TargetPath::local(&added);
+    for expect_write in [true, false] {
+        let report = owner
+            .client()
+            .create_directory_and_verify(
+                DirectoryTarget::NativePicker(&requested),
+                OperationOptions::new(Duration::from_secs(10)),
+            )
+            .await?;
+        assert_eq!(
+            report.completion(),
+            OperationCompletion::Completed,
+            "{report:?}"
+        );
+        assert_eq!(report.existed_before, Some(!expect_write));
+        assert_eq!(report.write.dispatched, expect_write);
+        assert_eq!(report.original?.is_some(), expect_write);
+    }
+    let existing_file = TargetPath::local(&sentinel);
+    let rejected = owner
         .client()
-        .create_target_directory(&TargetPath::local(&added))
+        .create_directory_and_verify(
+            DirectoryTarget::NativePicker(&existing_file),
+            OperationOptions::new(Duration::from_secs(10)),
+        )
         .await?;
+    assert!(matches!(
+        rejected.original,
+        Err(Error::ResourceAlreadyExists)
+    ));
+    assert!(!rejected.write.dispatched);
     assert!(added.is_dir());
-    assert!(!created.native_message.is_empty());
-    assert!(created.path.local_path().is_none());
+    println!("verified_directory_namespace=native-picker originals_and_readback=true repeated_zero_write=true existing_file_zero_write=true");
     assert!(owner
         .client()
         .target_directories(&TargetPath::local(&added))

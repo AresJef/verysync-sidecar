@@ -263,7 +263,7 @@ impl Client {
         Ok(())
     }
 
-    async fn delivery_observation_round(
+    pub(super) async fn delivery_observation_round(
         &self,
         batch: &DeliveryBatch,
         receivers: &[&Client],
@@ -408,7 +408,7 @@ impl Client {
         Ok(report)
     }
 
-    fn require_delivery_source(&self, batch: &DeliveryBatch) -> Result<()> {
+    pub(super) fn require_delivery_source(&self, batch: &DeliveryBatch) -> Result<()> {
         if self.instance().device_id != batch.source {
             return Err(Error::IdentityMismatch {
                 expected: batch.source.clone(),
@@ -501,7 +501,10 @@ impl Client {
     }
 }
 
-fn delivery_resource_path(base: &ResourcePath, components: &[String]) -> Result<ResourcePath> {
+pub(super) fn delivery_resource_path(
+    base: &ResourcePath,
+    components: &[String],
+) -> Result<ResourcePath> {
     components
         .iter()
         .try_fold(base.clone(), |path, component| path.child(component))
@@ -514,7 +517,7 @@ pub(super) fn same_resource(first: &ResourcePath, second: &ResourcePath) -> bool
 }
 
 /// Only use an exact lexical mapping between two native absolute paths.
-fn native_path_parts(style: PathStyle, path: &str) -> Option<Vec<&str>> {
+pub(super) fn native_path_parts(style: PathStyle, path: &str) -> Option<Vec<&str>> {
     let separator = |c| c == '/' || (style == PathStyle::Windows && c == '\\');
     let (prefix, path) = match style {
         PathStyle::Unix if !path.starts_with("//") => ("/", path.strip_prefix('/')?),

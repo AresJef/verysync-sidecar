@@ -123,3 +123,11 @@ mutation rechecks target identity, shares the Client-clone mutation lock and
 sends no automatic write retry. Independent clients/writers must coordinate
 read-modify-write settings. Failed post-write verification remains
 `MutationOutcomeUnknown`; reconcile actual state before another explicit action.
+
+
+Use `observe_folder_introduction` with the selected folder, introducer, and
+third device to check a current association. The report shows the trust and
+withdrawal options, the recorded introduction source and folder membership,
+and any current connections. Compare snapshots before and after the native
+peer exchange to verify what was added or removed. The read does not change
+any peer settings. A separate file check is needed to verify delivery.

@@ -98,7 +98,8 @@ async fn diagnose_owned_paths(
 async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthetic_bytes(
 ) -> TestResult {
     use verysync_sidecar::{
-        OperationOptions, ResourceFileState, ResourceRelocationOutcome, ResourceRemovalOutcome,
+        DirectoryTarget, OperationCompletion, OperationOptions, ResourceFileState,
+        ResourceRelocationOutcome, ResourceRemovalOutcome,
     };
     let root = tempfile::Builder::new().prefix("vfm-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
@@ -108,8 +109,24 @@ async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthet
     std::fs::write(&caller_sample, caller_bytes)?;
     let (profile, volume) = mount(&core).await?;
     let base = volume.clone().child("changes")?;
-    let result = core.client().create_resource_directory(&base).await?;
-    assert!(result.is_dir);
+    for expect_write in [true, false] {
+        let result = core
+            .client()
+            .create_directory_and_verify(
+                DirectoryTarget::FileManager(&base),
+                OperationOptions::new(Duration::from_secs(10)),
+            )
+            .await?;
+        assert_eq!(result.write.dispatched, expect_write);
+        assert_eq!(result.existed_before, Some(!expect_write));
+        assert_eq!(
+            result.completion(),
+            OperationCompletion::Completed,
+            "{result:?}"
+        );
+        assert_eq!(result.original?.is_some(), expect_write);
+    }
+    println!("verified_directory_namespace=file-manager original_and_readback=true repeated_zero_write=true");
     let native = profile.join("changes");
     assert!(native.is_dir());
     let nested = base.clone().child("parents")?.child("二 %.dir")?;

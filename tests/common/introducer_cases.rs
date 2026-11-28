@@ -3,7 +3,7 @@ use super::{associate, connected, options, private_tcp, received, TestResult};
 use std::{fs, path::PathBuf, time::Duration};
 use verysync_sidecar::{
     Client, DeviceAdvancedPatch, DeviceId, DevicePatch, DeviceTransport, FolderId,
-    IntroductionSource, JoinFolderOptions, ManagedInstance, TargetPath,
+    JoinFolderOptions, ManagedInstance, OperationOptions, TargetPath,
 };
 
 async fn set_introducer(client: &Client, via: &DeviceId, trusted: bool, keep: bool) -> TestResult {
@@ -68,26 +68,29 @@ async fn introduction(
     via: &DeviceId,
     introduced: &DeviceId,
 ) -> TestResult<[bool; 3]> {
-    let devices = client.devices().await?;
-    let record = devices
-        .iter()
-        .find(|device| &device.device_id == introduced);
-    let origin = record
-        .map(|record| record.advanced_configuration())
-        .transpose()?
-        .and_then(|advanced| advanced.introduced_by);
-    let folder = client.folder(folder).await?;
-    let members = folder
-        .extra
-        .get("devices")
-        .and_then(serde_json::Value::as_array)
-        .ok_or("native folder association array missing")?;
+    let report = client
+        .observe_folder_introduction(
+            folder,
+            via,
+            introduced,
+            OperationOptions::new(Duration::from_secs(5)),
+        )
+        .await?;
+    assert_eq!(
+        report.has_selected_introduction(),
+        report.introducer_trusted == Some(true)
+            && report.device_registered
+            && report.device_origin_matches == Some(true)
+            && report.folder_associated
+    );
+    assert_eq!(
+        report.both_absent(),
+        !report.device_registered && !report.folder_associated
+    );
     Ok([
-        record.is_some(),
-        origin == Some(IntroductionSource::Device(via.clone())),
-        members
-            .iter()
-            .any(|entry| entry["deviceID"].as_str() == Some(introduced.as_str())),
+        report.device_registered,
+        report.device_origin_matches == Some(true),
+        report.folder_associated,
     ])
 }
 

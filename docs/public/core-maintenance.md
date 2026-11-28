@@ -273,3 +273,11 @@ profile members and the native API-key redaction, then verifies that a separate
 synthetic file SHA and normal owned process-tree exit are checked separately.
 Synthetic contracts cover exact bytes, malformed/empty acknowledgements, native
 errors, authorization refusal, response bounds and no automatic retries.
+
+
+Use `change_core_logging_and_verify` to record a correlated error, clear the
+current error log, or edit active package levels. Use a unique non-secret
+correlation value, since the native log exposes the label. Clearing reports
+which previously observed entries remain and how many new entries appeared.
+Save any errors you need before clearing. Package-level readback describes
+the running engine. Check again after a restart if the setting must persist.

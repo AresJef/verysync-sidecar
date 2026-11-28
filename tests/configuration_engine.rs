@@ -566,30 +566,46 @@ async fn native_general_preferences_preserve_sections_disable_progress_and_chang
         );
     }
     let threshold = DiskFreeRequirement::new(0.25, DiskSpaceUnit::Megabytes)?;
-    let update = core
+    let patch = GeneralOptionsPatch::default()
+        .min_home_disk_free(threshold.clone())
+        .progress_update_interval_seconds(-1)
+        .temp_index_min_blocks(7)
+        .overwrite_remote_device_names_on_connect(false)
+        .send_full_index_on_upgrade(true)
+        .traffic_class(16)
+        .set_low_priority(false)
+        .max_folder_concurrency(2)
+        .max_dial_concurrent(3)
+        .max_concurrent_incoming_request_kib(4096)
+        .disable_system_sleep_on_sync(false);
+    let report = core
         .client()
-        .update_general_options(
-            &GeneralOptionsPatch::default()
-                .min_home_disk_free(threshold.clone())
-                .progress_update_interval_seconds(-1)
-                .temp_index_min_blocks(7)
-                .overwrite_remote_device_names_on_connect(false)
-                .send_full_index_on_upgrade(true)
-                .traffic_class(16)
-                .set_low_priority(false)
-                .max_folder_concurrency(2)
-                .max_dial_concurrent(3)
-                .max_concurrent_incoming_request_kib(4096)
-                .disable_system_sleep_on_sync(false),
+        .change_preferences_and_verify(
+            PreferenceChange::General(&patch),
+            OperationOptions::new(Duration::from_secs(10)),
         )
         .await?;
-    assert!(update.requested_fields_match);
-    assert_eq!(update.configuration.progress_update_interval_seconds, -1);
-    assert_eq!(update.configuration.traffic_class, Some(16));
-    assert_eq!(
-        update.configuration.min_home_disk_free.as_ref(),
-        Some(&threshold)
+    assert!(
+        report.write.dispatched && report.write.response_complete,
+        "{report:?}"
     );
+    assert_eq!(report.matching_fields, Some(11), "{report:?}");
+    assert_eq!(report.completion(), OperationCompletion::Completed);
+    let Some(PreferenceReadback::General(actual)) = report.current else {
+        return Err("general options readback absent".into());
+    };
+    assert_eq!(actual.progress_update_interval_seconds, -1);
+    assert_eq!(actual.traffic_class, Some(16));
+    assert_eq!(actual.min_home_disk_free.as_ref(), Some(&threshold));
+    let unchanged = core
+        .client()
+        .change_preferences_and_verify(
+            PreferenceChange::General(&patch),
+            OperationOptions::new(Duration::from_secs(10)),
+        )
+        .await?;
+    assert!(!unchanged.write.dispatched && unchanged.original?.is_none());
+    assert_eq!(unchanged.matching_fields, Some(11));
     let changed = core.client().configuration().await?;
     for section in [
         "folders",
@@ -654,7 +670,7 @@ async fn native_general_preferences_preserve_sections_disable_progress_and_chang
     }
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
-    println!("native_general_preferences_effects=18");
+    println!("native_general_preferences_effects=18 scoped_original_and_readback=true scoped_exact_11_fields=true repeat_zero_write=true");
     Ok(())
 }
 

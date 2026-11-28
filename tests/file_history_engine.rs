@@ -9,7 +9,8 @@ use managed_fixture::{options, TestResult};
 use std::{path::Path, time::Duration};
 use verysync_sidecar::{
     CreateDeviceOptions, DevicePatch, DeviceTransport, FileVersionRestore, FolderVersioningPolicy,
-    JoinFolderOptions, ManagedInstance, TargetPath,
+    JoinFolderOptions, ManagedInstance, OperationCompletion, OperationOptions,
+    RestoreFileExpectation, TargetPath, VerifiedRestoreSelection,
 };
 
 #[tokio::test]
@@ -787,26 +788,31 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
     ));
     let initial = b.client().folder_versioning(&bf.id).await?;
     assert_eq!(initial.kind, "");
+    let policy = FolderVersioningPolicy::Simple {
+        keep: 2,
+        cleanout_days: 0,
+        cleanup_interval_seconds: 3600,
+    };
     let configured = b
         .client()
-        .set_folder_versioning(
-            &bf.id,
-            FolderVersioningPolicy::Simple {
-                keep: 2,
-                cleanout_days: 0,
-                cleanup_interval_seconds: 3600,
-            },
+        .change_versioning_and_verify(
+            verysync_sidecar::VersioningTarget::Folder(&bf.id),
+            Some(&policy),
+            None,
+            OperationOptions::new(Duration::from_secs(15)),
         )
         .await?;
-    assert!(configured.requested_fields_match);
     assert_eq!(
-        configured.configuration.filesystem_path,
-        initial.filesystem_path
+        configured.completion(),
+        OperationCompletion::Completed,
+        "{configured:?}"
     );
-    assert_eq!(
-        configured.configuration.filesystem_type,
-        initial.filesystem_type
-    );
+    assert!(configured.write.dispatched && configured.write.response_complete);
+    let actual = configured
+        .current
+        .ok_or("versioning configuration not observed")?;
+    assert_eq!(actual.filesystem_path, initial.filesystem_path);
+    assert_eq!(actual.filesystem_type, initial.filesystem_type);
     // Establish the separate lazy native disk buffer before real peer changes.
     match b
         .client()
@@ -872,8 +878,21 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
     assert_eq!(remote_changes, 4);
     disk.close().await?;
     let history = b.client().folder_versions(&bf.id, None).await?;
-    let inventory = b.client().folder_version_inventory(&bf.id).await?;
+    let observed = b
+        .client()
+        .change_versioning_and_verify(
+            verysync_sidecar::VersioningTarget::Folder(&bf.id),
+            Some(&policy),
+            None,
+            OperationOptions::new(Duration::from_secs(15)),
+        )
+        .await?;
+    assert!(!observed.write.dispatched && observed.original?.is_none());
+    let inventory = observed
+        .archive
+        .ok_or("versioning workflow did not read the archive")??;
     assert_eq!(inventory.0.len(), history.0.len());
+    println!("native_versioner_folder original_and_exact_readback=true repeat_zero=true verified_inventory=true");
     for (name, versions) in &history.0 {
         let all = inventory
             .0
@@ -917,17 +936,58 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
     assert_eq!(std::fs::read(source.join("version-sample.bin"))?, new);
     let exit = a.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    let restore = [FileVersionRestore::new(
+        TargetPath::local("version-sample.bin"),
+        stamp,
+    )?];
+    let expected = [RestoreFileExpectation {
+        path: TargetPath::local("version-sample.bin"),
+        bytes: old.len() as u64,
+        sha256: Sha256::digest(old).into(),
+    }];
+    let request = || VerifiedRestoreSelection::Files {
+        versions: &restore,
+        expected: &expected,
+    };
     let report = b
         .client()
-        .restore_file_versions(
+        .restore_versions_and_verify(
             &bf.id,
-            &[FileVersionRestore::new(
-                TargetPath::local(Path::new("version-sample.bin")),
-                stamp,
-            )?],
+            request(),
+            OperationOptions::new(Duration::from_secs(15)),
         )
         .await?;
-    assert_eq!(report.error_count(), 0);
+    assert!(
+        report.write.dispatched && report.write.response_complete,
+        "{report:?}"
+    );
+    assert!(!report.files[0].already_matched);
+    assert_eq!(
+        report.completion(),
+        OperationCompletion::Completed,
+        "{report:?}"
+    );
+    assert_eq!(
+        report
+            .original?
+            .expect("native restore reply")
+            .error_count(),
+        0
+    );
+    let already = b
+        .client()
+        .restore_versions_and_verify(
+            &bf.id,
+            request(),
+            OperationOptions::new(Duration::from_secs(15)),
+        )
+        .await?;
+    assert_eq!(
+        already.completion(),
+        OperationCompletion::Completed,
+        "{already:?}"
+    );
+    assert!(!already.write.dispatched && already.files[0].already_matched);
     eprintln!("private version stage: restore");
     data(&receive.join("version-sample.bin"), old).await?;
     assert_eq!(std::fs::read(source.join("version-sample.bin"))?, new);
@@ -959,7 +1019,7 @@ async fn public_version_policy_archives_remote_changes_and_restores_old_bytes() 
     std::fs::remove_dir_all(root)?;
     println!(
         "public version history evidence: {}",
-        serde_json::json!({"actual_remote_disk_change_events":4,"actual_default_disabled":true,"whole_version_inventory_empty_and_actual_two_archives":true,"whole_inventory_retains_exact_browse_records":true,"paused_versioner_error_not_empty":true,"actual_simple_configuration":true,"actual_archive_location_preserved":true,"actual_remote_old_to_new_update":true,"actual_keep_two_after_three_remote_updates":true,"actual_file_prefix_observes_empty_descendants":true,"actual_nonempty_versions_and_original_size":true,"actual_source_stopped_before_restore":true,"actual_exact_old_bytes_restored":true,"actual_restored_sha256":true,"actual_stopped_source_new_bytes_preserved":true,"actual_disable_preserves_archives":true,"actual_normal_both_owned_tree_exits":true})
+        serde_json::json!({"actual_remote_disk_change_events":4,"actual_default_disabled":true,"whole_version_inventory_empty_and_actual_two_archives":true,"whole_inventory_retains_exact_browse_records":true,"paused_versioner_error_not_empty":true,"actual_simple_configuration":true,"actual_archive_location_preserved":true,"actual_remote_old_to_new_update":true,"actual_keep_two_after_three_remote_updates":true,"actual_file_prefix_observes_empty_descendants":true,"actual_nonempty_versions_and_original_size":true,"actual_source_stopped_before_restore":true,"actual_exact_old_bytes_restored":true,"typed_restore_verified_bytes":true,"already_matching_zero_write":true,"actual_restored_sha256":true,"actual_stopped_source_new_bytes_preserved":true,"actual_disable_preserves_archives":true,"actual_normal_both_owned_tree_exits":true})
     );
     Ok(())
 }
@@ -1149,11 +1209,60 @@ async fn public_directory_restore_selects_nested_and_explicit_root_versions() ->
     // generations explicitly; keep every 30-second content deadline unchanged.
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let scope = VersionedDirectory::Path(TargetPath::local(Path::new("nested")));
+    let expected: Vec<_> = relative[1..]
+        .iter()
+        .map(|path| RestoreFileExpectation {
+            path: TargetPath::local(path),
+            bytes: old.len() as u64,
+            sha256: Sha256::digest(old).into(),
+        })
+        .collect();
+    let restore = |expected| VerifiedRestoreSelection::Directory {
+        scope: &scope,
+        order: DirectoryVersionOrder::Oldest,
+        expected,
+    };
+    let incomplete = b
+        .client()
+        .restore_versions_and_verify(
+            &bf.id,
+            restore(&expected[..1]),
+            OperationOptions::new(Duration::from_secs(15)),
+        )
+        .await?;
+    assert!(matches!(
+        incomplete.original,
+        Err(verysync_sidecar::Error::ArchiveRestorePrecondition { .. })
+    ));
+    assert!(!incomplete.write.dispatched);
+    for path in &relative {
+        assert_eq!(std::fs::read(receive.join(path))?, new);
+    }
     let result = b
         .client()
-        .restore_directory_versions(&bf.id, &scope, DirectoryVersionOrder::Oldest)
+        .restore_versions_and_verify(
+            &bf.id,
+            restore(&expected),
+            OperationOptions::new(Duration::from_secs(15)),
+        )
         .await?;
-    assert_eq!(result.error_count(), 0);
+    assert_eq!(result.files.len(), expected.len());
+    assert!(result
+        .files
+        .iter()
+        .all(|file| !file.already_matched && file.current_matches == Some(true)));
+    assert_eq!(
+        result.completion(),
+        OperationCompletion::Completed,
+        "{result:?}"
+    );
+    assert_eq!(
+        result
+            .original?
+            .expect("native directory restore reply")
+            .error_count(),
+        0
+    );
     for (index, p) in relative[1..].iter().enumerate() {
         let effect = data(&receive.join(p), old).await;
         if effect.is_err() {
@@ -1198,7 +1307,7 @@ async fn public_directory_restore_selects_nested_and_explicit_root_versions() ->
     std::fs::remove_dir_all(root)?;
     println!(
         "public directory version restore evidence: {}",
-        serde_json::json!({"actual_three_remote_archived_paths":true,"actual_nested_oldest_restore":true,"actual_deeper_descendant_restored":true,"actual_unselected_root_file_unchanged":true,"actual_nested_newest_restore":true,"actual_explicit_dot_root_oldest_restore":true,"actual_all_restored_sha256":true,"actual_stopped_source_new_bytes_unchanged":true,"actual_unicode_percent_nested_path":true,"actual_both_owned_normal_tree_exits":true})
+        serde_json::json!({"actual_three_remote_archived_paths":true,"actual_nested_oldest_restore":true,"typed_restore_verified_whole_inventory":true,"incomplete_inventory_zero_write":true,"actual_deeper_descendant_restored":true,"actual_unselected_root_file_unchanged":true,"actual_nested_newest_restore":true,"actual_explicit_dot_root_oldest_restore":true,"actual_all_restored_sha256":true,"actual_stopped_source_new_bytes_unchanged":true,"actual_unicode_percent_nested_path":true,"actual_both_owned_normal_tree_exits":true})
     );
     Ok(())
 }

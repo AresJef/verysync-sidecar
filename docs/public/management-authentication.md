@@ -314,3 +314,11 @@ extend certificate-identity claims to the documented native StartTLS limitation,
 licensed features or a successful official-account/remote-gateway session.
 The Unix-only socket-mode case is separate from Windows applicable coverage.
 Full final integration remains required; other native-suite failures are retained.
+
+
+`set_local_gui_credentials_and_verify` submits one explicit credential change
+and attempts a separate login after confirming the original device's stored
+username, static mode, and password presence. A verified session establishes
+that the supplied credentials worked. Use or explicitly close the returned
+session. If the report stops during verification, check the current settings
+and original response before submitting another credential change.

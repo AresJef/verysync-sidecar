@@ -233,3 +233,39 @@ pub(crate) struct FolderPeer {
     #[serde(flatten)]
     pub(crate) extra: BTreeMap<String, serde_json::Value>,
 }
+
+/// The current status of a selected peer and folder at one receiving instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FolderIntroductionReport {
+    /// Whether the chosen introducer is currently trusted.
+    pub introducer_trusted: Option<bool>,
+    /// Whether this instance is configured to retain withdrawn introductions.
+    pub keep_withdrawn_introductions: Option<bool>,
+    /// Whether the selected third device is currently registered.
+    pub device_registered: bool,
+    /// Whether the registration identifies the chosen introducer as its source.
+    pub device_origin_matches: Option<bool>,
+    /// Whether the selected folder currently includes the third device.
+    pub folder_associated: bool,
+    /// Actual connection state for the introducer, if the engine lists it.
+    pub introducer_connected: Option<bool>,
+    /// Actual connection state for the introduced peer, if the engine lists it.
+    pub peer_connected: Option<bool>,
+}
+
+impl FolderIntroductionReport {
+    /// Confirm trusted introduction and a current folder association.
+    pub fn has_selected_introduction(&self) -> bool {
+        self.introducer_trusted == Some(true)
+            && self.device_registered
+            && self.device_origin_matches == Some(true)
+            && self.folder_associated
+    }
+
+    /// Check whether both the registration and association are absent now.
+    /// Compare with a prior report to establish that they were removed.
+    pub fn both_absent(&self) -> bool {
+        !self.device_registered && !self.folder_associated
+    }
+}

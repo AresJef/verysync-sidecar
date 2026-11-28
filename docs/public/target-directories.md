@@ -123,3 +123,12 @@ snapshots, unchanged identity/configuration and retained synthetic bytes with
 normal owned-tree exit. Full same-source native platform acceptance remains
 pending. An unsupported-selector empty result is refusal/ambiguity evidence,
 not a successful backend capability test.
+
+
+Use `create_directory_and_verify` to select a file-manager volume, an absolute
+native picker path, or a named directory in a Local Sync endpoint. The SDK
+checks the exact directory in the selected namespace. A directory that already
+exists needs no change. The native picker also requires read access to the
+underlying local file-manager volume to distinguish absence from a failed
+read. Native creation may create missing parents. Check any other trees or
+files separately.

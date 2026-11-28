@@ -66,3 +66,12 @@ engine can restore a locally deleted tracked file before an explicit revert;
 that automatic effect must not be attributed to this method. Marker tests retain
 the original marker as a backup and verify the same folder/key identity, intact
 sample bytes and successful scanning after an explicit caller restart.
+
+
+Use `recover_folder_and_verify` to request one native recovery and check
+the files you name. Revert reads the receiving folder directly. Override
+checks a reviewed sending folder and can verify files through explicitly
+authorized receiving connections. Require receiver reads to prevent a write
+when verification is unavailable. A best-effort request can proceed and shows
+which files were observed. The native command affects the whole folder. Save
+any edits you need before running it and check other affected files separately.

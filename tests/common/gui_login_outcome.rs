@@ -429,3 +429,104 @@ async fn reports_a_verified_session_under_the_explicit_version_policy() -> TestR
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn gui_credential_workflow_reauthenticates_only_an_eligible_read() -> TestResult {
+    use verysync_sidecar::{OperationCompletion, OperationOptions, ReadRetryDecision};
+    let identity = || Reply::json(json!({"myID":ID,"startTime":"generation-one"}));
+    let gui = || {
+        Reply::json(json!({"enabled":true,"authMode":"static","user":USER,
+        "password":"synthetic-native-hash","apiKey":KEY}))
+    };
+    let normal = || engine_version("v2.33.2");
+    for (client_retry, operation_retry, first_status, decision) in [
+        (false, true, 0, ReadRetryDecision::Disabled),
+        (true, false, 0, ReadRetryDecision::Disabled),
+        (true, true, 403, ReadRetryDecision::CauseNotEligible),
+        (true, true, 0, ReadRetryDecision::Permitted),
+    ] {
+        let recover = decision == ReadRetryDecision::Permitted;
+        let mut replies = vec![
+            normal(),
+            identity(),
+            normal(),
+            identity(),
+            identity(),
+            gui(),
+            identity(),
+            Reply::json(json!({})),
+            status(first_status),
+        ];
+        if recover {
+            replies.extend([
+                normal(),
+                identity(),
+                identity(),
+                gui(),
+                identity(),
+                challenge("AAAAAAA"),
+                issue_cookie(true),
+                normal(),
+                identity(),
+                identity(),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let mut client = Client::connect(server.options()?).await?;
+        if client_retry {
+            client = client.with_transient_read_retries();
+        }
+        let options = OperationOptions::new(Duration::from_secs(3));
+        let options = if operation_retry {
+            options
+        } else {
+            options.without_read_retry()
+        };
+        let report = client
+            .set_local_gui_credentials_and_verify(&GuiCredentials::new(USER, PASSWORD)?, options)
+            .await?;
+        assert_eq!(report.retry_decision, Some(decision), "{report:?}");
+        assert_eq!(report.reconnect_attempts, 1 + u8::from(recover));
+        assert_eq!(report.first_reconnect_error.is_some(), recover);
+        assert_eq!(
+            report.login.as_ref().is_some_and(|login| login.is_ok()),
+            recover
+        );
+        assert_eq!(
+            report.completion(),
+            if recover {
+                OperationCompletion::Completed
+            } else {
+                OperationCompletion::Unconfirmed
+            }
+        );
+        assert!(report.write.dispatched && report.write.response_complete);
+        let debug = format!("{report:?}");
+        for secret in [USER, PASSWORD, SESSION, CSRF] {
+            assert!(!debug.contains(secret));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("PATCH /prefix/rest/config/gui "))
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("POST /prefix/rest/noauth/auth/password "))
+                .count(),
+            usize::from(recover)
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("GET /prefix/rest/system/version "))
+                .count(),
+            if recover { 5 } else { 3 }
+        );
+    }
+    Ok(())
+}

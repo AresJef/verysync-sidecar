@@ -117,64 +117,10 @@ impl Client {
         id: &LocalSyncJobId,
         patch: &LocalSyncJobPatch,
     ) -> Result<LocalSyncJobUpdate> {
-        if patch.label.is_none()
-            && patch.group.is_none()
-            && patch.enabled.is_none()
-            && patch.settings.is_empty()
-            && patch.side_a.is_none()
-            && patch.side_b.is_none()
-        {
-            return Err(invalid("Local Sync update must select at least one field"));
-        }
-        for endpoint in [&patch.side_a, &patch.side_b].into_iter().flatten() {
-            endpoint.validate_target(self.folder_path_style()?)?;
-        }
+        self.validate_local_sync_job_patch(patch)?;
         let _guard = self.connection.mutation_lock.lock().await;
-        let mut job = self.local_sync_job(id).await?;
-        if let Some(label) = &patch.label {
-            job.label = label.clone();
-        }
-        if let Some(group) = &patch.group {
-            job.group = if group.is_empty() {
-                None
-            } else {
-                Some(group.clone())
-            };
-        }
-        if let Some(enabled) = patch.enabled {
-            job.enabled = enabled;
-        }
-        if let Some(endpoint) = &patch.side_a {
-            job.side_a = endpoint.clone();
-        }
-        if let Some(endpoint) = &patch.side_b {
-            job.side_b = endpoint.clone();
-        }
-        let mut body = value(&job)?;
-        for (key, val) in &patch.settings {
-            body[key] = val.clone();
-        }
-        let mode = body
-            .get("mode")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        if (mode == "bisync"
-            && body
-                .get("deleteExtraneous")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true))
-            || (patch
-                .settings
-                .get("deleteExtraneous")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true)
-                && !matches!(mode, "mirror_a_to_b" | "mirror_b_to_a"))
-            || (patch.settings.contains_key("conflictPolicy") && mode != "bisync")
-        {
-            return Err(invalid(
-                "requested native direction, deletion and conflict settings are incompatible",
-            ));
-        }
+        let job = self.local_sync_job(id).await?;
+        let body = local_sync_job_patch_body(patch, job)?;
         let operation = "update Local Sync job";
         let acknowledged: LocalSyncJob = self
             .local_sync_json(
@@ -196,35 +142,29 @@ impl Client {
             .local_sync_job(id)
             .await
             .map_err(|e| unknown(operation, e))?;
-        let observed_value = value(&configuration).map_err(|e| unknown(operation, e))?;
-        let mut endpoints_match = true;
-        for (name, endpoint) in [("sideA", &patch.side_a), ("sideB", &patch.side_b)] {
-            if let Some(endpoint) = endpoint {
-                let expected = value(endpoint).map_err(|e| unknown(operation, e))?;
-                endpoints_match &= observed_value
-                    .get(name)
-                    .is_some_and(|observed| requested_subset(&expected, observed));
-            }
-        }
-        let requested_fields_match = endpoints_match
-            && patch
-                .label
-                .as_ref()
-                .is_none_or(|v| v == &configuration.label)
-            && patch
-                .group
-                .as_ref()
-                .is_none_or(|v| v.as_str() == configuration.group.as_deref().unwrap_or_default())
-            && patch.enabled.is_none_or(|v| v == configuration.enabled)
-            && patch
-                .settings
-                .iter()
-                .all(|(k, v)| selected_job_setting_matches(k, v, observed_value.get(k)));
+        let requested_fields_match = local_sync_job_patch_matches(patch, &configuration)
+            .map_err(|error| unknown(operation, error))?;
         Ok(LocalSyncJobUpdate {
             configuration,
             requested_fields_match,
         })
     }
+    pub(super) fn validate_local_sync_job_patch(&self, patch: &LocalSyncJobPatch) -> Result<()> {
+        if patch.label.is_none()
+            && patch.group.is_none()
+            && patch.enabled.is_none()
+            && patch.settings.is_empty()
+            && patch.side_a.is_none()
+            && patch.side_b.is_none()
+        {
+            return Err(invalid("Local Sync update must select at least one field"));
+        }
+        for endpoint in [&patch.side_a, &patch.side_b].into_iter().flatten() {
+            endpoint.validate_target(self.folder_path_style()?)?;
+        }
+        Ok(())
+    }
+
     /// Delete one native job registration, then require its actual absence.
     /// Coordinate active work separately: this is not a rollback, file deletion
     /// or proof that an already started native operation stopped.
@@ -891,6 +831,88 @@ fn page_limit(limit: u16) -> Result<()> {
         Ok(())
     }
 }
+pub(super) fn local_sync_job_patch_body(
+    patch: &LocalSyncJobPatch,
+    mut job: LocalSyncJob,
+) -> Result<serde_json::Value> {
+    if let Some(label) = &patch.label {
+        job.label = label.clone();
+    }
+    if let Some(group) = &patch.group {
+        job.group = if group.is_empty() {
+            None
+        } else {
+            Some(group.clone())
+        };
+    }
+    if let Some(enabled) = patch.enabled {
+        job.enabled = enabled;
+    }
+    if let Some(endpoint) = &patch.side_a {
+        job.side_a = endpoint.clone();
+    }
+    if let Some(endpoint) = &patch.side_b {
+        job.side_b = endpoint.clone();
+    }
+    let mut body = value(&job)?;
+    for (key, val) in &patch.settings {
+        body[key] = val.clone();
+    }
+    let mode = body
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if (mode == "bisync"
+        && body
+            .get("deleteExtraneous")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true))
+        || (patch
+            .settings
+            .get("deleteExtraneous")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+            && !matches!(mode, "mirror_a_to_b" | "mirror_b_to_a"))
+        || (patch.settings.contains_key("conflictPolicy") && mode != "bisync")
+    {
+        return Err(invalid(
+            "requested native direction, deletion and conflict settings are incompatible",
+        ));
+    }
+    Ok(body)
+}
+
+pub(super) fn local_sync_job_patch_matches(
+    patch: &LocalSyncJobPatch,
+    configuration: &LocalSyncJob,
+) -> Result<bool> {
+    let observed_value = value(configuration)?;
+    let mut endpoints_match = true;
+    for (name, endpoint) in [("sideA", &patch.side_a), ("sideB", &patch.side_b)] {
+        if let Some(endpoint) = endpoint {
+            let expected = value(endpoint)?;
+            endpoints_match &= observed_value
+                .get(name)
+                .is_some_and(|observed| requested_subset(&expected, observed));
+        }
+    }
+    let requested_fields_match = endpoints_match
+        && patch
+            .label
+            .as_ref()
+            .is_none_or(|v| v == &configuration.label)
+        && patch
+            .group
+            .as_ref()
+            .is_none_or(|v| v.as_str() == configuration.group.as_deref().unwrap_or_default())
+        && patch.enabled.is_none_or(|v| v == configuration.enabled)
+        && patch
+            .settings
+            .iter()
+            .all(|(k, v)| selected_job_setting_matches(k, v, observed_value.get(k)));
+    Ok(requested_fields_match)
+}
+
 fn selected_job_setting_matches(
     key: &str,
     expected: &serde_json::Value,

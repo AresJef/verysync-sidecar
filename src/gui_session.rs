@@ -246,6 +246,58 @@ pub struct GuiCredentialUpdate {
     pub write_acknowledged: bool,
 }
 
+/// One native GUI credential change and a separately verified login.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct GuiCredentialWorkflowReport {
+    /// Dispatch and response evidence for the original credential PATCH.
+    pub write: ManagementWriteEvidence,
+    /// Original result of the credential PATCH.
+    pub original: Result<crate::ResponseDiagnostic>,
+    /// Current authentication configuration on the original engine generation.
+    pub configuration: Option<GuiAuthenticationConfig>,
+    /// Whether static mode, the username and password presence were observed.
+    pub configuration_matches: Option<bool>,
+    /// Number of logical read-only reauthentication attempts.
+    pub reconnect_attempts: u8,
+    /// First reauthentication error, preserved even if a later read succeeded.
+    pub first_reconnect_error: Option<Error>,
+    /// Decision made after a first reauthentication failure.
+    pub retry_decision: Option<crate::ReadRetryDecision>,
+    /// Original readback failure or identity change.
+    pub observation_error: Option<Error>,
+    /// One explicit login independently checked by version and device ID.
+    pub login: Option<std::result::Result<GuiSession, GuiLoginError>>,
+    /// Why verification stopped or the engine generation could not be reconfirmed.
+    pub login_wait_error: Option<Error>,
+}
+
+impl GuiCredentialWorkflowReport {
+    /// Classify observed configuration and whether the supplied credentials worked.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.configuration_matches {
+            Some(true)
+                if self.login.as_ref().is_some_and(|login| login.is_ok())
+                    && self.login_wait_error.is_none() =>
+            {
+                OperationCompletion::Completed
+            }
+            Some(true) => OperationCompletion::PartiallyCompleted,
+            Some(false) => OperationCompletion::GoalNotMet,
+            None if !self.write.dispatched
+                || (self.write.response_complete
+                    && matches!(
+                        self.original,
+                        Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+                    )) =>
+            {
+                OperationCompletion::GoalNotMet
+            }
+            None => OperationCompletion::Unconfirmed,
+        }
+    }
+}
+
 /// An explicitly authenticated native GUI session. Cookies remain in this
 /// object, are omitted by Debug and are sent only to the selected endpoint.
 /// The supplied password is not retained after login. Clones share the native

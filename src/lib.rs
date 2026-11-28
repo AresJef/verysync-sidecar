@@ -75,6 +75,7 @@ mod delivery;
 mod device_options;
 mod devices;
 mod diagnostics_preferences;
+mod directory_creation;
 mod endpoint;
 mod engine_source;
 mod error;
@@ -106,6 +107,7 @@ mod official_account;
 mod operation_options;
 mod operations;
 mod path;
+mod preferences;
 mod raw;
 mod recovery;
 mod relay;
@@ -173,6 +175,7 @@ pub use devices::{
     DeviceRemoval, DeviceUpdate, DeviceWorkflowOutcome, DeviceWorkflowReport,
 };
 pub use diagnostics_preferences::{CrashReportingPatch, DiagnosticsOptions};
+pub use directory_creation::{DirectoryCreationReport, DirectoryTarget};
 pub use endpoint::{EndpointKind, ManagementEndpoint};
 pub use engine_source::{EngineSource, LocalProgram, ProgramInfo};
 pub use error::{Error, ManagedStateLock, ProcessDiagnostic, ResponseDiagnostic, Result};
@@ -185,7 +188,9 @@ pub use file_history::{
     AuditHistorySettings, AuditHistoryUpdate, DirectoryVersionOrder, ExternalVersioningCommand,
     FileVersionRestore, FileVersionRestoreReport, FolderVersionHistory,
     FolderVersioningConfiguration, FolderVersioningPolicy, FolderVersioningUpdate,
-    VersionArchiveLocation, VersionedDirectory,
+    RestoreFileExpectation, RestoreFileObservation, VerifiedRestoreReport,
+    VerifiedRestoreSelection, VersionArchiveLocation, VersionedDirectory, VersioningChangeReport,
+    VersioningTarget,
 };
 pub use file_mutations::{
     ResourceConflictPolicy, ResourceDeleteScope, ResourceMutation, ResourceRelocationOutcome,
@@ -214,8 +219,9 @@ pub use gui_listener::{
 };
 pub use gui_preferences::{GuiPreferences, GuiPreferencesPatch, GuiPreferencesUpdate};
 pub use gui_session::{
-    GuiCredentialUpdate, GuiCredentials, GuiLoginError, GuiLoginOptions, GuiLoginPhase,
-    GuiLogoutOutcome, GuiLogoutReceipt, GuiLogoutReport, GuiSession,
+    GuiCredentialUpdate, GuiCredentialWorkflowReport, GuiCredentials, GuiLoginError,
+    GuiLoginOptions, GuiLoginPhase, GuiLogoutOutcome, GuiLogoutReceipt, GuiLogoutReport,
+    GuiSession,
 };
 pub use hardware::{
     NativeBlockDisk, NativeBlockHardware, NativeBlockPartition, NativeCpuCore, NativeCpuHardware,
@@ -227,9 +233,9 @@ pub use ignores::{
     IgnoreWorkflowReport,
 };
 pub use invitations::{
-    DeviceIgnoreUpdate, FolderPeerChange, FolderPeerEncryptionUpdate, FolderPeerUpdate,
-    FolderPeerWorkflowReport, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate, PendingDeviceInfo,
-    PendingDismissal, PendingFolderOffer, PendingFolderOffers,
+    DeviceIgnoreUpdate, FolderIntroductionReport, FolderPeerChange, FolderPeerEncryptionUpdate,
+    FolderPeerUpdate, FolderPeerWorkflowReport, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate,
+    PendingDeviceInfo, PendingDismissal, PendingFolderOffer, PendingFolderOffers,
 };
 pub use ldap::{GuiAuthModeUpdate, LdapConfiguration, LdapPatch, LdapTransport};
 pub use licenses::{
@@ -253,14 +259,16 @@ pub use local_sync_events::{
     LocalSyncEventGap, LocalSyncEventOptions, LocalSyncEventStreamItem, LocalSyncEventSubscription,
 };
 pub use local_sync_workflows::{
-    LocalSyncConflictReport, LocalSyncPreviewReport, LocalSyncRegistrationOutcome,
-    LocalSyncRegistrationReport, LocalSyncRunControlOutcome, LocalSyncRunControlReport,
-    LocalSyncRunOutcome, LocalSyncRunReceipt, LocalSyncRunReport, LocalSyncWorkflowOptions,
+    LocalSyncConflictReport, LocalSyncPreviewReport, LocalSyncRegistrationChange,
+    LocalSyncRegistrationChangeReport, LocalSyncRegistrationOutcome, LocalSyncRegistrationReport,
+    LocalSyncRunControlOutcome, LocalSyncRunControlReport, LocalSyncRunOutcome,
+    LocalSyncRunReceipt, LocalSyncRunReport, LocalSyncWorkflowOptions,
 };
 pub use maintenance::{
-    CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
-    CoreLogSnapshot, CoreLogText, CoreMetricsSnapshot, CoreProfile, CoreProfileRequest,
-    CoreSupportBundle, IndexResetAcknowledgement, IndexResetScope,
+    CoreDiagnostics, CoreErrorLog, CoreLogChange, CoreLogChangeReport, CoreLogEntry, CoreLogLevel,
+    CoreLogLevelUpdate, CoreLogLevels, CoreLogObservation, CoreLogSnapshot, CoreLogText,
+    CoreMetricsSnapshot, CoreProfile, CoreProfileRequest, CoreSupportBundle,
+    IndexResetAcknowledgement, IndexResetScope,
 };
 #[cfg(feature = "download")]
 pub use managed::{CachePolicy, CacheStatus, CachedProgram, ProgramCache};
@@ -303,8 +311,12 @@ pub use operations::{
     ScanUpdate, ScanWorkflowReport,
 };
 pub use path::{PathStyle, TargetPath};
+pub use preferences::{PreferenceChange, PreferenceReadback, PreferenceReport, PreferenceRuntime};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
-pub use recovery::{MarkerRepairReport, MarkerRepairResult};
+pub use recovery::{
+    FolderRecovery, FolderRecoveryReport, MarkerRepairReport, MarkerRepairResult, RecoveredFile,
+    RecoveryReadback,
+};
 pub use relay::{
     RelayProbe, RelayProbeResult, RelayRuntimeOptions, RelayServerConfig, RelayServerPatch,
     RelayServerStatus, RelayServerUpdate,

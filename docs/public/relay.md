@@ -62,3 +62,10 @@ was read back as disabled; that observation does not establish a cause or a
 successful authenticated relay. Authorization and enforcement require separate
 positive evidence. Server URLs and tokens may be sensitive even when readback
 does not match the requested authentication policy.
+
+
+`change_preferences_and_verify` with `PreferenceChange::RelayServer` returns
+the stored relay settings and a separate reading of the service. Check that
+the service is listening at the intended address before giving the URL to a
+peer. An explicit probe can verify the selected URL. Check actual files and
+connection type to establish that a transfer used the relay.

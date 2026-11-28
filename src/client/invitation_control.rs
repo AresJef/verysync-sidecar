@@ -2,9 +2,10 @@
 use super::{workflow_write_result, Client};
 use crate::invitations::FolderPeer;
 use crate::{
-    DeviceId, Error, FolderId, FolderPeerChange, FolderPeerEncryptionUpdate, FolderPeerUpdate,
-    FolderPeerWorkflowReport, IgnoredFolder, IgnoredFolderUpdate, OperationOptions, OperationPhase,
-    PendingDeviceInfo, PendingDismissal, PendingFolderOffers, ResponseDiagnostic, Result,
+    DeviceId, Error, FolderId, FolderIntroductionReport, FolderPeerChange,
+    FolderPeerEncryptionUpdate, FolderPeerUpdate, FolderPeerWorkflowReport, IgnoredFolder,
+    IgnoredFolderUpdate, IntroductionSource, OperationOptions, OperationPhase, PendingDeviceInfo,
+    PendingDismissal, PendingFolderOffers, ResponseDiagnostic, Result,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -12,6 +13,115 @@ use std::collections::BTreeMap;
 use tokio::time::Instant;
 
 impl Client {
+    /// Read the current introduction of an exact third device to one folder.
+    /// Compare this with a prior observation to distinguish addition, retention
+    /// and withdrawal. Current connections are separate from configuration.
+    /// This never changes a trust flag, redials a peer or sends files.
+    pub async fn observe_folder_introduction(
+        &self,
+        folder: &FolderId,
+        introducer: &DeviceId,
+        peer: &DeviceId,
+        options: OperationOptions,
+    ) -> Result<FolderIntroductionReport> {
+        const READ: &str = "verify the selected folder introduction";
+        self.require_remote_device(introducer)?;
+        self.require_remote_device(peer)?;
+        if introducer == peer {
+            return Err(Error::InvalidConfiguration {
+                reason: "select distinct introducer and introduced device identities",
+            });
+        }
+        let context = options.start()?;
+        let result =
+            context
+                .wait(context.deadline, READ, async {
+                    context.phase(OperationPhase::Checking);
+                    self.observe_control_identity().await?;
+                    let generation = self.system_status().await?.start_time.ok_or(
+                        Error::InvalidConfiguration {
+                            reason: "the selected instance did not report its start time",
+                        },
+                    )?;
+                    let (before_path, mut report) = self
+                        .read_folder_introduction(folder, introducer, peer)
+                        .await?;
+                    context.phase(OperationPhase::Verifying);
+                    let connections = self.connections().await?;
+                    let (after_path, current) = self
+                        .read_folder_introduction(folder, introducer, peer)
+                        .await?;
+                    if before_path != after_path
+                        || current != report
+                        || self.system_status().await?.start_time.as_deref()
+                            != Some(generation.as_str())
+                    {
+                        return Err(Error::ConfigurationChanged);
+                    }
+                    report.introducer_connected = connections
+                        .connections
+                        .get(introducer)
+                        .map(|state| state.connected);
+                    report.peer_connected = connections
+                        .connections
+                        .get(peer)
+                        .map(|state| state.connected);
+                    Ok(report)
+                })
+                .await;
+        context.phase(OperationPhase::Finished);
+        result
+    }
+
+    async fn read_folder_introduction(
+        &self,
+        folder: &FolderId,
+        introducer: &DeviceId,
+        peer: &DeviceId,
+    ) -> Result<(crate::TargetPath, FolderIntroductionReport)> {
+        let devices = self.devices().await?;
+        let unique = |id: &DeviceId| {
+            let mut matches = devices.iter().filter(|device| device.device_id == *id);
+            let found = matches.next();
+            if matches.next().is_some() {
+                return Err(Error::InvalidConfiguration {
+                    reason: "the device list repeats an introduction identity",
+                });
+            }
+            found
+                .map(|entry| entry.advanced_configuration())
+                .transpose()
+        };
+        let introducer_settings = unique(introducer)?.ok_or_else(|| Error::DeviceNotFound {
+            id: introducer.clone(),
+        })?;
+        let third = unique(peer)?;
+        let config = self.folder(folder).await?;
+        let members = folder_peers(&config)?;
+        let associated = match folder_peer_index(&members, peer) {
+            Ok(_) => true,
+            Err(Error::FolderPeerNotAssociated) => false,
+            Err(error) => return Err(error),
+        };
+        let source = third
+            .as_ref()
+            .and_then(|device| device.introduced_by.as_ref());
+        Ok((
+            config.path,
+            FolderIntroductionReport {
+                introducer_trusted: introducer_settings.introducer,
+                keep_withdrawn_introductions: introducer_settings.skip_introduction_removals,
+                device_registered: third.is_some(),
+                device_origin_matches: source.map(
+                    |value| matches!(value, IntroductionSource::Device(id) if id == introducer),
+                ),
+                folder_associated: associated,
+                introducer_connected: None,
+                peer_connected: None,
+            },
+        ))
+    }
+
     /// Change one existing folder's association with the exact selected peer.
     /// Read back that peer independently from the preserved associations.
     /// If the scoped state already matches, return without a PATCH.

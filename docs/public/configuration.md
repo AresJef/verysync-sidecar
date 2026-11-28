@@ -1039,3 +1039,11 @@ are separate evidence and do not supply these native results.
 Existing macOS assertion evidence and Windows verification remain separate.
 See the official [logind interface](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html)
 for the native inhibitor snapshot contract.
+
+
+Use `change_preferences_and_verify` with an explicit preference patch to keep
+the original response and the current settings in one report. It leaves
+matching fields untouched when the full selection already matches. Check the
+number of matching fields and the separate engine application flag. Template
+changes apply to future registrations. Check an existing object independently
+before assuming its settings changed.

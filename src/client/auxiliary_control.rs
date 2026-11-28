@@ -251,48 +251,12 @@ impl Client {
                 true,
             )
             .await?;
-        #[derive(Deserialize)]
-        struct Receipt {
-            error: String,
-            success: String,
-            path: String,
-            #[serde(flatten)]
-            extra: BTreeMap<String, serde_json::Value>,
-        }
-        let invalid = || {
-            mutation_error(
-                operation,
-                true,
-                Error::InvalidResponse {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes.clone()),
-                },
-            )
-        };
-        let receipt: Receipt = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-        if !receipt.error.is_empty() {
-            return Err(mutation_error(
-                operation,
-                true,
-                Error::Api {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                },
-            ));
-        }
-        if receipt.success.is_empty() {
-            return Err(invalid());
-        }
-        let returned =
-            TargetPath::remote(self.folder_path_style()?, receipt.path).map_err(|_| invalid())?;
+        let receipt =
+            decode_target_directory_creation(operation, status, bytes, self.folder_path_style()?)?;
         self.target_directories(path)
             .await
             .map_err(|e| mutation_error(operation, true, e))?;
-        Ok(TargetDirectoryCreation {
-            path: returned,
-            native_message: receipt.success,
-            extra: receipt.extra,
-        })
+        Ok(receipt)
     }
     fn auxiliary_path<'a>(&self, path: &'a TargetPath) -> Result<&'a str> {
         if path.style() != self.folder_path_style()? {
@@ -302,4 +266,50 @@ impl Client {
         }
         path.to_protocol()
     }
+}
+
+pub(super) fn decode_target_directory_creation(
+    operation: &'static str,
+    status: u16,
+    bytes: Vec<u8>,
+    style: crate::PathStyle,
+) -> Result<TargetDirectoryCreation> {
+    #[derive(Deserialize)]
+    struct Receipt {
+        error: String,
+        success: String,
+        path: String,
+        #[serde(flatten)]
+        extra: BTreeMap<String, serde_json::Value>,
+    }
+    let invalid = || {
+        mutation_error(
+            operation,
+            true,
+            Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes.clone()),
+            },
+        )
+    };
+    let receipt: Receipt = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    if !receipt.error.is_empty() {
+        return Err(mutation_error(
+            operation,
+            true,
+            Error::Api {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes),
+            },
+        ));
+    }
+    if receipt.success.is_empty() {
+        return Err(invalid());
+    }
+    let returned = TargetPath::remote(style, receipt.path).map_err(|_| invalid())?;
+    Ok(TargetDirectoryCreation {
+        path: returned,
+        native_message: receipt.success,
+        extra: receipt.extra,
+    })
 }
