@@ -171,7 +171,7 @@ def bind_consumer(args):
         relative = Path("tests") / name
         if sha256(args.consumer / relative) != expected or sha256(package / relative) != expected:
             raise ValueError(f"test fixture is not identical to the unpacked candidate: {relative}")
-    return present, package_record
+    return package / "scripts" / "sdk-completion-cases.tsv", package_record
 
 
 def runner_identity(args):
@@ -195,6 +195,9 @@ def runner_identity(args):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--toolchain", required=True)
     parser.add_argument("--platform", choices=sorted(RUNNERS))

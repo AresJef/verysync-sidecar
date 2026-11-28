@@ -154,8 +154,8 @@ impl Client {
     async fn verified_source_version(&self, path: &ResourcePath) -> Result<SourceVersion> {
         let algorithm = ResourceChecksum::Sha256;
         let (metadata, status, body) = self.read_resource_metadata(path, Some(algorithm)).await?;
-        if metadata.is_dir {
-            return Err(rejected("the selected resource is a directory"));
+        if !metadata.is_regular_file() {
+            return Err(rejected("the selected resource must be a regular file"));
         }
         let sha256 = metadata
             .checksums

@@ -95,10 +95,7 @@ impl Client {
                 }
                 Err(error) => return Err(error),
             };
-        // The fixed engine's resource mode is the Go os.FileMode value.
-        const TYPE_BITS: u32 =
-            (1 << 31) | (1 << 27) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 21) | (1 << 19);
-        if metadata.is_dir || metadata.mode & TYPE_BITS != 0 {
+        if !metadata.is_regular_file() {
             return Ok(ResourceFileState::OtherKind);
         }
         let sha256 = metadata

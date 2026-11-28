@@ -118,7 +118,7 @@ jobs:
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
-          name: sdk-completion-api-compatibility
+          name: sdk-completion-api-compatibility-a${{ github.run_attempt }}
           path: ${{ runner.temp }}/sdk-api
           if-no-files-found: error
 
@@ -457,6 +457,6 @@ jobs:
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
-          name: sdk-upgrade-evidence-${{ matrix.package }}
+          name: sdk-upgrade-evidence-${{ matrix.package }}-a${{ github.run_attempt }}
           path: ${{ runner.temp }}/sdk-upgrade-evidence
           if-no-files-found: error

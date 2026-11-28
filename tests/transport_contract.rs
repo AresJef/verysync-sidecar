@@ -7830,3 +7830,55 @@ async fn file_priority_workflow_observes_delayed_queue_change_after_one_post() -
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn verified_download_rejects_native_nonregular_modes_before_creating_output() -> TestResult {
+    use verysync_sidecar::{
+        OperationOptions, PathStyle, ResourcePath, ResourceVolumeId, VerifiedDownloadOptions,
+    };
+    let private = tempfile::tempdir()?;
+    for (name, mode, is_dir) in [
+        ("symbolic-link", 1u32 << 27, false),
+        ("named-pipe", 1u32 << 25, false),
+        ("directory", 1u32 << 31, true),
+    ] {
+        let status = || Reply::json(serde_json::json!({"myID":ID}));
+        let source = ScriptedServer::start(vec![
+            Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            status(),
+            status(),
+            Reply::json(serde_json::json!({
+                "path":"/selected","name":name,"size":1,"mode":mode,"modified":"native","isDir":is_dir,
+                "checksums":{"sha256":"11".repeat(32)}
+            })),
+        ]).await?;
+        let client = Client::connect(source.options()?).await?;
+        let destination = private.path().join(name);
+        let path = ResourcePath::root(ResourceVolumeId::parse("synthetic")?, PathStyle::Unix)
+            .child(name)?;
+        let result = client
+            .download_file_and_verify(
+                &path,
+                &destination,
+                VerifiedDownloadOptions::new(1024, OperationOptions::new(Duration::from_secs(5)))
+                    .resume_once(),
+            )
+            .await?;
+        assert!(
+            result.retained_staging_path().is_none(),
+            "{name}: {result:?}"
+        );
+        assert_eq!(result.data_requests, 0, "{name}: {result:?}");
+        assert!(
+            matches!(result.error, Some(Error::ResourceTransferRejected { .. })),
+            "{name}: {result:?}"
+        );
+        assert!(!destination.exists(), "{name}");
+        let requests = source.finish().await?;
+        assert_eq!(requests.len(), 4);
+        assert!(requests[3].starts_with("GET /prefix/rest/f/api/resources/"));
+    }
+    assert_eq!(std::fs::read_dir(private.path())?.count(), 0);
+    println!("verified download refused each nonregular native source before opening a stream or staging directory");
+    Ok(())
+}

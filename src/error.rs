@@ -251,11 +251,6 @@ pub enum Error {
         /// The operation that timed out.
         operation: &'static str,
     },
-    /// The caller explicitly cancelled the wait for a business operation.
-    OperationWaitCancelled {
-        /// The operation the caller stopped waiting for.
-        operation: &'static str,
-    },
     /// The management response exceeded the configured buffer bound.
     ResponseTooLarge {
         /// The configured maximum number of bytes.
@@ -393,6 +388,11 @@ pub enum Error {
     TlsCertificateRejected {
         /// The original URL-redacted management transport error.
         source: Box<Error>,
+    },
+    /// The caller explicitly cancelled the wait for a business operation.
+    OperationWaitCancelled {
+        /// The operation the caller stopped waiting for.
+        operation: &'static str,
     },
 }
 

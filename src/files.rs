@@ -186,6 +186,15 @@ pub struct ResourceInfo {
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
+impl ResourceInfo {
+    pub(crate) fn is_regular_file(&self) -> bool {
+        // The fixed engine reports Go os.FileMode, whose type bits differ from Unix modes.
+        const TYPE_BITS: u32 =
+            (1 << 31) | (1 << 27) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 21) | (1 << 19);
+        !self.is_dir && self.mode & TYPE_BITS == 0
+    }
+}
+
 impl fmt::Debug for ResourceInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResourceInfo")
