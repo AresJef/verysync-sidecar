@@ -97,7 +97,9 @@ async fn diagnose_owned_paths(
 #[tokio::test]
 async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthetic_bytes(
 ) -> TestResult {
-    use verysync_sidecar::{OperationOptions, ResourceFileState, ResourceRelocationOutcome};
+    use verysync_sidecar::{
+        OperationOptions, ResourceFileState, ResourceRelocationOutcome, ResourceRemovalOutcome,
+    };
     let root = tempfile::Builder::new().prefix("vfm-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
     let identity = core.client().instance().device_id.clone();
@@ -179,7 +181,40 @@ async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthet
         std::fs::read(native.join("verified-move.bin"))?,
         std::fs::read(native.join("source.bin"))?
     );
-    println!("native verified file copy and move: original response, matched SHA-256, expected source state, physical file matches");
+    let removed = core
+        .client()
+        .delete_resource_and_verify(
+            &verified_move_path,
+            verysync_sidecar::ResourceDeleteScope::File,
+            operation(),
+        )
+        .await?;
+    assert_eq!(
+        removed.outcome,
+        ResourceRemovalOutcome::ObservedAbsent,
+        "{removed:?}"
+    );
+    assert!(removed.write.dispatched && removed.write.response_complete);
+    assert!(!native.join("verified-move.bin").exists());
+    let absent = core
+        .client()
+        .delete_resource_and_verify(
+            &verified_move_path,
+            verysync_sidecar::ResourceDeleteScope::File,
+            operation(),
+        )
+        .await?;
+    assert_eq!(
+        absent.outcome,
+        ResourceRemovalOutcome::AlreadyAbsent,
+        "{absent:?}"
+    );
+    assert!(!absent.write.dispatched);
+    assert_eq!(
+        std::fs::read(native.join("source.bin"))?,
+        b"source original bytes"
+    );
+    println!("native verified file copy, move, and deletion: original replies, matched SHA-256, exact paths, zero repeated deletion");
     let copied = base.clone().child("copied 二 %.bin")?;
     let result = core
         .client()

@@ -3,7 +3,8 @@ use super::{mutation_error, workflow_write_result, Client};
 use crate::{
     Error, OperationOptions, OperationPhase, ResourceConflictPolicy, ResourceDeleteScope,
     ResourceFileState, ResourceInfo, ResourceMutation, ResourcePath, ResourceRelocationOutcome,
-    ResourceRelocationReport, ResourceRemoval, ResponseDiagnostic, Result,
+    ResourceRelocationReport, ResourceRemoval, ResourceRemovalOutcome, ResourceRemovalReport,
+    ResponseDiagnostic, Result,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -173,7 +174,7 @@ impl Client {
                     None
                 };
                 let preserve = (keep_both && target != File::Missing).then_some(target);
-                self.check_relocation_generation(&generation).await?;
+                self.check_resource_generation(&generation).await?;
                 if Instant::now() >= context.dispatch_deadline() {
                     return Err(Error::Timeout { operation });
                 }
@@ -216,7 +217,7 @@ impl Client {
             context.phase(OperationPhase::Verifying);
             report.observation_error = context
                 .wait(context.deadline, VERIFY_FILE, async {
-                    self.check_relocation_generation(&generation).await?;
+                    self.check_resource_generation(&generation).await?;
                     let origin = self.resource_file_state(source).await;
                     let actual = self
                         .resource_relocation_destination(destination, &parent, names.as_ref())
@@ -233,7 +234,7 @@ impl Client {
                     } else {
                         None
                     };
-                    self.check_relocation_generation(&generation).await?;
+                    self.check_resource_generation(&generation).await?;
                     let origin_expected = if moving { Some(File::Missing) } else { before };
                     let source_matches = origin.as_ref().ok().copied() == origin_expected;
                     let destination_matches = observed.as_ref().ok().copied() == before;
@@ -265,7 +266,7 @@ impl Client {
         Ok(report)
     }
 
-    async fn check_relocation_generation(&self, generation: &str) -> Result<()> {
+    async fn check_resource_generation(&self, generation: &str) -> Result<()> {
         if self.system_status().await?.start_time.as_deref() != Some(generation) {
             return Err(Error::ConfigurationChanged);
         }
@@ -471,6 +472,119 @@ impl Client {
         Ok(ResourceRemoval { previous })
     }
 
+    /// Ensure absence at one exact resource path with the selected deletion
+    /// scope. A native 404 before dispatch completes the state goal without a
+    /// DELETE. After an unanswered request, observe the same path without
+    /// deleting again. A remaining folder can have lost some of its children.
+    pub async fn delete_resource_and_verify(
+        &self,
+        path: &ResourcePath,
+        scope: ResourceDeleteScope,
+        options: OperationOptions,
+    ) -> Result<ResourceRemovalReport> {
+        use ResourceRemovalOutcome as Outcome;
+        const DELETE: &str = "delete the selected resource";
+        const VERIFY: &str = "check the selected path after deletion";
+        nonroot(path)?;
+        let context = options.start()?;
+        let url = self.resource_url("rest/f/api/resources", path)?;
+        let mut report = ResourceRemovalReport {
+            outcome: Outcome::NotSubmitted,
+            write: Default::default(),
+            original: None,
+            before: None,
+            remaining: None,
+            direct_children_removed: None,
+            observation_error: None,
+        };
+        let mut generation = None;
+        let mut guard = None;
+        let attempted = context
+            .wait(context.dispatch_deadline(), DELETE, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                self.observe_control_identity().await?;
+                let start = self
+                    .system_status()
+                    .await?
+                    .start_time
+                    .ok_or_else(|| rejected("VerySync did not report its start time"))?;
+                report.before = self.optional_resource(path).await?;
+                self.check_resource_generation(&start).await?;
+                let Some(current) = &report.before else {
+                    report.outcome = Outcome::AlreadyAbsent;
+                    return Ok(());
+                };
+                if current.is_dir != (scope == ResourceDeleteScope::RecursiveDirectory) {
+                    return Err(rejected(
+                        "deletion intent differs from the observed resource kind",
+                    ));
+                }
+                if Instant::now() >= context.dispatch_deadline() {
+                    return Err(Error::Timeout { operation: DELETE });
+                }
+                let request =
+                    self.connection
+                        .authorized_request(reqwest::Method::DELETE, url, None);
+                generation = Some(start);
+                let response = self
+                    .connection
+                    .send_workflow_write(DELETE, request, &context, &mut report.write)
+                    .await?;
+                verify_mutation_ack(DELETE, response.status, response.body)
+            })
+            .await;
+        if report.outcome != Outcome::AlreadyAbsent {
+            report.original = Some(workflow_write_result(DELETE, report.write, attempted));
+        }
+        if report.write.dispatched {
+            report.outcome = if report.write.response_complete
+                && matches!(
+                    report.original,
+                    Some(Err(
+                        Error::Authentication { .. } | Error::AccessDenied { .. }
+                    ))
+                ) {
+                Outcome::Rejected
+            } else {
+                Outcome::Unconfirmed
+            };
+        }
+        if let Some(generation) = generation.filter(|_| report.outcome == Outcome::Unconfirmed) {
+            context.phase(OperationPhase::Verifying);
+            let observed = context
+                .wait(context.deadline, VERIFY, async {
+                    self.check_resource_generation(&generation).await?;
+                    let remaining = self.optional_resource(path).await?;
+                    self.check_resource_generation(&generation).await?;
+                    Ok(remaining)
+                })
+                .await;
+            match observed {
+                Ok(None) => report.outcome = Outcome::ObservedAbsent,
+                Ok(Some(remaining)) => {
+                    report.direct_children_removed = report
+                        .before
+                        .as_ref()
+                        .and_then(|previous| removed_children(previous, &remaining));
+                    report.outcome = if report
+                        .direct_children_removed
+                        .is_some_and(|count| count > 0)
+                    {
+                        Outcome::PartialDirectoryChange
+                    } else {
+                        Outcome::StillPresent
+                    };
+                    report.remaining = Some(remaining);
+                }
+                Err(error) => report.observation_error = Some(error),
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
     /// Destructively edit an existing file with at most 16 MiB of UTF-8 text.
     /// Refuse an absent resource or directory before PUT, then require actual
     /// size and native SHA-256 readback. Cancellation can truncate or remove the
@@ -576,6 +690,25 @@ fn validate_relocation(source: &ResourcePath, destination: &ResourcePath) -> Res
         ));
     }
     Ok(())
+}
+
+fn removed_children(previous: &ResourceInfo, current: &ResourceInfo) -> Option<usize> {
+    if !previous.is_dir || !current.is_dir {
+        return None;
+    }
+    let before: BTreeSet<_> = previous
+        .items
+        .as_ref()?
+        .iter()
+        .map(|item| &item.name)
+        .collect();
+    let after: BTreeSet<_> = current
+        .items
+        .as_ref()?
+        .iter()
+        .map(|item| &item.name)
+        .collect();
+    Some(before.difference(&after).count())
 }
 
 fn verify_mutation_ack(operation: &'static str, status: u16, body: Vec<u8>) -> Result<()> {

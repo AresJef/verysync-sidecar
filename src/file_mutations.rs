@@ -99,3 +99,61 @@ impl ResourceRelocationReport {
         }
     }
 }
+
+/// Current resource state after an explicit deletion request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ResourceRemovalOutcome {
+    /// The exact path was absent in the initial read and required no write.
+    AlreadyAbsent,
+    /// The exact path was absent after dispatch.
+    ObservedAbsent,
+    /// The directory remains, with at least one previously observed child absent.
+    PartialDirectoryChange,
+    /// A resource still occupies the selected path.
+    StillPresent,
+    /// The operation refused or ended before dispatch.
+    NotSubmitted,
+    /// The endpoint sent a complete authorization refusal.
+    Rejected,
+    /// Access or identity evidence did not permit a conclusion.
+    Unconfirmed,
+}
+
+/// Original deletion reply and separately observed path state.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ResourceRemovalReport {
+    /// Point-in-time effect on the selected resource.
+    pub outcome: ResourceRemovalOutcome,
+    /// Transport evidence for the one optional DELETE.
+    pub write: ManagementWriteEvidence,
+    /// The original acknowledgement or error, absent for a confirmed zero-write.
+    pub original: Option<Result<()>>,
+    /// Native resource snapshot before dispatch, when it existed.
+    pub before: Option<ResourceInfo>,
+    /// A resource that still occupies the path, when observed.
+    pub remaining: Option<ResourceInfo>,
+    /// Number of previously listed direct children absent from the later listing.
+    pub direct_children_removed: Option<usize>,
+    /// A reason the path observation stopped without a conclusion.
+    pub observation_error: Option<Error>,
+}
+
+impl ResourceRemovalReport {
+    /// Classify the path-state goal. The original reply remains separate.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            ResourceRemovalOutcome::AlreadyAbsent | ResourceRemovalOutcome::ObservedAbsent => {
+                OperationCompletion::Completed
+            }
+            ResourceRemovalOutcome::PartialDirectoryChange => {
+                OperationCompletion::PartiallyCompleted
+            }
+            ResourceRemovalOutcome::StillPresent
+            | ResourceRemovalOutcome::NotSubmitted
+            | ResourceRemovalOutcome::Rejected => OperationCompletion::GoalNotMet,
+            ResourceRemovalOutcome::Unconfirmed => OperationCompletion::Unconfirmed,
+        }
+    }
+}

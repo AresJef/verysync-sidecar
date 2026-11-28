@@ -17,7 +17,8 @@ use crate::{
     LocalSyncSummary, LocalSyncWorkflowOptions, ManagementWriteEvidence, OperationPhase, Result,
 };
 use crate::{
-    CreateLocalSyncJob, LocalSyncJob, LocalSyncOperationControl, LocalSyncOperationId,
+    CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncConflictReport,
+    LocalSyncConflictResolution, LocalSyncJob, LocalSyncOperationControl, LocalSyncOperationId,
     LocalSyncRegistrationOutcome, LocalSyncRegistrationReport, LocalSyncRunControlOutcome,
     LocalSyncRunControlReport, LocalSyncRunId, LocalSyncStatus, OperationOptions,
 };
@@ -30,8 +31,219 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const UNFINISHED: &str = "0001-01-01T00:00:00Z";
 const CONTROL: &str = "control the selected Local Sync run";
 const CHECK_CONTROL: &str = "observe the selected Local Sync run state";
+const RESOLVE: &str = "resolve conflicts in the reviewed Local Sync preview";
+const RECHECK: &str = "verify conflicts in the acknowledged replacement preview";
 
 impl Client {
+    /// Change only the requested conflict path or subtree in the exact reviewed
+    /// preview. Verify the replacement's selected and remaining conflicts.
+    /// This prepares a new plan. Execute that plan in a separate explicit call.
+    pub async fn resolve_local_sync_conflict_and_verify(
+        &self,
+        job: &LocalSyncJobId,
+        expected: &LocalSyncPreviewId,
+        resolution: &LocalSyncConflictResolution,
+        options: LocalSyncWorkflowOptions,
+    ) -> Result<LocalSyncConflictReport> {
+        options.verify_limits()?;
+        let context = options.operation.clone().start()?;
+        let mut guard = None;
+        let mut generation = None;
+        let mut write = ManagementWriteEvidence::default();
+        let mut selected_before = None;
+        let result = context
+            .wait(context.dispatch_deadline(), RESOLVE, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                self.observe_control_identity().await?;
+                let start = self.system_status().await?.start_time.ok_or_else(|| {
+                    invalid("the Local Sync instance did not report its start time")
+                })?;
+                let preview = self.local_sync_preview(job).await?;
+                if &preview.id != expected {
+                    return Err(invalid(
+                        "the selected Local Sync preview is no longer current",
+                    ));
+                }
+                require_unexpired(&preview)?;
+                let count = self
+                    .conflicts_in_scope(&preview, resolution, &options)
+                    .await?;
+                self.confirm_current_preview(&preview).await?;
+                self.require_local_sync_generation(&start).await?;
+                selected_before = Some(count);
+                if count == 0 {
+                    return Ok(None);
+                }
+                if Instant::now() >= context.dispatch_deadline() {
+                    return Err(Error::Timeout { operation: RESOLVE });
+                }
+                let url = self.local_sync_url(
+                    &[
+                        "jobs",
+                        job.as_str(),
+                        "previews",
+                        expected.as_str(),
+                        "resolve-conflicts",
+                    ],
+                    &[],
+                )?;
+                let body = serde_json::to_value(resolution)
+                    .map_err(|_| invalid("could not encode the selected conflict scope"))?;
+                let request = self
+                    .connection
+                    .authorized_request(Method::POST, url, Some(&body));
+                generation = Some(start);
+                let response = self
+                    .connection
+                    .send_workflow_write(RESOLVE, request, &context, &mut write)
+                    .await?;
+                let acknowledged: LocalSyncPreview =
+                    decode_local_sync_json(RESOLVE, response.status, response.body, true, false)?;
+                if &acknowledged.job_id != job || &acknowledged.id == expected {
+                    return Err(mutation_error(
+                        RESOLVE,
+                        true,
+                        invalid("the reply did not identify a replacement for the selected job"),
+                    ));
+                }
+                Ok(Some(acknowledged))
+            })
+            .await;
+        let mut report = LocalSyncConflictReport {
+            write,
+            original: workflow_write_result(RESOLVE, write, result),
+            selected_before,
+            replacement: None,
+            selected_remaining: None,
+            all_remaining: None,
+            observation_error: None,
+        };
+        if let (Some(generation), Ok(Some(ack))) = (generation, &report.original) {
+            context.phase(OperationPhase::Verifying);
+            let checked = context
+                .wait(context.deadline, RECHECK, async {
+                    self.require_local_sync_generation(&generation).await?;
+                    let current = self.confirm_current_preview(ack).await?;
+                    let selected = self
+                        .conflicts_in_scope(&current, resolution, &options)
+                        .await?;
+                    let all = if current.count == 0 {
+                        0
+                    } else {
+                        self.local_sync_selection_summary(
+                            job,
+                            &current.id,
+                            &LocalSyncSelection::all(),
+                        )
+                        .await?
+                        .conflicts
+                    };
+                    if selected > all {
+                        return Err(invalid(
+                            "the selected conflict count exceeds the replacement's total",
+                        ));
+                    }
+                    let current = self.confirm_current_preview(&current).await?;
+                    self.require_local_sync_generation(&generation).await?;
+                    Ok((current, selected, all))
+                })
+                .await;
+            match checked {
+                Ok((preview, selected, all)) => {
+                    report.replacement = Some(preview);
+                    report.selected_remaining = Some(selected);
+                    report.all_remaining = Some(all);
+                }
+                Err(source) => report.observation_error = Some(source),
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn conflicts_in_scope(
+        &self,
+        preview: &LocalSyncPreview,
+        resolution: &LocalSyncConflictResolution,
+        options: &LocalSyncWorkflowOptions,
+    ) -> Result<u64> {
+        let mut actions = Vec::new();
+        self.read_local_sync_preview_actions(preview, options, &mut actions)
+            .await?;
+        let selected: Vec<_> = actions
+            .iter()
+            .filter(|action| resolution.selects(&action.path))
+            .map(|action| LocalSyncActionRange::single(action.id))
+            .collect();
+        let mut conflicts = 0u64;
+        for ranges in selected.chunks(10_000) {
+            let selection = LocalSyncSelection::including(ranges.to_vec())?;
+            let summary = self
+                .local_sync_selection_summary(&preview.job_id, &preview.id, &selection)
+                .await?;
+            if summary.conflicts > ranges.len() as u64 {
+                return Err(invalid(
+                    "the conflict count exceeds the number of selected actions",
+                ));
+            }
+            conflicts += summary.conflicts;
+        }
+        Ok(conflicts)
+    }
+
+    async fn confirm_current_preview(
+        &self,
+        expected: &LocalSyncPreview,
+    ) -> Result<LocalSyncPreview> {
+        let current = self.local_sync_preview(&expected.job_id).await?;
+        if current.id != expected.id
+            || current.operation_id != expected.operation_id
+            || current.count != expected.count
+            || current.expires_at != expected.expires_at
+        {
+            return Err(invalid(
+                "another Local Sync preview replaced the reviewed plan",
+            ));
+        }
+        require_unexpired(&current)?;
+        Ok(current)
+    }
+
+    async fn read_local_sync_preview_actions(
+        &self,
+        preview: &LocalSyncPreview,
+        options: &LocalSyncWorkflowOptions,
+        actions: &mut Vec<LocalSyncAction>,
+    ) -> Result<()> {
+        if preview.count > options.max_results {
+            return Err(invalid(
+                "the Local Sync preview exceeds the selected record limit",
+            ));
+        }
+        while (actions.len() as u64) < preview.count {
+            let offset = actions.len() as u64;
+            let limit = (preview.count - offset).min(u64::from(options.page_size)) as u16;
+            let page = self
+                .local_sync_preview_actions(&preview.job_id, &preview.id, offset, limit)
+                .await?;
+            if page.is_empty()
+                || page.len() > usize::from(limit)
+                || page
+                    .iter()
+                    .enumerate()
+                    .any(|(index, action)| action.id != offset + index as u64)
+            {
+                return Err(invalid(
+                    "the Local Sync preview has a missing, repeated or out-of-order action",
+                ));
+            }
+            actions.extend(page);
+        }
+        Ok(())
+    }
+
     /// Pause, resume or stop the selected, currently identified run. The
     /// engine's paused status can precede completion of writes already in
     /// flight. Confirm a stop only on a terminal cancellation of that run.
@@ -609,7 +821,7 @@ impl Client {
         options: LocalSyncWorkflowOptions,
     ) -> Result<LocalSyncPreviewReport> {
         options.verify_limits()?;
-        let context = options.operation.start()?;
+        let context = options.operation.clone().start()?;
         let dispatch_deadline = context.dispatch_deadline();
         let mut write = ManagementWriteEvidence::default();
         let mut guard = None;
@@ -649,51 +861,45 @@ impl Client {
         };
         if let Ok(operation) = &report.initial {
             context.phase(OperationPhase::Verifying);
-            let result = context.wait(context.deadline, CHECK_PREVIEW, async {
-                loop {
-                    let status = self.local_sync_status(job).await?;
-                    if status.operation_id.as_ref().is_some_and(|current| *current != operation.id) {
-                        return Err(invalid("a different Local Sync operation replaced the submitted preview"));
-                    }
-                    if status.operation_id.as_ref() == Some(&operation.id) {
-                        if status.state == "error" {
-                            return Err(invalid("the selected native Local Sync analysis reported an error"));
+            let result = context
+                .wait(context.deadline, CHECK_PREVIEW, async {
+                    loop {
+                        let status = self.local_sync_status(job).await?;
+                        if status
+                            .operation_id
+                            .as_ref()
+                            .is_some_and(|current| *current != operation.id)
+                        {
+                            return Err(invalid(
+                                "a different Local Sync operation replaced the submitted preview",
+                            ));
                         }
-                        if status.state == "idle" {
-                            break;
+                        if status.operation_id.as_ref() == Some(&operation.id) {
+                            if status.state == "error" {
+                                return Err(invalid(
+                                    "the selected native Local Sync analysis reported an error",
+                                ));
+                            }
+                            if status.state == "idle" {
+                                break;
+                            }
                         }
+                        tokio::time::sleep(POLL_INTERVAL).await;
                     }
-                    tokio::time::sleep(POLL_INTERVAL).await;
-                }
-                let preview = self.local_sync_preview(job).await?;
-                if preview.operation_id != operation.id {
-                    return Err(invalid("the current Local Sync preview belongs to another operation"));
-                }
-                require_unexpired(&preview)?;
-                let count = preview.count;
-                let id = preview.id.clone();
-                report.preview = Some(preview);
-                if count > options.max_results {
-                    return Err(invalid("the Local Sync preview exceeds the selected record limit"));
-                }
-                while (report.actions.len() as u64) < count {
-                    let offset = report.actions.len() as u64;
-                    let limit = (count - offset).min(u64::from(options.page_size)) as u16;
-                    let actions = self.local_sync_preview_actions(job, &id, offset, limit).await?;
-                    if actions.is_empty() || actions.len() > usize::from(limit)
-                        || actions.iter().enumerate().any(|(index, action)| action.id != offset + index as u64)
-                    {
-                        return Err(invalid("the Local Sync preview has a missing, repeated or out-of-order action"));
+                    let preview = self.local_sync_preview(job).await?;
+                    if preview.operation_id != operation.id {
+                        return Err(invalid(
+                            "the current Local Sync preview belongs to another operation",
+                        ));
                     }
-                    report.actions.extend(actions);
-                }
-                let current = self.local_sync_preview(job).await?;
-                if current.id != id || current.operation_id != operation.id || current.count != count {
-                    return Err(invalid("the Local Sync preview changed while reading its pages"));
-                }
-                require_unexpired(&current)?;
-                Ok(())
-            }).await;
+                    require_unexpired(&preview)?;
+                    let observed = report.preview.insert(preview);
+                    self.read_local_sync_preview_actions(observed, &options, &mut report.actions)
+                        .await?;
+                    self.confirm_current_preview(observed).await?;
+                    Ok(())
+                })
+                .await;
             report.observation_error = result.err();
         }
         drop(guard);

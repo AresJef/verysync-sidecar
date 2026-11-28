@@ -25,6 +25,13 @@ recipient needs matching bytes for every selected file. Read again to check
 late arrivals. This operation leaves native synchronization running and does
 not send a scan, start a transfer, or retry either one.
 
+After configuring native sharing, use `scan_delivery_batch_and_verify` for up
+to 256 selected source paths. It checks the source bytes and sends one scan
+request if the batch still needs delivery. With `RequireReceiverReads`,
+missing recipient access prevents dispatch. `BestEffort` allows the request
+with incomplete access and keeps any unverified files in the report. If all
+recipients already match, it can return without a scan.
+
 `folder_completion`, `folder_completions` and `batch_folder_status` read actual
 engine snapshots. A completion value is a reported percentage for an index;
 even 100 can accompany `remote_state = Some("unknown")`. It does not establish

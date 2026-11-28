@@ -313,6 +313,58 @@ pub struct DeliveryReport {
     pub observation_error: Option<Error>,
 }
 
+/// Verification required for a scan requested to deliver a known file batch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DeliveryVerification {
+    /// Obtain an authorized receiving-side observation for every file
+    /// before dispatching a scan whose effects need verification.
+    RequireReceiverReads,
+    /// Allow the scan to proceed when receiving-side observations are missing.
+    BestEffort,
+}
+
+/// One source scan request and the receiving evidence that was available.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct DeliveryScanReport {
+    /// Policy selected for missing recipient access.
+    pub verification: DeliveryVerification,
+    /// What was confirmed on the recipients before deciding whether to submit.
+    pub before: DeliveryReport,
+    /// Whether one source scan was dispatched, and which reply was available.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original reply or preflight error. An inner empty value means the
+    /// file state already matched everywhere without a new scan.
+    pub original: Result<Option<crate::ResponseDiagnostic>>,
+    /// Most recent receiving-side verification after submission, if available.
+    pub observed: Option<DeliveryReport>,
+    /// Why observation stopped before a complete batch could be verified.
+    pub observation_error: Option<Error>,
+}
+
+impl DeliveryScanReport {
+    /// Classify actual recipient evidence independently of the scan reply.
+    pub fn completion(&self) -> OperationCompletion {
+        if let Some(observed) = &self.observed {
+            return observed.completion();
+        }
+        if !self.write.dispatched && matches!(self.original, Ok(None)) {
+            self.before.completion()
+        } else if self.write.dispatched
+            && !(self.write.response_complete
+                && matches!(
+                    self.original,
+                    Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+                ))
+        {
+            OperationCompletion::Unconfirmed
+        } else {
+            OperationCompletion::GoalNotMet
+        }
+    }
+}
+
 impl DeliveryReport {
     /// Report completion only when every file matches at every selected receiver.
     pub fn completion(&self) -> OperationCompletion {

@@ -283,3 +283,59 @@ pub struct GuiConfigurationReplacement {
     /// Native HTTP acknowledgement. Debug omits potentially private body values.
     pub acknowledgement: crate::ResponseDiagnostic,
 }
+
+/// Scope of one complete native configuration replacement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ConfigurationScope {
+    /// All sections, including untouched native fields.
+    Complete,
+    /// The complete options section.
+    Options,
+    /// The complete GUI section on the selected connection.
+    Gui,
+}
+
+/// The request and separately observed document and application state.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ConfigurationSaveReport {
+    /// Native scope selected by the caller.
+    pub scope: ConfigurationScope,
+    /// Dispatch and completion of the initial reply.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original result. An empty value means the current scoped document
+    /// already matched and no PUT was needed.
+    pub original: Result<Option<crate::ResponseDiagnostic>>,
+    /// Complete current authenticated snapshot when available.
+    pub configuration: Option<ConfigurationSnapshot>,
+    /// Whether the complete selected scope equals the requested document.
+    pub scope_matches: Option<bool>,
+    /// Independently reported application state, when readable.
+    pub application_state: Option<super::ConfigurationSyncState>,
+    /// Why the configuration could not safely be read after dispatch.
+    pub observation_error: Option<Error>,
+    /// Why the native application status could not be confirmed.
+    pub application_error: Option<Error>,
+}
+
+impl ConfigurationSaveReport {
+    /// Classify the configuration values. Inspect application state separately.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        use crate::OperationCompletion as Completion;
+        if self.write.response_complete
+            && matches!(
+                self.original,
+                Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+            )
+        {
+            return Completion::GoalNotMet;
+        }
+        match self.scope_matches {
+            Some(true) => Completion::Completed,
+            Some(false) => Completion::GoalNotMet,
+            None if !self.write.dispatched => Completion::GoalNotMet,
+            None => Completion::Unconfirmed,
+        }
+    }
+}

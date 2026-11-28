@@ -101,7 +101,7 @@ impl Client {
             .map(|_| ())
     }
 
-    fn scan_subpath_query<'a>(
+    pub(super) fn scan_subpath_query<'a>(
         &self,
         folder: &'a FolderId,
         paths: &'a [TargetPath],

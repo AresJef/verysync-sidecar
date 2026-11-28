@@ -69,6 +69,48 @@ impl LocalSyncRunControlReport {
     }
 }
 
+/// The original conflict-resolution reply and the replacement plan's state.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct LocalSyncConflictReport {
+    /// One explicit plan change, when needed.
+    pub write: ManagementWriteEvidence,
+    /// The replacement acknowledged by VerySync, a refusal, or an unknown
+    /// result. The inner value is empty when the selection was already clear.
+    pub original: Result<Option<LocalSyncPreview>>,
+    /// Unresolved conflicts selected by path in the reviewed preview.
+    pub selected_before: Option<u64>,
+    /// The current replacement preview that matches the original acknowledgement.
+    pub replacement: Option<LocalSyncPreview>,
+    /// Unresolved conflicts still selected in the replacement.
+    pub selected_remaining: Option<u64>,
+    /// All unresolved conflicts in the replacement, including outside the selection.
+    pub all_remaining: Option<u64>,
+    /// Failure validating the replacement after the original modification.
+    pub observation_error: Option<crate::Error>,
+}
+
+impl LocalSyncConflictReport {
+    /// Classify the selected conflicts. The plan still needs explicit execution.
+    pub fn completion(&self) -> OperationCompletion {
+        match (
+            self.write.dispatched,
+            &self.original,
+            self.selected_remaining,
+        ) {
+            (false, Ok(None), _) if self.selected_before == Some(0) => {
+                OperationCompletion::Completed
+            }
+            (_, Ok(Some(_)), Some(0)) => OperationCompletion::Completed,
+            (_, Ok(Some(_)), Some(left)) if self.selected_before.is_some_and(|old| left < old) => {
+                OperationCompletion::PartiallyCompleted
+            }
+            (false, _, _) | (_, Ok(Some(_)), Some(_)) => OperationCompletion::GoalNotMet,
+            _ => OperationCompletion::Unconfirmed,
+        }
+    }
+}
+
 /// A shared deadline and explicit result limits for a Local Sync workflow.
 #[derive(Clone, Debug)]
 pub struct LocalSyncWorkflowOptions {

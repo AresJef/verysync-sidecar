@@ -1,10 +1,15 @@
 //! Explicit configuration reads and writes on the authenticated connection.
-use super::Client;
+use super::{workflow_write_result, Client};
 use crate::{
-    ConfigurationSectionUpdate, ConfigurationSyncState, DeviceDefaults, DevicePatch, Error,
-    FolderDefaults, FolderDefaultsPatch, Result,
+    ConfigurationSaveReport, ConfigurationScope, ConfigurationSectionUpdate, ConfigurationSnapshot,
+    ConfigurationSyncState, DeviceDefaults, DevicePatch, Error, FolderDefaults,
+    FolderDefaultsPatch, OperationOptions, OperationPhase, ResponseDiagnostic, Result,
 };
 use serde::{de::DeserializeOwned, Serialize};
+use tokio::time::Instant;
+
+const SAVE: &str = "save selected VerySync configuration";
+const READ: &str = "verify the selected configuration values";
 
 impl Client {
     /// Read the native `ping` marker through this authenticated connection.
@@ -100,6 +105,149 @@ impl Client {
             self.folder_path_style()?,
             document,
         )
+    }
+
+    /// Save one reviewed full configuration or complete section, with one
+    /// deadline for checking, dispatch and readback. When fresh values already
+    /// match the selected scope, return without a write. A changed stale scope
+    /// refuses dispatch. Independent writers must coordinate because the
+    /// native PUT does not conditionally apply the previous document.
+    ///
+    /// The client only reads the original trusted connection afterward.
+    /// Listener or credential changes can make readback unavailable. Use
+    /// the dedicated listener or API-key workflow when switching credentials
+    /// or management addresses.
+    pub async fn save_configuration_and_verify(
+        &self,
+        desired: &ConfigurationSnapshot,
+        scope: ConfigurationScope,
+        options: OperationOptions,
+    ) -> Result<ConfigurationSaveReport> {
+        self.require_snapshot_scope(desired)?;
+        let context = options.start()?;
+        let body = scoped_document(scope, &desired.document)?;
+        let original_document = scoped_document(scope, &desired.original)?;
+        if scope == ConfigurationScope::Gui
+            && serde_json::from_value::<crate::GuiAuthenticationConfig>(body.clone()).is_err()
+        {
+            return Err(Error::InvalidConfiguration {
+                reason: "complete GUI section does not match the required native schema",
+            });
+        }
+        let route = match scope {
+            ConfigurationScope::Complete => "rest/config",
+            ConfigurationScope::Options => "rest/config/options",
+            ConfigurationScope::Gui => "rest/config/gui",
+        };
+        let url = self.connection.management_url(route, &[])?;
+        let mut write = Default::default();
+        let mut guard = None;
+        let mut original_generation = None;
+        let mut configuration = None;
+        let result =
+            context
+                .wait(context.dispatch_deadline(), SAVE, async {
+                    context.phase(OperationPhase::Checking);
+                    guard = Some(self.connection.mutation_lock.lock().await);
+                    self.observe_control_identity().await?;
+                    let generation = self.system_status().await?.start_time.ok_or(
+                        Error::InvalidConfiguration {
+                            reason: "the selected instance did not report its start time",
+                        },
+                    )?;
+                    let fresh = self.configuration().await?;
+                    let observed = scoped_document(scope, &fresh.document)?;
+                    self.require_configuration_generation(&generation).await?;
+                    if observed == body {
+                        configuration = Some(fresh);
+                        original_generation = Some(generation);
+                        return Ok(None);
+                    }
+                    if observed != original_document {
+                        return Err(Error::ConfigurationChanged);
+                    }
+                    if Instant::now() >= context.dispatch_deadline() {
+                        return Err(Error::Timeout { operation: SAVE });
+                    }
+                    original_generation = Some(generation);
+                    let request =
+                        self.connection
+                            .authorized_request(reqwest::Method::PUT, url, Some(body));
+                    let response = self
+                        .connection
+                        .send_workflow_write(SAVE, request, &context, &mut write)
+                        .await?;
+                    Ok(Some(ResponseDiagnostic::new(
+                        response.status,
+                        response.body,
+                    )))
+                })
+                .await;
+        let original = workflow_write_result(SAVE, write, result);
+        let refused = write.response_complete
+            && matches!(
+                original,
+                Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+            );
+        let mut report = ConfigurationSaveReport {
+            scope,
+            scope_matches: configuration.as_ref().map(|_| true),
+            write,
+            original,
+            configuration,
+            application_state: None,
+            observation_error: None,
+            application_error: None,
+        };
+        if let Some(generation) = original_generation.filter(|_| !refused) {
+            context.phase(OperationPhase::Verifying);
+            if write.dispatched {
+                let observed = context
+                    .wait(context.deadline, READ, async {
+                        self.require_configuration_generation(&generation).await?;
+                        let current = self.configuration().await?;
+                        self.require_configuration_generation(&generation).await?;
+                        let matches = scoped_document(scope, &current.document)? == body;
+                        Ok((current, matches))
+                    })
+                    .await;
+                match observed {
+                    Ok((current, matches)) => {
+                        report.configuration = Some(current);
+                        report.scope_matches = Some(matches);
+                    }
+                    Err(error) => report.observation_error = Some(error),
+                }
+            }
+            // Observe application status only for a verified current document.
+            if report.configuration.is_some() {
+                let application = context
+                    .wait(
+                        context.deadline,
+                        "read the selected instance's configuration application state",
+                        async {
+                            let state = self.configuration_sync_state().await?;
+                            self.require_configuration_generation(&generation).await?;
+                            Ok(state)
+                        },
+                    )
+                    .await;
+                match application {
+                    Ok(state) => report.application_state = Some(state),
+                    Err(error) => report.application_error = Some(error),
+                }
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn require_configuration_generation(&self, generation: &str) -> Result<()> {
+        if self.system_status().await?.start_time.as_deref() != Some(generation) {
+            return Err(Error::ConfigurationChanged);
+        }
+        Ok(())
     }
 
     /// PUT a complete, identity-bound snapshot after explicit typed edits.
@@ -362,6 +510,22 @@ impl Client {
             requested_fields_match,
         })
     }
+}
+
+fn scoped_document(
+    scope: ConfigurationScope,
+    document: &serde_json::Value,
+) -> Result<&serde_json::Value> {
+    let selected = match scope {
+        ConfigurationScope::Complete => Some(document),
+        ConfigurationScope::Options => document.get("options"),
+        ConfigurationScope::Gui => document.get("gui"),
+    };
+    selected
+        .filter(|value| value.is_object())
+        .ok_or(Error::InvalidConfiguration {
+            reason: "the complete selected configuration document is absent",
+        })
 }
 
 fn section_unknown(source: Error) -> Error {

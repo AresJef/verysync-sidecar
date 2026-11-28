@@ -35,6 +35,11 @@ file or recursive-directory scope and verifies absence after a known native
 acknowledgement. It removes filesystem data; it does not detach a synchronization
 registration, use a recycle bin or create a backup.
 
+`delete_resource_and_verify` keeps the original reply and checks the selected
+path after a loss of contact. An observed 404 before the request requires no
+write. If the directory still exists, the report can show that some previously
+listed children are absent. An access denial leaves the path state unknown.
+
 Preflights and readback are observations. Coordinate other filesystem/management
 writers. Client clones serialize mutations; failures after sending a write can
 return `MutationOutcomeUnknown`. The action can have partially or fully applied.

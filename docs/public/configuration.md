@@ -88,6 +88,16 @@ session, or acquire a commercial entitlement.
 
 ## Complete options and GUI replacement
 
+Use `save_configuration_and_verify` with a reviewed snapshot and choose the
+complete document, options, or GUI scope. The report keeps the original reply
+separate from the current document and the native application flag. It skips
+the write when the selected values already match.
+
+A GUI save can briefly interrupt the management listener while VerySync
+reloads it. If the original reply arrived and readback failed, query the
+configuration from the trusted management connection when it is ready. Use
+the listener or key-change workflow when the address or credentials change.
+
 `replace_options_configuration(&snapshot)` sends one complete
 `PUT /rest/config/options`. Edit a fresh identity-bound `ConfigurationSnapshot`
 with the typed general, network, transport, system-preference or crash-report

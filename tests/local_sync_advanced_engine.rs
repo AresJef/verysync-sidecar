@@ -253,6 +253,10 @@ async fn conflict(policy: LocalSyncConflictPolicy) -> TestResult {
     for path in [&a, &b] {
         std::fs::write(path.join("shared.txt"), b"baseline")?;
         modified(&path.join("shared.txt"), 1700000000)?;
+        if matches!(policy, LocalSyncConflictPolicy::Manual) {
+            std::fs::write(path.join("separate.txt"), b"same baseline")?;
+            modified(&path.join("separate.txt"), 1700000000)?;
+        }
     }
     std::fs::write(a.join("from-a.bin"), b"a-only")?;
     std::fs::write(b.join("from-b.bin"), b"b-only")?;
@@ -286,6 +290,12 @@ async fn conflict(policy: LocalSyncConflictPolicy) -> TestResult {
     std::fs::write(b.join("shared.txt"), newer_smaller)?;
     modified(&a.join("shared.txt"), 1700001000)?;
     modified(&b.join("shared.txt"), 1700002000)?;
+    if matches!(policy, LocalSyncConflictPolicy::Manual) {
+        std::fs::write(a.join("separate.txt"), b"independent original side A")?;
+        std::fs::write(b.join("separate.txt"), b"independent original side B")?;
+        modified(&a.join("separate.txt"), 1700001000)?;
+        modified(&b.join("separate.txt"), 1700002000)?;
+    }
     let preview = analyze(&core, &job.job_id).await?;
     let totals = core
         .client()
@@ -293,17 +303,71 @@ async fn conflict(policy: LocalSyncConflictPolicy) -> TestResult {
         .await?;
     let (preview, expected) = match policy {
         LocalSyncConflictPolicy::Manual => {
-            assert_eq!(totals.conflicts, 1);
+            use verysync_sidecar::{
+                LocalSyncWorkflowOptions, OperationCompletion, OperationOptions,
+            };
+            assert_eq!(totals.conflicts, 2);
             assert_eq!(std::fs::read(a.join("shared.txt"))?, older_larger);
             assert_eq!(std::fs::read(b.join("shared.txt"))?, newer_smaller);
-            let resolved = core
+            let read_options = || {
+                LocalSyncWorkflowOptions::new(10, OperationOptions::new(Duration::from_secs(15)))
+                    .page_size(1)
+            };
+            let missing = core
                 .client()
-                .resolve_local_sync_conflict(
+                .resolve_local_sync_conflict_and_verify(
+                    &job.job_id,
+                    &preview.id,
+                    &LocalSyncConflictResolution::at_path("absent.txt", LocalSyncConflictSide::A)?,
+                    read_options(),
+                )
+                .await?;
+            assert!(!missing.write.dispatched && matches!(missing.original, Ok(None)));
+            assert_eq!(missing.completion(), OperationCompletion::Completed);
+            let scoped = core
+                .client()
+                .resolve_local_sync_conflict_and_verify(
                     &job.job_id,
                     &preview.id,
                     &LocalSyncConflictResolution::at_path("shared.txt", LocalSyncConflictSide::A)?,
+                    read_options(),
                 )
                 .await?;
+            assert!(
+                scoped.write.dispatched && scoped.write.response_complete,
+                "{scoped:?}"
+            );
+            assert_eq!(scoped.selected_before, Some(1), "{scoped:?}");
+            assert_eq!(scoped.selected_remaining, Some(0), "{scoped:?}");
+            assert_eq!(scoped.all_remaining, Some(1), "{scoped:?}");
+            let first = scoped
+                .replacement
+                .ok_or("missing verified replacement preview")?;
+            assert_ne!(first.id, preview.id);
+            assert_eq!(
+                std::fs::read(a.join("separate.txt"))?,
+                b"independent original side A"
+            );
+            assert_eq!(
+                std::fs::read(b.join("separate.txt"))?,
+                b"independent original side B"
+            );
+            let second = core
+                .client()
+                .resolve_local_sync_conflict_and_verify(
+                    &job.job_id,
+                    &first.id,
+                    &LocalSyncConflictResolution::at_path(
+                        "separate.txt",
+                        LocalSyncConflictSide::A,
+                    )?,
+                    read_options(),
+                )
+                .await?;
+            assert_eq!(second.all_remaining, Some(0), "{second:?}");
+            let resolved = second
+                .replacement
+                .ok_or("second replacement not verified")?;
             assert_ne!(resolved.id, preview.id);
             assert_eq!(std::fs::read(a.join("shared.txt"))?, older_larger);
             assert_eq!(std::fs::read(b.join("shared.txt"))?, newer_smaller);
@@ -318,6 +382,7 @@ async fn conflict(policy: LocalSyncConflictPolicy) -> TestResult {
                     .conflicts,
                 0
             );
+            println!("native conflict scope: two unresolved, one selected, one kept outside selection, both disks unchanged until explicit execution");
             (resolved, older_larger.as_slice())
         }
         LocalSyncConflictPolicy::Newer => {

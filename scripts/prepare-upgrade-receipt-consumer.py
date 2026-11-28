@@ -48,9 +48,9 @@ def prepare(args):
     test_files = ["upgrade_engine.rs", "upgrade_receipt_contract.rs"]
     if args.sdk_completion:
         test_files.extend((
-            "authentication_engine.rs", "devices.rs", "engine_control.rs", "events_contract.rs",
+            "authentication_engine.rs", "configuration_engine.rs", "devices.rs", "engine_control.rs", "events_contract.rs",
             "file_history_engine.rs", "file_mutation_engine.rs", "file_transfer_engine.rs",
-            "local_sync_engine.rs", "local_sync_runtime_engine.rs", "managed_instance.rs",
+            "local_sync_advanced_engine.rs", "local_sync_engine.rs", "local_sync_runtime_engine.rs", "managed_instance.rs",
             "p2p_three_nodes.rs",
             "sync_observation.rs", "transport_contract.rs",
         ))

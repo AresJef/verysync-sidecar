@@ -550,8 +550,9 @@ def main():
         raise ValueError("the independent upgrade consumer requires the upgrade suite")
     if args.sdk_completion_consumer and (
         args.upgrade_consumer or args.test_target not in {
-            "authentication_engine", "devices", "engine_control", "file_transfer_engine",
-            "file_history_engine", "file_mutation_engine", "local_sync_engine",
+            "authentication_engine", "configuration_engine", "devices", "engine_control",
+            "file_transfer_engine", "file_history_engine", "file_mutation_engine",
+            "local_sync_advanced_engine", "local_sync_engine",
             "local_sync_runtime_engine", "managed_instance", "p2p_three_nodes", "sync_observation",
         }
     ):

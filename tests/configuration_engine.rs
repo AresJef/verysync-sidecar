@@ -660,6 +660,38 @@ async fn native_general_preferences_preserve_sections_disable_progress_and_chang
 
 #[tokio::test]
 async fn full_configuration_save_preserves_sections_and_rejects_stale_snapshots() -> TestResult {
+    use verysync_sidecar::{
+        ConfigurationScope, GuiPreferencesPatch, OperationCompletion, OperationOptions,
+    };
+    async fn verify_current_gui(
+        client: &verysync_sidecar::Client,
+        desired: &verysync_sidecar::ConfigurationSnapshot,
+        generation: &str,
+    ) -> TestResult {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                match client.configuration().await {
+                    Ok(current) => {
+                        assert_eq!(
+                            client.system_status().await?.start_time.as_deref(),
+                            Some(generation)
+                        );
+                        assert_eq!(
+                            current.native_document()["gui"],
+                            desired.native_document()["gui"]
+                        );
+                        return Ok::<_, Error>(());
+                    }
+                    Err(Error::Timeout { .. } | Error::Transport { .. }) => {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        })
+        .await??;
+        Ok(())
+    }
     let root = tempfile::Builder::new()
         .prefix("vs-config-save-")
         .tempdir()?
@@ -764,6 +796,105 @@ async fn full_configuration_save_preserves_sections_and_rejects_stale_snapshots(
         std::fs::read(data.join("sentinel"))?,
         b"configuration save retains files"
     );
+    let operation = || OperationOptions::new(Duration::from_secs(15));
+    let same = core
+        .client()
+        .save_configuration_and_verify(&persisted, ConfigurationScope::Complete, operation())
+        .await?;
+    assert_eq!(same.completion(), OperationCompletion::Completed);
+    assert!(!same.write.dispatched);
+    assert!(matches!(same.original, Ok(None)));
+    assert_eq!(same.scope_matches, Some(true));
+    assert!(same
+        .application_state
+        .is_some_and(|status| status.config_in_sync));
+    let stale = core
+        .client()
+        .save_configuration_and_verify(&desired, ConfigurationScope::Complete, operation())
+        .await?;
+    assert!(!stale.write.dispatched);
+    assert!(matches!(stale.original, Err(Error::ConfigurationChanged)));
+
+    let mut options = persisted.clone();
+    options
+        .set_general_options(&GeneralOptionsPatch::default().keep_temporaries_hours(hours + 3))?;
+    options.set_folder_defaults(&FolderDefaultsPatch::default().rescan_interval_seconds(407))?;
+    let saved_options = core
+        .client()
+        .save_configuration_and_verify(&options, ConfigurationScope::Options, operation())
+        .await?;
+    assert_eq!(
+        saved_options.completion(),
+        OperationCompletion::Completed,
+        "{saved_options:?}"
+    );
+    assert!(saved_options.write.dispatched && saved_options.write.response_complete);
+    let current = saved_options
+        .configuration
+        .ok_or("missing current options configuration")?;
+    assert_eq!(current.general_options()?.keep_temporaries_hours, hours + 3);
+    assert_eq!(current.folder_defaults()?.rescan_interval_seconds, 317);
+
+    let mut gui = current.clone();
+    let original_debug = core.client().gui_preferences().await?.debugging;
+    let generation = core
+        .client()
+        .system_status()
+        .await?
+        .start_time
+        .ok_or("missing native identity start time")?;
+    gui.set_gui_preferences(&GuiPreferencesPatch::default().debugging(!original_debug))?;
+    let saved_gui = core
+        .client()
+        .save_configuration_and_verify(&gui, ConfigurationScope::Gui, operation())
+        .await?;
+    assert!(saved_gui.write.dispatched && saved_gui.write.response_complete);
+    if saved_gui.completion() != OperationCompletion::Completed {
+        assert!(saved_gui.scope_matches.is_none());
+        assert!(matches!(
+            saved_gui.observation_error,
+            Some(Error::Timeout { .. } | Error::Transport { .. })
+        ));
+    }
+    assert!(matches!(saved_gui.original, Ok(Some(_))));
+    verify_current_gui(core.client(), &gui, &generation).await?;
+    assert_eq!(
+        core.client().gui_preferences().await?.debugging,
+        !original_debug
+    );
+    assert_eq!(
+        core.client()
+            .general_options()
+            .await?
+            .keep_temporaries_hours,
+        hours + 3
+    );
+    let restored = core
+        .client()
+        .save_configuration_and_verify(&current, ConfigurationScope::Gui, operation())
+        .await?;
+    assert!(matches!(
+        restored.original,
+        Err(Error::ConfigurationChanged)
+    ));
+    assert!(!restored.write.dispatched);
+    let fresh = core.client().configuration().await?;
+    let mut reverted = fresh.clone();
+    reverted.set_gui_preferences(&GuiPreferencesPatch::default().debugging(original_debug))?;
+    let restored = core
+        .client()
+        .save_configuration_and_verify(&reverted, ConfigurationScope::Gui, operation())
+        .await?;
+    assert!(restored.write.dispatched && restored.write.response_complete);
+    if restored.completion() != OperationCompletion::Completed {
+        assert!(restored.scope_matches.is_none());
+        assert!(matches!(
+            restored.observation_error,
+            Some(Error::Timeout { .. } | Error::Transport { .. })
+        ));
+    }
+    verify_current_gui(core.client(), &reverted, &generation).await?;
+    println!("native configuration workflow: full document matched with zero PUT; stale snapshot denied; options and GUI verified with unrelated values retained; GUI scope read independently across native handler reload");
     assert!(
         core.client()
             .remove_folder_keep_files(&id)

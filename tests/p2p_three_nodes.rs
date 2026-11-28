@@ -144,7 +144,8 @@ async fn actual_delivery_batch_waits_for_the_late_receiver_and_checks_bytes() ->
     use std::time::SystemTime;
     use verysync_sidecar::{
         DeliveryBatch, DeliveryEvidenceSource, DeliveryFile, DeliveryFileOutcome, DeliveryReceipt,
-        OperationCompletion, OperationOptions, ResourceFileState,
+        DeliveryVerification, OperationCompletion, OperationOptions, OperationPhase,
+        ResourceFileState,
     };
     let root = tempfile::Builder::new().prefix("vbd-").tempdir()?;
     let mut a = ManagedInstance::start(options(&root.path().join("a"))?).await?;
@@ -285,7 +286,69 @@ async fn actual_delivery_batch_waits_for_the_late_receiver_and_checks_bytes() ->
         .flat_map(|peer| &peer.files)
         .all(|file| file.outcome == DeliveryFileOutcome::Unobserved));
 
-    c.client().resume_folder(&cf).await?;
+    let strict_refusal = a
+        .client()
+        .scan_delivery_batch_and_verify(
+            &batch,
+            &[b.client()],
+            &[],
+            since,
+            DeliveryVerification::RequireReceiverReads,
+            limit(),
+        )
+        .await?;
+    assert!(!strict_refusal.write.dispatched && strict_refusal.original.is_err());
+    let best_effort = a
+        .client()
+        .scan_delivery_batch_and_verify(
+            &batch,
+            &[],
+            &[],
+            since,
+            DeliveryVerification::BestEffort,
+            limit(),
+        )
+        .await?;
+    assert!(
+        best_effort.write.dispatched && best_effort.write.response_complete,
+        "{best_effort:#?}"
+    );
+    assert_eq!(best_effort.completion(), OperationCompletion::Unconfirmed);
+    assert!(!late.join("sample.bin").exists());
+
+    let (events, mut progress) = tokio::sync::mpsc::channel(16);
+    let resume = async {
+        while let Some(phase) = progress.recv().await {
+            if phase == OperationPhase::Submitting {
+                c.client().resume_folder(&cf).await?;
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(());
+            }
+        }
+        Err("strict verification finished before dispatch".into())
+    };
+    let recipients = [b.client(), c.client()];
+    let (strict, resumed) = tokio::join!(
+        a.client().scan_delivery_batch_and_verify(
+            &batch,
+            &recipients,
+            &[],
+            since,
+            DeliveryVerification::RequireReceiverReads,
+            limit().report_progress_to(events),
+        ),
+        resume,
+    );
+    let strict = strict?;
+    assert!(
+        strict.write.dispatched && strict.write.response_complete,
+        "{strict:#?}"
+    );
+    resumed?;
+    assert_eq!(
+        strict.completion(),
+        OperationCompletion::Completed,
+        "{strict:#?}"
+    );
     received("late selected recipient", c.client(), &cf, &late, &samples).await?;
     let complete = a
         .client()
@@ -296,6 +359,19 @@ async fn actual_delivery_batch_waits_for_the_late_receiver_and_checks_bytes() ->
         OperationCompletion::Completed,
         "{complete:#?}"
     );
+    let matched = a
+        .client()
+        .scan_delivery_batch_and_verify(
+            &batch,
+            &[b.client(), c.client()],
+            &[],
+            since,
+            DeliveryVerification::RequireReceiverReads,
+            limit(),
+        )
+        .await?;
+    assert!(!matched.write.dispatched && matches!(matched.original, Ok(None)));
+    assert_eq!(matched.completion(), OperationCompletion::Completed);
     assert!(complete
         .recipients
         .values()
@@ -344,6 +420,8 @@ async fn actual_delivery_batch_waits_for_the_late_receiver_and_checks_bytes() ->
             "one_late_receiver_before_ready":true, "actual_full_digest_both_receivers":true,
             "model_progress_alone_did_not_complete_batch":true, "conflicting_simultaneous_witnesses_retained":true,
             "external_witness_conflict_fixture_is_synthetic":true, "all_owned_trees_exited_cleanly":true,
+        "strict_unqualified_zero_scan":true,"best_effort_with_no_observer_kept_result_unknown":true,
+        "qualified_strict_scan_followed_by_native_delivery":true,"already_matched_zero_scan":true,
         })
     );
     Ok(())

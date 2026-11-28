@@ -508,6 +508,15 @@ impl LocalSyncConflictResolution {
             side,
         })
     }
+
+    pub(crate) fn selects(&self, path: &str) -> bool {
+        self.path == path
+            || (self.recursive
+                && (self.path.is_empty()
+                    || path
+                        .strip_prefix(&self.path)
+                        .is_some_and(|rest| rest.starts_with('/'))))
+    }
 }
 
 /// One target-side calendar rule. Weekdays use ISO numbers, Monday=1 through

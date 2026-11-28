@@ -31,6 +31,11 @@ writes already in flight finish. A verified stop includes a terminal record
 for that run with cancellation set. Check destination files to see which
 actions had already affected them. Ending the SDK wait sends no stop command.
 
+`resolve_local_sync_conflict_and_verify` applies a selected side to one path
+or subtree of the reviewed preview. The report identifies the acknowledged
+replacement and the conflicts still present inside and outside your
+selection. Review the replacement before submitting it for execution.
+
 The Local Sync API controls the official core's storage jobs. These
 registrations are distinct from P2P synchronization folders and file-manager
 volumes. Every method uses the selected authenticated connection. The SDK does

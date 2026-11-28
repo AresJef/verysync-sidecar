@@ -1902,6 +1902,123 @@ fn complete_configuration_fixture() -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn verified_configuration_keeps_the_original_write_separate_from_the_current_values(
+) -> TestResult {
+    use verysync_sidecar::{
+        ConfigurationScope, GeneralOptionsPatch, OperationCompletion, OperationOptions,
+    };
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"windows","arch":"amd64"}));
+    let generation = |name| Reply::json(serde_json::json!({"myID":ID,"startTime":name}));
+    let current = || generation("selected");
+    for case in [
+        "lost-matched",
+        "changed-generation",
+        "known-refusal",
+        "already-matched",
+    ] {
+        let baseline = complete_configuration_fixture();
+        let mut desired = baseline.clone();
+        desired["options"]["keepTemporariesH"] = 25.into();
+        let mut replies = vec![
+            version(),
+            current(),
+            current(),
+            Reply::json(baseline.clone()),
+            version(),
+            current(),
+            current(),
+            current(),
+            Reply::json(if case == "already-matched" {
+                desired.clone()
+            } else {
+                baseline.clone()
+            }),
+            current(),
+        ];
+        match case {
+            "known-refusal" => replies.push(Reply {
+                status: 403,
+                ..Reply::json(serde_json::json!({}))
+            }),
+            "changed-generation" => replies.extend([
+                Reply::json(serde_json::json!({})),
+                generation("replacement"),
+            ]),
+            "lost-matched" => replies.extend([
+                Reply {
+                    status: 0,
+                    ..Reply::json(serde_json::json!({}))
+                },
+                current(),
+                current(),
+                Reply::json(desired.clone()),
+                current(),
+            ]),
+            _ => (),
+        }
+        if matches!(case, "lost-matched" | "already-matched") {
+            replies.extend([
+                Reply::json(serde_json::json!({"configInSync":false})),
+                current(),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let mut snapshot = client.configuration().await?;
+        snapshot.set_general_options(&GeneralOptionsPatch::default().keep_temporaries_hours(25))?;
+        let report = client
+            .save_configuration_and_verify(
+                &snapshot,
+                ConfigurationScope::Options,
+                OperationOptions::new(Duration::from_secs(5)),
+            )
+            .await?;
+        match case {
+            "lost-matched" => {
+                assert!(
+                    matches!(&report.original, Err(Error::MutationOutcomeUnknown { .. })),
+                    "{report:?}"
+                );
+                assert_eq!(report.scope_matches, Some(true));
+                assert_eq!(report.completion(), OperationCompletion::Completed);
+                assert!(report
+                    .application_state
+                    .as_ref()
+                    .is_some_and(|state| !state.config_in_sync));
+            }
+            "changed-generation" => {
+                assert!(matches!(&report.original, Ok(Some(_))));
+                assert!(matches!(
+                    &report.observation_error,
+                    Some(Error::ConfigurationChanged)
+                ));
+                assert_eq!(report.completion(), OperationCompletion::Unconfirmed);
+            }
+            "known-refusal" => {
+                assert!(matches!(&report.original, Err(Error::AccessDenied { .. })));
+                assert_eq!(report.completion(), OperationCompletion::GoalNotMet);
+            }
+            _ => {
+                assert!(matches!(&report.original, Ok(None)));
+                assert_eq!(report.completion(), OperationCompletion::Completed);
+            }
+        }
+        assert!(!format!("{report:?}").contains(KEY));
+        let requests = server.finish().await?;
+        let writes: Vec<_> = requests.iter().filter(|r| r.starts_with("PUT ")).collect();
+        assert_eq!(writes.len(), usize::from(case != "already-matched"));
+        if let Some(request) = writes.first() {
+            assert!(request.starts_with("PUT /prefix/rest/config/options "));
+            let submitted: serde_json::Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").ok_or("missing body")?.1)?;
+            assert_eq!(submitted, desired["options"]);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn full_save_preserves_native_values_and_rejects_stale_or_unknown_outcomes() -> TestResult {
     use verysync_sidecar::GeneralOptionsPatch;
     for case in ["matching", "stale", "invalid-readback"] {
@@ -6347,6 +6464,103 @@ async fn verified_file_relocation_reads_both_paths_after_one_lost_response() -> 
                 .filter(|request| request.starts_with("PATCH "))
                 .count(),
             1
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn verified_resource_removal_distinguishes_absence_partial_change_and_denial() -> TestResult {
+    use verysync_sidecar::{
+        OperationOptions, PathStyle, ResourceDeleteScope, ResourcePath, ResourceRemovalOutcome,
+        ResourceVolumeId,
+    };
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let identity = || Reply::json(serde_json::json!({"myID":ID,"startTime":"observed"}));
+    let missing = || Reply {
+        status: 404,
+        ..Reply::json(serde_json::json!({}))
+    };
+    let directory = |children: &[&str]| {
+        Reply::json(serde_json::json!({
+            "path":"/directory","name":"directory","size":0,"mode":0,"modified":"native","isDir":true,
+            "items":children.iter().map(|name|serde_json::json!({
+                "path":"/directory/item","name":name,"size":4,"mode":420,"modified":"native","isDir":false,
+            })).collect::<Vec<_>>()
+        }))
+    };
+    for (case, outcome) in [
+        ("absent", ResourceRemovalOutcome::AlreadyAbsent),
+        ("lost-delete-reply", ResourceRemovalOutcome::ObservedAbsent),
+        ("partial", ResourceRemovalOutcome::PartialDirectoryChange),
+        ("permission", ResourceRemovalOutcome::Unconfirmed),
+    ] {
+        let mut replies = vec![
+            version(),
+            identity(),
+            version(),
+            identity(),
+            identity(),
+            identity(),
+            if case == "absent" {
+                missing()
+            } else {
+                directory(&["one", "two"])
+            },
+            identity(),
+        ];
+        if case != "absent" {
+            replies.extend([
+                Reply {
+                    status: 0,
+                    ..Reply::json(serde_json::json!({}))
+                },
+                identity(),
+                identity(),
+                match case {
+                    "lost-delete-reply" => missing(),
+                    "partial" => directory(&["two"]),
+                    _ => Reply {
+                        status: 403,
+                        ..Reply::json(serde_json::json!({}))
+                    },
+                },
+            ]);
+            if case != "permission" {
+                replies.push(identity());
+            }
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let path = ResourcePath::root(ResourceVolumeId::parse("v")?, PathStyle::Unix)
+            .child("directory")?;
+        let report = client
+            .delete_resource_and_verify(
+                &path,
+                ResourceDeleteScope::RecursiveDirectory,
+                OperationOptions::new(Duration::from_secs(5)),
+            )
+            .await?;
+        assert_eq!(report.outcome, outcome, "{case} {report:?}");
+        assert_eq!(
+            report.direct_children_removed,
+            (case == "partial").then_some(1)
+        );
+        assert_eq!(report.write.dispatched, case != "absent");
+        if case == "permission" {
+            assert!(matches!(
+                report.observation_error,
+                Some(Error::AccessDenied { .. })
+            ));
+        }
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("DELETE "))
+                .count(),
+            usize::from(case != "absent")
         );
     }
     Ok(())

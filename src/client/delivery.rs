@@ -1,18 +1,25 @@
 //! Read the selected delivery targets without starting or retrying transfers.
 
-use std::{collections::BTreeSet, sync::Arc, time::SystemTime};
+use std::{
+    collections::BTreeSet,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
-use tokio::task::JoinSet;
+use tokio::{task::JoinSet, time::Instant};
 
-use super::Client;
+use super::{workflow_write_result, Client};
 use crate::{
-    delivery::reconcile_delivery, DeliveryBatch, DeliveryEvidence, DeliveryEvidenceSource,
-    DeliveryFileOutcome, DeliveryFileReport, DeliveryReceipt, DeliveryRecipientReport,
-    DeliveryReport, DeviceId, Error, FolderId, OperationOptions, OperationPhase, PathStyle,
-    ResourcePath, Result,
+    delivery::reconcile_delivery, operation_options::OperationContext, DeliveryBatch,
+    DeliveryEvidence, DeliveryEvidenceSource, DeliveryFileOutcome, DeliveryFileReport,
+    DeliveryReceipt, DeliveryRecipientReport, DeliveryReport, DeliveryScanReport,
+    DeliveryVerification, DeviceId, Error, FolderId, OperationCompletion, OperationOptions,
+    OperationPhase, PathStyle, ResourceFileState, ResourcePath, ResponseDiagnostic, Result,
+    TargetPath,
 };
 
 const RECEIVE: &str = "verify delivered files on the selected receiving instances";
+const SCAN: &str = "request one scan of the selected source files";
 
 type ReceiverSnapshot = Result<Vec<Result<DeliveryReceipt>>>;
 
@@ -32,6 +39,239 @@ impl Client {
         options: OperationOptions,
     ) -> Result<DeliveryReport> {
         let context = options.start()?;
+        let observation = self
+            .delivery_observation_round(
+                batch,
+                receivers,
+                witnesses,
+                observed_since,
+                &context,
+                context.deadline,
+            )
+            .await;
+        context.phase(OperationPhase::Finished);
+        observation
+    }
+
+    /// Request one scan at the source, then check the selected recipients'
+    /// bytes. Set up the folder registrations and sharing before calling.
+    /// This accepts at most 256 source paths. Existing native sharing rules
+    /// govern delivery, including any recipients outside this batch.
+    ///
+    /// Strict verification requires usable read access to each receiver at
+    /// admission. Best effort can proceed with missing read access. If the
+    /// requested state already matches, the SDK can return without a scan.
+    pub async fn scan_delivery_batch_and_verify(
+        &self,
+        batch: &DeliveryBatch,
+        receivers: &[&Client],
+        witnessed_before: &[DeliveryReceipt],
+        observed_since: SystemTime,
+        verification: DeliveryVerification,
+        options: OperationOptions,
+    ) -> Result<DeliveryScanReport> {
+        if batch.files.len() > 256 {
+            return Err(invalid(
+                "one native delivery scan accepts at most 256 selected paths",
+            ));
+        }
+        self.require_delivery_source(batch)?;
+        let context = options.start()?;
+        let qualification = context.started
+            + context
+                .deadline
+                .duration_since(context.started)
+                .mul_f64(1.0 / 3.0);
+        let generation = context
+            .wait(qualification, SCAN, async {
+                self.system_status()
+                    .await?
+                    .start_time
+                    .ok_or_else(|| invalid("the source did not report its start time"))
+            })
+            .await?;
+        let before = self
+            .delivery_observation_round(
+                batch,
+                receivers,
+                witnessed_before,
+                observed_since,
+                &context,
+                qualification,
+            )
+            .await?;
+        let mut report = DeliveryScanReport {
+            verification,
+            before,
+            write: Default::default(),
+            original: Ok(None),
+            observed: None,
+            observation_error: None,
+        };
+        if report.before.completion() == OperationCompletion::Completed {
+            context.phase(OperationPhase::Finished);
+            return Ok(report);
+        }
+        if verification == DeliveryVerification::RequireReceiverReads
+            && !report.before.recipients.values().all(|receiver| {
+                receiver.files.iter().all(|file| {
+                    file.outcome != DeliveryFileOutcome::Conflicting
+                        && file
+                            .evidence
+                            .iter()
+                            .any(|item| item.source == DeliveryEvidenceSource::RecipientRead)
+                })
+            })
+        {
+            report.original = Err(invalid(
+                "at least one selected receiver cannot be verified with the supplied access",
+            ));
+            context.phase(OperationPhase::Finished);
+            return Ok(report);
+        }
+
+        let style = self.folder_path_style()?;
+        let separator = if style == PathStyle::Windows {
+            "\\"
+        } else {
+            "/"
+        };
+        let paths = batch
+            .files
+            .iter()
+            .map(|file| TargetPath::remote(style, file.components.join(separator)))
+            .collect::<Result<Vec<_>>>()?;
+        let query = self.scan_subpath_query(&batch.folder, &paths)?;
+        let url = self.connection.management_url("rest/db/scan", &query)?;
+        let dispatch = context.dispatch_deadline();
+        let result = context
+            .wait(dispatch, SCAN, async {
+                context.phase(OperationPhase::Checking);
+                let _guard = self.connection.mutation_lock.lock().await;
+                self.observe_control_identity().await?;
+                let folder = self.folder(&batch.folder).await?;
+                if folder.paused {
+                    return Err(Error::ScanNotIdle);
+                }
+                let peers = folder
+                    .extra
+                    .get("devices")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(|| {
+                        invalid("the selected folder did not report its device associations")
+                    })?;
+                if !batch.targets.keys().all(|id| {
+                    peers.iter().any(|peer| {
+                        peer.get("deviceID").and_then(serde_json::Value::as_str)
+                            == Some(id.as_str())
+                    })
+                }) {
+                    return Err(invalid(
+                        "the source folder is not configured for every selected receiver",
+                    ));
+                }
+                let base = self.delivery_folder_base(&batch.folder).await?;
+                for file in &batch.files {
+                    let path = delivery_resource_path(&base, &file.components)?;
+                    let expected = ResourceFileState::Present {
+                        bytes: file.bytes,
+                        sha256: file.sha256,
+                    };
+                    if self.resource_file_state(&path).await? != expected {
+                        return Err(invalid("a source file differs from the selected batch"));
+                    }
+                }
+                let current = self.delivery_folder_base(&batch.folder).await?;
+                let current_folder = self.folder(&batch.folder).await?;
+                if !same_resource(&base, &current)
+                    || current_folder.path != folder.path
+                    || current_folder.paused
+                    || current_folder.extra.get("devices") != folder.extra.get("devices")
+                {
+                    return Err(Error::ConfigurationChanged);
+                }
+                self.check_delivery_generation(&generation).await?;
+                if Instant::now() >= dispatch {
+                    return Err(Error::Timeout { operation: SCAN });
+                }
+                let request = self
+                    .connection
+                    .authorized_request(reqwest::Method::POST, url, None);
+                let reply = self
+                    .connection
+                    .send_workflow_write(SCAN, request, &context, &mut report.write)
+                    .await?;
+                Ok(Some(ResponseDiagnostic::new(reply.status, reply.body)))
+            })
+            .await;
+        report.original = workflow_write_result(SCAN, report.write, result);
+        let refused = report.write.response_complete
+            && matches!(
+                report.original,
+                Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+            );
+        if report.write.dispatched && !refused && !receivers.is_empty() {
+            let started = SystemTime::now();
+            report.observation_error = context
+                .wait(context.deadline, RECEIVE, async {
+                    loop {
+                        self.check_delivery_generation(&generation).await?;
+                        let latest = self
+                            .delivery_observation_round(
+                                batch,
+                                receivers,
+                                &[],
+                                started,
+                                &context,
+                                context.deadline,
+                            )
+                            .await?;
+                        self.check_delivery_generation(&generation).await?;
+                        let checked = receivers.iter().all(|client| {
+                            latest
+                                .recipients
+                                .get(&client.instance().device_id)
+                                .is_some_and(|peer| {
+                                    peer.files
+                                        .iter()
+                                        .all(|file| file.outcome == DeliveryFileOutcome::Matched)
+                                })
+                        });
+                        let unavailable = latest.observation_error.is_some()
+                            || latest.recipients.values().any(|recipient| {
+                                recipient.read_error.is_some()
+                                    || recipient.files.iter().any(|file| file.read_error.is_some())
+                            });
+                        report.observed = Some(latest);
+                        if checked || unavailable {
+                            return Ok(());
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                })
+                .await
+                .err();
+        }
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn check_delivery_generation(&self, expected: &str) -> Result<()> {
+        if self.system_status().await?.start_time.as_deref() != Some(expected) {
+            return Err(Error::ConfigurationChanged);
+        }
+        Ok(())
+    }
+
+    async fn delivery_observation_round(
+        &self,
+        batch: &DeliveryBatch,
+        receivers: &[&Client],
+        witnesses: &[DeliveryReceipt],
+        observed_since: SystemTime,
+        context: &OperationContext,
+        deadline: Instant,
+    ) -> Result<DeliveryReport> {
         self.require_delivery_source(batch)?;
         let mut chosen = BTreeSet::new();
         for receiver in receivers {
@@ -96,7 +336,7 @@ impl Client {
         // Admit the selected source before starting any receiver I/O.
         context
             .wait(
-                context.deadline,
+                deadline,
                 "check the selected source of the delivery batch",
                 async {
                     self.observe_control_identity().await?;
@@ -117,7 +357,7 @@ impl Client {
             });
         }
         context.phase(OperationPhase::Verifying);
-        let receiver_result = context.wait(context.deadline, RECEIVE, async {
+        let receiver_result = context.wait(deadline, RECEIVE, async {
             while let Some(task) = tasks.join_next().await {
                 let (device, observation) = task
                     .map_err(|_| invalid("a receiving observation task ended before reporting"))?;
@@ -143,7 +383,7 @@ impl Client {
             Ok(())
         });
         let source_result = context.wait(
-            context.deadline,
+            deadline,
             "read sender progress for the selected batch",
             async { self.folder_completions(&batch.folder).await },
         );
@@ -165,7 +405,6 @@ impl Client {
                     reconcile_delivery(&batch.files[file.file_index], &mut file.evidence);
             }
         }
-        context.phase(OperationPhase::Finished);
         Ok(report)
     }
 
@@ -198,10 +437,7 @@ impl Client {
         let mut records = Vec::with_capacity(batch.files.len());
         for (file, expected) in batch.files.iter().enumerate() {
             let read = async {
-                let resource = expected
-                    .components
-                    .iter()
-                    .try_fold(initial.clone(), |path, component| path.child(component))?;
+                let resource = delivery_resource_path(&initial, &expected.components)?;
                 let started = SystemTime::now();
                 let received = self.resource_file_state(&resource).await?;
                 DeliveryReceipt::witnessed(
@@ -219,8 +455,7 @@ impl Client {
         let current = self.delivery_folder_base(folder).await?;
         self.observe_control_identity().await?;
         if self.system_status().await?.start_time.as_deref() != Some(&start)
-            || (initial.volume, initial.style, initial.components)
-                != (current.volume, current.style, current.components)
+            || !same_resource(&initial, &current)
         {
             return Err(Error::ConfigurationChanged);
         }
@@ -258,6 +493,18 @@ impl Client {
             |path, component| path.child(*component),
         )
     }
+}
+
+fn delivery_resource_path(base: &ResourcePath, components: &[String]) -> Result<ResourcePath> {
+    components
+        .iter()
+        .try_fold(base.clone(), |path, component| path.child(component))
+}
+
+fn same_resource(first: &ResourcePath, second: &ResourcePath) -> bool {
+    first.volume == second.volume
+        && first.style == second.style
+        && first.components == second.components
 }
 
 /// Only use an exact lexical mapping between two native absolute paths.

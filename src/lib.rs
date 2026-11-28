@@ -149,9 +149,10 @@ pub use client::{
     SettingsStepResult, SettingsTarget, SettingsValue, VersionCompatibility, VersionPolicy,
 };
 pub use configuration::{
-    ConfigurationSectionUpdate, ConfigurationSnapshot, ConfigurationSyncState, ConfigurationUpdate,
-    DiskFreeRequirement, DiskSpaceUnit, FolderDefaults, FolderDefaultsPatch, GeneralOptions,
-    GeneralOptionsPatch, GuiConfigurationReplacement,
+    ConfigurationSaveReport, ConfigurationScope, ConfigurationSectionUpdate, ConfigurationSnapshot,
+    ConfigurationSyncState, ConfigurationUpdate, DiskFreeRequirement, DiskSpaceUnit,
+    FolderDefaults, FolderDefaultsPatch, GeneralOptions, GeneralOptionsPatch,
+    GuiConfigurationReplacement,
 };
 pub use control_observation::{
     FolderObservation, FolderObservationPosition, FolderObservationRefresh,
@@ -164,6 +165,7 @@ pub use control_operation::{
 pub use delivery::{
     DeliveryBatch, DeliveryEvidence, DeliveryEvidenceSource, DeliveryFile, DeliveryFileOutcome,
     DeliveryFileReport, DeliveryReceipt, DeliveryRecipientReport, DeliveryReport,
+    DeliveryScanReport, DeliveryVerification,
 };
 pub use device_options::{DeviceAdvancedConfig, DeviceAdvancedPatch, IntroductionSource};
 pub use devices::{
@@ -187,7 +189,7 @@ pub use file_history::{
 };
 pub use file_mutations::{
     ResourceConflictPolicy, ResourceDeleteScope, ResourceMutation, ResourceRelocationOutcome,
-    ResourceRelocationReport, ResourceRemoval,
+    ResourceRelocationReport, ResourceRemoval, ResourceRemovalOutcome, ResourceRemovalReport,
 };
 pub use file_transfers::{
     ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,
@@ -248,9 +250,9 @@ pub use local_sync_events::{
     LocalSyncEventGap, LocalSyncEventOptions, LocalSyncEventStreamItem, LocalSyncEventSubscription,
 };
 pub use local_sync_workflows::{
-    LocalSyncPreviewReport, LocalSyncRegistrationOutcome, LocalSyncRegistrationReport,
-    LocalSyncRunControlOutcome, LocalSyncRunControlReport, LocalSyncRunOutcome,
-    LocalSyncRunReceipt, LocalSyncRunReport, LocalSyncWorkflowOptions,
+    LocalSyncConflictReport, LocalSyncPreviewReport, LocalSyncRegistrationOutcome,
+    LocalSyncRegistrationReport, LocalSyncRunControlOutcome, LocalSyncRunControlReport,
+    LocalSyncRunOutcome, LocalSyncRunReceipt, LocalSyncRunReport, LocalSyncWorkflowOptions,
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
