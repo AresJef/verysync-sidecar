@@ -1,5 +1,6 @@
 //! Test-only, opt-in process-start tracing. No application/runtime SDK hook.
 use std::{
+    io::{BufRead, BufReader, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -31,6 +32,7 @@ pub(super) async fn run_owned_capture_child() -> super::TestResult<bool> {
             }
         }
     }
+    let mut child_output = tempfile::tempfile()?;
     let mut child = CaptureChild(
         Command::new(std::env::current_exe()?)
             .args([
@@ -45,11 +47,19 @@ pub(super) async fn run_owned_capture_child() -> super::TestResult<bool> {
             // argv capture replaces optional system-wide name observation.
             .env("VERYSYNC_TEST_OPENER_TRACE", "0")
             .stdin(Stdio::null())
+            .stdout(child_output.try_clone()?)
+            .stderr(child_output.try_clone()?)
             .spawn()?,
     );
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if let Some(status) = child.0.try_wait()? {
+            // Preserve the child transcript without presenting its nested
+            // harness as a second top-level execution to the evidence collector.
+            child_output.seek(SeekFrom::Start(0))?;
+            for line in BufReader::new(&mut child_output).lines() {
+                eprintln!("owned Windows dispatch child: {}", line?);
+            }
             if !status.success() {
                 return Err("owned Windows native dispatch child failed".into());
             }
