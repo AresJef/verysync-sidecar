@@ -39,23 +39,12 @@ application-specific files or migrations separately.
 #     archive: std::path::PathBuf, target: &verysync_sidecar::OfficialProgram)
 #     -> verysync_sidecar::Result<()> {
 use std::time::Duration;
-use verysync_sidecar::{KernelInstallationOutcome, OperationOptions};
+use verysync_sidecar::OperationOptions;
 
 let report = core
     .install_kernel_upgrade(archive, target, OperationOptions::new(Duration::from_secs(45)))
     .await?;
-println!("{}", report.outcome);
-if !matches!(
-    report.outcome,
-    KernelInstallationOutcome::AlreadyInstalled | KernelInstallationOutcome::Installed
-) {
-    // Present the specific original or verification error when available.
-    if let Some(error) = report.verification_error.as_ref()
-        .or_else(|| report.installation.result.as_ref().err())
-    {
-        eprintln!("{error}");
-    }
-}
+println!("{report}");
 # Ok(())
 # }
 ```
@@ -65,10 +54,29 @@ Set one total timeout with `OperationOptions`. Add
 running version and device after a recognized transient failure. For the
 standalone `Client::query_kernel_upgrade`, set the same preference on the
 client handle. `OperationOptions::without_read_retry` disables it for one
-call. Legacy upgrade methods retain their original behavior. To stop waiting,
+call. A connection and its shared handles admit at most four extra reads in
+one rolling second. The report records whether the first failure qualified and
+whether that allowance was available. Legacy upgrade methods retain their
+original behavior. To stop waiting,
 pass a cancellation channel with `cancel_wait_on` and send `true`. The
 returned report says how far the SDK got. The native operation may continue
 after an upload was dispatched, so inspect the report before trying again.
+
+To keep request evidence across application restarts, configure
+`OperationOptions::save_upgrade_checkpoints`. Save the before-upload and
+request-finished receipts in separate private slots for the same operation ID.
+Use the finished slot when present. A before-upload receipt by itself leaves
+submission uncertain because the earlier process may have handed off the
+request after saving it. A failed before-upload save prevents dispatch. A
+late storage write can complete after its wait has timed out, so each stage
+needs its own slot. Saving the finished receipt can fail after a request has
+already been sent. The installation report retains the original request and,
+when verified, the program on disk.
+
+`UpgradeReceipt::decode` reopens the stored facts for inspection. The bytes
+carry neither an executable location nor an original process owner. A new
+application can check the current program through its trusted instance setup.
+Keep that independent observation separate from the earlier upgrade.
 
 ## Stop, snapshot and select a program
 

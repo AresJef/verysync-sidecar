@@ -1,10 +1,10 @@
-//! Explicit kernel upgrade calls. No automatic selection, download or retry.
+//! Explicit kernel upgrade calls and opt-in retries for trusted reads.
 use super::{checked_response, mutation_error, send_bounded_observing_headers, Client};
 use crate::{
     operation_options::OperationContext,
     upgrade_receipt::{UpgradeAttempt, UpgradeProgress},
     Error, FailedUpgradeRead, KernelUpgradeCheck, OfficialProgram, OperationOptions,
-    OperationPhase, ResponseDiagnostic, Result, UpgradeAction, UpgradeDispatch,
+    OperationPhase, ReadRetryDecision, ResponseDiagnostic, Result, UpgradeAction, UpgradeDispatch,
     UpgradeOperationResult, UpgradeOutcome, UpgradeQueryReport,
 };
 use sha2::{Digest, Sha256};
@@ -20,7 +20,7 @@ impl Client {
     ///
     /// A handle configured with [Client::with_transient_read_retries] can make
     /// one extra read after an eligible timeout or connection interruption.
-    /// The first attempt uses up to two thirds of the total time when enabled.
+    /// The first attempt uses up to four fifths of the total time when enabled.
     /// Each attempt checks the selected version and device before querying the
     /// release provider. The query does not install a release.
     pub async fn query_kernel_upgrade(
@@ -47,7 +47,7 @@ impl Client {
         )?;
         let retry = context.read_retries_enabled(self.transient_read_retries);
         let first_deadline = if retry {
-            context.started + deadline.duration_since(context.started).mul_f64(2.0 / 3.0)
+            context.started + deadline.duration_since(context.started).mul_f64(4.0 / 5.0)
         } else {
             deadline
         };
@@ -55,12 +55,14 @@ impl Client {
             .read_kernel_release(context, first_deadline, &attempt)
             .await;
         let delay = retry_delay(attempt.operation_id());
-        let retry = retry
-            && result.as_ref().is_err_and(|error| retryable_read(error))
-            && deadline.saturating_duration_since(tokio::time::Instant::now()) > delay;
-        if !retry {
+        let retry_decision = result
+            .as_ref()
+            .err()
+            .map(|error| self.decide_upgrade_read_retry(retry, deadline, delay, error));
+        if retry_decision != Some(ReadRetryDecision::Permitted) {
             return Ok(UpgradeQueryReport {
                 first_failed_attempt: None,
+                retry_decision,
                 final_attempt: attempt.finish(result, |_| UpgradeOutcome::Queried),
             });
         }
@@ -83,8 +85,29 @@ impl Client {
         };
         Ok(UpgradeQueryReport {
             first_failed_attempt,
+            retry_decision,
             final_attempt: next.finish(result, |_| UpgradeOutcome::Queried),
         })
+    }
+
+    pub(crate) fn decide_upgrade_read_retry(
+        &self,
+        enabled: bool,
+        deadline: tokio::time::Instant,
+        delay: Duration,
+        error: &Error,
+    ) -> ReadRetryDecision {
+        if !enabled {
+            ReadRetryDecision::Disabled
+        } else if !retryable_read(error) {
+            ReadRetryDecision::CauseNotEligible
+        } else if deadline.saturating_duration_since(tokio::time::Instant::now()) <= delay {
+            ReadRetryDecision::InsufficientTime
+        } else if !self.read_retry_budget.take() {
+            ReadRetryDecision::SharedBudgetExhausted
+        } else {
+            ReadRetryDecision::Permitted
+        }
     }
 
     async fn read_kernel_release(
@@ -101,6 +124,7 @@ impl Client {
                     .await
             })
             .await
+            .map_err(super::control_identity::recovery_read_error)
     }
 
     /// Check the kernel's own release provider once. Managed instances disable
@@ -415,7 +439,7 @@ pub(crate) fn retry_delay(operation_id: [u8; 16]) -> Duration {
     Duration::from_millis(5 + u64::from(operation_id[0] & 0x0f))
 }
 
-pub(crate) fn retryable_read(error: &Error) -> bool {
+fn retryable_read(error: &Error) -> bool {
     use std::{error::Error as _, io::ErrorKind};
     match error {
         Error::Timeout { .. } => true,

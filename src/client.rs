@@ -56,6 +56,7 @@ use crate::{
     Result, SystemStatus, BASELINE_ENGINE_VERSION,
 };
 use crate::{RawRequest, RawResponse, RequestEffect};
+pub(crate) use control_identity::recovery_read_error as classify_control_read_trust;
 pub use control_identity::ControlIdentityObservation;
 pub use control_preview::{
     SettingsChange, SettingsCommit, SettingsField, SettingsFieldChange, SettingsFieldResult,
@@ -70,7 +71,7 @@ pub use local_api::{
     LocalApiHistoryPage, LocalApiHistoryRecord, LocalApiPeer, LocalApiScanAcknowledgement,
     LocalApiUpgradeAcknowledgement,
 };
-pub(crate) use upgrade_control::{retry_delay, retryable_read};
+pub(crate) use upgrade_control::retry_delay;
 
 /// The policy applied to an engine version during connection.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -237,6 +238,7 @@ pub struct Client {
     connection: Connection,
     instance: InstanceInfo,
     transient_read_retries: bool,
+    read_retry_budget: Arc<crate::operation_options::ReadRetryBudget>,
     #[cfg(all(test, feature = "engine-tests"))]
     shutdown_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -244,6 +246,7 @@ pub struct Client {
 impl Client {
     /// Enable bounded transient reads for eligible high-level operations on this
     /// handle and its clones. Legacy requests retain their single-attempt behavior.
+    /// Shared handles can use at most four extra reads in a rolling second.
     /// Use [crate::OperationOptions::without_read_retry] to disable it for one call.
     pub fn with_transient_read_retries(mut self) -> Self {
         self.transient_read_retries = true;
@@ -663,6 +666,7 @@ impl Client {
         Ok(Self {
             connection,
             transient_read_retries: false,
+            read_retry_budget: Arc::new(crate::operation_options::ReadRetryBudget::default()),
             #[cfg(all(test, feature = "engine-tests"))]
             shutdown_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             instance: InstanceInfo {

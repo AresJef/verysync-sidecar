@@ -279,6 +279,19 @@ fn stamp(file: &fs::File) -> Result<native::FileStamp> {
 }
 
 impl UpgradeObservationScope {
+    pub(super) async fn verify_before_upload(&self, deadline: Instant) -> Result<()> {
+        let scope = self.clone();
+        run_read_worker(deadline, move |cancelled| {
+            if scope.read_program(&cancelled, deadline)? != scope.previous {
+                return Err(Error::ProgramRejected {
+                    reason: "the selected executable changed before the upgrade could be submitted",
+                });
+            }
+            Ok(())
+        })
+        .await
+    }
+
     fn read_program(&self, cancelled: &mpsc::Receiver<()>, deadline: Instant) -> Result<[u8; 32]> {
         self.read_program_with_checkpoint(cancelled, deadline, || Ok(()))
     }

@@ -179,7 +179,7 @@ impl ReadOnlyControl {
     }
 }
 
-fn recovery_read_error(error: Error) -> Error {
+pub(crate) fn recovery_read_error(error: Error) -> Error {
     #[cfg(feature = "tls")]
     if let Error::Transport { source, .. } = &error {
         if certificate_rejection(source) {

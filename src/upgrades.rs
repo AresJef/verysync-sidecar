@@ -2,7 +2,7 @@
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 
-use crate::{Error, UpgradeOperationResult, UpgradeReceipt};
+use crate::{Error, ReadRetryDecision, UpgradeOperationResult, UpgradeReceipt};
 
 /// The original transient error when a second read was considered.
 #[derive(Debug)]
@@ -20,8 +20,22 @@ pub struct FailedUpgradeRead {
 pub struct UpgradeQueryReport {
     /// The initial failure if the operation entered its bounded retry phase.
     pub first_failed_attempt: Option<FailedUpgradeRead>,
+    /// Whether another read was permitted after the first failure.
+    pub retry_decision: Option<ReadRetryDecision>,
     /// The only or last attempt. Inspect its receipt to see whether it dispatched.
     pub final_attempt: UpgradeOperationResult<KernelUpgradeCheck>,
+}
+
+impl fmt::Display for UpgradeQueryReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.final_attempt.result {
+            Ok(check) if check.newer => f.write_str("VerySync reported a newer release."),
+            Ok(_) => f.write_str("VerySync finished checking for a newer release."),
+            Err(Error::Timeout { .. }) =>
+                f.write_str("The release check timed out. Check the connection to the selected instance before checking again."),
+            Err(source) => fmt::Display::fmt(source, f),
+        }
+    }
 }
 
 pub(crate) const NO_MATCHING_RELEASE: &[u8] = b"couldn't find a release to download";

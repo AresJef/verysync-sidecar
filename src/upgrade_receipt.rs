@@ -1,7 +1,7 @@
 //! Evidence from one explicitly requested kernel query or upgrade.
 
 use crate::{DeviceId, Error, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fmt,
     sync::{Arc, Mutex},
@@ -9,7 +9,7 @@ use std::{
 };
 
 /// The caller's selected route and action.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum UpgradeAction {
@@ -35,8 +35,8 @@ impl UpgradeAction {
 
 /// The furthest observed operation boundary. Preliminary management status reads
 /// are outside this stage: it records the selected query or upgrade itself.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "stage", rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "stage", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum UpgradeDispatch {
     /// The selected request or native command did not reach its dispatch step.
@@ -63,7 +63,7 @@ pub enum UpgradeDispatch {
 }
 
 /// What the initiating invocation can establish about its own result.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum UpgradeOutcome {
@@ -89,6 +89,15 @@ pub enum UpgradeOutcome {
 /// record is suitable for private storage as evidence.
 #[derive(Clone, Serialize)]
 pub struct UpgradeReceipt {
+    #[serde(flatten)]
+    data: UpgradeReceiptData,
+    #[serde(skip)]
+    pub(crate) observation_scope: Option<crate::managed::UpgradeObservationScope>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct UpgradeReceiptData {
     schema_version: u16,
     operation_id: [u8; 16],
     device_id: DeviceId,
@@ -102,59 +111,108 @@ pub struct UpgradeReceipt {
     owner_generation: Option<[u8; 32]>,
     archive_sha256: Option<[u8; 32]>,
     target_program_sha256: Option<[u8; 32]>,
-    #[serde(skip)]
-    pub(crate) observation_scope: Option<crate::managed::UpgradeObservationScope>,
 }
 
 impl UpgradeReceipt {
+    /// Encode the versioned, bounded evidence for the application's private storage.
+    /// This excludes the original owner handle and its executable location.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(&self.data).map_err(|_| invalid_receipt())
+    }
+
+    /// Reopen the stored evidence. The original process owner and executable
+    /// position cannot be reconstructed from these bytes. A reopened receipt
+    /// cannot authorize another installation or claim a same-attempt disk check.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > 8192 {
+            return Err(invalid_receipt());
+        }
+        let data: UpgradeReceiptData =
+            serde_json::from_slice(bytes).map_err(|_| invalid_receipt())?;
+        if data.schema_version != 1
+            || matches!(data.dispatch, UpgradeDispatch::Http { status: Some(status), .. } if !(100..=999).contains(&status))
+            || matches!(
+                data.dispatch,
+                UpgradeDispatch::Http {
+                    status: None,
+                    complete: true
+                }
+            )
+            || (matches!(data.dispatch, UpgradeDispatch::Http { .. })
+                && matches!(
+                    data.action,
+                    UpgradeAction::CliCheck
+                        | UpgradeAction::CliProvider
+                        | UpgradeAction::CliFromUrl
+                ))
+            || (matches!(
+                data.dispatch,
+                UpgradeDispatch::CliSpawnUnconfirmed
+                    | UpgradeDispatch::CliStarted
+                    | UpgradeDispatch::CliExited { .. }
+            ) && matches!(
+                data.action,
+                UpgradeAction::ManagementCheck
+                    | UpgradeAction::ManagementProvider
+                    | UpgradeAction::ManagementArchive
+            ))
+        {
+            return Err(invalid_receipt());
+        }
+        Ok(Self {
+            data,
+            observation_scope: None,
+        })
+    }
+
     /// The local correlation ID. It is not an engine task or idempotency key.
     pub fn operation_id(&self) -> [u8; 16] {
-        self.operation_id
+        self.data.operation_id
     }
     /// The device selected by the caller's connection or owning handle.
     pub fn device_id(&self) -> &DeviceId {
-        &self.device_id
+        &self.data.device_id
     }
     /// The selected operation.
     pub fn action(&self) -> UpgradeAction {
-        self.action
+        self.data.action
     }
     /// Start time in Unix epoch milliseconds, or zero before the epoch.
     pub fn started_at_unix_millis(&self) -> u64 {
-        self.started_at_unix_millis
+        self.data.started_at_unix_millis
     }
     /// The caller's time allowance in milliseconds. Contained cleanup can take longer.
     pub fn timeout_millis(&self) -> u64 {
-        self.timeout_millis
+        self.data.timeout_millis
     }
     /// Elapsed monotonic time observed before the receipt returned.
     pub fn elapsed_millis(&self) -> u64 {
-        self.elapsed_millis
+        self.data.elapsed_millis
     }
     /// The observed dispatch and response boundary.
     pub fn dispatch(&self) -> UpgradeDispatch {
-        self.dispatch
+        self.data.dispatch
     }
     /// The original attempt's outcome, independent of any later observation.
     pub fn outcome(&self) -> UpgradeOutcome {
-        self.outcome
+        self.data.outcome
     }
     /// The previous executable's verified digest, if the stopped CLI checked it.
     pub fn previous_program_sha256(&self) -> Option<[u8; 32]> {
-        self.previous_program_sha256
+        self.data.previous_program_sha256
     }
     /// Opaque ID of the original owned startup, when observed on that owner.
     pub fn owner_generation(&self) -> Option<[u8; 32]> {
-        self.owner_generation
+        self.data.owner_generation
     }
     /// The selected fixed archive's catalog digest, before any validation.
     /// This identifies the archive, not the executable inside it.
     pub fn archive_sha256(&self) -> Option<[u8; 32]> {
-        self.archive_sha256
+        self.data.archive_sha256
     }
     /// The preselected target executable digest, distinct from the archive digest.
     pub fn target_program_sha256(&self) -> Option<[u8; 32]> {
-        self.target_program_sha256
+        self.data.target_program_sha256
     }
 
     pub(crate) fn bind_observation(
@@ -162,9 +220,9 @@ impl UpgradeReceipt {
         generation: [u8; 32],
         scope: crate::managed::UpgradeObservationScope,
     ) {
-        self.owner_generation = Some(generation);
-        self.previous_program_sha256 = Some(scope.previous);
-        self.target_program_sha256 = Some(scope.target);
+        self.data.owner_generation = Some(generation);
+        self.data.previous_program_sha256 = Some(scope.previous);
+        self.data.target_program_sha256 = Some(scope.target);
         self.observation_scope = Some(scope);
     }
 }
@@ -172,12 +230,18 @@ impl UpgradeReceipt {
 impl fmt::Debug for UpgradeReceipt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeReceipt")
-            .field("operation_id", &self.operation_id)
-            .field("action", &self.action)
-            .field("dispatch", &self.dispatch)
-            .field("outcome", &self.outcome)
-            .field("elapsed_millis", &self.elapsed_millis)
+            .field("operation_id", &self.data.operation_id)
+            .field("action", &self.data.action)
+            .field("dispatch", &self.data.dispatch)
+            .field("outcome", &self.data.outcome)
+            .field("elapsed_millis", &self.data.elapsed_millis)
             .finish_non_exhaustive()
+    }
+}
+
+fn invalid_receipt() -> Error {
+    Error::InvalidConfiguration {
+        reason: "the upgrade receipt format or evidence is invalid",
     }
 }
 
@@ -188,6 +252,27 @@ pub struct UpgradeOperationResult<T> {
     pub receipt: UpgradeReceipt,
     /// The same result contract and source errors as the original entry point.
     pub result: Result<T>,
+}
+
+/// Storage slot for a fixed upgrade workflow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum UpgradeCheckpointStage {
+    /// Saved before handing an upload to the transport. A later application
+    /// can know the intent from this record and must treat submission as unknown.
+    BeforeUpload,
+    /// The initiating request reached the recorded boundary and returned.
+    RequestFinished,
+}
+
+/// Private storage evidence for one fixed upgrade workflow.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct UpgradeCheckpoint {
+    /// Save each stage in its own slot, keyed by this receipt's operation ID.
+    pub stage: UpgradeCheckpointStage,
+    /// Bounded versioned record. It can be serialized with [UpgradeReceipt::encode].
+    pub receipt: UpgradeReceipt,
 }
 
 #[derive(Clone)]
@@ -239,23 +324,25 @@ impl UpgradeAttempt {
             deadline,
             start,
             receipt: UpgradeReceipt {
-                schema_version: 1,
-                operation_id,
-                device_id,
-                action,
-                started_at_unix_millis: milliseconds(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default(),
-                ),
-                timeout_millis: milliseconds(timeout),
-                elapsed_millis: 0,
-                dispatch: UpgradeDispatch::Preparing,
-                outcome: UpgradeOutcome::NotSubmitted,
-                previous_program_sha256: None,
-                owner_generation: None,
-                archive_sha256: None,
-                target_program_sha256: None,
+                data: UpgradeReceiptData {
+                    schema_version: 1,
+                    operation_id,
+                    device_id,
+                    action,
+                    started_at_unix_millis: milliseconds(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default(),
+                    ),
+                    timeout_millis: milliseconds(timeout),
+                    elapsed_millis: 0,
+                    dispatch: UpgradeDispatch::Preparing,
+                    outcome: UpgradeOutcome::NotSubmitted,
+                    previous_program_sha256: None,
+                    owner_generation: None,
+                    archive_sha256: None,
+                    target_program_sha256: None,
+                },
                 observation_scope: None,
             },
             progress: UpgradeProgress(Arc::new(Mutex::new(Progress {
@@ -266,7 +353,7 @@ impl UpgradeAttempt {
     }
 
     pub(crate) fn repeat_read(&self) -> Self {
-        debug_assert!(self.receipt.action.is_query());
+        debug_assert!(self.receipt.action().is_query());
         Self {
             deadline: self.deadline,
             start: self.start,
@@ -279,15 +366,25 @@ impl UpgradeAttempt {
     }
 
     pub(crate) fn operation_id(&self) -> [u8; 16] {
-        self.receipt.operation_id
+        self.receipt.operation_id()
+    }
+
+    pub(crate) fn before_upload(&self) -> UpgradeCheckpoint {
+        let mut receipt = self.receipt.clone();
+        receipt.observation_scope = None;
+        receipt.data.elapsed_millis = milliseconds(self.start.elapsed());
+        UpgradeCheckpoint {
+            stage: UpgradeCheckpointStage::BeforeUpload,
+            receipt,
+        }
     }
 
     pub(crate) fn set_owner_generation(&mut self, generation: [u8; 32]) {
-        self.receipt.owner_generation = Some(generation);
+        self.receipt.data.owner_generation = Some(generation);
     }
 
     pub(crate) fn set_archive(&mut self, sha256: [u8; 32]) {
-        self.receipt.archive_sha256 = Some(sha256);
+        self.receipt.data.archive_sha256 = Some(sha256);
     }
 
     pub(crate) fn bind_observation(
@@ -313,7 +410,7 @@ impl UpgradeAttempt {
     ) -> UpgradeOperationResult<T> {
         use UpgradeOutcome::*;
         let progress = self.progress.0.lock().unwrap_or_else(|e| e.into_inner());
-        let receipt = &mut self.receipt;
+        let receipt = &mut self.receipt.data;
         receipt.dispatch = progress.dispatch;
         if progress.previous_program_sha256.is_some() {
             receipt.previous_program_sha256 = progress.previous_program_sha256;
@@ -340,6 +437,17 @@ impl UpgradeAttempt {
         UpgradeOperationResult {
             receipt: self.receipt,
             result,
+        }
+    }
+}
+
+impl UpgradeCheckpoint {
+    pub(crate) fn finished(receipt: &UpgradeReceipt) -> Self {
+        let mut receipt = receipt.clone();
+        receipt.observation_scope = None;
+        Self {
+            stage: UpgradeCheckpointStage::RequestFinished,
+            receipt,
         }
     }
 }

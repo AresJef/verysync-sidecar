@@ -268,7 +268,7 @@ pub use network::{
 pub use official_account::{
     OfficialAccountChange, OfficialAccountCredentials, OfficialAccountState, OfficialAccountStatus,
 };
-pub use operation_options::{OperationOptions, OperationPhase};
+pub use operation_options::{OperationOptions, OperationPhase, ReadRetryDecision};
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
@@ -308,7 +308,8 @@ pub use transports::{
     TrackerStatus, TransportConfig, TransportPatch, TransportStatus, TransportUpdate,
 };
 pub use upgrade_receipt::{
-    UpgradeAction, UpgradeDispatch, UpgradeOperationResult, UpgradeOutcome, UpgradeReceipt,
+    UpgradeAction, UpgradeCheckpoint, UpgradeCheckpointStage, UpgradeDispatch,
+    UpgradeOperationResult, UpgradeOutcome, UpgradeReceipt,
 };
 pub use upgrades::{FailedUpgradeRead, KernelUpgradeCheck, UpgradeQueryReport};
 

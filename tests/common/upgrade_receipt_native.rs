@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -20,8 +20,8 @@ use verysync_sidecar::{
     ApiKey, Client, ConnectOptions, CreateFolderOptions, Error, FolderId,
     KernelInstallationOutcome, KernelReadinessOutcome, KernelUpgradeCommand, LocalProgram,
     ManagedInstance, ManagedOptions, ManagementEndpoint, OperationOptions, TargetPath,
-    UpgradeDispatch, UpgradeOutcome, UpgradeProgramMatch, UpgradeProgramUncertainty,
-    UpgradeReceipt, VersionPolicy,
+    UpgradeCheckpointStage, UpgradeDispatch, UpgradeOutcome, UpgradeProgramMatch,
+    UpgradeProgramUncertainty, UpgradeReceipt, VersionPolicy,
 };
 
 async fn owned_old(
@@ -842,7 +842,26 @@ async fn native_business_upgrade_and_ready_reuses_owned_data_and_same_device() -
         ))
         .await?;
     let before = core.client().folder(&id).await?;
-    let options = OperationOptions::new(Duration::from_secs(45));
+    let prep_file = root.path().join("prepared-storage-1.json");
+    let path_for_storage = prep_file.clone();
+    let options = OperationOptions::new(Duration::from_secs(45)).save_upgrade_checkpoints(
+        move |checkpoint| {
+            let output = path_for_storage.clone();
+            async move {
+                match checkpoint.stage {
+                    UpgradeCheckpointStage::BeforeUpload => {
+                        let bytes = checkpoint.receipt.encode().map_err(io::Error::other)?;
+                        tokio::fs::write(output, bytes).await
+                    }
+                    UpgradeCheckpointStage::RequestFinished => Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "synthetic final receipt storage refusal",
+                    )),
+                    _ => Err(io::Error::other("unexpected test checkpoint stage")),
+                }
+            }
+        },
+    );
     let report = core
         .upgrade_kernel_and_wait_ready(archive, &target, options.clone())
         .await?;
@@ -852,6 +871,16 @@ async fn native_business_upgrade_and_ready_reuses_owned_data_and_same_device() -
         report.installation.outcome,
         KernelInstallationOutcome::Installed
     );
+    assert!(matches!(
+        report.installation.persistence_error,
+        Some(Error::LocalIo { .. })
+    ));
+    let durable = UpgradeReceipt::decode(&std::fs::read(&prep_file)?)?;
+    assert_eq!(
+        durable.operation_id(),
+        report.installation.installation.receipt.operation_id()
+    );
+    assert_eq!(durable.dispatch(), UpgradeDispatch::Preparing);
     assert_eq!(
         report.installation.installation.receipt.outcome(),
         UpgradeOutcome::Acknowledged
@@ -874,7 +903,11 @@ async fn native_business_upgrade_and_ready_reuses_owned_data_and_same_device() -
     assert_eq!(hash(&sample)?, saved);
     let ready = core.control_generation();
     let zero = core
-        .upgrade_kernel_and_wait_ready(root.path().join("unneeded-archive.zip"), &target, options)
+        .upgrade_kernel_and_wait_ready(
+            root.path().join("unneeded-archive.zip"),
+            &target,
+            OperationOptions::new(Duration::from_secs(45)),
+        )
         .await?;
     assert_eq!(zero.outcome, KernelReadinessOutcome::AlreadyReady);
     assert_eq!(
@@ -895,9 +928,187 @@ async fn native_business_upgrade_and_ready_reuses_owned_data_and_same_device() -
             "disk_target":true, "authenticated_target_generation":true, "original_device":true,
             "folder_and_bytes_retained":true, "already_ready_without_upload_or_restart":true,
             "original_native_exit":transition.previous_exit.code, "sdk_start_attempted":true,
+        "final_storage_failure_separate_from_installed_and_ready":true,
             "owned_program_pids":0, "removed":true
         }),
     )
+}
+
+#[tokio::test]
+async fn native_business_install_timed_out_checkpoint_cannot_replace_the_final_receipt(
+) -> TestResult {
+    let root = tempfile::Builder::new().prefix("u30s").tempdir()?;
+    let (mut core, settings, program) = owned_old(root.path(), true).await?;
+    let previous = core.control_generation();
+    let digest = hash(&program)?;
+    let identity = core.client().instance().device_id.clone();
+    let asset = baseline_asset()?;
+    let archive =
+        PathBuf::from(std::env::var_os("VERYSYNC_TEST_ARCHIVE").ok_or("fixed archive missing")?);
+    let parsed = rmpv::decode::read_value(&mut std::fs::File::open(
+        settings.state_directory().join("setting.dat"),
+    )?)?;
+    let key = ApiKey::new(
+        parsed["4"]["6"]
+            .as_str()
+            .ok_or("private fixture key missing")?,
+    )?;
+    let port = settings
+        .management_endpoint()
+        .http_url()
+        .and_then(|url| url.port())
+        .ok_or("private port missing")?;
+    let native = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let proxy = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let endpoint = ManagementEndpoint::http(&format!("http://{}/", proxy.local_addr()?))?;
+    let uploads = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&uploads);
+    let mut relay = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = proxy.accept().await?;
+            let head = bounded_request_head(&mut stream).await?;
+            let upgrade = head.starts_with("POST /rest/system/upgrade/upload ");
+            if upgrade {
+                seen.fetch_add(1, Ordering::SeqCst);
+                return Err("upload reached the witness after a failed write checkpoint".into());
+            }
+            forward_native_management(stream, native, head, false, "s30-storage").await?;
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    });
+    core.reconnect_management(
+        ConnectOptions::new(endpoint, key)
+            .version_policy(VersionPolicy::AllowUnverified)
+            .expected_device_id(identity),
+    )
+    .await?;
+
+    let prepared = root.path().join("before-upload.json");
+    let finished = root.path().join("request-finished.json");
+    let (release_late_save, wait_for_release) = std::sync::mpsc::channel();
+    let held = Arc::new(Mutex::new(Some(wait_for_release)));
+    let (late_saved, confirmed_late) = tokio::sync::oneshot::channel();
+    let acknowledged = Arc::new(Mutex::new(Some(late_saved)));
+    let options = OperationOptions::new(Duration::from_secs(4)).save_upgrade_checkpoints({
+        let prepared = prepared.clone();
+        let finished = finished.clone();
+        move |checkpoint| {
+            let prepared = prepared.clone();
+            let finished = finished.clone();
+            let held = Arc::clone(&held);
+            let acknowledged = Arc::clone(&acknowledged);
+            async move {
+                let bytes = checkpoint.receipt.encode().map_err(io::Error::other)?;
+                match checkpoint.stage {
+                    UpgradeCheckpointStage::BeforeUpload => {
+                        let receiver =
+                            held.lock().unwrap().take().ok_or_else(|| {
+                                io::Error::other("duplicate pre-upload checkpoint")
+                            })?;
+                        tokio::task::spawn_blocking(move || {
+                            receiver
+                                .recv_timeout(Duration::from_secs(10))
+                                .map_err(io::Error::other)?;
+                            std::fs::write(prepared, bytes)?;
+                            let sender = acknowledged
+                                .lock()
+                                .unwrap()
+                                .take()
+                                .ok_or_else(|| io::Error::other("duplicate late write"))?;
+                            let _ = sender.send(());
+                            Ok::<(), io::Error>(())
+                        })
+                        .await
+                        .map_err(io::Error::other)?
+                    }
+                    UpgradeCheckpointStage::RequestFinished => {
+                        tokio::fs::write(finished, bytes).await
+                    }
+                    _ => Err(io::Error::other("unexpected test checkpoint stage")),
+                }
+            }
+        }
+    });
+    let result = core.install_kernel_upgrade(archive, &asset, options);
+    let report = tokio::select! {
+        result = result => result?,
+        end = &mut relay => { end??; return Err("private relay finished early".into()); }
+    };
+    assert_eq!(report.outcome, KernelInstallationOutcome::NotInstalled);
+    assert!(matches!(
+        report.installation.result,
+        Err(Error::Timeout { .. })
+    ));
+    assert_eq!(
+        report.installation.receipt.outcome(),
+        UpgradeOutcome::NotSubmitted
+    );
+    assert_eq!(
+        report.installation.receipt.dispatch(),
+        UpgradeDispatch::Preparing
+    );
+    assert!(report.persistence_error.is_none());
+    assert!(!prepared.exists());
+    let original_final_bytes = std::fs::read(&finished)?;
+    release_late_save.send(())?;
+    tokio::time::timeout(Duration::from_secs(4), confirmed_late).await??;
+    assert_eq!(std::fs::read(&finished)?, original_final_bytes);
+    assert_ne!(std::fs::read(&prepared)?, original_final_bytes);
+    let child = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "upgrade_receipt_native::reopen_private_upgrade_receipt_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("VERYSYNC_S30_FINAL_TEST_RECEIPT", &finished)
+        .env("VERYSYNC_S30_BEFORE_TEST_RECEIPT", &prepared)
+        .output()?;
+    assert!(child.status.success());
+    assert!(
+        std::str::from_utf8(&child.stdout)?.contains("s30-second-process-private-receipts-read")
+    );
+    assert_eq!(uploads.load(Ordering::SeqCst), 0);
+    assert_eq!(core.control_generation(), previous);
+    assert_eq!(hash(&program)?, digest);
+    let ended = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(ended.tree_stopped && ended.state_released && !ended.forced);
+    assert!(exact_program_pids(&program).await?.is_empty());
+    relay.abort();
+    assert!(relay.await.is_err_and(|error| error.is_cancelled()));
+    drop(core);
+    root.close()?;
+    receipt_event(
+        "s30-storage",
+        "result-and-cleanup",
+        serde_json::json!({
+            "upload_requests":0, "prewrite_timed_out":true, "late_write_completed":true,
+            "final_receipt_unchanged":true, "second_process_reopened_both_slots":true,
+            "owned_program_pids":0, "removed":true
+        }),
+    )
+}
+
+#[test]
+#[ignore = "subprocess of the private checkpoint timing fixture"]
+fn reopen_private_upgrade_receipt_child() -> TestResult {
+    let final_path =
+        std::env::var_os("VERYSYNC_S30_FINAL_TEST_RECEIPT").ok_or("missing final fixture")?;
+    let before_path =
+        std::env::var_os("VERYSYNC_S30_BEFORE_TEST_RECEIPT").ok_or("missing before fixture")?;
+    let final_bytes = std::fs::read(final_path)?;
+    let final_receipt = UpgradeReceipt::decode(&final_bytes)?;
+    let before = UpgradeReceipt::decode(&std::fs::read(before_path)?)?;
+    assert_eq!(final_receipt.operation_id(), before.operation_id());
+    assert_eq!(final_receipt.dispatch(), UpgradeDispatch::Preparing);
+    assert_eq!(final_receipt.outcome(), UpgradeOutcome::NotSubmitted);
+    assert_eq!(final_receipt.encode()?, final_bytes);
+    let mut malformed: serde_json::Value = serde_json::from_slice(&final_bytes)?;
+    malformed["schema_version"] = 77.into();
+    assert!(UpgradeReceipt::decode(&serde_json::to_vec(&malformed)?).is_err());
+    println!("s30-second-process-private-receipts-read");
+    Ok(())
 }
 
 #[tokio::test]

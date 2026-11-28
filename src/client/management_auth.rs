@@ -12,6 +12,7 @@ impl Client {
         let mut client = Client::connect(options).await?;
         client.connection.mutation_lock = self.connection.mutation_lock.clone();
         client.transient_read_retries = self.transient_read_retries;
+        client.read_retry_budget = self.read_retry_budget.clone();
         Ok(client)
     }
     /// Select local GUI authentication with one explicit username/password PATCH,
@@ -153,6 +154,7 @@ impl Client {
         let mut client = Client::connect(options).await?;
         client.connection.mutation_lock = self.connection.mutation_lock.clone();
         client.transient_read_retries = self.transient_read_retries;
+        client.read_retry_budget = self.read_retry_budget.clone();
         Ok(client)
     }
 

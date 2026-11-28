@@ -8,11 +8,12 @@ use super::{
     ManagedExit, ManagedInstance, ProgramTransition, UpgradeProgramMatch, UpgradeProgramObservation,
 };
 use crate::{
-    client::{retry_delay, retryable_read},
+    client::{classify_control_read_trust, retry_delay},
     operation_options::OperationContext,
     upgrade_receipt::UpgradeAttempt,
-    Client, Error, LocalProgram, OfficialProgram, OperationOptions, OperationPhase, Result,
-    UpgradeAction, UpgradeDispatch, UpgradeOperationResult, UpgradeOutcome,
+    Client, Error, LocalProgram, OfficialProgram, OperationOptions, OperationPhase,
+    ReadRetryDecision, Result, UpgradeAction, UpgradeCheckpoint, UpgradeDispatch,
+    UpgradeOperationResult, UpgradeOutcome,
 };
 
 const CHECK: &str = "check the running VerySync program before installation";
@@ -60,12 +61,62 @@ pub struct KernelInstallationReport {
     pub admission_attempts: u8,
     /// The cause that triggered an additional admission read, if applicable.
     pub first_admission_failure: Option<Error>,
+    /// Whether another admission read was permitted after a first failure.
+    pub admission_retry: Option<ReadRetryDecision>,
     /// Confirmed original process-tree exit and release before disk inspection.
     pub original_exit: Option<ManagedExit>,
     /// The verified program comparison, or a reason it could not be made.
     pub disk: Option<UpgradeProgramObservation>,
     /// A wait or inspection error before a disk report could be produced.
     pub verification_error: Option<Error>,
+    /// The request-finished checkpoint could not be saved. Its error does not
+    /// change the observed effects or initiate another upload.
+    pub persistence_error: Option<Error>,
+}
+
+impl fmt::Display for KernelInstallationReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.outcome {
+            KernelInstallationOutcome::NotInstalled => {
+                match (
+                    self.installation.receipt.dispatch(),
+                    self.installation.result.as_ref().err(),
+                ) {
+                    (UpgradeDispatch::Preparing, Some(source)) => {
+                        return write!(
+                            f,
+                            "The call ended before submitting the installation request. {source}"
+                        );
+                    }
+                    (_, Some(Error::Authentication { .. } | Error::AccessDenied { .. })) => {
+                        return f.write_str("VerySync declined the installation. Verify the credentials and management permissions for the selected instance.");
+                    }
+                    (_, Some(source)) => {
+                        return write!(
+                            f,
+                            "VerySync could not install the selected version. {source}"
+                        )
+                    }
+                    _ => {}
+                }
+            }
+            KernelInstallationOutcome::Unconfirmed => {
+                if let Some(disk) = &self.disk {
+                    match disk.comparison {
+                        UpgradeProgramMatch::Other => return f.write_str(
+                            "The program file matches neither the previous nor the selected version. Check this instance before sending another installation request."
+                        ),
+                        UpgradeProgramMatch::Unconfirmed(crate::UpgradeProgramUncertainty::FileUnverified) => {
+                            return f.write_str("The SDK could not verify the program file. Check its location and access before making another installation decision.");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        fmt::Display::fmt(&self.outcome, f)
+    }
 }
 
 /// Whether the selected program was installed and authenticated on its state.
@@ -109,6 +160,15 @@ pub struct KernelReadinessReport {
     pub transition: Option<ProgramTransition>,
     /// The startup or readiness error, if one was observed.
     pub readiness_error: Option<Error>,
+}
+
+impl fmt::Display for KernelReadinessReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.outcome == KernelReadinessOutcome::InstallationUnconfirmed {
+            return fmt::Display::fmt(&self.installation, f);
+        }
+        fmt::Display::fmt(&self.outcome, f)
+    }
 }
 
 enum UploadResult {
@@ -266,7 +326,7 @@ impl ManagedInstance {
         attempt.set_archive(target.archive_sha256());
         let mut admission_attempts = 0;
         let mut first_admission_failure = None;
-        let mut already_installed = false;
+        let mut admission_retry = None;
 
         let prepared = context
             .wait(deadline, CHECK, async {
@@ -277,7 +337,7 @@ impl ManagedInstance {
                     .bind_upgrade_position(target, deadline.into_std(), true)
                     .await?;
                 let current_target = scope.previous == scope.target;
-                attempt.bind_observation(self.generation, scope);
+                attempt.bind_observation(self.generation, scope.clone());
 
                 // Verify all local bytes before the last remote identity check.
                 let file = if current_target {
@@ -297,15 +357,17 @@ impl ManagedInstance {
                 let first = context
                     .wait(read_deadline, CHECK, async {
                         admission_attempts = 1;
-                        self.observe_owned_control_identity().await
+                        self.observe_owned_control_identity()
+                            .await
+                            .map_err(classify_control_read_trust)
                     })
                     .await;
                 if let Err(source) = first {
                     let delay = retry_delay(attempt.operation_id());
-                    if !retry
-                        || !retryable_read(&source)
-                        || dispatch_deadline.saturating_duration_since(Instant::now()) <= delay
-                    {
+                    let decision =
+                        client.decide_upgrade_read_retry(retry, dispatch_deadline, delay, &source);
+                    admission_retry = Some(decision);
+                    if decision != ReadRetryDecision::Permitted {
                         return Err(source);
                     }
                     first_admission_failure = Some(source);
@@ -316,16 +378,31 @@ impl ManagedInstance {
                             self.require_control_generation(&generation)?;
                             admission_attempts = 2;
                             context.phase(OperationPhase::Checking);
-                            self.observe_owned_control_identity().await
+                            self.observe_owned_control_identity()
+                                .await
+                                .map_err(classify_control_read_trust)
                         })
                         .await?;
                 }
-                self.require_control_generation(&generation)?;
                 let Some(file) = file else {
+                    scope
+                        .verify_before_upload(dispatch_deadline.into_std())
+                        .await?;
+                    self.require_control_generation(&generation)?;
                     return Ok(UploadResult::AlreadyInstalled);
                 };
                 context
                     .wait(dispatch_deadline, UPLOAD, async {
+                        context
+                            .save_upgrade(dispatch_deadline, || attempt.before_upload())
+                            .await?;
+                        scope
+                            .verify_before_upload(dispatch_deadline.into_std())
+                            .await?;
+                        self.require_control_generation(&generation)?;
+                        if Instant::now() >= dispatch_deadline {
+                            return Err(Error::Timeout { operation: UPLOAD });
+                        }
                         client
                             .upload_prepared_kernel_archive(
                                 file,
@@ -340,25 +417,22 @@ impl ManagedInstance {
             })
             .await;
 
-        let result = prepared
-            .map(|result| {
-                already_installed = matches!(result, UploadResult::AlreadyInstalled);
-            })
-            .map_err(|source| {
-                if matches!(attempt.dispatch(), UpgradeDispatch::Http { .. })
-                    && matches!(
-                        source,
-                        Error::Timeout { .. } | Error::OperationWaitCancelled { .. }
-                    )
-                {
-                    Error::MutationOutcomeUnknown {
-                        operation: UPLOAD,
-                        source: Box::new(source),
-                    }
-                } else {
-                    source
+        let already_installed = matches!(prepared, Ok(UploadResult::AlreadyInstalled));
+        let result = prepared.map(|_| ()).map_err(|source| {
+            if matches!(attempt.dispatch(), UpgradeDispatch::Http { .. })
+                && matches!(
+                    source,
+                    Error::Timeout { .. } | Error::OperationWaitCancelled { .. }
+                )
+            {
+                Error::MutationOutcomeUnknown {
+                    operation: UPLOAD,
+                    source: Box::new(source),
                 }
-            });
+            } else {
+                source
+            }
+        });
         let installation = attempt.finish(result, |_| {
             if already_installed {
                 UpgradeOutcome::NotSubmitted
@@ -371,43 +445,63 @@ impl ManagedInstance {
             installation,
             admission_attempts,
             first_admission_failure,
+            admission_retry,
             original_exit: None,
             disk: None,
             verification_error: None,
+            persistence_error: None,
         };
+        let checkpoint = UpgradeCheckpoint::finished(&report.installation.receipt);
+        let save = context.save_upgrade(deadline, || checkpoint);
+        let verify =
+            self.verify_fixed_installation(&mut report, already_installed, context, deadline);
+        let (saved, ()) = tokio::join!(save, verify);
+        report.persistence_error = saved.err();
+        Ok(report)
+    }
+
+    async fn verify_fixed_installation(
+        &self,
+        report: &mut KernelInstallationReport,
+        already_installed: bool,
+        context: &OperationContext,
+        deadline: Instant,
+    ) {
         if already_installed {
             report.outcome = KernelInstallationOutcome::AlreadyInstalled;
-        } else if matches!(
+            return;
+        }
+        if !matches!(
             report.installation.receipt.outcome(),
             UpgradeOutcome::Acknowledged | UpgradeOutcome::Unknown
         ) {
-            report.outcome = KernelInstallationOutcome::Unconfirmed;
-            let verified = context
-                .wait(deadline, VERIFY, async {
-                    context.phase(OperationPhase::Verifying);
-                    report.original_exit = Some(self.observe_exit().await?);
-                    self.observe_bound_upgrade_program(
-                        &report.installation.receipt,
-                        deadline.saturating_duration_since(Instant::now()),
-                        true,
-                    )
-                    .await
-                })
-                .await;
-            match verified {
-                Ok(final_disk) => {
-                    report.outcome = match final_disk.comparison {
-                        UpgradeProgramMatch::Target => KernelInstallationOutcome::Installed,
-                        UpgradeProgramMatch::Previous => {
-                            KernelInstallationOutcome::PreviousProgramRemains
-                        }
-                        _ => KernelInstallationOutcome::Unconfirmed,
-                    };
-                    report.disk = Some(final_disk);
-                }
-                Err(source) => report.verification_error = Some(source),
-            }
+            return;
         }
-        Ok(report)
+        report.outcome = KernelInstallationOutcome::Unconfirmed;
+        let verified = context
+            .wait(deadline, VERIFY, async {
+                context.phase(OperationPhase::Verifying);
+                report.original_exit = Some(self.observe_exit().await?);
+                self.observe_bound_upgrade_program(
+                    &report.installation.receipt,
+                    deadline.saturating_duration_since(Instant::now()),
+                    true,
+                )
+                .await
+            })
+            .await;
+        match verified {
+            Ok(final_disk) => {
+                report.outcome = match final_disk.comparison {
+                    UpgradeProgramMatch::Target => KernelInstallationOutcome::Installed,
+                    UpgradeProgramMatch::Previous => {
+                        KernelInstallationOutcome::PreviousProgramRemains
+                    }
+                    _ => KernelInstallationOutcome::Unconfirmed,
+                };
+                report.disk = Some(final_disk);
+            }
+            Err(source) => report.verification_error = Some(source),
+        }
     }
 }
