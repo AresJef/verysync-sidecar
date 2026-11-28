@@ -320,5 +320,7 @@ Full final integration remains required; other native-suite failures are retaine
 and attempts a separate login after confirming the original device's stored
 username, static mode, and password presence. A verified session establishes
 that the supplied credentials worked. Use or explicitly close the returned
-session. If the report stops during verification, check the current settings
-and original response before submitting another credential change.
+session. An opted-in client can try one additional read after a transient
+management reconnect failure. The report shows the first failure and its
+retry decision. If verification stops, check the current settings and original
+response before submitting another credential change.

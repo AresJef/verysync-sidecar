@@ -98,8 +98,28 @@ async fn public_marker_rebuild_and_baseline_recovery_restore_real_safety_guards_
         .as_deref()
         .is_some_and(|e| e.contains("synchronization folder marker missing")));
     original_files(&a, &b)?;
-    let receipt = core.client().rebuild_local_sync_markers(&job).await?;
-    assert_eq!(receipt.job_id, job.job_id);
+    let bounded = || OperationOptions::new(Duration::from_secs(12));
+    let receipt = core
+        .client()
+        .repair_local_sync_and_verify(&job, LocalSyncRepairAction::RebuildMarkers, bounded())
+        .await?;
+    assert_eq!(
+        receipt.completion(),
+        OperationCompletion::Completed,
+        "{receipt:?}"
+    );
+    assert!(receipt.write.dispatched && receipt.write.response_complete);
+    assert!(matches!(
+        receipt.original,
+        Ok(LocalSyncRepairReply::MarkersAcknowledged)
+    ));
+    assert_eq!(
+        receipt
+            .status
+            .ok_or("original native marker status absent")?
+            .job_id,
+        job.job_id
+    );
     assert!(marker.is_dir() && saved_marker.is_dir());
     let healthy = analyze(&core, &job.job_id).await?;
     assert_eq!(healthy.count, 0);
@@ -140,8 +160,33 @@ async fn public_marker_rebuild_and_baseline_recovery_restore_real_safety_guards_
         b"explicit post-recovery payload",
     )?;
     let current = core.client().local_sync_job(&job.job_id).await?;
-    let recovery = core.client().recover_local_sync_baseline(&current).await?;
+    let stale = core
+        .client()
+        .repair_local_sync_and_verify(&job, LocalSyncRepairAction::RecoverBaseline, bounded())
+        .await?;
+    assert!(!stale.write.dispatched && stale.original.is_err());
+    let recovery = core
+        .client()
+        .repair_local_sync_and_verify(&current, LocalSyncRepairAction::RecoverBaseline, bounded())
+        .await?;
+    assert!(recovery.write.dispatched && recovery.write.response_complete);
+    assert_eq!(
+        recovery.completion(),
+        OperationCompletion::Completed,
+        "{recovery:?}"
+    );
+    let LocalSyncRepairReply::BaselinePreview(original) = recovery.original? else {
+        return Err("native baseline acknowledgement did not produce a preview".into());
+    };
+    let recovery = recovery
+        .preview
+        .ok_or("baseline preview could not be read back")?;
+    assert_eq!(
+        (recovery.id.clone(), recovery.operation_id.clone()),
+        (original.id, original.operation_id)
+    );
     assert_eq!(recovery.job_id, job.job_id);
+    println!("verified_local_sync_repair original_marker_and_status=true stale_zero_write=true original_preview_and_readback_match=true");
     assert_eq!(recovery.scan_issue_count, 0);
     assert!(recovery.count > 0);
     assert!(!b.join("after-recovery.txt").exists());

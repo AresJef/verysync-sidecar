@@ -324,7 +324,10 @@ async fn calibrate_transient_read_burst_with_independent_endpoint(
     const CALLS: usize = 16;
     let (healthy, _rx, healthy_routes) =
         measured_peer(|_| Some(RELEASE), |_| OTHER_DEVICE, Duration::ZERO).await?;
-    let (silent, _rx, silent_routes) = measured_peer(|_| None, |_| DEVICE, Duration::ZERO).await?;
+    const CALIBRATION_DEVICE: &str =
+        "GGGGGGG-GGGGGGG-GGGGGGG-GGGGGGG-GGGGGGG-GGGGGGG-GGGGGGG-GGGGGGG";
+    let (silent, _rx, silent_routes) =
+        measured_peer(|_| None, |_| CALIBRATION_DEVICE, Duration::ZERO).await?;
     let silent = silent.with_transient_read_retries();
     let (normal, normal_successes) = run_read_burst(&healthy, CALLS, DEADLINE).await;
     let baseline = healthy_routes.after_handshake();
@@ -360,6 +363,16 @@ async fn shared_retry_budget_bounds_paired_bursts_and_recovers_transient_reads(
 ) -> Result<(), Box<dyn std::error::Error>> {
     const CALLS: usize = 16;
     const EXTRA: usize = 4;
+    // Each pair has a separate synthetic native identity, so one timed slot's
+    // rolling window does not contaminate the next deliberate control.
+    let identities = [
+        "CCCCCCH-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC",
+        "CCCCCCJ-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC",
+        "CCCCCCK-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC",
+        "CCCCCCL-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC",
+        "CCCCCCM-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC",
+        "CCCCCCN-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC-CCCCCCC",
+    ];
     // Freeze two opposite orders for the persistent failure, then exercise
     // the same recoverable input with the preference both off and on.
     for (slot, (enabled, transient)) in [
@@ -375,9 +388,10 @@ async fn shared_retry_budget_bounds_paired_bursts_and_recovers_transient_reads(
     {
         let (healthy, _healthy_records, healthy_routes) =
             measured_peer(|_| Some(RELEASE), |_| OTHER_DEVICE, Duration::ZERO).await?;
+        let selected_device = identities[slot];
         let (fault, _fault_records, fault_routes) = measured_peer(
             move |query| (transient && query >= CALLS).then_some(RELEASE),
-            |_| DEVICE,
+            move |_| selected_device,
             Duration::ZERO,
         )
         .await?;
@@ -418,7 +432,10 @@ async fn shared_retry_budget_bounds_paired_bursts_and_recovers_transient_reads(
 #[tokio::test]
 async fn permanent_silence_stops_at_one_retry_and_cancellation_stops_during_backoff(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (client, mut calls) = peer(None).await?;
+    const CANCELLATION_DEVICE: &str =
+        "TTTTTTT-TTTTTTT-TTTTTTT-TTTTTTT-TTTTTTT-TTTTTTT-TTTTTTT-TTTTTTT";
+    let (client, mut calls) =
+        peer_with_behavior(|_| None, |_| CANCELLATION_DEVICE, Duration::ZERO).await?;
     let started = tokio::time::Instant::now();
     let report = client
         .with_transient_read_retries()
@@ -434,7 +451,8 @@ async fn permanent_silence_stops_at_one_retry_and_cancellation_stops_during_back
     assert!(calls.try_recv().is_err());
     assert!(started.elapsed() < DEADLINE + Duration::from_millis(200));
 
-    let (client, mut calls) = peer(None).await?;
+    let (client, mut calls) =
+        peer_with_behavior(|_| None, |_| CANCELLATION_DEVICE, Duration::ZERO).await?;
     let (cancel, signal) = watch::channel(false);
     let (progress, mut phases) = mpsc::channel(8);
     let client = client.with_transient_read_retries();
@@ -565,5 +583,36 @@ async fn fixed_archive_preflight_preserves_legacy_error_and_sends_no_upgrade_req
     );
     assert!(observed.try_recv().is_err());
     assert!(!format!("{:?}", attempt.receipt).contains("synthetic-upgrade-key"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn distinct_clients_for_the_same_authenticated_device_share_four_extra_reads(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const SAME_DEVICE: &str = "ZZZZZZZ-ZZZZZZZ-ZZZZZZZ-ZZZZZZZ-ZZZZZZZ-ZZZZZZZ-ZZZZZZZ-ZZZZZZZ";
+    let (a, _, routes_a) = measured_peer(|_| None, |_| SAME_DEVICE, Duration::ZERO).await?;
+    let (b, _, routes_b) = measured_peer(|_| None, |_| SAME_DEVICE, Duration::ZERO).await?;
+    let (healthy, _, routes_healthy) =
+        measured_peer(|_| Some(RELEASE), |_| OTHER_DEVICE, Duration::ZERO).await?;
+    assert_eq!(a.instance().device_id, b.instance().device_id);
+    assert_ne!(a.endpoint(), b.endpoint());
+    let a = a.with_transient_read_retries();
+    let b = b.with_transient_read_retries();
+    let healthy = healthy.with_transient_read_retries();
+    let (_, _, (healthy_us, successes)) = tokio::join!(
+        run_read_burst(&a, 8, DEADLINE),
+        run_read_burst(&b, 8, DEADLINE),
+        run_read_burst(&healthy, 16, DEADLINE),
+    );
+    let a_counts = routes_a.after_handshake();
+    let b_counts = routes_b.after_handshake();
+    assert_eq!(
+        std::array::from_fn::<_, 3, _>(|index| a_counts[index] + b_counts[index]),
+        [20; 3]
+    );
+    assert_eq!(routes_healthy.after_handshake(), [16; 3]);
+    assert_eq!(successes, 16);
+    assert!(healthy_us.last().is_some_and(|&elapsed| elapsed <= 100_000));
+    println!("shared quota across independent clients actual_a_routes={a_counts:?} actual_b_routes={b_counts:?} healthy_routes={:?} healthy_max_us={:?}", routes_healthy.after_handshake(), healthy_us.last());
     Ok(())
 }

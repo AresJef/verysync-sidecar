@@ -261,6 +261,7 @@ jobs:
           engine_control actual_target_directory_helpers_create_read_and_retain_only_explicit_synthetic_paths
           configuration_engine native_default_versioning_inheritance_selects_real_archives_and_retains_old_folders
           maintenance_engine public_core_errors_logs_levels_and_owned_diagnostics
+          local_sync_repair_engine public_marker_rebuild_and_baseline_recovery_restore_real_safety_guards_without_implicit_run
           upgrade_engine offline_backup_restore_preserves_old_index_and_rejects_corruption
           invitations actual_folder_offer_dismiss_ignore_unignore_and_explicit_read_only_acceptance
           sync_observation actual_ignore_replace_parse_rejection_reset_and_restart_preserve_files

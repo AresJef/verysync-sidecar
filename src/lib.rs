@@ -261,8 +261,9 @@ pub use local_sync_events::{
 pub use local_sync_workflows::{
     LocalSyncConflictReport, LocalSyncPreviewReport, LocalSyncRegistrationChange,
     LocalSyncRegistrationChangeReport, LocalSyncRegistrationOutcome, LocalSyncRegistrationReport,
-    LocalSyncRunControlOutcome, LocalSyncRunControlReport, LocalSyncRunOutcome,
-    LocalSyncRunReceipt, LocalSyncRunReport, LocalSyncWorkflowOptions,
+    LocalSyncRepairAction, LocalSyncRepairReply, LocalSyncRepairReport, LocalSyncRunControlOutcome,
+    LocalSyncRunControlReport, LocalSyncRunOutcome, LocalSyncRunReceipt, LocalSyncRunReport,
+    LocalSyncWorkflowOptions,
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogChange, CoreLogChangeReport, CoreLogEntry, CoreLogLevel,

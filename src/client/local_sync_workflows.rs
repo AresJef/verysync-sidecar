@@ -21,8 +21,9 @@ use crate::{
     CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncConflictReport,
     LocalSyncConflictResolution, LocalSyncJob, LocalSyncOperationControl, LocalSyncOperationId,
     LocalSyncRegistrationChange, LocalSyncRegistrationChangeReport, LocalSyncRegistrationOutcome,
-    LocalSyncRegistrationReport, LocalSyncRunControlOutcome, LocalSyncRunControlReport,
-    LocalSyncRunId, LocalSyncStatus, OperationOptions,
+    LocalSyncRegistrationReport, LocalSyncRepairAction, LocalSyncRepairReply,
+    LocalSyncRepairReport, LocalSyncRunControlOutcome, LocalSyncRunControlReport, LocalSyncRunId,
+    LocalSyncStatus, OperationOptions,
 };
 
 const RUN: &str = "submit the selected Local Sync preview for execution";
@@ -735,6 +736,144 @@ impl Client {
             return Err(Error::ConfigurationChanged);
         }
         Ok(Some(current))
+    }
+
+    /// Repair a reviewed Local Sync job once and read its actual current state.
+    /// A baseline change requires a quiescent two-way job. A preview is bound
+    /// to the operation only when the original response identifies it.
+    /// Archive any required baseline or marker copies yourself before repair.
+    /// No file run or rollback is implicit.
+    pub async fn repair_local_sync_and_verify(
+        &self,
+        expected: &LocalSyncJob,
+        action: LocalSyncRepairAction,
+        options: OperationOptions,
+    ) -> Result<LocalSyncRepairReport> {
+        const REPAIR: &str = "repair the selected Local Sync job";
+        const VERIFY: &str = "verify the selected Local Sync repair";
+        let id = &expected.job_id;
+        let route = match action {
+            LocalSyncRepairAction::RebuildMarkers => ["jobs", id.as_str(), "markers", "rebuild"],
+            LocalSyncRepairAction::RecoverBaseline => {
+                if expected.mode != "bisync" {
+                    return Err(invalid("native baseline recovery requires a two-way job"));
+                }
+                ["jobs", id.as_str(), "baseline", "recover"]
+            }
+        };
+        let url = self.local_sync_url(&route, &[])?;
+        let context = options.start()?;
+        let original_job = local_job_document(expected)?;
+        let mut guard = None;
+        let mut write = Default::default();
+        let mut selected = None;
+        let result = context
+            .wait(context.dispatch_deadline(), REPAIR, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                self.observe_control_identity().await?;
+                let generation =
+                    self.system_status().await?.start_time.ok_or_else(|| {
+                        invalid("the selected engine did not report its start time")
+                    })?;
+                let current = self.local_sync_repair_snapshot(expected).await?;
+                self.require_configuration_generation(&generation).await?;
+                if Instant::now() >= context.dispatch_deadline() {
+                    return Err(Error::Timeout { operation: REPAIR });
+                }
+                selected = Some(generation);
+                let body = serde_json::json!({"confirmed": true, "job": current});
+                let request = self
+                    .connection
+                    .authorized_request(Method::POST, url, Some(&body));
+                let reply = self
+                    .connection
+                    .send_workflow_write(REPAIR, request, &context, &mut write)
+                    .await?;
+                match action {
+                    LocalSyncRepairAction::RebuildMarkers => {
+                        let ack: serde_json::Value =
+                            decode_local_sync_json(REPAIR, reply.status, reply.body, true, false)?;
+                        if ack.as_object().is_none_or(|obj| !obj.is_empty()) {
+                            return Err(mutation_error(
+                                REPAIR,
+                                true,
+                                invalid(
+                                    "native marker rebuild returned an unexpected acknowledgement",
+                                ),
+                            ));
+                        }
+                        Ok(LocalSyncRepairReply::MarkersAcknowledged)
+                    }
+                    LocalSyncRepairAction::RecoverBaseline => {
+                        let preview: LocalSyncPreview =
+                            decode_local_sync_json(REPAIR, reply.status, reply.body, true, false)?;
+                        if preview.job_id != *id {
+                            return Err(mutation_error(
+                                REPAIR,
+                                true,
+                                invalid("native baseline recovery acknowledged a different job"),
+                            ));
+                        }
+                        Ok(LocalSyncRepairReply::BaselinePreview(preview))
+                    }
+                }
+            })
+            .await;
+        let original = workflow_write_result(REPAIR, write, result);
+        let refused = write.response_complete
+            && matches!(
+                original,
+                Err(Error::Authentication { .. }
+                    | Error::AccessDenied { .. }
+                    | Error::LicenseRequired { .. })
+            );
+        let mut report = LocalSyncRepairReport {
+            original,
+            write,
+            status: None,
+            preview: None,
+            observation_error: None,
+        };
+        if let Some(generation) = selected.filter(|_| write.dispatched && !refused) {
+            context.phase(OperationPhase::Verifying);
+            let observed = context
+                .wait(context.deadline, VERIFY, async {
+                    self.require_configuration_generation(&generation).await?;
+                    let current = self.local_sync_job(id).await?;
+                    if local_job_document(&current)? != original_job {
+                        return Err(Error::ConfigurationChanged);
+                    }
+                    let status = self.local_sync_status(id).await?;
+                    let preview = (action == LocalSyncRepairAction::RecoverBaseline).then_some(id);
+                    let preview = if let Some(id) = preview {
+                        Some(self.local_sync_preview(id).await)
+                    } else {
+                        None
+                    };
+                    let current = self.local_sync_job(id).await?;
+                    if local_job_document(&current)? != original_job {
+                        return Err(Error::ConfigurationChanged);
+                    }
+                    self.require_configuration_generation(&generation).await?;
+                    Ok((status, preview))
+                })
+                .await;
+            match observed {
+                Ok((status, preview)) => {
+                    report.status = Some(status);
+                    match preview {
+                        Some(Ok(current)) => report.preview = Some(current),
+                        Some(Err(error)) => report.observation_error = Some(error),
+                        None => {}
+                    }
+                }
+                Err(error) => report.observation_error = Some(error),
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
     }
 
     /// Execute an already reviewed preview once and observe its terminal run.

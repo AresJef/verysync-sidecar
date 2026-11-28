@@ -69,6 +69,72 @@ impl LocalSyncRegistrationChangeReport {
     }
 }
 
+/// One explicit repair for a reviewed and quiescent Local Sync job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LocalSyncRepairAction {
+    /// Rebuild the native safety markers.
+    RebuildMarkers,
+    /// Replace the incompatible two-way baseline and return a new preview.
+    RecoverBaseline,
+}
+
+/// A recognized native response from one Local Sync repair.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum LocalSyncRepairReply {
+    /// The native engine acknowledged the marker rebuild.
+    MarkersAcknowledged,
+    /// The engine identified the replacement preview.
+    BaselinePreview(LocalSyncPreview),
+}
+
+/// Original repair response and current observations for the reviewed job.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct LocalSyncRepairReport {
+    /// Dispatch and response evidence for the original repair.
+    pub write: ManagementWriteEvidence,
+    /// Recognized original response, or its failure and underlying reason.
+    pub original: Result<LocalSyncRepairReply>,
+    /// Current state for the original job.
+    pub status: Option<crate::LocalSyncStatus>,
+    /// Current baseline-recovery preview, if available.
+    pub preview: Option<LocalSyncPreview>,
+    /// Why the selected operation could not be verified after submission.
+    pub observation_error: Option<Error>,
+}
+
+impl LocalSyncRepairReport {
+    /// Classify the available native acknowledgement and readback.
+    /// Check marker files and storage separately, and review a baseline
+    /// preview before any subsequent file execution.
+    pub fn completion(&self) -> OperationCompletion {
+        match (&self.original, &self.status, &self.preview) {
+            (Ok(LocalSyncRepairReply::MarkersAcknowledged), Some(_), _) => {
+                OperationCompletion::Completed
+            }
+            (Ok(LocalSyncRepairReply::BaselinePreview(original)), Some(_), Some(current))
+                if original.id == current.id && original.operation_id == current.operation_id =>
+            {
+                OperationCompletion::Completed
+            }
+            (Ok(_), Some(_), _) => OperationCompletion::PartiallyCompleted,
+            (
+                Err(
+                    Error::Authentication { .. }
+                    | Error::AccessDenied { .. }
+                    | Error::LicenseRequired { .. },
+                ),
+                _,
+                _,
+            ) if self.write.response_complete => OperationCompletion::GoalNotMet,
+            _ if !self.write.dispatched => OperationCompletion::GoalNotMet,
+            _ => OperationCompletion::Unconfirmed,
+        }
+    }
+}
+
 /// Observed outcome of one command for a selected Local Sync run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]

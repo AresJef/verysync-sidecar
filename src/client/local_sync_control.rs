@@ -439,7 +439,10 @@ impl Client {
         }
         Ok(observed)
     }
-    async fn local_sync_repair_snapshot(&self, expected: &LocalSyncJob) -> Result<LocalSyncJob> {
+    pub(super) async fn local_sync_repair_snapshot(
+        &self,
+        expected: &LocalSyncJob,
+    ) -> Result<LocalSyncJob> {
         let current = self.local_sync_job(&expected.job_id).await?;
         if value(&current)? != value(expected)? {
             return Err(invalid(

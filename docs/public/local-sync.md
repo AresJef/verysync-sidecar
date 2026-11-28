@@ -654,3 +654,12 @@ trying again. A matching edit or an already absent job requires no write.
 The report ties the original request to the exact job ID and its later
 registration. Check the run and files separately before assuming work stopped
 or data changed.
+
+
+Use `repair_local_sync_and_verify` for one explicit repair of a reviewed
+quiescent job. Marker repair returns the native acknowledgement and current
+job status. Check the actual marker directories before relying on them.
+Baseline recovery identifies a replacement preview when the original reply
+and a separate read agree. Review that preview before running it. If the
+original reply is unavailable, an observed preview alone leaves its origin
+unconfirmed.

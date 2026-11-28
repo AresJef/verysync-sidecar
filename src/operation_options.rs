@@ -1,10 +1,10 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fmt,
     future::Future,
     io,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -13,7 +13,7 @@ use tokio::{
     time::Instant,
 };
 
-use crate::{Error, Result, UpgradeCheckpoint};
+use crate::{DeviceId, Error, Result, UpgradeCheckpoint};
 
 type SaveUpgrade =
     dyn Fn(UpgradeCheckpoint) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send + Sync;
@@ -61,7 +61,7 @@ pub enum ReadRetryDecision {
     CauseNotEligible,
     /// The operation cannot wait for the retry within its deadline.
     InsufficientTime,
-    /// This connection and its shared handles have spent their allowance.
+    /// The selected device has spent its shared allowance in this application process.
     SharedBudgetExhausted,
     /// The operation could proceed to its bounded retry phase.
     Permitted,
@@ -83,14 +83,34 @@ pub struct ManagementWriteEvidence {
 pub(crate) struct ReadRetryBudget(Mutex<VecDeque<Instant>>);
 
 impl ReadRetryBudget {
+    const WINDOW: Duration = Duration::from_secs(1);
+
+    pub(crate) fn for_device(id: &DeviceId) -> Arc<Self> {
+        static BUDGETS: OnceLock<Mutex<HashMap<DeviceId, Arc<ReadRetryBudget>>>> = OnceLock::new();
+        let budgets = BUDGETS.get_or_init(Mutex::default);
+        let mut budgets = budgets.lock().unwrap_or_else(|error| error.into_inner());
+        let now = Instant::now();
+        // Keep short-lived reservations across independently opened handles.
+        // Retire inactive entries after the same rolling window.
+        budgets.retain(|_, budget| {
+            Arc::strong_count(budget) > 1
+                || budget
+                    .0
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .back()
+                    .is_some_and(|used| now.duration_since(*used) < Self::WINDOW)
+        });
+        Arc::clone(budgets.entry(id.clone()).or_default())
+    }
+
     pub(crate) fn take(&self) -> bool {
         const LIMIT: usize = 4;
-        const WINDOW: Duration = Duration::from_secs(1);
         let mut recent = self.0.lock().unwrap_or_else(|error| error.into_inner());
         let now = Instant::now();
         while recent
             .front()
-            .is_some_and(|oldest| now.duration_since(*oldest) >= WINDOW)
+            .is_some_and(|oldest| now.duration_since(*oldest) >= Self::WINDOW)
         {
             recent.pop_front();
         }

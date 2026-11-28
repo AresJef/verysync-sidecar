@@ -48,12 +48,15 @@ def prepare(args):
     test_files = ["upgrade_engine.rs", "upgrade_receipt_contract.rs"]
     if args.sdk_completion:
         test_files.extend((
-            "authentication_engine.rs", "configuration_engine.rs", "devices.rs", "engine_control.rs", "events_contract.rs",
-            "file_history_engine.rs", "file_mutation_engine.rs", "file_transfer_engine.rs",
-            "local_sync_advanced_engine.rs", "local_sync_engine.rs", "local_sync_runtime_engine.rs", "managed_instance.rs",
-            "invitations.rs", "maintenance_engine.rs", "network.rs",
-            "p2p_three_nodes.rs",
-            "sync_observation.rs", "transport_contract.rs",
+            "authentication_engine.rs", "cache_engine.rs", "configuration_engine.rs",
+            "control_observation_engine.rs", "control_preview_engine.rs", "control_reliability_engine.rs",
+            "devices.rs", "download_engine.rs", "engine_control.rs", "events.rs", "events_contract.rs",
+            "file_history_engine.rs", "file_mutation_engine.rs", "file_transfer_engine.rs", "files_engine.rs",
+            "host_control_engine.rs", "invitations.rs", "local_sync_advanced_engine.rs",
+            "local_sync_automation_engine.rs", "local_sync_engine.rs", "local_sync_protocol_engine.rs",
+            "local_sync_repair_engine.rs", "local_sync_runtime_engine.rs", "maintenance_engine.rs",
+            "managed_instance.rs", "managed_lifetime.rs", "network.rs", "p2p_three_nodes.rs",
+            "sharing.rs", "sync_observation.rs", "transport_contract.rs",
         ))
     for name in test_files:
         shutil.copyfile(package / "tests" / name, testroot / name)
@@ -63,13 +66,19 @@ def prepare(args):
         shutil.copytree(package / "tests/fixtures", testroot / "fixtures")
         shutil.copytree(package / "scripts", consumer / "scripts")
         shutil.copytree(package / "releases", consumer / "releases")
-        # The test-only device event witness also compiles this timestamp parser.
-        # The tested library remains the independently unpacked dependency.
-        name = "src/timestamps.rs"
-        fixture_source = consumer / name
-        fixture_source.parent.mkdir()
-        shutil.copyfile(package / name, fixture_source)
-        fixture_sources[name] = sha256(fixture_source)
+        # These helpers are copied only for test witnesses. The SDK under
+        # test remains the separately unpacked Cargo dependency.
+        required = [
+            package / "src" / "timestamps.rs",
+            package / "examples" / "common" / "owned_shutdown.rs",
+            *sorted((package / "examples" / "acceptance_pair").glob("*.rs")),
+        ]
+        for helper in required:
+            name = helper.relative_to(package).as_posix()
+            fixture_source = consumer / name
+            fixture_source.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(helper, fixture_source)
+            fixture_sources[name] = sha256(fixture_source)
     else:
         (consumer / "scripts").mkdir()
         shutil.copyfile(package / "scripts/prepare-test-engine.py", consumer / "scripts/prepare-test-engine.py")
@@ -77,8 +86,9 @@ def prepare(args):
     feature = ""
     if args.sdk_completion:
         feature = ('default = ["tls"]\n'
-                   'tls = ["verysync-sidecar/tls"]\n'
-                   'download = ["verysync-sidecar/download"]\n')
+                   'tls = ["verysync-sidecar/tls", "dep:rustls"]\n'
+                   'download = ["verysync-sidecar/download"]\n'
+                   'host-configuration-tests = ["engine-tests"]\n')
         extra_dependencies = """bzip2 = "0.6.1"
 dunce = "1.0.5"
 flate2 = { version = "1.1.11", default-features = false, features = ["miniz_oxide"] }
@@ -88,10 +98,12 @@ libc = "=0.2.186"
 lz4_flex = "0.13.0"
 lzma-rust2 = { version = "=0.21.0", default-features = false, features = ["std", "xz"] }
 rawzip = "0.5.2"
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "multipart", "stream"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["std"], optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 snap = "1.1.1"
 tar = { version = "0.4.46", default-features = false }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
 """
     (consumer / "Cargo.toml").write_text(
         f"""[package]

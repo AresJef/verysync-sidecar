@@ -254,9 +254,13 @@ pub struct Client {
 impl Client {
     /// Enable bounded transient reads for eligible high-level operations on this
     /// handle and its clones. Legacy requests retain their single-attempt behavior.
-    /// Shared handles can use at most four extra reads in a rolling second.
-    /// Use [crate::OperationOptions::without_read_retry] to disable it for one call.
+    /// All opted-in handles for the authenticated device in this process can
+    /// reserve at most four extra reads in a rolling second. Initial reads do
+    /// not use the allowance. Use [crate::OperationOptions::without_read_retry]
+    /// to disable the extra read for one call.
     pub fn with_transient_read_retries(mut self) -> Self {
+        self.read_retry_budget =
+            crate::operation_options::ReadRetryBudget::for_device(&self.instance.device_id);
         self.transient_read_retries = true;
         self
     }

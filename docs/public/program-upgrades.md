@@ -54,8 +54,9 @@ Set one total timeout with `OperationOptions`. Add
 running version and device after a recognized transient failure. For the
 standalone `Client::query_kernel_upgrade`, set the same preference on the
 client handle. `OperationOptions::without_read_retry` disables it for one
-call. A connection and its shared handles admit at most four extra reads in
-one rolling second. The report records whether the first failure qualified and
+call. Clients in the same application process that authenticate the same
+device share at most four extra reads in one rolling second. The report
+records whether the first failure qualified and
 whether that allowance was available. Legacy upgrade methods retain their
 original behavior. To stop waiting,
 pass a cancellation channel with `cancel_wait_on` and send `true`. The
