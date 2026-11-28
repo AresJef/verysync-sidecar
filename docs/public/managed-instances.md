@@ -298,6 +298,14 @@ egress restriction, and the library does not install a global proxy or firewall.
 
 ## Explicit shutdown and termination
 
+Use `shutdown_and_verify(OperationOptions::new(total_timeout))` to request
+normal shutdown and confirm the original owned process has stopped. The first
+wait uses at most ten seconds or half of the total timeout. If that wait ends
+without a confirmed exit, the remaining time can observe the same generation.
+The report retains the original error, the HTTP status and response
+completeness when available, and any later exit. Use `confirmed_exit()` to
+inspect the actual exit code, process tree and release of private state.
+
 When a shutdown call times out, use the remaining part of your application
 deadline to observe the same owned process. Save its `control_generation()`
 before calling `shutdown` once. If the result is uncertain and time remains,

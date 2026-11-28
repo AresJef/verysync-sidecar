@@ -576,14 +576,14 @@ async fn native_business_install_reports_verified_target_after_lost_reply() -> T
         ConnectOptions::new(proxy, key)
             .version_policy(VersionPolicy::AllowUnverified)
             .expected_device_id(identity.clone())
-            .request_timeout(Duration::from_secs(20))?,
+            .request_timeout(Duration::from_secs(35))?,
     )
     .await?;
     armed.store(true, Ordering::SeqCst);
     let job = core.install_kernel_upgrade(
         archive,
         &asset,
-        OperationOptions::new(Duration::from_secs(18)),
+        OperationOptions::new(Duration::from_secs(45)),
     );
     let report = tokio::select! {
         result = job => result?,
@@ -990,25 +990,29 @@ async fn native_business_install_timed_out_checkpoint_cannot_replace_the_final_r
     let held = Arc::new(Mutex::new(Some(wait_for_release)));
     let (late_saved, confirmed_late) = tokio::sync::oneshot::channel();
     let acknowledged = Arc::new(Mutex::new(Some(late_saved)));
-    let options = OperationOptions::new(Duration::from_secs(4)).save_upgrade_checkpoints({
+    let began_storage = Arc::new(AtomicBool::new(false));
+    let options = OperationOptions::new(Duration::from_secs(30)).save_upgrade_checkpoints({
         let prepared = prepared.clone();
         let finished = finished.clone();
+        let began_storage = Arc::clone(&began_storage);
         move |checkpoint| {
             let prepared = prepared.clone();
             let finished = finished.clone();
             let held = Arc::clone(&held);
             let acknowledged = Arc::clone(&acknowledged);
+            let began_storage = Arc::clone(&began_storage);
             async move {
                 let bytes = checkpoint.receipt.encode().map_err(io::Error::other)?;
                 match checkpoint.stage {
                     UpgradeCheckpointStage::BeforeUpload => {
+                        assert!(!began_storage.swap(true, Ordering::SeqCst));
                         let receiver =
                             held.lock().unwrap().take().ok_or_else(|| {
                                 io::Error::other("duplicate pre-upload checkpoint")
                             })?;
                         tokio::task::spawn_blocking(move || {
                             receiver
-                                .recv_timeout(Duration::from_secs(10))
+                                .recv_timeout(Duration::from_secs(45))
                                 .map_err(io::Error::other)?;
                             std::fs::write(prepared, bytes)?;
                             let sender = acknowledged
@@ -1036,9 +1040,12 @@ async fn native_business_install_timed_out_checkpoint_cannot_replace_the_final_r
         end = &mut relay => { end??; return Err("private relay finished early".into()); }
     };
     assert_eq!(report.outcome, KernelInstallationOutcome::NotInstalled);
+    assert!(began_storage.load(Ordering::SeqCst), "{report:?}");
     assert!(matches!(
         report.installation.result,
-        Err(Error::Timeout { .. })
+        Err(Error::Timeout {
+            operation: "save the private upgrade checkpoint"
+        })
     ));
     assert_eq!(
         report.installation.receipt.outcome(),
@@ -1048,7 +1055,7 @@ async fn native_business_install_timed_out_checkpoint_cannot_replace_the_final_r
         report.installation.receipt.dispatch(),
         UpgradeDispatch::Preparing
     );
-    assert!(report.persistence_error.is_none());
+    assert!(report.persistence_error.is_none(), "{report:?}");
     assert!(!prepared.exists());
     let original_final_bytes = std::fs::read(&finished)?;
     release_late_save.send(())?;

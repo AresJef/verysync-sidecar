@@ -502,19 +502,24 @@ impl Client {
     pub async fn request_shutdown(&self) -> Result<()> {
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
-        self.send_shutdown().await
+        self.send_shutdown(None).await
     }
 
     pub(crate) async fn request_owned_shutdown(
         &self,
         admission: std::sync::Arc<crate::managed::ShutdownAdmission>,
         deadline: tokio::time::Instant,
+        tracking: Option<crate::managed::ShutdownRequestTracking>,
     ) -> Result<()> {
         let write = self.connection.mutation_lock.clone().lock_owned().await;
         let Some(dispatch) = admission.admit().await else {
             return Ok(());
         };
-        self.system_status().await?;
+        if tracking.is_some() {
+            self.observe_control_identity().await?;
+        } else {
+            self.system_status().await?;
+        }
         let client = self.clone();
         // After admission and identity read, keep both guards with the single
         // write until the transport is done, even if the caller stops waiting.
@@ -528,7 +533,7 @@ impl Client {
                     operation: "gracefully stop owned program",
                 });
             }
-            tokio::time::timeout_at(deadline, client.send_shutdown())
+            tokio::time::timeout_at(deadline, client.send_shutdown(tracking.as_ref()))
                 .await
                 .map_err(|_| Error::Timeout {
                     operation: "gracefully stop owned program",
@@ -551,21 +556,41 @@ impl Client {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    async fn send_shutdown(&self) -> Result<()> {
+    async fn send_shutdown(
+        &self,
+        tracking: Option<&crate::managed::ShutdownRequestTracking>,
+    ) -> Result<()> {
+        let operation = crate::error::GRACEFUL_SHUTDOWN_OPERATION;
+        if tracking.is_some_and(crate::managed::ShutdownRequestTracking::cancelled) {
+            return Err(Error::OperationWaitCancelled { operation });
+        }
         #[cfg(all(test, feature = "engine-tests"))]
         self.shutdown_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.connection
-            .request_bytes(
-                crate::error::GRACEFUL_SHUTDOWN_OPERATION,
-                reqwest::Method::POST,
-                self.connection
-                    .management_url("rest/system/shutdown", &[])?,
-                None,
-                true,
-            )
-            .await
-            .map(|_| ())
+        let request = self.connection.authorized_request(
+            reqwest::Method::POST,
+            self.connection
+                .management_url("rest/system/shutdown", &[])?,
+            None,
+        );
+        let Some(tracking) = tracking else {
+            return self
+                .connection
+                .request_prepared_response(operation, request, true)
+                .await
+                .map(|_| ());
+        };
+        tracking.dispatched();
+        let response = send_bounded_observing_headers(
+            operation,
+            request,
+            true,
+            self.connection.response_limit,
+            |status| tracking.response(status, false),
+        )
+        .await?;
+        tracking.response(response.status, true);
+        checked_response(operation, response, true).map(|_| ())
     }
 
     /// Request the native restart action once after checking the current identity.

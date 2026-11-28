@@ -644,8 +644,12 @@ fn report_device_failure(
     let pause_acknowledged = matches!(prior_pause, Some(ControlSubmission::Acknowledged { .. }));
     let code = match receipt.submission() {
         ControlSubmission::Acknowledged { .. } => {
-            read_failure(summary, "post_submit_read", error,
-                "VerySync acknowledged the removal request. The current registration could not be confirmed. Use observe-device to check it before sending another request.");
+            let message = if complete_response_status(error) == Some(403) {
+                "VerySync acknowledged the removal request. The current account cannot read the device registration. Check read permissions. After access is restored, use observe-device to check the current registration."
+            } else {
+                "VerySync acknowledged the removal request. The current registration could not be confirmed. Use observe-device to check it before sending another request."
+            };
+            read_failure(summary, "post_submit_read", error, message);
             2
         }
         ControlSubmission::PossiblySubmitted => write_failure(

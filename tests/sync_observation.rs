@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::{collections::BTreeSet, path::Path, time::Duration};
 use verysync_sidecar::{
     CreateDeviceOptions, CreateFolderOptions, DevicePatch, Error, FolderId, ListPage,
-    ManagedInstance, SyncFileKind, TargetPath,
+    ManagedExitObservationOutcome, ManagedInstance, OperationOptions, SyncFileKind, TargetPath,
 };
 
 async fn indexed_files(
@@ -1058,8 +1058,35 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     }
     a.client().pause_device(&b_id).await?;
     b.client().pause_device(&a_id).await?;
-    for instance in [&mut b, &mut a] {
-        let exit = instance.shutdown(Duration::from_secs(10)).await?;
+    for (role, instance) in [("receiver", &mut b), ("sender", &mut a)] {
+        let owner = instance.control_generation();
+        let pid = instance.process_id();
+        let stop = instance
+            .shutdown_and_verify(OperationOptions::new(Duration::from_secs(24)))
+            .await?;
+        assert_eq!(stop.initial_limit, Duration::from_secs(10));
+        assert_eq!(stop.generation, owner);
+        let later = stop.later.as_ref().map(|result| match result {
+            Ok(report) if matches!(report.outcome, ManagedExitObservationOutcome::Exited(_)) => {
+                "exited"
+            }
+            Ok(_) => "timed_out",
+            Err(_) => "observation_failed",
+        });
+        println!(
+            "folder priority shutdown {}",
+            json!({
+                "role":role, "owner_pid":pid, "first_wait_ms":stop.initial_limit.as_millis(),
+                "reported_dispatch":stop.request.dispatched,"response_status":stop.request.status,
+                "response_complete":stop.request.response_complete,
+                "first_exit_confirmed":stop.original.is_ok(),
+                "first_error":stop.original.as_ref().err().map(ToString::to_string),
+                "later_observation":later,
+                "exit_confirmed":stop.confirmed_exit().is_some(),
+                "user_result":stop.to_string()
+            })
+        );
+        let exit = stop.confirmed_exit().ok_or_else(|| stop.to_string())?;
         assert!(exit.tree_stopped && exit.state_released && !exit.forced && exit.code == Some(0));
     }
     std::fs::remove_dir_all(root)?;

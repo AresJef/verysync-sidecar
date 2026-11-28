@@ -257,7 +257,7 @@ pub use managed::{
 };
 pub use managed::{
     ManagedControlGeneration, ManagedExitObservation, ManagedExitObservationOutcome,
-    ManagedGenerationStatus,
+    ManagedGenerationStatus, ManagedShutdownReport, ShutdownRequestEvidence,
 };
 pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
 pub use management_transport::{ManagementProxy, ManagementTransport};

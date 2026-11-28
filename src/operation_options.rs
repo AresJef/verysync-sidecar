@@ -179,6 +179,14 @@ impl OperationContext {
         handle_enabled && self.options.allow_read_retry
     }
 
+    pub(crate) fn cancelled_on(&self) -> Option<watch::Receiver<bool>> {
+        self.options.cancel.clone()
+    }
+
+    pub(crate) fn progress_sender(&self) -> Option<mpsc::Sender<OperationPhase>> {
+        self.options.progress.clone()
+    }
+
     pub(crate) fn phase(&self, phase: OperationPhase) {
         if let Some(progress) = &self.options.progress {
             let _ = progress.try_send(phase);

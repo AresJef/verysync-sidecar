@@ -319,8 +319,17 @@ def submission_case(executable, scenario):
         elif config_read == "post_delete":
             assert_public(evidence, summary, submitted, code=2, stage="post_submit_read",
                           failure="mutation_outcome_unknown", status=200, complete=True,
-                          message_parts=("acknowledged", "registration"))
+                          message_parts=("acknowledged", "cannot read the device registration",
+                                         "check read permissions", "after access is restored",
+                                         "use observe-device"))
             evidence.require(summary.get("read_http_status") == 403, "readback HTTP 403")
+            message = summary.get("message", "").lower()
+            evidence.require(
+                0 <= message.find("check read permissions")
+                < message.find("after access is restored")
+                < message.find("use observe-device"),
+                "public guidance restores permissions before asking for a read-only check",
+            )
         elif reply in (401, 403):
             fragment = "authenticat" if reply == 401 else "refus"
             assert_public(evidence, summary, submitted, code=1, stage="submit",

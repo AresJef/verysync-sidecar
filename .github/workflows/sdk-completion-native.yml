@@ -42,7 +42,7 @@ jobs:
     name: SDK upgrade workflow (${{ matrix.package }})
     needs: package
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +114,23 @@ jobs:
             python scripts/prepare-test-engine.py check-cleanup --upgrade-source | tee "$RUNNER_TEMP/sdk-upgrade-evidence/previous-cleanup.log" || result=1
           fi
           exit "$result"
+      - name: Verify the real Windows ARM64 shutdown path
+        if: matrix.package == 'windows-arm64-standard'
+        run: |
+          set -o pipefail
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target control_observation_engine --test-filter native_shutdown_receipt_ \
+            --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/shutdown-control"
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target sync_observation \
+            --test-filter actual_folder_order_and_specific_priority_change_preserve_samples \
+            --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/shutdown-folder-priority"
+      - name: Verify Windows ARM64 shutdown fixture cleanup
+        if: always() && matrix.package == 'windows-arm64-standard' && env.VERYSYNC_TEST_BINARY != ''
+        run: |
+          set -o pipefail
+          python scripts/prepare-test-engine.py check-cleanup \
+            | tee "$RUNNER_TEMP/sdk-upgrade-evidence/windows-shutdown-cleanup.log"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:

@@ -3,6 +3,8 @@
 
 #[path = "common/managed_fixture.rs"]
 mod managed_fixture;
+#[path = "common/normal_shutdown_workflow.rs"]
+mod normal_shutdown_workflow;
 
 use managed_fixture::TestResult;
 use serde_json::json;

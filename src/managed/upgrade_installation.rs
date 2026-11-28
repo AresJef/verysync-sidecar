@@ -1,6 +1,6 @@
 //! Verify the effect of one fixed archive upload on its original owned program.
 
-use std::{fmt, path::PathBuf};
+use std::{fmt, path::PathBuf, time::Duration};
 
 use tokio::time::Instant;
 
@@ -350,7 +350,7 @@ impl ManagedInstance {
                 let dispatch_deadline = now + available.mul_f64(2.0 / 3.0);
                 let retry = context.read_retries_enabled(self.options.transient_read_retries);
                 let read_deadline = if retry {
-                    now + dispatch_deadline.duration_since(now).mul_f64(1.0 / 2.0)
+                    now + (dispatch_deadline.duration_since(now) / 2).min(Duration::from_secs(5))
                 } else {
                     dispatch_deadline
                 };
@@ -392,10 +392,10 @@ impl ManagedInstance {
                     return Ok(UploadResult::AlreadyInstalled);
                 };
                 context
+                    .save_upgrade(dispatch_deadline, || attempt.before_upload())
+                    .await?;
+                context
                     .wait(dispatch_deadline, UPLOAD, async {
-                        context
-                            .save_upgrade(dispatch_deadline, || attempt.before_upload())
-                            .await?;
                         scope
                             .verify_before_upload(dispatch_deadline.into_std())
                             .await?;
