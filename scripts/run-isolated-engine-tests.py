@@ -509,7 +509,10 @@ def main():
                         help="separately unpacked crate consumer directory for the upgrade suite")
     parser.add_argument("--sdk-completion-consumer", type=Path,
                         help="separately unpacked crate consumer for the selected SDK workflow test")
-    parser.add_argument("--test-filter", help="run only tests matching this name in the selected suite")
+    filters = parser.add_mutually_exclusive_group()
+    filters.add_argument("--test-filter", help="run only tests matching this name in the selected suite")
+    filters.add_argument("--exact-case", action="append", default=[],
+                         help="run this exact Cargo test name; repeat to select multiple cases")
     parser.add_argument("--allow-private-discovery", action="store_true",
                         help="route only allowlisted discovery CONNECTs to a nonce-selected loopback fixture")
     parser.add_argument("--allow-upgrade-metadata", action="store_true",
@@ -523,7 +526,7 @@ def main():
         raise RuntimeError("owned-host acceptance requires native macOS, Linux or Windows")
     if args.mechanism and {"macos": "darwin", "linux": "linux", "windows": "win32"}[args.mechanism] != sys.platform:
         raise RuntimeError("mechanism investigation requires its actual native platform")
-    if args.test_filter and not args.test_target:
+    if (args.test_filter or args.exact_case) and not args.test_target:
         raise ValueError("a test filter requires an explicit Cargo test target")
     if args.allow_private_discovery and args.test_target != "network":
         raise ValueError("private discovery routing is restricted to the explicit network suite")
@@ -548,15 +551,14 @@ def main():
         raise ValueError("process tracing is scoped to the two packaged native upgrade recovery cases on GitHub")
     if args.upgrade_consumer and args.test_target != "upgrade_engine":
         raise ValueError("the independent upgrade consumer requires the upgrade suite")
-    if args.sdk_completion_consumer and (
-        args.upgrade_consumer or args.test_target not in {
-            "authentication_engine", "configuration_engine", "devices", "engine_control",
-            "file_transfer_engine", "file_history_engine", "file_mutation_engine",
-            "local_sync_advanced_engine", "local_sync_engine",
-            "local_sync_runtime_engine", "managed_instance", "p2p_three_nodes", "sync_observation",
-        }
-    ):
-        raise ValueError("select one separately unpacked SDK consumer for a supported workflow test")
+    if args.sdk_completion_consumer:
+        if args.upgrade_consumer or not args.test_target:
+            raise ValueError("select one segregated SDK consumer and a supported Cargo test suite")
+        consumer = args.sdk_completion_consumer
+        selected = consumer / "tests" / f"{args.test_target}.rs"
+        if (not consumer.is_absolute() or not (consumer / "Cargo.toml").is_file()
+                or not selected.is_file() or selected.is_symlink()):
+            raise ValueError("the prepared SDK consumer does not contain the selected test suite")
     if (args.allow_upgrade_metadata or args.serve_pinned_upgrade_archive) and args.test_target != "upgrade_engine":
         raise ValueError("upgrade routing is restricted to the explicit upgrade suite")
     if args.allow_wallpaper_source and args.test_target != "wallpaper_engine":
@@ -657,6 +659,8 @@ def main():
                 if args.test_filter:
                     command += [args.test_filter]
                 command += ["--", "--test-threads=1", "--nocapture"]
+                if args.exact_case:
+                    command += ["--exact", *args.exact_case]
                 if args.blocked_upgrade_check:
                     command += ["--ignored"]
                 if args.test_target == "browser_engine":
@@ -711,6 +715,11 @@ def main():
                   "private_connections_forwarded": proxy.forwarded,
                   "requests_blocked": observed, "handler_errors": errors,
                   "wallpaper_source_proxy_bypass_suffix": "bing.com" if args.allow_wallpaper_source else None,
+                  "test_target": args.test_target,
+                  "test_filter": args.test_filter,
+                  "exact_cases": args.exact_case,
+                  "package_consumer": (args.sdk_completion_consumer is not None
+                                       or args.upgrade_consumer is not None),
                   "test_exit_code": returncode}
         (args.evidence_dir / "proxy-observations.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print("Isolated engine HTTP proxy observations: " + json.dumps(report, sort_keys=True))

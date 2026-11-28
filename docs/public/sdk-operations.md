@@ -10,7 +10,8 @@ original request separately. A reply may be lost even when a later read
 confirms the requested state. If the effect is unconfirmed, inspect the same
 instance and selected files before submitting another change. Use
 `OperationOptions` for an explicit total timeout and optional progress.
-Closing a progress receiver or cancelling a wait leaves native work running.
+After dispatch, native work can continue if you stop waiting. Read the report
+to check which request was sent.
 
 | ID | Goal and Rust entry | What the result establishes |
 | --- | --- | --- |
