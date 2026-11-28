@@ -462,12 +462,18 @@ impl Client {
         Ok(records)
     }
 
-    async fn delivery_folder_base(&self, folder: &FolderId) -> Result<ResourcePath> {
+    pub(super) async fn delivery_folder_base(&self, folder: &FolderId) -> Result<ResourcePath> {
         let folder = self.folder(folder).await?;
-        let style = folder.path.style();
-        let configured = native_path_parts(style, folder.path.to_protocol()?).ok_or_else(|| {
-            invalid("the receiver folder path has no verified absolute local mount")
-        })?;
+        self.local_file_manager_base(&folder.path).await
+    }
+
+    pub(super) async fn local_file_manager_base(
+        &self,
+        path: &crate::TargetPath,
+    ) -> Result<ResourcePath> {
+        let style = path.style();
+        let configured = native_path_parts(style, path.to_protocol()?)
+            .ok_or_else(|| invalid("the folder path has no verified absolute local mount"))?;
         let volumes = self.resource_volumes().await?;
         let mut matching: Vec<_> = volumes
             .iter()
@@ -482,10 +488,10 @@ impl Client {
         matching.sort_by_key(|(_, depth, _)| std::cmp::Reverse(*depth));
         let (volume, length, suffix) = matching
             .first()
-            .ok_or_else(|| invalid("no local file-manager volume contains the receiving folder"))?;
+            .ok_or_else(|| invalid("no local file-manager volume contains the selected folder"))?;
         if matching.get(1).is_some_and(|(_, depth, _)| depth == length) {
             return Err(invalid(
-                "the file-manager mount for the receiving folder is ambiguous",
+                "the file-manager mount for the selected folder is ambiguous",
             ));
         }
         suffix.iter().try_fold(
@@ -501,7 +507,7 @@ fn delivery_resource_path(base: &ResourcePath, components: &[String]) -> Result<
         .try_fold(base.clone(), |path, component| path.child(component))
 }
 
-fn same_resource(first: &ResourcePath, second: &ResourcePath) -> bool {
+pub(super) fn same_resource(first: &ResourcePath, second: &ResourcePath) -> bool {
     first.volume == second.volume
         && first.style == second.style
         && first.components == second.components

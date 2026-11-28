@@ -46,6 +46,15 @@ Every mutation uses a fresh identity/existence preflight and the shared Client
 clone lock. Separate requests and external writers are not one transaction.
 Debug output omits file lines, expanded rules, parser text and unknown metadata.
 
+Use `change_ignore_patterns_and_verify` to keep the first reply and the
+later rule read in one report. `IgnoreChange::Folder` replaces selected rules
+and skips the write when the file already matches. `RestoreFolderDefaults`
+checks the engine's returned defaults against a later read. When its first
+reply is missing, the current rules are available for review and their origin
+remains unconfirmed. `DefaultTemplate` changes the global template and keeps
+its other fields. Rule matching describes configuration. To confirm which files
+are indexed, check the folder or run a deliberate scan separately.
+
 Native tests check the default temporary-file exclusion, explicit empty rules,
 ordered negation and a subdirectory pattern, restart persistence, actual stored
 invalid syntax and recovery using real default restoration. Indexed counts

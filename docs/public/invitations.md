@@ -58,6 +58,13 @@ result back. `folder_peer_encryption_password_is_set()` observes the current
 setting without returning the password. Both methods preserve an omitted
 native field as `None`. The update receipt also reports an exact match.
 
+`change_folder_peer_and_verify` runs a single chosen association change and
+checks the selected peer and remaining associations afterward. An already
+satisfied request leaves the configuration untouched. The report retains the
+original reply and the later state, including a concurrent change to another
+association. Before assuming the peer received a file, check the file at the
+receiving device.
+
 When preparing a receive-encrypted replica, establish the association and
 set the password with the peer and folder paused before marking the encrypted
 peer untrusted. Use explicit, matching folder IDs for the tested v2.33.2

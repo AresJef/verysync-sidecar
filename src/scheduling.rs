@@ -61,6 +61,62 @@ pub struct FolderSchedulingUpdate {
     /// Whether the explicitly requested order matches current readback.
     pub requested_order_match: bool,
 }
+/// The selected file's position in a verified first page of need.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FilePriorityState {
+    /// The file is currently being transferred.
+    InProgress,
+    /// The file is first in the waiting queue.
+    FirstQueued,
+    /// The file is visible, but not at the front of the waiting queue.
+    Waiting,
+    /// The file is outside this page or no longer in need.
+    Unobserved,
+}
+
+/// The original priority request, if dispatched, and a separate need read.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct FilePriorityReport {
+    /// Dispatch and response evidence for the optional priority request.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original need page returned by the request, if it was sent.
+    pub original: crate::Result<Option<crate::NeedPage>>,
+    /// Exact position before submission, when readable.
+    pub before: Option<FilePriorityState>,
+    /// Latest exact position in a verified page.
+    pub current: Option<FilePriorityState>,
+    /// Independent need page, including the untouched neighboring entries.
+    pub current_need: Option<crate::NeedPage>,
+    /// Why the later need page could not be verified.
+    pub observation_error: Option<crate::Error>,
+}
+
+impl FilePriorityReport {
+    /// Classify the observed priority without inferring that bytes arrived.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        use crate::OperationCompletion as Completion;
+        match self.current {
+            Some(FilePriorityState::FirstQueued | FilePriorityState::InProgress) => {
+                Completion::Completed
+            }
+            Some(FilePriorityState::Waiting) => Completion::GoalNotMet,
+            Some(FilePriorityState::Unobserved) => Completion::Unconfirmed,
+            None if !self.write.dispatched
+                || (self.write.response_complete
+                    && matches!(
+                        self.original,
+                        Err(crate::Error::Authentication { .. } | crate::Error::AccessDenied { .. })
+                    )) =>
+            {
+                Completion::GoalNotMet
+            }
+            None => Completion::Unconfirmed,
+        }
+    }
+}
+
 /// Actual global byte-rate settings. Zero means unlimited for this limiter.
 #[derive(Clone, Deserialize)]
 pub struct GlobalBandwidthConfig {

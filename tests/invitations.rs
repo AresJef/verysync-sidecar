@@ -611,12 +611,33 @@ async fn actual_folder_offer_dismiss_ignore_unignore_and_explicit_read_only_acce
             && joined.read_write_key_matches
     );
     assert_eq!(joined.permission, SharePermission::ReadOnly);
-    assert!(
-        b.client()
-            .share_folder_with(&joined.configuration.id, &a_id)
-            .await?
-            .association_present
+    use verysync_sidecar::{FolderPeerChange, OperationCompletion, OperationOptions};
+    let limit = || OperationOptions::new(Duration::from_secs(10));
+    let shares = b
+        .client()
+        .change_folder_peer_and_verify(
+            &joined.configuration.id,
+            &a_id,
+            FolderPeerChange::Share,
+            limit(),
+        )
+        .await?;
+    assert_eq!(
+        shares.completion(),
+        OperationCompletion::Completed,
+        "{shares:?}"
     );
+    assert_eq!(shares.association_present, Some(true));
+    let same = b
+        .client()
+        .change_folder_peer_and_verify(
+            &joined.configuration.id,
+            &a_id,
+            FolderPeerChange::Share,
+            limit(),
+        )
+        .await?;
+    assert!(matches!(same.original, Ok(None)) && !same.write.dispatched);
     b.client().resume_folder(&joined.configuration.id).await?;
     a.client().request_scan(&first_local).await?;
     eprintln!("private invitation stage: observe actual accepted file bytes");
@@ -640,12 +661,22 @@ async fn actual_folder_offer_dismiss_ignore_unignore_and_explicit_read_only_acce
         );
     }
     offer(b.client(), first, &a_id, false).await?;
-    assert!(
-        !b.client()
-            .unshare_folder_from(&joined.configuration.id, &a_id)
-            .await?
-            .association_present
+    let removed = b
+        .client()
+        .change_folder_peer_and_verify(
+            &joined.configuration.id,
+            &a_id,
+            FolderPeerChange::Unshare,
+            limit(),
+        )
+        .await?;
+    assert!(removed.write.dispatched && removed.write.response_complete);
+    assert_eq!(
+        removed.completion(),
+        OperationCompletion::Completed,
+        "{removed:?}"
     );
+    assert_eq!(removed.association_present, Some(false));
     assert!(b.client().device(&a_id).await.is_ok());
     assert_eq!(
         b.client().folder(&joined.configuration.id).await?.id,

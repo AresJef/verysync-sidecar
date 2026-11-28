@@ -80,3 +80,11 @@ counter decreases invalidate the whole trial. Earlier failed preparation and v2
 results are retained with their original identities; they are not combined with
 v3 acceptance data. These are absolute functional observations, with no promised
 throughput, SLA, speedup, CPU filtering or time deduction.
+
+
+Use `prioritize_file_and_verify` with the first need page to check one waiting
+file. The report shows the queue before the request and after a separate read.
+A file already first or in progress needs no write. If the file is missing from
+the page, increase the page limit or check its contents at the receiving device.
+A queue position shows which file is scheduled next or active. Verify the
+received file separately.

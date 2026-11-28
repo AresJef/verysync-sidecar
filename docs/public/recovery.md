@@ -43,6 +43,14 @@ The caller must establish that the intended storage is present before requesting
 marker repair. The SDK itself does not create, remove or inspect local paths,
 replace keys, reset configuration or restart the engine automatically.
 
+`repair_folder_marker_and_verify` takes the expected configured folder path.
+It resolves the path through an unambiguous native local mount and reads the
+marker directory through VerySync. A matching directory already in place
+requires no request. After a repair, review the observed marker and folder
+activity separately. When the target storage cannot be verified, the function
+leaves the folder untouched. To confirm a resumed scan, observe its activity and
+check the relevant files.
+
 All three mutations perform a fresh identity and exact-folder preflight, share
 the Client clone mutation lock, and have no automatic write retries. External
 writers remain the caller's responsibility. An unexpected nonempty recovery

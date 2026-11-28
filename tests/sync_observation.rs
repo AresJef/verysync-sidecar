@@ -240,7 +240,7 @@ struct BlockedFile {
 
 #[tokio::test]
 async fn actual_ignore_replace_parse_rejection_reset_and_restart_preserve_files() -> TestResult {
-    use verysync_sidecar::IgnorePatterns;
+    use verysync_sidecar::{IgnoreChange, IgnorePatterns, IgnoreReadback, OperationCompletion};
     let root = tempfile::Builder::new()
         .prefix("vss-ignore-")
         .tempdir()?
@@ -304,11 +304,31 @@ async fn actual_ignore_replace_parse_rejection_reset_and_restart_preserve_files(
         "*.tmp".into(),
         "sub/*.dat".into(),
     ])?;
-    let changed = core.client().set_ignore_patterns(&id, &rules).await?;
-    assert!(changed.requested_patterns_match);
-    assert_eq!(changed.snapshot.patterns.as_deref(), Some(rules.patterns()));
-    assert!(!changed.snapshot.expanded_patterns.is_empty());
+    let operation = || OperationOptions::new(Duration::from_secs(12));
+    let change = IgnoreChange::Folder {
+        folder: &id,
+        patterns: &rules,
+    };
+    let changed = core
+        .client()
+        .change_ignore_patterns_and_verify(change, operation())
+        .await?;
+    assert!(changed.write.dispatched && changed.write.response_complete);
+    assert_eq!(
+        changed.completion(),
+        OperationCompletion::Completed,
+        "{changed:?}"
+    );
+    assert!(
+        matches!(&changed.current, Some(IgnoreReadback::Folder(snapshot))
+        if snapshot.patterns.as_deref() == Some(rules.patterns()) && !snapshot.expanded_patterns.is_empty())
+    );
     assert!(!format!("{changed:?} {rules:?}").contains("synthetic private"));
+    let already = core
+        .client()
+        .change_ignore_patterns_and_verify(change, operation())
+        .await?;
+    assert!(!already.write.dispatched && matches!(already.original, Ok(None)));
     core.client().request_scan(&id).await?;
     indexed_files(core.client(), &id, 2).await?;
     core.restart(Duration::from_secs(30)).await?;
@@ -322,11 +342,19 @@ async fn actual_ignore_replace_parse_rejection_reset_and_restart_preserve_files(
     );
     indexed_files(core.client(), &id, 2).await?;
     let bad = IgnorePatterns::new(vec!["[synthetic-private-pattern".into()])?;
-    let rejection = core
+    let bad_change = core
         .client()
-        .set_ignore_patterns(&id, &bad)
-        .await
-        .unwrap_err();
+        .change_ignore_patterns_and_verify(
+            IgnoreChange::Folder {
+                folder: &id,
+                patterns: &bad,
+            },
+            operation(),
+        )
+        .await?;
+    assert!(bad_change.write.dispatched && bad_change.write.response_complete);
+    assert_eq!(bad_change.completion(), OperationCompletion::GoalNotMet);
+    let rejection = bad_change.original.unwrap_err();
     assert!(!format!("{rejection:?} {rejection}").contains("synthetic-private"));
     let Error::IgnorePatternsRejected { snapshot } = rejection else {
         return Err("expected actual ignore parser rejection".into());
@@ -339,7 +367,18 @@ async fn actual_ignore_replace_parse_rejection_reset_and_restart_preserve_files(
         .parse_error
         .as_ref()
         .is_some_and(|s| !s.is_empty()));
-    let reset = core.client().reset_ignore_patterns(&id).await?;
+    let restored = core
+        .client()
+        .change_ignore_patterns_and_verify(IgnoreChange::RestoreFolderDefaults(&id), operation())
+        .await?;
+    assert_eq!(
+        restored.completion(),
+        OperationCompletion::Completed,
+        "{restored:?}"
+    );
+    let Some(IgnoreReadback::Folder(reset)) = restored.current else {
+        return Err("restored rules were not reported".into());
+    };
     assert!(reset.parse_error.is_none());
     assert_eq!(reset.expanded_patterns, original.expanded_patterns);
     core.client().request_scan(&id).await?;
@@ -1045,11 +1084,47 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
         .iter()
         .position(|f| f.name == target)
         .is_some_and(|p| p > 0));
-    let prioritized = b
+    let report = b
         .client()
-        .prioritize_file(folder, &TargetPath::local(target), page)
+        .prioritize_file_and_verify(
+            folder,
+            &TargetPath::local(target),
+            page,
+            OperationOptions::new(Duration::from_secs(12)),
+        )
         .await?;
+    assert!(
+        report.write.dispatched && report.write.response_complete,
+        "{report:?}"
+    );
+    assert_eq!(
+        report.before,
+        Some(verysync_sidecar::FilePriorityState::Waiting)
+    );
+    assert_eq!(
+        report.completion(),
+        verysync_sidecar::OperationCompletion::Completed,
+        "{report:?}"
+    );
+    assert!(report.original?.is_some());
+    let prioritized = report
+        .current_need
+        .expect("verified native queue is available");
     assert!(!prioritized.queued.is_empty());
+    let absent = b
+        .client()
+        .prioritize_file_and_verify(
+            folder,
+            &TargetPath::local("unlisted-synthetic-name.bin"),
+            page,
+            OperationOptions::new(Duration::from_secs(12)),
+        )
+        .await?;
+    assert!(!absent.write.dispatched && absent.original?.is_none());
+    assert_eq!(
+        absent.current,
+        Some(verysync_sidecar::FilePriorityState::Unobserved)
+    );
     assert!(
         prioritized.queued.first().is_some_and(|f| f.name == target)
             || prioritized.progress.iter().any(|f| f.name == target)
@@ -1133,7 +1208,7 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     std::fs::remove_dir_all(root)?;
     println!(
         "public folder priority evidence: {}",
-        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"actual_511_backlog_files_created_after_throttle":backlog_created_after_throttle,"explicit_owned_fixture_reconnection_seconds":5,"all_six_actual_order_readbacks":true,"paused_scope_rejected":true,"legacy_queue_fixture_fields_read_back":true,"actual_alphabetic_backlog_has_nonfirst_target":true,"actual_target_promoted_while_other_work_still_queued":true,"actual_page_scope_preserved":true,"unrelated_folder_settings_retained":true,"unknown_order_and_invalid_relative_path_rejected":true,"explicit_rate_restoration_read_back":true,"actual_all_512_files_received":true,"all_source_and_destination_contents_match":true,"both_actual_normal_tree_and_state_exits":true})
+        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"actual_511_backlog_files_created_after_throttle":backlog_created_after_throttle,"explicit_owned_fixture_reconnection_seconds":5,"all_six_actual_order_readbacks":true,"paused_scope_rejected":true,"legacy_queue_fixture_fields_read_back":true,"actual_alphabetic_backlog_has_nonfirst_target":true,"actual_target_promoted_while_other_work_still_queued":true,"priority_reply_and_independent_readback":true,"unlisted_target_zero_write":true,"actual_page_scope_preserved":true,"unrelated_folder_settings_retained":true,"unknown_order_and_invalid_relative_path_rejected":true,"explicit_rate_restoration_read_back":true,"actual_all_512_files_received":true,"all_source_and_destination_contents_match":true,"both_actual_normal_tree_and_state_exits":true})
     );
     Ok(())
 }
@@ -2044,11 +2119,50 @@ async fn actual_receiveonly_revert_and_marker_repair_restore_owned_data() -> Tes
         }
     })
     .await??;
+    let wrong_path = a
+        .client()
+        .repair_folder_marker_and_verify(
+            &mf.configuration.id,
+            &TargetPath::local(root.join("marker-backup")),
+            verysync_sidecar::OperationOptions::new(Duration::from_secs(20)),
+        )
+        .await?;
+    assert!(matches!(
+        wrong_path.original,
+        Err(Error::ConfigurationChanged)
+    ));
+    assert!(!wrong_path.write.dispatched && !marker_data.join(".verysync").exists());
+    let marker_path = TargetPath::local(&marker_data);
     let repaired = a
         .client()
-        .request_marker_repair(&mf.configuration.id)
+        .repair_folder_marker_and_verify(
+            &mf.configuration.id,
+            &marker_path,
+            verysync_sidecar::OperationOptions::new(Duration::from_secs(20)),
+        )
         .await?;
-    assert!(repaired.success && repaired.error.is_empty());
+    assert!(
+        repaired.write.response_complete && repaired.write.dispatched,
+        "{repaired:?}"
+    );
+    let observed = repaired.completion();
+    assert_eq!(
+        observed,
+        verysync_sidecar::OperationCompletion::Completed,
+        "{repaired:?}"
+    );
+    let response = repaired.original?.expect("the native repair was requested");
+    assert!(response.success && response.error.is_empty());
+    let already = a
+        .client()
+        .repair_folder_marker_and_verify(
+            &mf.configuration.id,
+            &marker_path,
+            verysync_sidecar::OperationOptions::new(Duration::from_secs(20)),
+        )
+        .await?;
+    assert!(!already.write.dispatched && already.original?.is_none());
+    assert_eq!(already.marker_present, Some(true));
     assert!(!std::fs::symlink_metadata(marker_data.join(".verysync"))?
         .file_type()
         .is_symlink());
@@ -2078,7 +2192,7 @@ async fn actual_receiveonly_revert_and_marker_repair_restore_owned_data() -> Tes
     std::fs::remove_dir_all(root)?;
     println!(
         "public receive-only and marker recovery evidence: {}",
-        json!({"actual_receiveonly_fixture_readback":true,"actual_original_received_bytes":true,"actual_tracked_edit_observed_in_changes":true,"actual_local_edit_reverted":true,"actual_ro_key_deletion_autorestored_before_explicit_revert":true,"actual_unindexed_local_addition_bytes_retained":true,"actual_source_files_unchanged":true,"actual_local_changes_clear":true,"wrong_mode_rejected":true,"actual_missing_marker_error_observed":true,"actual_marker_repair_acknowledgement":true,"actual_marker_directory_recreated_without_symlink":true,"original_marker_backup_retained":true,"actual_same_folder_and_share_keys_after_restart":true,"actual_scan_recovers_after_explicit_restart":true,"all_retained_marker_data_bytes_preserved":true,"missing_folder_rejected":true,"both_actual_normal_tree_exits":true})
+        json!({"actual_receiveonly_fixture_readback":true,"actual_original_received_bytes":true,"actual_tracked_edit_observed_in_changes":true,"actual_local_edit_reverted":true,"actual_ro_key_deletion_autorestored_before_explicit_revert":true,"actual_unindexed_local_addition_bytes_retained":true,"actual_source_files_unchanged":true,"actual_local_changes_clear":true,"wrong_mode_rejected":true,"actual_missing_marker_error_observed":true,"actual_marker_repair_acknowledgement":true,"wrong_configured_path_zero_write":true,"marker_native_readback_completed":true,"already_present_zero_write":true,"actual_marker_directory_recreated_without_symlink":true,"original_marker_backup_retained":true,"actual_same_folder_and_share_keys_after_restart":true,"actual_scan_recovers_after_explicit_restart":true,"all_retained_marker_data_bytes_preserved":true,"missing_folder_rejected":true,"both_actual_normal_tree_exits":true})
     );
     Ok(())
 }

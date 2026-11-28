@@ -161,7 +161,72 @@ pub struct FolderPeerEncryptionUpdate {
     pub requested_password_matches: bool,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+/// Explicit goal for one folder-to-device association.
+#[derive(Clone, Copy)]
+#[non_exhaustive]
+pub enum FolderPeerChange<'a> {
+    /// Associate the already configured device with the folder.
+    Share,
+    /// Remove this folder association while retaining both registrations.
+    Unshare,
+    /// Set a nonempty password, or clear the existing password with `None`.
+    EncryptionPassword(Option<&'a str>),
+}
+
+impl std::fmt::Debug for FolderPeerChange<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Share => "Share",
+            Self::Unshare => "Unshare",
+            Self::EncryptionPassword(Some(_)) => "SetEncryptionPassword",
+            Self::EncryptionPassword(None) => "ClearEncryptionPassword",
+        })
+    }
+}
+
+/// Original association reply and a credential-free readback.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct FolderPeerWorkflowReport {
+    /// Dispatch and reply facts for the optional PATCH.
+    pub write: crate::ManagementWriteEvidence,
+    /// Initial result. An empty value means no configuration change was needed.
+    pub original: crate::Result<Option<crate::ResponseDiagnostic>>,
+    /// Whether this device remains in the selected folder, when readable.
+    pub association_present: Option<bool>,
+    /// Whether the current association reports a password set.
+    pub password_is_set: Option<bool>,
+    /// Whether the scoped goal matches current readback.
+    pub requested_state_matches: Option<bool>,
+    /// Whether other associations match their preflight fields.
+    pub other_peers_preserved: Option<bool>,
+    /// Why the authenticated result could not be read.
+    pub observation_error: Option<crate::Error>,
+}
+
+impl FolderPeerWorkflowReport {
+    /// Classify configuration evidence. Peer traffic requires separate proof.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        use crate::OperationCompletion as Completion;
+        match (self.requested_state_matches, self.other_peers_preserved) {
+            (Some(true), Some(true)) => Completion::Completed,
+            (Some(true), _) => Completion::PartiallyCompleted,
+            (Some(false), _) => Completion::GoalNotMet,
+            _ if !self.write.dispatched
+                || (self.write.response_complete
+                    && matches!(
+                        self.original,
+                        Err(crate::Error::Authentication { .. } | crate::Error::AccessDenied { .. })
+                    )) =>
+            {
+                Completion::GoalNotMet
+            }
+            _ => Completion::Unconfirmed,
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub(crate) struct FolderPeer {
     #[serde(rename = "deviceID")]
     pub(crate) device_id: DeviceId,

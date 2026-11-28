@@ -1,16 +1,146 @@
 //! Explicit invitation records, per-peer ignores and folder associations.
-use super::Client;
+use super::{workflow_write_result, Client};
 use crate::invitations::FolderPeer;
 use crate::{
-    DeviceId, Error, FolderId, FolderPeerEncryptionUpdate, FolderPeerUpdate, IgnoredFolder,
-    IgnoredFolderUpdate, PendingDeviceInfo, PendingDismissal, PendingFolderOffers,
-    ResponseDiagnostic, Result,
+    DeviceId, Error, FolderId, FolderPeerChange, FolderPeerEncryptionUpdate, FolderPeerUpdate,
+    FolderPeerWorkflowReport, IgnoredFolder, IgnoredFolderUpdate, OperationOptions, OperationPhase,
+    PendingDeviceInfo, PendingDismissal, PendingFolderOffers, ResponseDiagnostic, Result,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use tokio::time::Instant;
 
 impl Client {
+    /// Change one existing folder's association with the exact selected peer.
+    /// Read back that peer independently from the preserved associations.
+    /// If the scoped state already matches, return without a PATCH.
+    /// This reports configuration and leaves connection and data effects to
+    /// the native engine. Coordinate other management writers.
+    pub async fn change_folder_peer_and_verify(
+        &self,
+        folder: &FolderId,
+        device: &DeviceId,
+        change: FolderPeerChange<'_>,
+        options: OperationOptions,
+    ) -> Result<FolderPeerWorkflowReport> {
+        const CHANGE: &str = "change the selected folder's peer association";
+        const VERIFY: &str = "verify the selected folder's peer association";
+        self.require_remote_device(device)?;
+        if matches!(change, FolderPeerChange::EncryptionPassword(Some(""))) {
+            return Err(Error::InvalidCredential {
+                reason: "use the explicit clear option for an empty folder password",
+            });
+        }
+        let url = self.connection.folder_url(folder)?;
+        let context = options.start()?;
+        let mut write = Default::default();
+        let mut guard = None;
+        let mut admission = None;
+        let mut already = None;
+        let result = context
+            .wait(context.dispatch_deadline(), CHANGE, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                self.observe_control_identity().await?;
+                let start =
+                    self.system_status()
+                        .await?
+                        .start_time
+                        .ok_or(Error::InvalidConfiguration {
+                            reason: "the selected instance did not report its start time",
+                        })?;
+                self.device(device).await?;
+                let current = self.folder(folder).await?;
+                let mut peers = folder_peers(&current)?;
+                let unchanged = other_associations(&peers, device)?;
+                let facts = folder_peer_facts(&peers, device, change)?;
+                self.check_folder_peer_generation(&start).await?;
+                if facts.2 {
+                    already = Some(facts);
+                    return Ok(None);
+                }
+                match change {
+                    FolderPeerChange::Share => peers.push(FolderPeer {
+                        device_id: device.clone(),
+                        extra: BTreeMap::new(),
+                    }),
+                    FolderPeerChange::Unshare => peers.retain(|peer| peer.device_id != *device),
+                    FolderPeerChange::EncryptionPassword(password) => {
+                        let index = folder_peer_index(&peers, device)?;
+                        peers[index].extra.insert(
+                            "encryptionPassword".into(),
+                            Value::String(password.unwrap_or_default().into()),
+                        );
+                    }
+                }
+                if Instant::now() >= context.dispatch_deadline() {
+                    return Err(Error::Timeout { operation: CHANGE });
+                }
+                admission = Some((start, current.path, unchanged));
+                let body = json!({"devices":peers});
+                let request =
+                    self.connection
+                        .authorized_request(reqwest::Method::PATCH, url, Some(&body));
+                let reply = self
+                    .connection
+                    .send_workflow_write(CHANGE, request, &context, &mut write)
+                    .await?;
+                Ok(Some(ResponseDiagnostic::new(reply.status, reply.body)))
+            })
+            .await;
+        let original = workflow_write_result(CHANGE, write, result);
+        let refused = write.response_complete
+            && matches!(
+                original,
+                Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+            );
+        let mut report = FolderPeerWorkflowReport {
+            write,
+            original,
+            association_present: already.map(|facts| facts.0),
+            password_is_set: already.and_then(|facts| facts.1),
+            requested_state_matches: already.map(|facts| facts.2),
+            other_peers_preserved: already.map(|_| true),
+            observation_error: None,
+        };
+        if let Some((start, path, expected)) = admission.filter(|_| write.dispatched && !refused) {
+            context.phase(OperationPhase::Verifying);
+            let observed = context
+                .wait(context.deadline, VERIFY, async {
+                    self.check_folder_peer_generation(&start).await?;
+                    let current = self.folder(folder).await?;
+                    if current.path != path {
+                        return Err(Error::ConfigurationChanged);
+                    }
+                    let peers = folder_peers(&current)?;
+                    let facts = folder_peer_facts(&peers, device, change)?;
+                    let preserved = other_associations(&peers, device)? == expected;
+                    self.check_folder_peer_generation(&start).await?;
+                    Ok((facts, preserved))
+                })
+                .await;
+            match observed {
+                Ok(((associated, password, matched), preserved)) => {
+                    report.association_present = Some(associated);
+                    report.password_is_set = password;
+                    report.requested_state_matches = Some(matched);
+                    report.other_peers_preserved = Some(preserved);
+                }
+                Err(source) => report.observation_error = Some(source),
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn check_folder_peer_generation(&self, expected: &str) -> Result<()> {
+        if self.system_status().await?.start_time.as_deref() != Some(expected) {
+            return Err(Error::ConfigurationChanged);
+        }
+        Ok(())
+    }
     /// Read pending device records. An empty object is distinct from an API error.
     /// Nonempty VerySync records and their dismissal need separate native evidence.
     pub async fn pending_devices(&self) -> Result<BTreeMap<DeviceId, PendingDeviceInfo>> {
@@ -390,6 +520,50 @@ fn folder_peer_password(peer: &FolderPeer) -> Result<Option<&str>> {
             })
         })
         .transpose()
+}
+
+fn folder_peer_facts(
+    peers: &[FolderPeer],
+    device: &DeviceId,
+    change: FolderPeerChange<'_>,
+) -> Result<(bool, Option<bool>, bool)> {
+    let peer = match folder_peer_index(peers, device) {
+        Ok(index) => Some(&peers[index]),
+        Err(Error::FolderPeerNotAssociated) => None,
+        Err(error) => return Err(error),
+    };
+    let password = peer.map(folder_peer_password).transpose()?.flatten();
+    let matches = match change {
+        FolderPeerChange::Share => peer.is_some(),
+        FolderPeerChange::Unshare => peer.is_none(),
+        FolderPeerChange::EncryptionPassword(value) => {
+            peer.is_some() && password.unwrap_or_default() == value.unwrap_or_default()
+        }
+    };
+    Ok((
+        peer.is_some(),
+        password.map(|value| !value.is_empty()),
+        matches,
+    ))
+}
+
+fn other_associations(
+    peers: &[FolderPeer],
+    selected: &DeviceId,
+) -> Result<BTreeMap<DeviceId, FolderPeer>> {
+    let mut others = BTreeMap::new();
+    for peer in peers.iter().filter(|peer| peer.device_id != *selected) {
+        if others
+            .insert(peer.device_id.clone(), peer.clone())
+            .is_some()
+        {
+            return Err(Error::InvalidResponse {
+                operation: "verify unique folder peer associations",
+                response: ResponseDiagnostic::new(200, Vec::new()),
+            });
+        }
+    }
+    Ok(others)
 }
 fn uncertain(operation: &'static str, source: Error) -> Error {
     Error::MutationOutcomeUnknown {

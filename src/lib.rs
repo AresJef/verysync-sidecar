@@ -222,11 +222,14 @@ pub use hardware::{
     NativeCpuPackage, NativeMemoryHardware, NativeMemoryModule, NativeNetworkHardware,
     NativeNetworkInterface, NativeNicCapability,
 };
-pub use ignores::{IgnoreDefaults, IgnorePatterns, IgnoreSnapshot, IgnoreUpdate};
+pub use ignores::{
+    IgnoreChange, IgnoreDefaults, IgnorePatterns, IgnoreReadback, IgnoreSnapshot, IgnoreUpdate,
+    IgnoreWorkflowReport,
+};
 pub use invitations::{
-    DeviceIgnoreUpdate, FolderPeerEncryptionUpdate, FolderPeerUpdate, IgnoredDevice, IgnoredFolder,
-    IgnoredFolderUpdate, PendingDeviceInfo, PendingDismissal, PendingFolderOffer,
-    PendingFolderOffers,
+    DeviceIgnoreUpdate, FolderPeerChange, FolderPeerEncryptionUpdate, FolderPeerUpdate,
+    FolderPeerWorkflowReport, IgnoredDevice, IgnoredFolder, IgnoredFolderUpdate, PendingDeviceInfo,
+    PendingDismissal, PendingFolderOffer, PendingFolderOffers,
 };
 pub use ldap::{GuiAuthModeUpdate, LdapConfiguration, LdapPatch, LdapTransport};
 pub use licenses::{
@@ -301,7 +304,7 @@ pub use operations::{
 };
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
-pub use recovery::MarkerRepairResult;
+pub use recovery::{MarkerRepairReport, MarkerRepairResult};
 pub use relay::{
     RelayProbe, RelayProbeResult, RelayRuntimeOptions, RelayServerConfig, RelayServerPatch,
     RelayServerStatus, RelayServerUpdate,
@@ -313,8 +316,8 @@ pub use releases::{
 pub use remote_management::DeviceTunnelProbe;
 pub use scans::{FolderScanConfig, FolderScanPatch, FolderScanUpdate};
 pub use scheduling::{
-    BandwidthPatch, BandwidthUpdate, FolderPullOrder, FolderSchedulingConfig,
-    FolderSchedulingUpdate, GlobalBandwidthConfig,
+    BandwidthPatch, BandwidthUpdate, FilePriorityReport, FilePriorityState, FolderPullOrder,
+    FolderSchedulingConfig, FolderSchedulingUpdate, GlobalBandwidthConfig,
 };
 pub use selective::{
     FolderSelectiveConfig, FolderSelectiveUpdate, SelectiveAcknowledgement, SelectiveAction,

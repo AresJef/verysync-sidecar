@@ -29,6 +29,92 @@ fn folder(peers: &Value) -> Reply {
 }
 
 #[tokio::test]
+async fn folder_peer_workflow_does_not_repeat_writes_or_treat_changed_neighbors_as_preserved(
+) -> TestResult {
+    use verysync_sidecar::{FolderPeerChange, OperationCompletion, OperationOptions};
+    let generation = || Reply::json(json!({"myID":ID,"startTime":"owned-generation"}));
+    let peer = ID.replacen('A', "B", 1);
+    let other = ID.replacen('A', "C", 1);
+    let members = json!([
+        {"deviceID":peer,"encryptionPassword":"previous","held":true},
+        {"deviceID":other,"encryptionPassword":"other synthetic secret","future":1}
+    ]);
+    for (case, outcome) in [
+        ("already", OperationCompletion::Completed),
+        ("lost", OperationCompletion::Completed),
+        ("neighbor changed", OperationCompletion::PartiallyCompleted),
+    ] {
+        let mut observed = members.clone();
+        observed[0]["encryptionPassword"] = PASSWORD.into();
+        if case == "neighbor changed" {
+            observed[1]["future"] = 2.into();
+        }
+        let mut replies = vec![
+            version(),
+            generation(),
+            version(),
+            generation(),
+            generation(),
+            devices(&peer),
+            folder(if case == "already" {
+                &observed
+            } else {
+                &members
+            }),
+            generation(),
+        ];
+        if case != "already" {
+            replies.extend([
+                Reply {
+                    status: 0,
+                    ..Reply::json(json!({}))
+                },
+                generation(),
+                folder(&observed),
+                generation(),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let change = FolderPeerChange::EncryptionPassword(Some(PASSWORD));
+        assert!(!format!("{change:?}").contains(PASSWORD));
+        let report = client
+            .change_folder_peer_and_verify(
+                &FolderId::parse(FOLDER)?,
+                &DeviceId::parse(&peer)?,
+                change,
+                OperationOptions::new(Duration::from_secs(6)),
+            )
+            .await?;
+        assert_eq!(report.completion(), outcome, "{case} {report:?}");
+        assert_eq!(report.password_is_set, Some(true));
+        assert_eq!(
+            report.other_peers_preserved,
+            Some(case != "neighbor changed")
+        );
+        if case != "already" {
+            assert!(matches!(
+                report.original,
+                Err(Error::MutationOutcomeUnknown { .. })
+            ));
+        }
+        let requests = server.finish().await?;
+        let writes: Vec<_> = requests
+            .iter()
+            .filter(|request| request.starts_with("PATCH "))
+            .collect();
+        assert_eq!(writes.len(), usize::from(case != "already"));
+        if let Some(request) = writes.first() {
+            let body: Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").ok_or("body missing")?.1)?;
+            assert_eq!(body["devices"][0]["encryptionPassword"], PASSWORD);
+            assert_eq!(body["devices"][1], members[1]);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn folder_peer_encryption_preserves_other_settings_and_reports_actual_password_state(
 ) -> TestResult {
     let peer = ID.replacen('A', "B", 1);

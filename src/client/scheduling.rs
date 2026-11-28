@@ -1,11 +1,14 @@
 //! Explicit scheduling mutations and independent rate-setting readback.
-use super::Client;
+use super::{workflow_write_result, Client};
 use crate::{
-    BandwidthPatch, BandwidthUpdate, Error, FolderId, FolderPullOrder, FolderSchedulingConfig,
-    FolderSchedulingUpdate, GlobalBandwidthConfig, ListPage, NeedPage, ResponseDiagnostic, Result,
+    BandwidthPatch, BandwidthUpdate, Error, FilePriorityReport, FilePriorityState, FolderId,
+    FolderPullOrder, FolderSchedulingConfig, FolderSchedulingUpdate, GlobalBandwidthConfig,
+    ListPage, NeedPage, OperationOptions, OperationPhase, ResponseDiagnostic, Result, SyncFileKind,
     TargetPath,
 };
+use reqwest::{Method, Url};
 use serde::Deserialize;
+use tokio::time::Instant;
 impl Client {
     /// Read actual global byte-rate settings, without starting a transfer.
     pub async fn bandwidth_configuration(&self) -> Result<GlobalBandwidthConfig> {
@@ -117,6 +120,128 @@ impl Client {
             configuration,
         })
     }
+    /// Prioritize one visible waiting file once and independently read its
+    /// current queue position. Use page one with a limit that includes that
+    /// file. An active or first-queued file requires no write. If the file
+    /// leaves the page, check its contents separately.
+    pub async fn prioritize_file_and_verify(
+        &self,
+        folder: &FolderId,
+        file: &TargetPath,
+        page: ListPage,
+        options: OperationOptions,
+    ) -> Result<FilePriorityReport> {
+        const WRITE: &str = "prioritize the selected folder file";
+        const CHECK: &str = "read the selected folder file's priority";
+        if page.number() != 1 {
+            return Err(Error::InvalidConfiguration {
+                reason: "file priority verification requires the first need page",
+            });
+        }
+        let relative = crate::scans::validate_subpath(file, self.folder_path_style()?)?;
+        let url = self.priority_url(folder, relative, page)?;
+        let context = options.start()?;
+        let mut write = Default::default();
+        let mut guard = None;
+        let mut selected = None;
+        let mut before = None;
+        let mut no_write = None;
+        let original =
+            context
+                .wait(context.dispatch_deadline(), WRITE, async {
+                    context.phase(OperationPhase::Checking);
+                    guard = Some(self.connection.mutation_lock.lock().await);
+                    self.observe_control_identity().await?;
+                    let generation = self.system_status().await?.start_time.ok_or(
+                        Error::InvalidConfiguration {
+                            reason: "the selected instance did not report its start time",
+                        },
+                    )?;
+                    let config = self.folder(folder).await?;
+                    if config.paused {
+                        return Err(Error::FolderPaused { id: folder.clone() });
+                    }
+                    let need = self.folder_need(folder, page).await?;
+                    let state = file_priority(&need, relative, page)?;
+                    self.verify_priority_scope(folder, &config.path, &generation)
+                        .await?;
+                    before = Some(state);
+                    if state != FilePriorityState::Waiting {
+                        no_write = Some((state, need));
+                        return Ok(None);
+                    }
+                    if Instant::now() >= context.dispatch_deadline() {
+                        return Err(Error::Timeout { operation: WRITE });
+                    }
+                    selected = Some((config.path, generation));
+                    let request = self.connection.authorized_request(Method::POST, url, None);
+                    let reply = self
+                        .connection
+                        .send_workflow_write(WRITE, request, &context, &mut write)
+                        .await?;
+                    decode_priority_page(reply.status, reply.body).map(Some)
+                })
+                .await;
+        let original = workflow_write_result(WRITE, write, original);
+        let refused = write.response_complete
+            && matches!(
+                original,
+                Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+            );
+        let mut report = FilePriorityReport {
+            write,
+            original,
+            before,
+            current: None,
+            current_need: None,
+            observation_error: None,
+        };
+        if let Some((state, need)) = no_write {
+            report.current = Some(state);
+            report.current_need = Some(need);
+        }
+        if let Some((path, generation)) = selected.filter(|_| write.dispatched && !refused) {
+            context.phase(OperationPhase::Verifying);
+            let observed = context
+                .wait(context.deadline, CHECK, async {
+                    self.verify_priority_scope(folder, &path, &generation)
+                        .await?;
+                    let need = self.folder_need(folder, page).await?;
+                    let state = file_priority(&need, relative, page)?;
+                    self.verify_priority_scope(folder, &path, &generation)
+                        .await?;
+                    Ok((state, need))
+                })
+                .await;
+            match observed {
+                Ok((state, need)) => {
+                    report.current = Some(state);
+                    report.current_need = Some(need);
+                }
+                Err(source) => report.observation_error = Some(source),
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn verify_priority_scope(
+        &self,
+        folder: &FolderId,
+        path: &TargetPath,
+        generation: &str,
+    ) -> Result<()> {
+        let current = self.folder(folder).await?;
+        if current.paused
+            || &current.path != path
+            || self.system_status().await?.start_time.as_deref() != Some(generation)
+        {
+            return Err(Error::ConfigurationChanged);
+        }
+        Ok(())
+    }
+
     /// Ask the engine to prioritize a relative file and return its actual need
     /// page. An active file is not preempted; absence from this page is unknown.
     pub async fn prioritize_file(
@@ -131,17 +256,7 @@ impl Client {
         if self.folder(folder).await?.paused {
             return Err(Error::FolderPaused { id: folder.clone() });
         }
-        let number = page.number().to_string();
-        let limit = page.per_page().to_string();
-        let url = self.connection.management_url(
-            "rest/db/prio",
-            &[
-                ("folder", folder.as_str()),
-                ("file", file),
-                ("page", &number),
-                ("perpage", &limit),
-            ],
-        )?;
+        let url = self.priority_url(folder, file, page)?;
         let (status, bytes) = self
             .connection
             .request_bytes(
@@ -152,12 +267,78 @@ impl Client {
                 true,
             )
             .await?;
-        serde_json::from_slice(&bytes).map_err(|_| Error::MutationOutcomeUnknown {
-            operation: "decode prioritized need page",
-            source: Box::new(Error::InvalidResponse {
-                operation: "decode prioritized need page",
-                response: ResponseDiagnostic::new(status, bytes),
-            }),
-        })
+        decode_priority_page(status, bytes)
     }
+
+    fn priority_url(&self, folder: &FolderId, file: &str, page: ListPage) -> Result<Url> {
+        let number = page.number().to_string();
+        let limit = page.per_page().to_string();
+        self.connection.management_url(
+            "rest/db/prio",
+            &[
+                ("folder", folder.as_str()),
+                ("file", file),
+                ("page", &number),
+                ("perpage", &limit),
+            ],
+        )
+    }
+}
+
+fn decode_priority_page(status: u16, bytes: Vec<u8>) -> Result<NeedPage> {
+    serde_json::from_slice(&bytes).map_err(|_| Error::MutationOutcomeUnknown {
+        operation: "decode prioritized need page",
+        source: Box::new(Error::InvalidResponse {
+            operation: "decode prioritized need page",
+            response: ResponseDiagnostic::new(status, bytes),
+        }),
+    })
+}
+
+fn file_priority(
+    page: &NeedPage,
+    relative: &str,
+    requested: ListPage,
+) -> Result<FilePriorityState> {
+    if page.page != Some(requested.number())
+        || page.per_page != Some(u32::from(requested.per_page()))
+    {
+        return Err(Error::InvalidConfiguration {
+            reason: "the need response did not identify the selected page",
+        });
+    }
+    let mut matches = page
+        .progress
+        .iter()
+        .map(|file| (FilePriorityState::InProgress, file))
+        .chain(page.queued.iter().enumerate().map(|(index, file)| {
+            (
+                if index == 0 {
+                    FilePriorityState::FirstQueued
+                } else {
+                    FilePriorityState::Waiting
+                },
+                file,
+            )
+        }))
+        .chain(
+            page.rest
+                .iter()
+                .map(|file| (FilePriorityState::Waiting, file)),
+        )
+        .filter(|(_, file)| file.name == relative);
+    let Some((state, file)) = matches.next() else {
+        return Ok(FilePriorityState::Unobserved);
+    };
+    if matches.next().is_some()
+        || file.kind != SyncFileKind::File
+        || file.deleted == Some(true)
+        || file.invalid == Some(true)
+        || file.ignored == Some(true)
+    {
+        return Err(Error::InvalidConfiguration {
+            reason: "the need response did not identify one valid waiting file",
+        });
+    }
+    Ok(state)
 }

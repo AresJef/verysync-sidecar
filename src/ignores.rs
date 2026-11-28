@@ -100,3 +100,67 @@ pub struct IgnoreUpdate {
     /// Exact ordered input equality; a returned null matches only empty input.
     pub requested_patterns_match: bool,
 }
+
+/// The requested scope and change to an ignore file or template.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub enum IgnoreChange<'a> {
+    /// Write the exact ordered lines to one folder.
+    Folder {
+        /// Selected registered folder.
+        folder: &'a crate::FolderId,
+        /// New lines, including comments and directives.
+        patterns: &'a IgnorePatterns,
+    },
+    /// Restore the engine's built-in rules in one registered folder.
+    RestoreFolderDefaults(&'a crate::FolderId),
+    /// Replace the template used for later folder registrations.
+    DefaultTemplate(&'a IgnorePatterns),
+}
+
+/// One observed snapshot from the scope selected by an ignore update.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum IgnoreReadback {
+    /// Actual folder file, expanded rules, and parser result.
+    Folder(IgnoreSnapshot),
+    /// Actual future-folder template. Saving it does not parse its rules.
+    DefaultTemplate(IgnoreDefaults),
+}
+
+/// Original reply and separate readback of a change to ignore rules.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct IgnoreWorkflowReport {
+    /// Transport evidence for the optional change.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original response or failure. An empty value means no change was needed.
+    pub original: crate::Result<Option<crate::ResponseDiagnostic>>,
+    /// Current folder rules or the current template, when available.
+    pub current: Option<IgnoreReadback>,
+    /// Whether the specific ordered rules or accepted native defaults match.
+    pub scope_matches: Option<bool>,
+    /// Failure reading back the selected scope.
+    pub observation_error: Option<crate::Error>,
+}
+
+impl IgnoreWorkflowReport {
+    /// Classify the readback within its scope. Check indexing separately.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        use crate::OperationCompletion as Completion;
+        match self.scope_matches {
+            Some(true) => Completion::Completed,
+            Some(false) => Completion::GoalNotMet,
+            None if !self.write.dispatched
+                || (self.write.response_complete
+                    && matches!(
+                        self.original,
+                        Err(crate::Error::Authentication { .. } | crate::Error::AccessDenied { .. })
+                    )) =>
+            {
+                Completion::GoalNotMet
+            }
+            None => Completion::Unconfirmed,
+        }
+    }
+}

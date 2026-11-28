@@ -4,6 +4,7 @@ use super::*;
 #[tokio::test]
 async fn native_default_ignore_template_and_explicit_application_preserve_rules_files_and_restart(
 ) -> TestResult {
+    use verysync_sidecar::{IgnoreChange, IgnoreReadback, OperationCompletion, OperationOptions};
     let root = tempfile::Builder::new()
         .prefix("vs-ignore-defaults-")
         .tempdir()?
@@ -37,10 +38,26 @@ async fn native_default_ignore_template_and_explicit_application_preserve_rules_
         "// synthetic global default".into(),
         "*.new-default".into(),
     ])?;
-    let update = core.client().set_default_ignore_patterns(&rules).await?;
-    assert!(update.requested_fields_match);
-    assert_eq!(update.configuration.lines, rules.patterns());
-    assert!(update.configuration.extra == original.extra);
+    let limits = || OperationOptions::new(Duration::from_secs(12));
+    let update = core
+        .client()
+        .change_ignore_patterns_and_verify(IgnoreChange::DefaultTemplate(&rules), limits())
+        .await?;
+    assert_eq!(
+        update.completion(),
+        OperationCompletion::Completed,
+        "{update:?}"
+    );
+    let Some(IgnoreReadback::DefaultTemplate(configuration)) = update.current else {
+        return Err("the actual template was not read back".into());
+    };
+    assert_eq!(configuration.lines, rules.patterns());
+    assert!(configuration.extra == original.extra);
+    let same = core
+        .client()
+        .change_ignore_patterns_and_verify(IgnoreChange::DefaultTemplate(&rules), limits())
+        .await?;
+    assert!(!same.write.dispatched && matches!(same.original, Ok(None)));
     let mut expected = before.native_document().clone();
     expected["defaults"]["ignores"]["lines"] = serde_json::json!(rules.patterns());
     let after = core.client().configuration().await?;
