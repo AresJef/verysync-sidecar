@@ -5,6 +5,7 @@ use std::{collections::HashSet, time::Duration};
 use reqwest::Method;
 use tokio::time::Instant;
 
+use super::local_sync_control::requested_subset;
 use super::{local_sync_control::decode_local_sync_json, workflow_write_result, Client};
 use crate::{
     control_operation::version_fingerprint, local_sync::invalid,
@@ -12,6 +13,10 @@ use crate::{
     LocalSyncOperation, LocalSyncPreview, LocalSyncPreviewId, LocalSyncPreviewReport, LocalSyncRun,
     LocalSyncRunOutcome, LocalSyncRunReceipt, LocalSyncRunReport, LocalSyncSelection,
     LocalSyncSummary, LocalSyncWorkflowOptions, ManagementWriteEvidence, OperationPhase, Result,
+};
+use crate::{
+    CreateLocalSyncJob, LocalSyncJob, LocalSyncRegistrationOutcome, LocalSyncRegistrationReport,
+    OperationOptions,
 };
 
 const RUN: &str = "submit the selected Local Sync preview for execution";
@@ -22,6 +27,136 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const UNFINISHED: &str = "0001-01-01T00:00:00Z";
 
 impl Client {
+    /// Register one native storage job and check the exact endpoints and
+    /// settings. For an unanswered request, the SDK compares the earlier job
+    /// list with a fresh one. A matching label alone cannot identify a new job.
+    /// Automatic triggers follow the supplied job settings.
+    pub async fn create_local_sync_job_and_verify(
+        &self,
+        input: &CreateLocalSyncJob,
+        options: OperationOptions,
+    ) -> Result<LocalSyncRegistrationReport> {
+        use LocalSyncRegistrationOutcome as Outcome;
+        const REGISTER: &str = "register the selected Local Sync job";
+        const VERIFY: &str = "identify the new Local Sync job";
+        let body = self.preflight_local_sync_job(input)?;
+        let context = options.start()?;
+        let deadline = context.dispatch_deadline();
+        let mut guard = None;
+        let mut write = ManagementWriteEvidence::default();
+        let mut before = HashSet::new();
+        let submission = context
+            .wait(deadline, REGISTER, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                for job in self.local_sync_jobs().await? {
+                    if !before.insert(job.job_id.as_str().to_owned()) {
+                        return Err(invalid(
+                            "the existing Local Sync list contains duplicate job IDs",
+                        ));
+                    }
+                }
+                self.system_status().await?;
+                let url = self.local_sync_url(&["jobs"], &[])?;
+                if Instant::now() >= deadline {
+                    return Err(Error::Timeout {
+                        operation: REGISTER,
+                    });
+                }
+                let outgoing = self
+                    .connection
+                    .authorized_request(Method::POST, url, Some(&body));
+                let response = self
+                    .connection
+                    .send_workflow_write(REGISTER, outgoing, &context, &mut write)
+                    .await?;
+                let job: LocalSyncJob =
+                    decode_local_sync_json(REGISTER, response.status, response.body, true, false)?;
+                if before.contains(job.job_id.as_str()) {
+                    return Err(super::mutation_error(
+                        REGISTER,
+                        true,
+                        invalid(
+                            "the acknowledgement referred to an already registered Local Sync job",
+                        ),
+                    ));
+                }
+                Ok(job)
+            })
+            .await;
+        let original = workflow_write_result(REGISTER, write, submission);
+        let mut report = LocalSyncRegistrationReport {
+            outcome: Outcome::NotSubmitted,
+            write,
+            original,
+            observed: None,
+            observation_error: None,
+        };
+        if write.response_complete
+            && matches!(
+                report.original,
+                Err(Error::Authentication { .. }
+                    | Error::AccessDenied { .. }
+                    | Error::LicenseRequired { .. })
+            )
+        {
+            report.outcome = Outcome::Rejected;
+        } else if write.dispatched {
+            context.phase(OperationPhase::Verifying);
+            let completion = context
+                .wait(context.deadline, VERIFY, async {
+                    if let Ok(accepted) = &report.original {
+                        let observed = self.local_sync_job(&accepted.job_id).await?;
+                        let outcome = if local_job_matches(&body, &observed)? {
+                            Outcome::CurrentMatches
+                        } else {
+                            Outcome::CurrentDiffers
+                        };
+                        return Ok((outcome, observed));
+                    }
+                    let mut latest = HashSet::new();
+                    let mut matched = None;
+                    for job in self.local_sync_jobs().await? {
+                        if !latest.insert(job.job_id.as_str().to_owned()) {
+                            return Err(invalid(
+                                "the current Local Sync list contains duplicate job IDs",
+                            ));
+                        }
+                        if !before.contains(job.job_id.as_str())
+                            && local_job_matches(&body, &job)?
+                            && matched.replace(job).is_some()
+                        {
+                            return Err(invalid(
+                                "several new Local Sync jobs match the requested settings",
+                            ));
+                        }
+                    }
+                    let candidate = matched.ok_or_else(|| {
+                        invalid("no new Local Sync job matched the requested settings")
+                    })?;
+                    let observed = self.local_sync_job(&candidate.job_id).await?;
+                    if !local_job_matches(&body, &observed)? {
+                        return Err(Error::ConfigurationChanged);
+                    }
+                    Ok((Outcome::MatchingNewRegistrationObserved, observed))
+                })
+                .await;
+            match completion {
+                Ok((outcome, observed)) => {
+                    report.outcome = outcome;
+                    report.observed = Some(observed);
+                }
+                Err(source) => {
+                    report.outcome = Outcome::Unconfirmed;
+                    report.observation_error = Some(source);
+                }
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
     /// Execute an already reviewed preview once and observe its terminal run.
     ///
     /// The workflow checks the preview identity, issue count, expiry against
@@ -41,7 +176,7 @@ impl Client {
         let page = options.page_size;
         let context = options.operation.start()?;
         let mut report = LocalSyncRunReport::default();
-        let dispatch_deadline = dispatch_limit(&context);
+        let dispatch_deadline = context.dispatch_deadline();
         let mut guard = None;
         let attempt = context
             .wait(dispatch_deadline, RUN, async {
@@ -300,7 +435,7 @@ impl Client {
     ) -> Result<LocalSyncPreviewReport> {
         options.verify_limits()?;
         let context = options.operation.start()?;
-        let dispatch_deadline = dispatch_limit(&context);
+        let dispatch_deadline = context.dispatch_deadline();
         let mut write = ManagementWriteEvidence::default();
         let mut guard = None;
         let initial: Result<LocalSyncOperation> = context
@@ -392,14 +527,6 @@ impl Client {
     }
 }
 
-fn dispatch_limit(context: &OperationContext) -> Instant {
-    context.started
-        + context
-            .deadline
-            .duration_since(context.started)
-            .mul_f64(2.0 / 3.0)
-}
-
 fn require_unexpired(preview: &LocalSyncPreview) -> Result<()> {
     if parse_rfc3339(&preview.expires_at).is_some_and(|expiry| expiry > jiff::Timestamp::now()) {
         Ok(())
@@ -408,6 +535,12 @@ fn require_unexpired(preview: &LocalSyncPreview) -> Result<()> {
             "the Local Sync preview is expired or its expiry cannot be verified",
         ))
     }
+}
+
+fn local_job_matches(expected: &serde_json::Value, observed: &LocalSyncJob) -> Result<bool> {
+    let value = serde_json::to_value(observed)
+        .map_err(|_| invalid("the authenticated Local Sync job cannot be compared"))?;
+    Ok(requested_subset(expected, &value))
 }
 
 fn check_run_identity(run: &LocalSyncRun, receipt: &LocalSyncRunReceipt) -> Result<()> {

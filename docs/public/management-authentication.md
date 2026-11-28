@@ -186,6 +186,11 @@ remain usable. Password hashing and session invalidation are performed by the
 official program. LDAP-mode correctness and official account login require
 their own actual authentication evidence.
 
+`logout_and_verify` keeps the original request outcome and the later cookie
+check in one bounded report. It skips the logout request if the endpoint
+already refuses that cookie. A different GUI session and API-key access
+have their own credentials and should be managed separately.
+
 ## LDAP configuration and GUI mode
 
 `ldap_configuration()` reads the actual native address, bind template, transport,

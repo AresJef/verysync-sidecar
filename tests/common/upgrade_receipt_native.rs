@@ -1124,6 +1124,8 @@ async fn native_business_install_exercises_preflight_response_and_live_writer_bo
     let proxy = ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?;
     let intercepted_uploads = Arc::new(AtomicUsize::new(0));
     let uploads = intercepted_uploads.clone();
+    let held_versions = Arc::new(AtomicUsize::new(0));
+    let counted_versions = held_versions.clone();
     let behavior = Arc::new(AtomicUsize::new(0));
     let selected = behavior.clone();
     let service = tokio::spawn(async move {
@@ -1132,6 +1134,7 @@ async fn native_business_install_exercises_preflight_response_and_live_writer_bo
             let head = bounded_request_head(&mut socket).await?;
             let mode = selected.load(Ordering::SeqCst);
             if head.starts_with("GET /rest/system/version ") && mode == ADMISSION_TIMEOUT {
+                counted_versions.fetch_add(1, Ordering::SeqCst);
                 // Hold the first admission read until the controller closes its timeout.
                 let _ = socket.read_u8().await;
                 continue;
@@ -1200,10 +1203,13 @@ async fn native_business_install_exercises_preflight_response_and_live_writer_bo
         behavior.store(ADMISSION_TIMEOUT, Ordering::SeqCst);
         let timeout = core.install_kernel_upgrade(
             &archive, &target,
-            OperationOptions::new(Duration::from_secs(5)).without_read_retry(),
+            // The fixed archive and executable must be hashed before this fault
+            // can reach the admission read, including on slower ARM64 workers.
+            OperationOptions::new(Duration::from_secs(45)).without_read_retry(),
         ).await?;
         assert_eq!(timeout.installation.receipt.dispatch(), UpgradeDispatch::Preparing);
         assert_eq!(timeout.admission_attempts, 1);
+        assert_eq!(held_versions.load(Ordering::SeqCst), 1);
         assert!(matches!(timeout.installation.result, Err(Error::Timeout { .. })));
         assert_eq!(intercepted_uploads.load(Ordering::SeqCst), 0);
         receipt_event("s30-preflight-timeout", "before-upload-boundary",
@@ -1217,7 +1223,7 @@ async fn native_business_install_exercises_preflight_response_and_live_writer_bo
         ] {
             behavior.store(mode, Ordering::SeqCst);
             let start = tokio::time::Instant::now();
-            let total = Duration::from_secs(if complete { 30 } else { 18 });
+            let total = Duration::from_secs(45);
             let report = core.install_kernel_upgrade(&archive, &target, OperationOptions::new(total)).await?;
             let elapsed = start.elapsed();
             expected_count += 1;

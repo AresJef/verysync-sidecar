@@ -387,6 +387,7 @@ enum RemovalCase {
 }
 
 async fn device_control_effects(case: RemovalCase) -> TestResult {
+    use verysync_sidecar::{DeviceWorkflowOutcome, OperationOptions};
     let explicit_disconnect = !matches!(case, RemovalCase::Single);
     let root = tempfile::Builder::new().prefix("vsdp-").tempdir()?.keep();
     let mut a = ManagedInstance::start(options(&root.join("a"))?).await?;
@@ -434,18 +435,24 @@ async fn device_control_effects(case: RemovalCase) -> TestResult {
         (a.client(), &af, &b_id, b_addr),
         (b.client(), &bf, &a_id, a_addr),
     ] {
-        assert!(
-            client
-                .create_device(
-                    &CreateDeviceOptions::new(peer.clone()).settings(
-                        DevicePatch::default()
-                            .addresses(vec![address])
-                            .paused(false)
-                    )
-                )
-                .await?
-                .requested_fields_match
+        let create = CreateDeviceOptions::new(peer.clone()).settings(
+            DevicePatch::default()
+                .addresses(vec![address])
+                .paused(false),
         );
+        if matches!(case, RemovalCase::Receipt) {
+            let admitted = client
+                .create_device_and_verify(&create, OperationOptions::new(Duration::from_secs(15)))
+                .await?;
+            assert_eq!(
+                admitted.outcome,
+                DeviceWorkflowOutcome::CurrentMatches,
+                "{admitted:?}"
+            );
+            assert!(admitted.write.dispatched && admitted.write.response_complete);
+        } else {
+            assert!(client.create_device(&create).await?.requested_fields_match);
+        }
         let mut associations = folder.extra["devices"]
             .as_array()
             .ok_or("missing folder device associations")?
@@ -473,17 +480,58 @@ async fn device_control_effects(case: RemovalCase) -> TestResult {
     })
     .await?;
     println!("synthetic device effect stage: pause device and disconnect both sides");
-    assert!(a.client().pause_device(&b_id).await?.requested_fields_match);
+    if matches!(case, RemovalCase::Receipt) {
+        let budget = || OperationOptions::new(Duration::from_secs(15));
+        let paused = a
+            .client()
+            .set_device_pause_and_verify(&b_id, true, Some(false), budget())
+            .await?;
+        assert_eq!(
+            paused.outcome,
+            DeviceWorkflowOutcome::CurrentMatches,
+            "{paused:?}"
+        );
+        assert!(paused.write.dispatched);
+        assert_eq!(paused.expected_connection_observed, Some(true));
+        let matching = a
+            .client()
+            .set_device_pause_and_verify(&b_id, true, Some(false), budget())
+            .await?;
+        assert_eq!(matching.outcome, DeviceWorkflowOutcome::AlreadyMatched);
+        assert!(!matching.write.dispatched);
+        assert_eq!(matching.expected_connection_observed, Some(true));
+    } else {
+        assert!(a.client().pause_device(&b_id).await?.requested_fields_match);
+    }
     connected(a.client(), &b_id, false).await?;
     connected(b.client(), &a_id, false).await?;
     println!("synthetic device effect stage: resume device and reconnect both sides");
     assert!(!a.client().folder(&af.id).await?.paused);
-    assert!(
-        a.client()
-            .resume_device(&b_id)
-            .await?
-            .requested_fields_match
-    );
+    if matches!(case, RemovalCase::Receipt) {
+        let resumed = a
+            .client()
+            .set_device_pause_and_verify(
+                &b_id,
+                false,
+                Some(true),
+                OperationOptions::new(Duration::from_secs(25)),
+            )
+            .await?;
+        assert_eq!(
+            resumed.outcome,
+            DeviceWorkflowOutcome::CurrentMatches,
+            "{resumed:?}"
+        );
+        assert_eq!(resumed.expected_connection_observed, Some(true));
+        println!("Native peer workflow verified exact registration, one pause, already paused zero writes, and separate connected/disconnected readback");
+    } else {
+        assert!(
+            a.client()
+                .resume_device(&b_id)
+                .await?
+                .requested_fields_match
+        );
+    }
     let a_before = connected(a.client(), &b_id, true).await?;
     let b_before = connected(b.client(), &a_id, true).await?;
     println!("synthetic device effect stage: perform explicitly selected removal semantics");

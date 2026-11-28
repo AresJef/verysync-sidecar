@@ -12,6 +12,102 @@ fn defaults() -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn device_workflow_separates_configuration_from_live_connection() -> TestResult {
+    use verysync_sidecar::{DeviceWorkflowOutcome, OperationOptions};
+    let remote = ID.replacen('A', "B", 1);
+    let other = ID.replacen('A', "C", 1);
+    let device = |target: &str, paused| {
+        let mut settings = defaults();
+        settings["deviceID"] = target.into();
+        settings["paused"] = serde_json::Value::Bool(paused);
+        Reply::json(serde_json::json!({"devices":[settings]}))
+    };
+    for (name, response, outcome, dispatch) in [
+        (
+            "already paused",
+            200,
+            DeviceWorkflowOutcome::AlreadyMatched,
+            false,
+        ),
+        ("ack lost", 0, DeviceWorkflowOutcome::CurrentMatches, true),
+        (
+            "wrong readback ID",
+            200,
+            DeviceWorkflowOutcome::CurrentDiffers,
+            true,
+        ),
+    ] {
+        let mut replies = vec![
+            version(),
+            identity(),
+            version(),
+            identity(),
+            device(&remote, !dispatch),
+            identity(),
+        ];
+        if dispatch {
+            replies.extend([
+                Reply {
+                    status: response,
+                    ..Reply::json(serde_json::json!({}))
+                },
+                version(),
+                identity(),
+                device(
+                    if name == "wrong readback ID" {
+                        &other
+                    } else {
+                        &remote
+                    },
+                    true,
+                ),
+                identity(),
+            ]);
+        }
+        if name != "wrong readback ID" {
+            replies.extend([
+                identity(),
+                identity(),
+                Reply::json(
+                    serde_json::json!({"connections":{(remote.clone()):{"connected":false}}}),
+                ),
+                device(&remote, true),
+                identity(),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let report = client
+            .set_device_pause_and_verify(
+                &DeviceId::parse(&remote)?,
+                true,
+                Some(false),
+                OperationOptions::new(Duration::from_secs(3)),
+            )
+            .await?;
+        assert_eq!(report.outcome, outcome, "{name}: {report:?}");
+        assert_eq!(report.write.dispatched, dispatch);
+        assert_eq!(
+            report.expected_connection_observed,
+            (name != "wrong readback ID").then_some(true)
+        );
+        if response == 0 {
+            assert!(matches!(
+                report.original,
+                Some(Err(Error::MutationOutcomeUnknown { .. }))
+            ));
+        }
+        let seen = server.finish().await?;
+        let writes: Vec<_> = seen.iter().filter(|r| r.starts_with("PATCH ")).collect();
+        assert_eq!(writes.len(), usize::from(dispatch));
+        if let Some(write) = writes.first() {
+            assert!(write.contains(&remote) && write.ends_with("{\"paused\":true}"));
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn advanced_device_defaults_preserve_absence_and_submit_only_selected_fields() -> TestResult {
     let mut actual = defaults();
     actual["introducer"] = true.into();

@@ -343,7 +343,7 @@ async fn verify_staged_bytes(
     Ok(())
 }
 
-fn decode_sha256(text: &str) -> Option<[u8; 32]> {
+pub(super) fn decode_sha256(text: &str) -> Option<[u8; 32]> {
     if text.len() != 64 || !text.is_ascii() {
         return None;
     }

@@ -143,11 +143,7 @@ impl Client {
             observed: None,
             observation_error: None,
         };
-        let dispatch = context.started
-            + context
-                .deadline
-                .duration_since(context.started)
-                .mul_f64(2.0 / 3.0);
+        let dispatch = context.dispatch_deadline();
         let mut guard = None;
         let attempt = context
             .wait(dispatch, operation, async {

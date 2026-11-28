@@ -6,10 +6,10 @@ use reqwest::Method;
 
 use super::{workflow_write_result, Client};
 use crate::{
-    operation_options::OperationContext, Error, FolderConfig, FolderConfigurationOutcome,
-    FolderConfigurationReport, FolderId, FolderPatch, FolderRuntimeObservation, FolderState,
-    FolderUnregistrationOutcome, FolderUnregistrationReport, ManagementWriteEvidence,
-    OperationOptions, OperationPhase, Result,
+    operation_options::OperationContext, CreateFolderOptions, Error, FolderConfig,
+    FolderConfigurationOutcome, FolderConfigurationReport, FolderId, FolderPatch,
+    FolderRuntimeObservation, FolderState, FolderUnregistrationOutcome, FolderUnregistrationReport,
+    JoinFolderOptions, ManagementWriteEvidence, OperationOptions, OperationPhase, Result,
 };
 
 const CHANGE: &str = "apply the requested folder settings";
@@ -17,8 +17,148 @@ const VERIFY: &str = "confirm the selected folder settings";
 const ACTIVITY: &str = "observe the selected folder activity";
 const UNREGISTER: &str = "unregister the selected folder";
 const CHECK_UNREGISTERED: &str = "confirm the selected folder is unregistered";
+const REGISTER: &str = "register the selected synchronization folder";
+const CHECK_REGISTERED: &str = "confirm the selected folder registration";
+
+#[derive(Clone, Copy)]
+enum Registration<'a> {
+    Create(&'a CreateFolderOptions),
+    Join(&'a JoinFolderOptions),
+}
 
 impl Client {
+    /// Create a new explicit registration once and read back its requested
+    /// fields within the same deadline. A previously registered ID cannot
+    /// serve as proof of a new creation. File activity and peer acceptance
+    /// require additional observations.
+    pub async fn create_folder_and_verify(
+        &self,
+        options: &CreateFolderOptions,
+        operation: OperationOptions,
+    ) -> Result<FolderConfigurationReport> {
+        self.register_folder_workflow(Registration::Create(options), operation)
+            .await
+    }
+
+    /// Register a previously validated share once and check the exact ID,
+    /// path, requested settings and share keys on this same device.
+    pub async fn join_folder_and_verify(
+        &self,
+        options: &JoinFolderOptions,
+        operation: OperationOptions,
+    ) -> Result<FolderConfigurationReport> {
+        self.register_folder_workflow(Registration::Join(options), operation)
+            .await
+    }
+
+    async fn register_folder_workflow(
+        &self,
+        inputs: Registration<'_>,
+        options: OperationOptions,
+    ) -> Result<FolderConfigurationReport> {
+        let (path, advanced) = match inputs {
+            Registration::Create(options) => self.created_folder_inputs(options)?,
+            Registration::Join(options) => (self.join_folder_path(options)?, None),
+        };
+        let (id, label, paused) = match inputs {
+            Registration::Create(options) => {
+                (&options.id, options.label.as_deref(), options.paused)
+            }
+            Registration::Join(options) => (
+                &options.share.registration_id,
+                options.label.as_deref(),
+                options.paused,
+            ),
+        };
+        let context = options.start()?;
+        let mut report = FolderConfigurationReport {
+            outcome: FolderConfigurationOutcome::NotSubmitted,
+            write: Default::default(),
+            original: None,
+            observed: None,
+            observation_error: None,
+            runtime: None,
+        };
+        let dispatch = context.dispatch_deadline();
+        let mut guard = None;
+        let result = context
+            .wait(dispatch, REGISTER, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                let body = match inputs {
+                    Registration::Create(options) => {
+                        self.prepare_folder_creation(options, path, advanced.as_ref())
+                            .await?
+                    }
+                    Registration::Join(options) => self.prepare_folder_join(options, path).await?,
+                };
+                self.system_status().await?;
+                if tokio::time::Instant::now() >= dispatch {
+                    return Err(Error::Timeout {
+                        operation: REGISTER,
+                    });
+                }
+                let url = self.connection.management_url("rest/config/folders", &[])?;
+                let request = self
+                    .connection
+                    .authorized_request(Method::POST, url, Some(&body));
+                self.connection
+                    .send_workflow_write(REGISTER, request, &context, &mut report.write)
+                    .await?;
+                Ok(())
+            })
+            .await;
+        report.original = Some(workflow_write_result(REGISTER, report.write, result));
+        if permission_refused(report.write, report.original.as_ref()) {
+            report.outcome = FolderConfigurationOutcome::Rejected;
+        } else if report.write.dispatched {
+            context.phase(OperationPhase::Verifying);
+            let verified = context
+                .wait(context.deadline, CHECK_REGISTERED, async {
+                    let registered = self.current_registration(id).await?;
+                    let Some(registered) = registered else {
+                        return Ok((None, false));
+                    };
+                    let mut fields_match = registered.path.to_protocol()? == path
+                        && label.is_none_or(|expected| expected == registered.label)
+                        && paused.is_none_or(|expected| expected == registered.paused);
+                    if let Some(fields) = advanced.as_ref().and_then(serde_json::Value::as_object) {
+                        registered.advanced_configuration()?;
+                        fields_match &= fields
+                            .iter()
+                            .all(|(key, value)| registered.extra.get(key) == Some(value));
+                    }
+                    if let Registration::Join(options) = inputs {
+                        let details = Self::joined_folder_result(options, registered);
+                        fields_match &= details.submitted_key_matches
+                            && details.read_only_key_matches
+                            && details.read_write_key_matches;
+                        Ok((Some(details.configuration), fields_match))
+                    } else {
+                        Ok((Some(registered), fields_match))
+                    }
+                })
+                .await;
+            match verified {
+                Ok((observed, matches)) => {
+                    report.outcome = if matches {
+                        FolderConfigurationOutcome::CurrentMatches
+                    } else {
+                        FolderConfigurationOutcome::CurrentDiffers
+                    };
+                    report.observed = observed;
+                }
+                Err(source) => {
+                    report.outcome = FolderConfigurationOutcome::Unconfirmed;
+                    report.observation_error = Some(source);
+                }
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
     /// Apply the selected fields once and check the current configuration on
     /// the original device. If the fields already match, the SDK skips writing.
     /// A later matching snapshot can coexist with an unknown original response.
@@ -74,11 +214,7 @@ impl Client {
             observation_error: None,
             runtime: None,
         };
-        let write_deadline = context.started
-            + context
-                .deadline
-                .duration_since(context.started)
-                .mul_f64(2.0 / 3.0);
+        let write_deadline = context.dispatch_deadline();
         let mut previous = None;
         let mut mutation_guard = None;
         let attempt = context
@@ -234,11 +370,7 @@ impl Client {
             current: None,
             observation_error: None,
         };
-        let write_deadline = context.started
-            + context
-                .deadline
-                .duration_since(context.started)
-                .mul_f64(2.0 / 3.0);
+        let write_deadline = context.dispatch_deadline();
         let mut mutation_guard = None;
         let attempt = context
             .wait(write_deadline, UNREGISTER, async {

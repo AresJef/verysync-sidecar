@@ -259,3 +259,78 @@ pub struct FolderSelectiveUpdate {
     /// Whether the explicitly requested mode matches readback.
     pub requested_mode_match: bool,
 }
+
+/// The evidence available for the selected path on this device.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SelectivePathOutcome {
+    /// The requested local selection flag was already present.
+    AlreadyMatched,
+    /// The index now reports the requested flag for the selected path.
+    CurrentMatches,
+    /// The call ended before entering the native request.
+    NotSubmitted,
+    /// The complete native response rejected the request.
+    Rejected,
+    /// The current selection could not be verified.
+    Unconfirmed,
+}
+
+/// One selective request and a read of the selected path's index flags.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct SelectivePathReport {
+    /// Which path flag was observed.
+    pub outcome: SelectivePathOutcome,
+    /// Readback of the folder-wide selective mode.
+    pub configuration: Option<FolderSelectiveConfig>,
+    /// Transport evidence for the one optional selection request.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original acknowledgement or error. An already matching flag needs neither.
+    pub original: Option<Result<SelectiveAcknowledgement>>,
+    /// Selected path's last observed flags, if available.
+    pub observed: Option<SelectiveEntry>,
+    /// Whether the engine reported the caller's optional existence condition.
+    pub expected_index_presence_observed: Option<bool>,
+    /// Reason the optional verification could not finish.
+    pub observation_error: Option<Error>,
+}
+
+impl SelectivePathReport {
+    /// Summarize the reported selection flag and optional index presence goal.
+    /// Confirm actual file bytes or other nodes separately.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        match self.outcome {
+            SelectivePathOutcome::AlreadyMatched | SelectivePathOutcome::CurrentMatches => {
+                if self.expected_index_presence_observed == Some(false) {
+                    crate::OperationCompletion::PartiallyCompleted
+                } else {
+                    crate::OperationCompletion::Completed
+                }
+            }
+            SelectivePathOutcome::Unconfirmed => crate::OperationCompletion::Unconfirmed,
+            _ => crate::OperationCompletion::GoalNotMet,
+        }
+    }
+}
+
+impl fmt::Display for SelectivePathReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.outcome {
+            SelectivePathOutcome::AlreadyMatched => "This device already reported the requested selection flag.",
+            SelectivePathOutcome::CurrentMatches => "This device now reports the requested selection flag.",
+            SelectivePathOutcome::NotSubmitted => "The call ended before submitting a selective change.",
+            SelectivePathOutcome::Rejected => "VerySync declined the selective change. Check the device's permissions and license.",
+            SelectivePathOutcome::Unconfirmed => "The current selection could not be verified. Check the path on this device before trying again.",
+        })?;
+        if self.expected_index_presence_observed == Some(false) {
+            f.write_str(" The requested index presence was not confirmed.")?;
+        }
+        if self.outcome == SelectivePathOutcome::NotSubmitted {
+            if let Some(Err(source)) = &self.original {
+                write!(f, " {source}")?;
+            }
+        }
+        Ok(())
+    }
+}

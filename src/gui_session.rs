@@ -1,6 +1,7 @@
 //! Explicit native GUI credentials and in-memory cookie sessions.
 use crate::{
-    Client, DeviceId, Error, GuiAuthenticationConfig, InstanceInfo, ManagementEndpoint, Result,
+    Client, DeviceId, Error, GuiAuthenticationConfig, InstanceInfo, ManagementEndpoint,
+    ManagementWriteEvidence, OperationCompletion, OperationOptions, OperationPhase, Result,
     VersionPolicy,
 };
 use reqwest::header::{HeaderName, HeaderValue};
@@ -253,6 +254,7 @@ pub struct GuiCredentialUpdate {
 pub struct GuiSession {
     wire: GuiWire,
     instance: InstanceInfo,
+    logout_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -459,6 +461,7 @@ impl GuiSession {
         }
         Ok(Self {
             wire,
+            logout_lock: Default::default(),
             instance: InstanceInfo {
                 device_id: status.device_id,
                 version,
@@ -533,6 +536,7 @@ impl GuiSession {
     /// is logged out or changed. Clones retain their now potentially revoked
     /// cookie and observe the native refusal on subsequent requests.
     pub async fn logout(&self) -> Result<GuiLogoutReceipt> {
+        let _guard = self.logout_lock.lock().await;
         self.system_status().await?;
         let write_acknowledged = match self
             .wire
@@ -560,6 +564,101 @@ impl GuiSession {
             session_rejected,
         })
     }
+
+    /// Submit one logout for this cookie and check the same cookie within one
+    /// deadline. A cookie already refused by the selected endpoint needs no
+    /// new request. The original reply and later access are separate facts.
+    /// This verifies endpoint access for this session only.
+    pub async fn logout_and_verify(&self, options: OperationOptions) -> Result<GuiLogoutReport> {
+        const LOGOUT: &str = "log out the selected GUI session";
+        const VERIFY: &str = "check the original GUI session";
+        let context = options.start()?;
+        let dispatch = context.dispatch_deadline();
+        let mut report = GuiLogoutReport {
+            outcome: GuiLogoutOutcome::NotSubmitted,
+            write: Default::default(),
+            original: None,
+            observation_error: None,
+        };
+        let mut guard = None;
+        let started = context
+            .wait(dispatch, LOGOUT, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.logout_lock.lock().await);
+                match self.system_status().await {
+                    Ok(_) => {}
+                    Err(source) if gui_cookie_refused(&source) => return Ok(false),
+                    Err(source) => return Err(source),
+                }
+                let request = self.wire.request_builder(
+                    reqwest::Method::POST,
+                    "rest/noauth/auth/logout",
+                    Some(&serde_json::json!({})),
+                )?;
+                if tokio::time::Instant::now() >= dispatch {
+                    return Err(Error::Timeout { operation: LOGOUT });
+                }
+                report.write.dispatched = true;
+                context.phase(OperationPhase::Submitting);
+                let response = crate::client::send_bounded_reporting_headers(
+                    LOGOUT,
+                    request,
+                    true,
+                    self.wire.limit,
+                    &mut report.write.status,
+                )
+                .await?;
+                report.write.response_complete = true;
+                crate::client::checked_response(LOGOUT, response, true)?;
+                Ok(true)
+            })
+            .await;
+        if matches!(started, Ok(false)) {
+            report.outcome = GuiLogoutOutcome::AlreadyRejected;
+        } else {
+            report.original = Some(crate::client::workflow_write_result(
+                LOGOUT,
+                report.write,
+                started.map(|_| ()),
+            ));
+            if report.write.dispatched {
+                let refused = report.write.response_complete
+                    && matches!(report.original, Some(Err(ref source)) if gui_cookie_refused(source));
+                context.phase(OperationPhase::Verifying);
+                match context
+                    .wait(context.deadline, VERIFY, self.system_status())
+                    .await
+                {
+                    Err(source) if gui_cookie_refused(&source) => {
+                        report.outcome = GuiLogoutOutcome::CookieRejected
+                    }
+                    Ok(_) => {
+                        report.outcome = if refused {
+                            GuiLogoutOutcome::RequestRejected
+                        } else {
+                            GuiLogoutOutcome::CookieStillAccepted
+                        }
+                    }
+                    Err(source) => {
+                        report.outcome = if refused {
+                            GuiLogoutOutcome::RequestRejected
+                        } else {
+                            GuiLogoutOutcome::Unconfirmed
+                        };
+                        report.observation_error = Some(source);
+                    }
+                }
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+}
+
+fn gui_cookie_refused(source: &Error) -> bool {
+    matches!(source, Error::Authentication { status: 401 })
+        || matches!(source, Error::AccessDenied { response } if response.status() == 403)
 }
 
 fn sensitive(value: &str) -> Result<HeaderValue> {
@@ -674,4 +773,68 @@ pub struct GuiLogoutReceipt {
     pub write_acknowledged: bool,
     /// The exact previous session cookie was refused with HTTP 401/403 afterward.
     pub session_rejected: bool,
+}
+
+/// What the selected GUI endpoint reports about the original cookie.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum GuiLogoutOutcome {
+    /// The endpoint already refused this cookie before a logout request.
+    AlreadyRejected,
+    /// The same cookie was refused in a fresh read after the request.
+    CookieRejected,
+    /// The original cookie could still read from the endpoint afterward.
+    CookieStillAccepted,
+    /// A complete response refused the logout request.
+    RequestRejected,
+    /// The workflow ended before submitting the request.
+    NotSubmitted,
+    /// The original session could not be reliably observed.
+    Unconfirmed,
+}
+
+/// The original logout and the fresh access result for that cookie.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct GuiLogoutReport {
+    /// What could be established about the selected GUI session.
+    pub outcome: GuiLogoutOutcome,
+    /// Dispatch and completeness of the one optional logout.
+    pub write: ManagementWriteEvidence,
+    /// Preflight error or original request result. Empty if none was needed.
+    pub original: Option<Result<()>>,
+    /// Why the original session could not be checked after a request.
+    pub observation_error: Option<Error>,
+}
+
+impl GuiLogoutReport {
+    /// Summarize access for the selected cookie and endpoint.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            GuiLogoutOutcome::AlreadyRejected | GuiLogoutOutcome::CookieRejected => {
+                OperationCompletion::Completed
+            }
+            GuiLogoutOutcome::Unconfirmed => OperationCompletion::Unconfirmed,
+            _ => OperationCompletion::GoalNotMet,
+        }
+    }
+}
+
+impl fmt::Display for GuiLogoutReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.outcome {
+            GuiLogoutOutcome::AlreadyRejected => "The selected GUI endpoint already refused this session.",
+            GuiLogoutOutcome::CookieRejected => "The selected GUI endpoint now refuses this session.",
+            GuiLogoutOutcome::CookieStillAccepted => "The original GUI session can still read from the selected endpoint.",
+            GuiLogoutOutcome::RequestRejected => "The selected GUI endpoint declined the logout request. Check this session before trying again.",
+            GuiLogoutOutcome::NotSubmitted => "The call ended before sending a GUI logout request.",
+            GuiLogoutOutcome::Unconfirmed => "The original GUI session could not be verified after the request. Check the session on the selected device.",
+        })?;
+        if self.outcome == GuiLogoutOutcome::NotSubmitted {
+            if let Some(Err(source)) = &self.original {
+                write!(f, " {source}")?;
+            }
+        }
+        Ok(())
+    }
 }

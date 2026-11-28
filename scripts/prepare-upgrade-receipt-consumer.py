@@ -48,7 +48,7 @@ def prepare(args):
     test_files = ["upgrade_engine.rs", "upgrade_receipt_contract.rs"]
     if args.sdk_completion:
         test_files.extend((
-            "engine_control.rs", "file_transfer_engine.rs", "local_sync_engine.rs",
+            "authentication_engine.rs", "devices.rs", "engine_control.rs", "file_transfer_engine.rs", "local_sync_engine.rs",
             "managed_instance.rs", "transport_contract.rs",
         ))
     for name in test_files:

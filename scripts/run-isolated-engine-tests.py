@@ -550,7 +550,8 @@ def main():
         raise ValueError("the independent upgrade consumer requires the upgrade suite")
     if args.sdk_completion_consumer and (
         args.upgrade_consumer or args.test_target not in {
-            "engine_control", "file_transfer_engine", "local_sync_engine", "managed_instance",
+            "authentication_engine", "devices", "engine_control", "file_transfer_engine",
+            "local_sync_engine", "managed_instance",
         }
     ):
         raise ValueError("select one separately unpacked SDK consumer for a supported workflow test")

@@ -16,6 +16,83 @@ fn connection() -> Vec<Reply> {
     ]
 }
 
+#[tokio::test]
+async fn local_sync_registration_never_adopts_old_id_or_same_label_with_other_endpoints(
+) -> TestResult {
+    use verysync_sidecar::{
+        CreateLocalSyncJob, LocalSyncMode, LocalSyncRegistrationOutcome as Outcome, PathStyle,
+        StorageEndpoint, TargetPath,
+    };
+    let input = CreateLocalSyncJob::new(
+        "synthetic repeated name",
+        StorageEndpoint::local(TargetPath::remote(PathStyle::Unix, "/fixture/from")?)?,
+        StorageEndpoint::local(TargetPath::remote(PathStyle::Unix, "/fixture/to")?)?,
+        LocalSyncMode::MirrorAToB,
+    )?;
+    let expected = serde_json::to_value(&input)?;
+    let job = |id: &str, correct_fields: bool| {
+        let mut fields = expected.clone();
+        fields["jobId"] = id.into();
+        if !correct_fields {
+            fields["sideB"]["uri"] = "/fixture/different".into();
+        }
+        fields
+    };
+    for (name, want) in [
+        (
+            "one exact candidate",
+            Outcome::MatchingNewRegistrationObserved,
+        ),
+        ("ambiguous", Outcome::Unconfirmed),
+        ("old matching only", Outcome::Unconfirmed),
+    ] {
+        let old = job("old-id", true);
+        let new = job("selected-new-id", true);
+        let different = job("same-label-different-path", false);
+        let mut replies = connection();
+        replies.extend([
+            identity(),
+            Reply::json(json!([old])),
+            identity(),
+            Reply {
+                status: 0,
+                ..Reply::json(json!({}))
+            },
+            identity(),
+        ]);
+        replies.push(Reply::json(match name {
+            "one exact candidate" => json!([old, new, different]),
+            "ambiguous" => json!([old, new, job("other-new-id", true)]),
+            _ => json!([old, different]),
+        }));
+        if want == Outcome::MatchingNewRegistrationObserved {
+            replies.extend([identity(), Reply::json(new)]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let report = client
+            .create_local_sync_job_and_verify(&input, OperationOptions::new(Duration::from_secs(3)))
+            .await?;
+        assert_eq!(report.outcome, want, "{name}: {report:?}");
+        assert!(matches!(
+            report.original,
+            Err(Error::MutationOutcomeUnknown { .. })
+        ));
+        assert_eq!(
+            report.observed.as_ref().map(|job| job.job_id.as_str()),
+            (want == Outcome::MatchingNewRegistrationObserved).then_some("selected-new-id")
+        );
+        let seen = server.finish().await?;
+        assert_eq!(
+            seen.iter()
+                .filter(|r| r.starts_with("POST /prefix/rest/localsync/jobs "))
+                .count(),
+            1
+        );
+    }
+    Ok(())
+}
+
 fn plan(id: &str, expires: &str) -> Reply {
     Reply::json(json!({
         "id":id,"jobId":"job-a","operationId":"preview-producer","count":2,

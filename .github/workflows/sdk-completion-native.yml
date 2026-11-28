@@ -183,6 +183,10 @@ jobs:
             --test-target file_transfer_engine --test-filter verified_download_native_ \
             --sdk-completion-consumer "$RUNNER_TEMP/sdk-upgrade-consumer/consumer" \
             --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/verified-download-native" || result=1
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target file_transfer_engine --test-filter verified_upload_native_ \
+            --sdk-completion-consumer "$RUNNER_TEMP/sdk-upgrade-consumer/consumer" \
+            --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/verified-upload-native" || result=1
           exit "$result"
       - name: Verify account, folder and Local Sync workflows using the independent package
         if: always() && env.VERYSYNC_TEST_BINARY != ''
@@ -190,7 +194,7 @@ jobs:
           set -o pipefail
           result=0
           consumer="$RUNNER_TEMP/sdk-upgrade-consumer/consumer"
-          for selector in official_account_ license_ audit_workflow_ folder_workflow_contracts local_sync_workflow_contracts; do
+          for selector in official_account_ license_ audit_workflow_ folder_workflow_contracts local_sync_workflow_contracts gui_login_outcome device_workflow_ verified_upload_observes; do
             cargo +"$TEST_TOOLCHAIN" test --locked --offline --manifest-path "$consumer/Cargo.toml" \
               --test transport_contract "$selector" -- --nocapture \
               | tee "$RUNNER_TEMP/sdk-upgrade-evidence/$selector.log" || result=1
@@ -203,6 +207,18 @@ jobs:
             --test-target local_sync_engine --test-filter local_sync_business_native_ \
             --sdk-completion-consumer "$consumer" \
             --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/local-sync-workflow-native" || result=1
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target engine_control --test-filter folder_registration_workflow_ \
+            --sdk-completion-consumer "$consumer" \
+            --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/registration-native" || result=1
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target authentication_engine --test-filter gui_password_sessions_logout_and_api_key_management_are_independent \
+            --sdk-completion-consumer "$consumer" \
+            --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/gui-auth-native" || result=1
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target devices --test-filter actual_receipt_disconnect_and_remove_preserves_files \
+            --sdk-completion-consumer "$consumer" \
+            --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/device-workflow-native" || result=1
           exit "$result"
       - name: Confirm final owned process cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''

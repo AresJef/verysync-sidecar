@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::{
-    DeviceId, Error, LocalSyncAction, LocalSyncActionResult, LocalSyncJobId, LocalSyncOperation,
-    LocalSyncPreview, LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId, LocalSyncSummary,
-    ManagementWriteEvidence, OperationCompletion, OperationOptions, Result,
+    DeviceId, Error, LocalSyncAction, LocalSyncActionResult, LocalSyncJob, LocalSyncJobId,
+    LocalSyncOperation, LocalSyncPreview, LocalSyncPreviewId, LocalSyncRun, LocalSyncRunId,
+    LocalSyncSummary, ManagementWriteEvidence, OperationCompletion, OperationOptions, Result,
 };
 
 /// A shared deadline and explicit result limits for a Local Sync workflow.
@@ -257,5 +257,74 @@ impl LocalSyncPreviewReport {
         } else {
             OperationCompletion::GoalNotMet
         }
+    }
+}
+
+/// What the SDK verified about the requested Local Sync job registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum LocalSyncRegistrationOutcome {
+    /// The acknowledged new job matches the requested registration.
+    CurrentMatches,
+    /// An unanswered request was followed by one new job matching all requested fields.
+    MatchingNewRegistrationObserved,
+    /// The acknowledged job's latest settings differ from the requested values.
+    CurrentDiffers,
+    /// The operation stopped before attempting job creation.
+    NotSubmitted,
+    /// The endpoint returned a complete refusal for job creation.
+    Rejected,
+    /// The SDK could not identify one matching new registration.
+    Unconfirmed,
+}
+
+/// Evidence from one Local Sync job creation. Automatic triggers can run
+/// independently once their settings are saved.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct LocalSyncRegistrationReport {
+    /// What the SDK verified about the selected job.
+    pub outcome: LocalSyncRegistrationOutcome,
+    /// Dispatch and completeness of the single optional changing request.
+    pub write: ManagementWriteEvidence,
+    /// The original acknowledged job or the original error.
+    pub original: Result<LocalSyncJob>,
+    /// A current matching job or a directly identified job with different settings.
+    pub observed: Option<LocalSyncJob>,
+    /// A read failure, or why the available jobs could not be reconciled.
+    pub observation_error: Option<Error>,
+}
+
+impl LocalSyncRegistrationReport {
+    /// Summarize registration only. Runtime automation and file effects have
+    /// their own evidence.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            LocalSyncRegistrationOutcome::CurrentMatches
+            | LocalSyncRegistrationOutcome::MatchingNewRegistrationObserved => {
+                OperationCompletion::Completed
+            }
+            LocalSyncRegistrationOutcome::Unconfirmed => OperationCompletion::Unconfirmed,
+            _ => OperationCompletion::GoalNotMet,
+        }
+    }
+}
+
+impl fmt::Display for LocalSyncRegistrationReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.outcome {
+            LocalSyncRegistrationOutcome::CurrentMatches => "The acknowledged Local Sync job has the requested settings.",
+            LocalSyncRegistrationOutcome::MatchingNewRegistrationObserved => "One new Local Sync job has the requested settings. The original reply remains unconfirmed.",
+            LocalSyncRegistrationOutcome::CurrentDiffers => "The acknowledged Local Sync job reports different settings.",
+            LocalSyncRegistrationOutcome::NotSubmitted => "The call ended before submitting the Local Sync job.",
+            LocalSyncRegistrationOutcome::Rejected => "VerySync declined this Local Sync job. Check the permissions and license for the selected device.",
+            LocalSyncRegistrationOutcome::Unconfirmed => "The new Local Sync job could not be identified. Check existing jobs before submitting another registration.",
+        })?;
+        if self.outcome == LocalSyncRegistrationOutcome::NotSubmitted {
+            if let Err(source) = &self.original {
+                write!(f, " {source}")?;
+            }
+        }
+        Ok(())
     }
 }

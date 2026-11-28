@@ -11,6 +11,7 @@ mod default_versioning;
 mod device_control;
 mod device_ignore;
 mod device_recovery;
+mod device_workflows;
 mod file_control;
 mod file_mutation;
 mod file_transfer;
@@ -310,7 +311,24 @@ impl Client {
         &self,
         options: &crate::JoinFolderOptions,
     ) -> Result<crate::JoinFolderResult> {
-        use crate::{JoinPeerObservation, SharePermission};
+        let path = self.join_folder_path(options)?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        let body = self.prepare_folder_join(options, path).await?;
+        self.connection
+            .post_json("register sharing key", "rest/config/folders", &body)
+            .await?;
+        let configuration =
+            self.folder(&options.share.registration_id)
+                .await
+                .map_err(|source| Error::MutationOutcomeUnknown {
+                    operation: "read back sharing registration",
+                    source: Box::new(source),
+                })?;
+        Ok(Self::joined_folder_result(options, configuration))
+    }
+
+    fn join_folder_path<'a>(&self, options: &'a crate::JoinFolderOptions) -> Result<&'a str> {
+        use crate::SharePermission;
         let share = &options.share;
         if share.device_id != self.instance.device_id {
             return Err(Error::IdentityMismatch {
@@ -329,8 +347,15 @@ impl Client {
                 reason: "path syntax differs from the connected engine",
             });
         }
-        let path = options.path.to_protocol()?;
-        let _guard = self.connection.mutation_lock.lock().await;
+        options.path.to_protocol()
+    }
+
+    async fn prepare_folder_join(
+        &self,
+        options: &crate::JoinFolderOptions,
+        path: &str,
+    ) -> Result<serde_json::Value> {
+        let share = &options.share;
         self.system_status().await?;
         let configured = self.folders().await?;
         for folder in &configured {
@@ -388,20 +413,14 @@ impl Client {
         if let Some(paused) = options.paused {
             defaults.insert("paused".to_owned(), serde_json::json!(paused));
         }
-        self.connection
-            .post_json(
-                "register sharing key",
-                "rest/config/folders",
-                &serde_json::Value::Object(defaults),
-            )
-            .await?;
-        let configuration = self
-            .folder(&share.registration_id)
-            .await
-            .map_err(|source| Error::MutationOutcomeUnknown {
-                operation: "read back sharing registration",
-                source: Box::new(source),
-            })?;
+        Ok(serde_json::Value::Object(defaults))
+    }
+
+    fn joined_folder_result(
+        options: &crate::JoinFolderOptions,
+        configuration: FolderConfig,
+    ) -> crate::JoinFolderResult {
+        let share = &options.share;
         let value = |field: &str| {
             configuration
                 .extra
@@ -418,14 +437,14 @@ impl Client {
                     .as_ref()
                     .map_or("", |key| key.expose_secret()),
             );
-        Ok(crate::JoinFolderResult {
+        crate::JoinFolderResult {
             configuration,
             permission: share.permission.clone(),
             submitted_key_matches,
             read_only_key_matches,
             read_write_key_matches,
-            peer_observation: JoinPeerObservation::Unobserved,
-        })
+            peer_observation: crate::JoinPeerObservation::Unobserved,
+        }
     }
 
     /// Request one whole-folder scan, with fresh identity/existence checks.
@@ -795,6 +814,36 @@ impl Client {
     /// scanning and synchronization can continue afterward; inspect folder status.
     /// After cancellation or MutationOutcomeUnknown, read the ID before retrying.
     pub async fn create_folder(&self, options: &CreateFolderOptions) -> Result<FolderConfig> {
+        let (path, advanced) = self.created_folder_inputs(options)?;
+        let _guard = self.connection.mutation_lock.lock().await;
+        let body = self
+            .prepare_folder_creation(options, path, advanced.as_ref())
+            .await?;
+        self.connection
+            .post_json("create folder", "rest/config/folders", &body)
+            .await?;
+        let configuration =
+            self.folder(&options.id)
+                .await
+                .map_err(|source| Error::MutationOutcomeUnknown {
+                    operation: "read back created folder",
+                    source: Box::new(source),
+                })?;
+        if options.advanced.is_some() {
+            configuration.advanced_configuration().map_err(|source| {
+                Error::MutationOutcomeUnknown {
+                    operation: "read back created folder",
+                    source: Box::new(source),
+                }
+            })?;
+        }
+        Ok(configuration)
+    }
+
+    fn created_folder_inputs<'a>(
+        &self,
+        options: &'a CreateFolderOptions,
+    ) -> Result<(&'a str, Option<serde_json::Value>)> {
         validate_folder_item_id(&options.id)?;
         let advanced = options
             .advanced
@@ -807,8 +856,15 @@ impl Client {
                 reason: "path syntax differs from the connected engine",
             });
         }
-        let path = options.path.to_protocol()?;
-        let _guard = self.connection.mutation_lock.lock().await;
+        Ok((options.path.to_protocol()?, advanced))
+    }
+
+    async fn prepare_folder_creation(
+        &self,
+        options: &CreateFolderOptions,
+        path: &str,
+        advanced: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value> {
         self.system_status().await?;
         let configured = self.folders().await?;
         if configured.iter().any(|folder| folder.id == options.id) {
@@ -849,29 +905,7 @@ impl Client {
         if let Some(paused) = options.paused {
             defaults.insert("paused".to_owned(), serde_json::json!(paused));
         }
-        self.connection
-            .post_json(
-                "create folder",
-                "rest/config/folders",
-                &serde_json::Value::Object(defaults),
-            )
-            .await?;
-        let configuration =
-            self.folder(&options.id)
-                .await
-                .map_err(|source| Error::MutationOutcomeUnknown {
-                    operation: "read back created folder",
-                    source: Box::new(source),
-                })?;
-        if options.advanced.is_some() {
-            configuration.advanced_configuration().map_err(|source| {
-                Error::MutationOutcomeUnknown {
-                    operation: "read back created folder",
-                    source: Box::new(source),
-                }
-            })?;
-        }
-        Ok(configuration)
+        Ok(serde_json::Value::Object(defaults))
     }
 
     /// Change only the requested fields, then return actual configuration readback.
@@ -1447,7 +1481,7 @@ fn mutation_error(operation: &'static str, mutation: bool, source: Error) -> Err
     }
 }
 
-fn workflow_write_result<T>(
+pub(crate) fn workflow_write_result<T>(
     operation: &'static str,
     evidence: crate::ManagementWriteEvidence,
     result: Result<T>,

@@ -201,6 +201,14 @@ pub(crate) struct OperationContext {
 }
 
 impl OperationContext {
+    pub(crate) fn dispatch_deadline(&self) -> Instant {
+        self.started
+            + self
+                .deadline
+                .duration_since(self.started)
+                .mul_f64(2.0 / 3.0)
+    }
+
     pub(crate) fn read_retries_enabled(&self, handle_enabled: bool) -> bool {
         handle_enabled && self.options.allow_read_retry
     }

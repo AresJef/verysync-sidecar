@@ -12,8 +12,9 @@ use verysync_sidecar::{
 async fn local_sync_business_native_executes_reviewed_preview_and_reads_exact_run() -> TestResult {
     use sha2::{Digest, Sha256};
     use verysync_sidecar::{
-        Client, ConnectOptions, LocalSyncActionRange, LocalSyncRunOutcome, LocalSyncRunReceipt,
-        LocalSyncSelection, LocalSyncWorkflowOptions, OperationCompletion, OperationOptions,
+        Client, ConnectOptions, LocalSyncActionRange, LocalSyncRegistrationOutcome,
+        LocalSyncRunOutcome, LocalSyncRunReceipt, LocalSyncSelection, LocalSyncWorkflowOptions,
+        OperationCompletion, OperationOptions,
     };
     let root = tempfile::Builder::new().prefix("vls-flow-").tempdir()?;
     let source = root.path().join("source");
@@ -27,14 +28,18 @@ async fn local_sync_business_native_executes_reviewed_preview_and_reads_exact_ru
         std::fs::write(source.join("selected.txt"), one)?;
         std::fs::write(source.join("unselected.txt"), two)?;
         std::fs::write(target.join("outside.bin"), b"target sentinel")?;
-        let job = core.client().create_local_sync_job(
+        let registration = core.client().create_local_sync_job_and_verify(
             &CreateLocalSyncJob::new(
                 "one explicit synthetic preview",
                 StorageEndpoint::local(TargetPath::local(&source))?,
                 StorageEndpoint::local(TargetPath::local(&target))?,
                 LocalSyncMode::MirrorAToB,
             )?.ignore_permissions(true),
+            OperationOptions::new(Duration::from_secs(12)),
         ).await?;
+        assert_eq!(registration.outcome, LocalSyncRegistrationOutcome::CurrentMatches, "{registration:?}");
+        assert!(registration.write.dispatched && registration.write.response_complete);
+        let job = registration.observed.ok_or("the exact native job was not read back")?;
         let bounds = || LocalSyncWorkflowOptions::new(10, OperationOptions::new(Duration::from_secs(24))).page_size(1);
         let plan = core.client().preview_local_sync_and_verify(&job.job_id, bounds()).await?;
         assert_eq!(plan.completion(), OperationCompletion::Completed, "{plan:?}");
@@ -57,6 +62,7 @@ async fn local_sync_business_native_executes_reviewed_preview_and_reads_exact_ru
                 "controlled_nanosecond_or_count_probe":true,
                 "sdk_initial":original.map(ToString::to_string),
                 "sdk_cause":original.and_then(|error|error.source()).map(ToString::to_string),
+                "sdk_observation_error":report.observation_error.as_ref().map(ToString::to_string),
                 "selected_count":1,"preview_count":2,"native_run_count":later.count,
                 "elapsed_time_fields":[later.started,later.finished],
                 "native_summary":[later.summary.completed,later.summary.failed,later.summary.skipped],
@@ -69,6 +75,8 @@ async fn local_sync_business_native_executes_reviewed_preview_and_reads_exact_ru
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].action_id, selected);
         assert_eq!(report.results[0].path, "selected.txt");
+        assert_eq!(report.terminal.as_ref().map(|run| run.summary.skipped), Some(1));
+        assert_eq!(report.selected_summary.as_ref().map(|summary| summary.skipped), Some(0));
         assert_eq!(report.terminal.as_ref().map(|run| &run.id), Some(receipt.run()));
         assert_eq!(Sha256::digest(std::fs::read(target.join("selected.txt"))?), Sha256::digest(one));
         assert!(!target.join("unselected.txt").exists());

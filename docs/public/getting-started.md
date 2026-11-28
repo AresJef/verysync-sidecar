@@ -108,6 +108,10 @@ writers; the precheck is not an external atomic transaction.
 
 `folders()` and `folder(&id)` read exact current folder configuration.
 `update_folder` with `FolderPatch` sends only explicit label/pause fields.
+`create_folder_and_verify` and `join_folder_and_verify` return the original
+reply alongside a check of the specified registration. They keep an existing
+ID out of the creation path. Check actual folder activity and peer delivery
+with the corresponding observation APIs.
 `pause_folder` and `resume_folder` change only folder-level pause configuration.
 Use `set_folder_pause_and_verify` to check the same folder and skip a write if
 its pause setting already matches. You can also select a runtime state to wait

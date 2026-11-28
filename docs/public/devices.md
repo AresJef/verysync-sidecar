@@ -54,6 +54,12 @@ disconnection, or completed synchronization. Device pause is independent of
 folder and instance pause. The engine can also update peer names on connection
 according to its separate name policy.
 
+`create_device_and_verify`, `update_device_and_verify`, and
+`set_device_pause_and_verify` report the write and subsequent configuration
+separately. An update that already matches can return without writing. Read
+the report's connection observation to see whether that peer was connected
+when the core was queried.
+
 `remove_device()` sends a single exact-ID DELETE with no deletion body or flag.
 It then reads one configuration snapshot for device absence and remaining folder
 associations. The library does not access local data paths. Local file retention

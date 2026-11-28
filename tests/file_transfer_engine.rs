@@ -31,6 +31,55 @@ fn digest(data: &[u8]) -> [u8; 32] {
 }
 
 #[tokio::test]
+async fn verified_upload_native_checks_destination_bytes_without_replacing_an_existing_match(
+) -> TestResult {
+    use verysync_sidecar::{OperationOptions, VerifiedUploadOutcome};
+    let root = tempfile::Builder::new().prefix("vs-upload-").tempdir()?;
+    let mut core = ManagedInstance::start(options(&root.path().join("c"))?).await?;
+    let verified: TestResult = async {
+        let (profile, volume, _) = mount(&core).await?;
+        let source = root.path().join("source.txt");
+        let bytes = b"fixed upload bytes, independently compared";
+        std::fs::write(&source, bytes)?;
+        let remote = volume.clone().child("upload-target.txt")?;
+        let limits = || OperationOptions::new(Duration::from_secs(10));
+        let first = core.client().upload_file_and_verify(
+            &remote, &source, ResourceUploadConflict::RejectExisting, 1024, limits(),
+        ).await?;
+        assert_eq!(first.outcome, VerifiedUploadOutcome::CurrentMatches, "{first:?}");
+        assert!(first.write.dispatched && first.write.response_complete);
+        assert_eq!(first.observed.as_ref().map(|f| (f.bytes, f.sha256)), Some((bytes.len() as u64, digest(bytes))));
+        let target = profile.join("upload-target.txt");
+        assert_eq!(std::fs::read(&target)?, bytes);
+        let matched = core.client().upload_file_and_verify(
+            &remote, &source, ResourceUploadConflict::Replace, 1024, limits(),
+        ).await?;
+        assert_eq!(matched.outcome, VerifiedUploadOutcome::AlreadyMatches);
+        assert!(!matched.write.dispatched);
+        std::fs::write(&source, b"different private source bytes")?;
+        let conflict = core.client().upload_file_and_verify(
+            &remote, &source, ResourceUploadConflict::RejectExisting, 1024, limits(),
+        ).await?;
+        assert!(matches!(conflict.original, Some(Err(Error::ResourceAlreadyExists))));
+        assert!(!conflict.write.dispatched);
+        assert_eq!(std::fs::read(&target)?, bytes);
+        std::fs::write(&source, b"")?;
+        let empty = core.client().upload_file_and_verify(
+            &volume.child("upload-empty.txt")?, &source, ResourceUploadConflict::RejectExisting, 1024, limits(),
+        ).await?;
+        assert_eq!(empty.outcome, VerifiedUploadOutcome::CurrentMatches, "{empty:?}");
+        assert_eq!(std::fs::metadata(profile.join("upload-empty.txt"))?.len(), 0);
+        assert_eq!(std::fs::metadata(source)?.len(), 0);
+        println!("Verified upload native evidence: one exact write, remote bytes and SHA-256 match, replace match and pre-existing conflict send zero writes, empty file retained");
+        Ok(())
+    }.await;
+    let stopped = core.shutdown(Duration::from_secs(15)).await?;
+    assert!(stopped.tree_stopped && stopped.state_released && !stopped.forced);
+    root.close()?;
+    verified
+}
+
+#[tokio::test]
 async fn public_owned_process_failure_retains_partial_download_and_recovers_explicitly(
 ) -> TestResult {
     let root = tempfile::Builder::new().prefix("vpf-").tempdir()?.keep();

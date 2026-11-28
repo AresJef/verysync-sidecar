@@ -1,9 +1,13 @@
 //! Payload streaming with explicit local destinations and finite bounds.
-use super::{mutation_error, transport_error, Client};
+use super::{
+    mutation_error, transport_error, verified_download::decode_sha256, workflow_write_result,
+    Client,
+};
 use crate::{
-    Error, ResourceArchiveFormat, ResourceByteRange, ResourceChecksum, ResourceDownload,
-    ResourcePath, ResourceTransferOptions, ResourceUpload, ResourceUploadConflict,
-    ResponseDiagnostic, Result, TargetPath,
+    Error, OperationOptions, OperationPhase, ResourceArchiveFormat, ResourceByteRange,
+    ResourceChecksum, ResourceDownload, ResourcePath, ResourceTransferOptions, ResourceUpload,
+    ResourceUploadConflict, ResponseDiagnostic, Result, TargetPath, VerifiedUploadOutcome,
+    VerifiedUploadReport,
 };
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
@@ -323,68 +327,9 @@ impl Client {
         within(options.deadline, operation, async {
             let _guard = self.connection.mutation_lock.lock().await;
             self.system_status().await?;
-            let mut open = tokio::fs::OpenOptions::new();
-            open.read(true);
-            #[cfg(unix)]
-            {
-                open.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
-            }
-            #[cfg(windows)]
-            {
-                open.custom_flags(
-                    windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
-                );
-            }
-            let mut input = open
-                .open(source)
-                .await
-                .map_err(|e| local("open upload input", e))?;
-            let metadata = input
-                .metadata()
-                .await
-                .map_err(|e| local("inspect upload input", e))?;
-            if !metadata.is_file() || metadata.len() > options.max_bytes {
-                return Err(rejected(
-                    "upload input is not a regular file within the byte bound",
-                ));
-            }
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::MetadataExt;
-                if metadata.file_attributes()
-                    & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-                    != 0
-                {
-                    return Err(rejected("upload input is a reparse point"));
-                }
-            }
-            let mut hash = Sha256::new();
-            let mut total = 0u64;
-            let mut buffer = vec![0; 65536];
-            loop {
-                let count = input
-                    .read(&mut buffer)
-                    .await
-                    .map_err(|e| local("hash upload input", e))?;
-                if count == 0 {
-                    break;
-                }
-                total = total
-                    .checked_add(count as u64)
-                    .ok_or_else(|| rejected("upload size overflow"))?;
-                if total > options.max_bytes {
-                    return Err(rejected("upload input grew beyond the byte bound"));
-                }
-                hash.update(&buffer[..count]);
-            }
-            if total != metadata.len() {
-                return Err(rejected("upload input changed length during preparation"));
-            }
-            let sha256: [u8; 32] = hash.finalize().into();
-            input
-                .rewind()
-                .await
-                .map_err(|e| local("rewind upload input", e))?;
+            let input = prepare_upload(source, options.max_bytes).await?;
+            let total = input.bytes;
+            let sha256 = input.sha256;
             let request = self
                 .connection
                 .http
@@ -393,9 +338,7 @@ impl Client {
                 .header("Content-Type", "application/octet-stream")
                 .header("Content-Length", total)
                 .timeout(options.deadline)
-                .body(reqwest::Body::wrap_stream(
-                    tokio_util::io::ReaderStream::with_capacity(input.take(total), 65536),
-                ));
+                .body(input.stream());
             attempted = true;
             let (status, body) = self
                 .connection
@@ -437,7 +380,276 @@ impl Client {
             other => other,
         })
     }
+
+    /// Upload one dedicated local file and verify the selected remote
+    /// destination within a single operation deadline. With `Replace` an
+    /// exact existing match needs no write. With `RejectExisting` a current
+    /// destination is refused, and the native conflict check remains active
+    /// during upload. The SDK never repeats a write after an uncertain reply.
+    ///
+    /// Keep the input immutable until the operation returns, and coordinate
+    /// other writers to this destination. Readback proves the observed bytes,
+    /// including when the original acknowledgement remains unknown.
+    pub async fn upload_file_and_verify(
+        &self,
+        path: &ResourcePath,
+        source: &Path,
+        conflict: ResourceUploadConflict,
+        max_bytes: u64,
+        options: OperationOptions,
+    ) -> Result<VerifiedUploadReport> {
+        const UPLOAD: &str = "upload the selected local file";
+        const CHECK: &str = "check the uploaded destination";
+        use VerifiedUploadOutcome as Outcome;
+        if !source.is_absolute() || path.components.is_empty() || max_bytes == 0 {
+            return Err(rejected("a verified upload requires an absolute local file, a destination filename and a positive byte bound"));
+        }
+        if self.instance().version.version != crate::BASELINE_ENGINE_VERSION {
+            return Err(rejected(
+                "the selected engine version has no verified upload contract",
+            ));
+        }
+        let mut url = self.resource_url("rest/f/api/resources", path)?;
+        url.query_pairs_mut().append_pair(
+            "override",
+            if conflict == ResourceUploadConflict::Replace {
+                "true"
+            } else {
+                "false"
+            },
+        );
+        let context = options.start()?;
+        let deadline = context.dispatch_deadline();
+        let mut report = VerifiedUploadReport {
+            outcome: Outcome::NotSubmitted,
+            write: Default::default(),
+            original: None,
+            input: None,
+            observed: None,
+            observation_error: None,
+        };
+        let mut guard = None;
+        let attempt = context
+            .wait(deadline, UPLOAD, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                let input = prepare_upload(source, max_bytes).await?;
+                let expected = ResourceUpload {
+                    bytes: input.bytes,
+                    sha256: input.sha256,
+                };
+                report.input = Some(expected.clone());
+                match self.read_upload_target(path).await? {
+                    ObservedUploadTarget::Absent => {}
+                    _ if conflict == ResourceUploadConflict::RejectExisting => {
+                        return Err(Error::ResourceAlreadyExists)
+                    }
+                    ObservedUploadTarget::Directory => {
+                        return Err(rejected("the selected upload destination is a directory"))
+                    }
+                    ObservedUploadTarget::File(current) if same_upload(&current, &expected) => {
+                        report.observed = Some(current);
+                        return Ok(false);
+                    }
+                    ObservedUploadTarget::File(_) => {}
+                }
+                self.system_status().await?;
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining < Duration::from_millis(1) {
+                    return Err(Error::Timeout { operation: UPLOAD });
+                }
+                let request = self
+                    .connection
+                    .authorized_request(reqwest::Method::POST, url, None)
+                    .header("Content-Type", "application/octet-stream")
+                    .header("Content-Length", expected.bytes)
+                    .timeout(remaining)
+                    .body(input.stream());
+                let response = self
+                    .connection
+                    .send_workflow_write(UPLOAD, request, &context, &mut report.write)
+                    .await?;
+                if response.body != b"200 OK\n" {
+                    return Err(mutation_error(
+                        UPLOAD,
+                        true,
+                        Error::InvalidResponse {
+                            operation: UPLOAD,
+                            response: ResponseDiagnostic::new(response.status, response.body),
+                        },
+                    ));
+                }
+                Ok(true)
+            })
+            .await;
+        if matches!(attempt, Ok(false)) {
+            report.outcome = Outcome::AlreadyMatches;
+        } else {
+            report.original = Some(workflow_write_result(
+                UPLOAD,
+                report.write,
+                attempt.map(|_| ()),
+            ));
+            if report.write.response_complete
+                && matches!(
+                    report.original,
+                    Some(Err(
+                        Error::Authentication { .. } | Error::AccessDenied { .. }
+                    ))
+                )
+            {
+                report.outcome = Outcome::Rejected;
+            } else if report.write.dispatched {
+                context.phase(OperationPhase::Verifying);
+                match context
+                    .wait(context.deadline, CHECK, self.read_upload_target(path))
+                    .await
+                {
+                    Ok(ObservedUploadTarget::Absent) => report.outcome = Outcome::CurrentAbsent,
+                    Ok(ObservedUploadTarget::Directory) => report.outcome = Outcome::CurrentDiffers,
+                    Ok(ObservedUploadTarget::File(current)) => {
+                        report.outcome = if report
+                            .input
+                            .as_ref()
+                            .is_some_and(|expected| same_upload(&current, expected))
+                        {
+                            Outcome::CurrentMatches
+                        } else {
+                            Outcome::CurrentDiffers
+                        };
+                        report.observed = Some(current);
+                    }
+                    Err(source) => {
+                        report.outcome = Outcome::Unconfirmed;
+                        report.observation_error = Some(source);
+                    }
+                }
+            }
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn read_upload_target(&self, path: &ResourcePath) -> Result<ObservedUploadTarget> {
+        let algorithm = ResourceChecksum::Sha256;
+        let (info, status, body) = match self.read_resource_metadata(path, Some(algorithm)).await {
+            Ok(response) => response,
+            Err(Error::Http { response }) if response.status() == 404 => {
+                return Ok(ObservedUploadTarget::Absent)
+            }
+            Err(source) => return Err(source),
+        };
+        if info.is_dir {
+            return Ok(ObservedUploadTarget::Directory);
+        }
+        let sha256 = info
+            .checksums
+            .get(algorithm.name())
+            .and_then(|value| decode_sha256(value))
+            .ok_or(Error::InvalidResponse {
+                operation: "read the destination SHA-256",
+                response: ResponseDiagnostic::new(status, body),
+            })?;
+        Ok(ObservedUploadTarget::File(ResourceUpload {
+            bytes: info.size,
+            sha256,
+        }))
+    }
 }
+
+enum ObservedUploadTarget {
+    Absent,
+    Directory,
+    File(ResourceUpload),
+}
+
+fn same_upload(a: &ResourceUpload, b: &ResourceUpload) -> bool {
+    a.bytes == b.bytes && a.sha256 == b.sha256
+}
+struct PreparedUpload {
+    input: tokio::fs::File,
+    bytes: u64,
+    sha256: [u8; 32],
+}
+
+impl PreparedUpload {
+    fn stream(self) -> reqwest::Body {
+        reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::with_capacity(
+            self.input.take(self.bytes),
+            65536,
+        ))
+    }
+}
+
+async fn prepare_upload(source: &Path, max_bytes: u64) -> Result<PreparedUpload> {
+    let mut open = tokio::fs::OpenOptions::new();
+    open.read(true);
+    #[cfg(unix)]
+    {
+        open.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        open.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut input = open
+        .open(source)
+        .await
+        .map_err(|e| local("open upload input", e))?;
+    let metadata = input
+        .metadata()
+        .await
+        .map_err(|e| local("inspect upload input", e))?;
+    if !metadata.is_file() || metadata.len() > max_bytes {
+        return Err(rejected(
+            "upload input is not a regular file within the byte bound",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
+            return Err(rejected("upload input is a reparse point"));
+        }
+    }
+    let mut hash = Sha256::new();
+    let mut total = 0u64;
+    let mut buffer = vec![0; 65536];
+    loop {
+        let count = input
+            .read(&mut buffer)
+            .await
+            .map_err(|e| local("hash upload input", e))?;
+        if count == 0 {
+            break;
+        }
+        total = total
+            .checked_add(count as u64)
+            .ok_or_else(|| rejected("upload size overflow"))?;
+        if total > max_bytes {
+            return Err(rejected("upload input grew beyond the byte bound"));
+        }
+        hash.update(&buffer[..count]);
+    }
+    if total != metadata.len() {
+        return Err(rejected("upload input changed length during preparation"));
+    }
+    let sha256: [u8; 32] = hash.finalize().into();
+    input
+        .rewind()
+        .await
+        .map_err(|e| local("rewind upload input", e))?;
+    Ok(PreparedUpload {
+        input,
+        bytes: total,
+        sha256,
+    })
+}
+
 fn validate_destination(path: &Path) -> Result<()> {
     if path.is_absolute() {
         Ok(())

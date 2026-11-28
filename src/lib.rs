@@ -163,7 +163,7 @@ pub use control_operation::{
 pub use device_options::{DeviceAdvancedConfig, DeviceAdvancedPatch, IntroductionSource};
 pub use devices::{
     CreateDeviceOptions, DeviceCompression, DeviceConfig, DeviceDefaults, DevicePatch,
-    DeviceRemoval, DeviceUpdate,
+    DeviceRemoval, DeviceUpdate, DeviceWorkflowOutcome, DeviceWorkflowReport,
 };
 pub use diagnostics_preferences::{CrashReportingPatch, DiagnosticsOptions};
 pub use endpoint::{EndpointKind, ManagementEndpoint};
@@ -186,6 +186,7 @@ pub use file_mutations::{
 pub use file_transfers::{
     ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,
     ResourceUpload, ResourceUploadConflict, VerifiedDownloadOptions, VerifiedDownloadReport,
+    VerifiedUploadOutcome, VerifiedUploadReport,
 };
 pub use files::{
     ResourceChecksum, ResourceInfo, ResourcePath, ResourcePreview, ResourceVolume, ResourceVolumeId,
@@ -205,7 +206,7 @@ pub use gui_listener::{
 pub use gui_preferences::{GuiPreferences, GuiPreferencesPatch, GuiPreferencesUpdate};
 pub use gui_session::{
     GuiCredentialUpdate, GuiCredentials, GuiLoginError, GuiLoginOptions, GuiLoginPhase,
-    GuiLogoutReceipt, GuiSession,
+    GuiLogoutOutcome, GuiLogoutReceipt, GuiLogoutReport, GuiSession,
 };
 pub use hardware::{
     NativeBlockDisk, NativeBlockHardware, NativeBlockPartition, NativeCpuCore, NativeCpuHardware,
@@ -240,8 +241,8 @@ pub use local_sync_events::{
     LocalSyncEventGap, LocalSyncEventOptions, LocalSyncEventStreamItem, LocalSyncEventSubscription,
 };
 pub use local_sync_workflows::{
-    LocalSyncPreviewReport, LocalSyncRunOutcome, LocalSyncRunReceipt, LocalSyncRunReport,
-    LocalSyncWorkflowOptions,
+    LocalSyncPreviewReport, LocalSyncRegistrationOutcome, LocalSyncRegistrationReport,
+    LocalSyncRunOutcome, LocalSyncRunReceipt, LocalSyncRunReport, LocalSyncWorkflowOptions,
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
@@ -304,8 +305,9 @@ pub use scheduling::{
 };
 pub use selective::{
     FolderSelectiveConfig, FolderSelectiveUpdate, SelectiveAcknowledgement, SelectiveAction,
-    SelectiveBrowseOptions, SelectiveEntry, SelectiveMatch, SelectiveScope, SelectiveSearchOptions,
-    SelectiveSearchPage, SelectiveTree,
+    SelectiveBrowseOptions, SelectiveEntry, SelectiveMatch, SelectivePathOutcome,
+    SelectivePathReport, SelectiveScope, SelectiveSearchOptions, SelectiveSearchPage,
+    SelectiveTree,
 };
 pub use sharing::{
     GeneratedShare, JoinFolderOptions, JoinFolderResult, JoinPeerObservation, ShareKey,

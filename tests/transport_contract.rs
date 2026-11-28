@@ -512,6 +512,90 @@ async fn audit_workflow_reports_empty_snapshot_only_after_complete_verified_read
 }
 
 #[tokio::test]
+async fn verified_upload_observes_destination_after_lost_reply_without_replaying() -> TestResult {
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        OperationOptions, PathStyle, ResourcePath, ResourceUploadConflict, ResourceVolumeId,
+        VerifiedUploadOutcome,
+    };
+    let root = tempfile::tempdir()?;
+    let source = root.path().join("sample.bin");
+    let content = b"bounded synthetic upload";
+    std::fs::write(&source, content)?;
+    let correct = format!("{:x}", Sha256::digest(content));
+    let identity = || Reply::json(json!({"myID":ID}));
+    for (response, digest, expected) in [
+        (
+            0,
+            Some(correct.clone()),
+            VerifiedUploadOutcome::CurrentMatches,
+        ),
+        (
+            0,
+            Some("f".repeat(64)),
+            VerifiedUploadOutcome::CurrentDiffers,
+        ),
+        (403, None, VerifiedUploadOutcome::Rejected),
+    ] {
+        let mut replies = vec![
+            Reply::json(json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            Reply {
+                status: 404,
+                ..Reply::json(json!({}))
+            },
+            identity(),
+            Reply {
+                status: response,
+                ..Reply::json(json!({}))
+            },
+        ];
+        if let Some(digest) = digest {
+            replies.extend([
+                identity(),
+                Reply::json(json!({
+                    "path":"/native/sample.bin","name":"sample.bin","size":content.len(),"mode":420,
+                    "modified":"synthetic timestamp","isDir":false,"checksums":{"sha256":digest}
+                })),
+            ]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let remote = ResourcePath::root(
+            ResourceVolumeId::parse("dedicated-private")?,
+            PathStyle::Unix,
+        )
+        .child("sample.bin")?;
+        let report = client
+            .upload_file_and_verify(
+                &remote,
+                &source,
+                ResourceUploadConflict::RejectExisting,
+                1024,
+                OperationOptions::new(Duration::from_secs(3)),
+            )
+            .await?;
+        assert_eq!(report.outcome, expected, "{report:?}");
+        assert!(report.write.dispatched);
+        assert_eq!(report.write.response_complete, response != 0);
+        if response == 0 {
+            assert!(matches!(
+                report.original,
+                Some(Err(Error::MutationOutcomeUnknown { .. }))
+            ));
+        }
+        let seen = server.finish().await?;
+        let writes: Vec<_> = seen.iter().filter(|r| r.starts_with("POST /prefix/rest/f/api/resources/dedicated-private/sample.bin?override=false ")).collect();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].ends_with(std::str::from_utf8(content)?));
+        assert_eq!(std::fs::read(&source)?, content);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn license_missing_metadata_bad_ack_and_explicit_nested_errors_never_become_success(
 ) -> TestResult {
     for native in [

@@ -1048,11 +1048,9 @@ async fn native_ldap_bind_and_authentication_failure_preserve_api_management() -
 
 #[tokio::test]
 async fn gui_password_sessions_logout_and_api_key_management_are_independent() -> TestResult {
-    let root = tempfile::Builder::new()
-        .prefix("vs-gui-auth-")
-        .tempdir()?
-        .keep();
-    let mut core = ManagedInstance::start(options(&root.join("core"))?).await?;
+    use verysync_sidecar::{GuiLogoutOutcome, OperationOptions};
+    let root = tempfile::Builder::new().prefix("vs-gui-auth-").tempdir()?;
+    let mut core = ManagedInstance::start(options(&root.path().join("core"))?).await?;
     let endpoint = core.client().endpoint().clone();
     let identity = core.client().instance().device_id.clone();
     let mut entropy = [0u8; 24];
@@ -1097,7 +1095,13 @@ async fn gui_password_sessions_logout_and_api_key_management_are_independent() -
             || matches!(&wrong, Err(Error::Authentication { status: 401 }))
     );
     let stale = session.clone();
-    assert!(session.logout().await?.session_rejected);
+    let bounded = || OperationOptions::new(Duration::from_secs(10));
+    let checked = session.logout_and_verify(bounded()).await?;
+    assert_eq!(checked.outcome, GuiLogoutOutcome::CookieRejected);
+    assert!(checked.write.dispatched && checked.write.response_complete);
+    let no_repeat = stale.logout_and_verify(bounded()).await?;
+    assert_eq!(no_repeat.outcome, GuiLogoutOutcome::AlreadyRejected);
+    assert!(!no_repeat.write.dispatched);
     let denied = stale.system_status().await;
     assert!(
         matches!(&denied,Err(Error::AccessDenied{response}) if response.status()==403)
@@ -1108,7 +1112,8 @@ async fn gui_password_sessions_logout_and_api_key_management_are_independent() -
     assert!(second.logout().await?.session_rejected);
     let exit = core.shutdown(Duration::from_secs(10)).await?;
     assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
-    println!("native_gui_authentication_effects=14");
+    root.close()?;
+    println!("native_gui_authentication_effects=14; verified workflow refused original cookie; fresh read before repeated goal prevented a second logout; other session and API key remained usable; fixture removed");
     Ok(())
 }
 

@@ -54,6 +54,11 @@ sends `selected=false&removefromall=true`. It can affect other nodes; never
 infer retained files from an acknowledgement. Mutations recheck identity and
 configured scope, share the Client clone lock and are never retried.
 
+`set_selective_path_and_verify` checks the requested path's selection after
+one change. Its local availability field is the core's report at that moment.
+Check the intended recipient's file when you need to verify the delivered
+bytes.
+
 **Licensed success is not yet verified.** The fixed free engine actually
 returns HTTP 200 with `code: 3000` and a Pro-license error for all tested file,
 directory and root requests. Typed APIs report `Error::LicenseRequired`, retain

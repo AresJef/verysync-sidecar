@@ -42,6 +42,49 @@ fn expected_core_architecture() -> TestResult<&'static str> {
     }
 }
 
+#[tokio::test]
+async fn folder_registration_workflow_verifies_created_and_joined_items_on_native_engine(
+) -> TestResult {
+    use std::time::Duration;
+    use verysync_sidecar::{
+        CreateFolderOptions, FolderConfigurationOutcome, FolderId, JoinFolderOptions,
+        OperationOptions, TargetPath,
+    };
+    let mut fixture = EngineFixture::start().await?;
+    let tested: TestResult = async {
+        let client = Client::connect(
+            ConnectOptions::new(endpoint(&fixture)?, ApiKey::new(fixture.api_key())?)
+                .expected_device_id(DeviceId::parse(fixture.device_id())?),
+        ).await?;
+        let limit = || OperationOptions::new(Duration::from_secs(12));
+        let create = CreateFolderOptions::new(
+            FolderId::parse("new-synthetic-id")?, TargetPath::local(fixture.state_dir().join("new-data")),
+        ).label("new configured folder").paused(true);
+        let registered = client.create_folder_and_verify(&create, limit()).await?;
+        assert_eq!(registered.outcome, FolderConfigurationOutcome::CurrentMatches, "{registered:?}");
+        assert_eq!(registered.observed.as_ref().map(|folder| &folder.id), Some(create.id()));
+        let existing = client.create_folder_and_verify(&create, limit()).await?;
+        assert_eq!(existing.outcome, FolderConfigurationOutcome::NotSubmitted);
+        assert!(!existing.write.dispatched);
+        let share = client.generate_share().await?;
+        let validated = client.validate_share_key(&share.read_only_key).await?;
+        let joined_id = validated.registration_id().clone();
+        let joined = client.join_folder_and_verify(
+            &JoinFolderOptions::new(validated, TargetPath::local(fixture.state_dir().join("shared-data")))
+                .paused(true),
+            limit(),
+        ).await?;
+        assert_eq!(joined.outcome, FolderConfigurationOutcome::CurrentMatches, "{joined:?}");
+        assert_eq!(joined.observed.as_ref().map(|folder| &folder.id), Some(&joined_id));
+        assert!(joined.write.dispatched && joined.write.response_complete);
+        assert_eq!(client.folders().await?.len(), 2);
+        println!("Native folder admission: exact created registration, already existing ID zero writes, exact share join with verified keys, two independent registration IDs");
+        Ok(())
+    }.await;
+    assert!(fixture.shutdown().await?.success());
+    tested
+}
+
 fn endpoint(instance: &EngineFixture) -> verysync_sidecar::Result<ManagementEndpoint> {
     #[cfg(unix)]
     {

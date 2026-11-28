@@ -49,6 +49,28 @@ impl Client {
         self.require_remote_device(&options.id)?;
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
+        let body = self.prepare_device_creation(options).await?;
+        self.connection
+            .post_json("create device", "rest/config/devices", &body)
+            .await?;
+        let configuration = self
+            .device(&options.id)
+            .await
+            .map_err(|source| uncertain("read back created device", source))?;
+        options
+            .patch
+            .validate_advanced_readback(&configuration.extra)
+            .map_err(|source| uncertain("read back created device", source))?;
+        Ok(DeviceUpdate {
+            requested_fields_match: options.patch.matches(&configuration),
+            configuration,
+        })
+    }
+
+    pub(super) async fn prepare_device_creation(
+        &self,
+        options: &CreateDeviceOptions,
+    ) -> Result<serde_json::Value> {
         if self
             .devices()
             .await?
@@ -77,21 +99,7 @@ impl Client {
                     })?
                     .clone(),
             );
-        self.connection
-            .post_json("create device", "rest/config/devices", &body)
-            .await?;
-        let configuration = self
-            .device(&options.id)
-            .await
-            .map_err(|source| uncertain("read back created device", source))?;
-        options
-            .patch
-            .validate_advanced_readback(&configuration.extra)
-            .map_err(|source| uncertain("read back created device", source))?;
-        Ok(DeviceUpdate {
-            requested_fields_match: options.patch.matches(&configuration),
-            configuration,
-        })
+        Ok(body)
     }
 
     /// Patch only explicit remote-device fields and return actual configuration.
@@ -367,7 +375,7 @@ impl DeviceRegistrationState {
     }
 }
 
-fn patch_json(patch: &DevicePatch) -> Result<serde_json::Value> {
+pub(super) fn patch_json(patch: &DevicePatch) -> Result<serde_json::Value> {
     serde_json::to_value(patch).map_err(|_| Error::InvalidConfiguration {
         reason: "device settings cannot be encoded",
     })

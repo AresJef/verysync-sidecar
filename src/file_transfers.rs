@@ -269,3 +269,74 @@ pub struct ResourceUpload {
     /// Local input digest also observed at the remote target after upload.
     pub sha256: [u8; 32],
 }
+
+/// The file version observed after an explicit upload attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum VerifiedUploadOutcome {
+    /// Before upload, the selected replace target already matched the local bytes.
+    AlreadyMatches,
+    /// The currently observed remote file matches the full local input.
+    CurrentMatches,
+    /// The destination exists with different bytes or a different resource kind.
+    CurrentDiffers,
+    /// The destination is currently absent.
+    CurrentAbsent,
+    /// The operation ended before sending an upload.
+    NotSubmitted,
+    /// The endpoint returned a complete refusal.
+    Rejected,
+    /// The destination could not be verified.
+    Unconfirmed,
+}
+
+/// Original upload result and separately checked destination state.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct VerifiedUploadReport {
+    /// Exact destination state verified by the SDK, when available.
+    pub outcome: VerifiedUploadOutcome,
+    /// Dispatch and response facts from the one optional upload.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original response or error. It can remain unknown after successful readback.
+    pub original: Option<crate::Result<()>>,
+    /// Length and SHA-256 of the selected complete local input.
+    pub input: Option<ResourceUpload>,
+    /// Length and SHA-256 of the destination if it is a readable file.
+    pub observed: Option<ResourceUpload>,
+    /// Why the SDK could not verify the current destination.
+    pub observation_error: Option<crate::Error>,
+}
+
+impl VerifiedUploadReport {
+    /// Summarize the current destination goal without claiming peer delivery.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            VerifiedUploadOutcome::AlreadyMatches | VerifiedUploadOutcome::CurrentMatches => {
+                OperationCompletion::Completed
+            }
+            VerifiedUploadOutcome::Unconfirmed => OperationCompletion::Unconfirmed,
+            _ => OperationCompletion::GoalNotMet,
+        }
+    }
+}
+
+impl fmt::Display for VerifiedUploadReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.outcome {
+            VerifiedUploadOutcome::AlreadyMatches => "The destination already matched the selected local file.",
+            VerifiedUploadOutcome::CurrentMatches => "The currently observed destination matches the selected local file.",
+            VerifiedUploadOutcome::CurrentDiffers => "The destination differs from the selected local file. Inspect it before uploading again.",
+            VerifiedUploadOutcome::CurrentAbsent => "The selected destination is currently absent.",
+            VerifiedUploadOutcome::NotSubmitted => "The call ended before submitting an upload.",
+            VerifiedUploadOutcome::Rejected => "VerySync declined the upload. Check access to the selected destination.",
+            VerifiedUploadOutcome::Unconfirmed => "The destination could not be verified. Inspect the selected file before uploading again.",
+        })?;
+        if self.outcome == VerifiedUploadOutcome::NotSubmitted {
+            if let Some(Err(source)) = &self.original {
+                write!(f, " {source}")?;
+            }
+        }
+        Ok(())
+    }
+}

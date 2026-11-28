@@ -73,11 +73,7 @@ impl Client {
         &self,
         options: &CreateLocalSyncJob,
     ) -> Result<LocalSyncJob> {
-        let style = self.folder_path_style()?;
-        let (a, b) = options.endpoints();
-        a.validate_target(style)?;
-        b.validate_target(style)?;
-        let body = value(options)?;
+        let body = self.preflight_local_sync_job(options)?;
         let _guard = self.connection.mutation_lock.lock().await;
         let operation = "create Local Sync job";
         let job: LocalSyncJob = self
@@ -101,6 +97,17 @@ impl Client {
             ));
         }
         Ok(observed)
+    }
+
+    pub(super) fn preflight_local_sync_job(
+        &self,
+        options: &CreateLocalSyncJob,
+    ) -> Result<serde_json::Value> {
+        let style = self.folder_path_style()?;
+        let (a, b) = options.endpoints();
+        a.validate_target(style)?;
+        b.validate_target(style)?;
+        value(options)
     }
     /// Replace selected native job settings in a freshly read full object,
     /// preserving unselected endpoint credentials and unknown options. This
@@ -892,7 +899,7 @@ fn selected_job_setting_matches(
                 && actual.is_null())
     })
 }
-fn requested_subset(expected: &serde_json::Value, actual: &serde_json::Value) -> bool {
+pub(super) fn requested_subset(expected: &serde_json::Value, actual: &serde_json::Value) -> bool {
     match (expected, actual) {
         (serde_json::Value::Object(a), serde_json::Value::Object(b)) => a.iter().all(|(key, v)| {
             match b.get(key) {

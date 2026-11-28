@@ -57,6 +57,69 @@ fn options(server: &ScriptedServer) -> TestResult<GuiLoginOptions> {
     .stay_logged_in(true))
 }
 
+#[tokio::test]
+async fn gui_logout_workflow_preserves_request_and_fresh_cookie_evidence() -> TestResult {
+    use verysync_sidecar::{GuiLogoutOutcome as Outcome, OperationOptions};
+    let identity = || Reply::json(json!({"myID":ID}));
+    for (before, original, after, expected) in [
+        (401, None, None, Outcome::AlreadyRejected),
+        (200, Some(200), Some(401), Outcome::CookieRejected),
+        (200, Some(0), Some(403), Outcome::CookieRejected),
+        (200, Some(200), Some(200), Outcome::CookieStillAccepted),
+        (200, Some(403), Some(200), Outcome::RequestRejected),
+        (200, Some(200), Some(503), Outcome::Unconfirmed),
+        (503, None, None, Outcome::NotSubmitted),
+    ] {
+        let mut replies = vec![
+            challenge("AAAAAAA"),
+            issue_cookie(true),
+            engine_version("v2.33.2"),
+            identity(),
+        ];
+        replies.push(if before == 200 {
+            identity()
+        } else {
+            status(before)
+        });
+        if let Some(original) = original {
+            replies.push(status(original));
+        }
+        if let Some(after) = after {
+            replies.push(if after == 200 {
+                identity()
+            } else {
+                status(after)
+            });
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let session = GuiSession::login(options(&server)?).await?;
+        let report = session
+            .logout_and_verify(OperationOptions::new(Duration::from_secs(3)))
+            .await?;
+        assert_eq!(report.outcome, expected, "{report:?}");
+        assert_eq!(report.write.dispatched, original.is_some());
+        assert_eq!(
+            report.write.response_complete,
+            original.is_some_and(|code| code != 0)
+        );
+        assert!(!format!("{report} {report:?}").contains(SESSION));
+        if original == Some(0) {
+            assert!(matches!(
+                report.original,
+                Some(Err(Error::MutationOutcomeUnknown { .. }))
+            ));
+        }
+        let used = server.finish().await?;
+        assert_eq!(
+            used.iter()
+                .filter(|r| r.starts_with("POST /prefix/rest/noauth/auth/logout "))
+                .count(),
+            usize::from(original.is_some())
+        );
+    }
+    Ok(())
+}
+
 fn kind(error: &Error) -> &'static str {
     match error {
         Error::Authentication { .. } => "authentication",

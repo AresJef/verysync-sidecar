@@ -106,6 +106,13 @@ SDK's wait, and previously submitted filesystem work may still settle. Inspect
 the returned report and the destination before deciding how to proceed. Archives
 and caller-selected byte ranges use their separate entry points.
 
+`upload_file_and_verify` hashes the complete local file before making one
+upload request, then reads the destination's size and SHA-256. Choose
+the overwrite policy explicitly. A matching destination with `Replace`
+needs no new upload. If the original reply is lost, the report can still
+describe the current destination. Keep the source unchanged until the call
+returns and inspect a differing destination before sending another upload.
+
 `download_resource_archive` asks the engine to archive a directory.
 `download_selected_resources` accepts explicit relative target paths within one
 base resource directory. Both stream the native archive to a new local file.

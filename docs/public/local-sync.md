@@ -20,6 +20,11 @@ Store the encoded receipt privately and reopen the trusted device connection.
 A newer run can make the older results unavailable. If the original response
 never identified a run, inspect the job before deciding whether to run it again.
 
+Use `create_local_sync_job_and_verify` when you need a report for job
+registration. After a lost response, it looks for one newly observed job that
+matches the requested endpoints and settings. Coordinate other job writers so
+they cannot create an indistinguishable job during that check.
+
 The Local Sync API controls the official core's storage jobs. These
 registrations are distinct from P2P synchronization folders and file-manager
 volumes. Every method uses the selected authenticated connection. The SDK does

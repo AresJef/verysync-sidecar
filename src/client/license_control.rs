@@ -58,11 +58,7 @@ impl Client {
         let context = options.start()?;
         let (route, operation) = license_route(request);
         let url = self.connection.management_url(route, &[])?;
-        let write_deadline = context.started
-            + context
-                .deadline
-                .duration_since(context.started)
-                .mul_f64(2.0 / 3.0);
+        let write_deadline = context.dispatch_deadline();
         let mut guard = None;
         let mut write = ManagementWriteEvidence::default();
         let mut before = None;

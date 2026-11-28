@@ -391,6 +391,84 @@ pub struct DeviceUpdate {
     pub requested_fields_match: bool,
 }
 
+/// What the selected endpoint reports about a specific remote registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DeviceWorkflowOutcome {
+    /// The configured peer already had the requested fields.
+    AlreadyMatched,
+    /// The current exact configuration matches the requested fields.
+    CurrentMatches,
+    /// The peer's current configuration is absent or differs.
+    CurrentDiffers,
+    /// The operation ended before dispatching a request.
+    NotSubmitted,
+    /// The complete native response refused the request.
+    Rejected,
+    /// The current configuration could not be verified.
+    Unconfirmed,
+}
+
+/// Original device write and separately verified configuration and connectivity.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct DeviceWorkflowReport {
+    /// State of the selected peer's requested configuration.
+    pub outcome: DeviceWorkflowOutcome,
+    /// Transport facts about the single optional write.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original result or admission error, if there was one.
+    pub original: Option<Result<()>>,
+    /// The exact current remote device, when it was observed.
+    pub observed: Option<DeviceConfig>,
+    /// Latest exact peer entry during the requested connectivity check.
+    pub connection: Option<crate::PeerConnection>,
+    /// Whether the optional connected state was observed. A missing native
+    /// connection record cannot prove the device disconnected.
+    pub expected_connection_observed: Option<bool>,
+    /// Why trustworthy data or a desired connection state could not be observed.
+    pub observation_error: Option<Error>,
+}
+
+impl DeviceWorkflowReport {
+    /// Summarize the configuration and an optional connection goal.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        match self.outcome {
+            DeviceWorkflowOutcome::AlreadyMatched | DeviceWorkflowOutcome::CurrentMatches => {
+                if self.expected_connection_observed == Some(false) {
+                    crate::OperationCompletion::PartiallyCompleted
+                } else {
+                    crate::OperationCompletion::Completed
+                }
+            }
+            DeviceWorkflowOutcome::Unconfirmed => crate::OperationCompletion::Unconfirmed,
+            _ => crate::OperationCompletion::GoalNotMet,
+        }
+    }
+}
+
+impl fmt::Display for DeviceWorkflowReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.outcome {
+            DeviceWorkflowOutcome::AlreadyMatched => "The selected device configuration already matched.",
+            DeviceWorkflowOutcome::CurrentMatches => "The current configuration for the selected device matches.",
+            DeviceWorkflowOutcome::CurrentDiffers => "The selected device is absent or reports a different configuration.",
+            DeviceWorkflowOutcome::NotSubmitted => "The call ended before sending a change for the selected device.",
+            DeviceWorkflowOutcome::Rejected => "VerySync declined the device change. Check management permissions.",
+            DeviceWorkflowOutcome::Unconfirmed => "The current device configuration could not be verified. Check the selected registration before trying again.",
+        })?;
+        if self.expected_connection_observed == Some(false) {
+            f.write_str(" The requested connection state was not confirmed.")?;
+        }
+        if self.outcome == DeviceWorkflowOutcome::NotSubmitted {
+            if let Some(Err(source)) = &self.original {
+                write!(f, " {source}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Observations following one device DELETE. No local file deletion is requested.
 #[derive(Clone, Debug)]
 pub struct DeviceRemoval {
