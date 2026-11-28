@@ -198,7 +198,7 @@ impl ManagedInstance {
             requested = self.client().request_owned_shutdown(
                 Arc::clone(&self.shutdown_admission),
                 deadline,
-            tracking,
+                tracking,
             ) => {
                 requested?;
                 self.observe_exit().await
@@ -216,11 +216,21 @@ impl ManagedInstance {
         options: OperationOptions,
     ) -> Result<ManagedShutdownReport> {
         let context = options.start()?;
+        let report = self.shutdown_before(&context, context.deadline).await;
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    pub(super) async fn shutdown_before(
+        &self,
+        context: &OperationContext,
+        deadline: tokio::time::Instant,
+    ) -> ManagedShutdownReport {
         let generation = self.control_generation();
         let initial_limit =
-            (context.deadline.duration_since(context.started) / 2).min(Duration::from_secs(10));
+            (deadline.duration_since(context.started) / 2).min(Duration::from_secs(10));
         let initial = context.started + initial_limit;
-        let tracking = ShutdownRequestTracking::new(&context);
+        let tracking = ShutdownRequestTracking::new(context);
         let original = context
             .wait(initial, SHUTDOWN, async {
                 context.phase(OperationPhase::Checking);
@@ -235,15 +245,13 @@ impl ManagedInstance {
             Some(
                 context
                     .wait(
-                        context.deadline,
+                        deadline,
                         "confirm the original instance has stopped",
                         async {
                             context.phase(OperationPhase::Verifying);
                             self.observe_control_exit(
                                 &generation,
-                                context
-                                    .deadline
-                                    .saturating_duration_since(tokio::time::Instant::now()),
+                                deadline.saturating_duration_since(tokio::time::Instant::now()),
                             )
                             .await
                         },
@@ -253,14 +261,13 @@ impl ManagedInstance {
         } else {
             None
         };
-        context.phase(OperationPhase::Finished);
-        Ok(ManagedShutdownReport {
+        ManagedShutdownReport {
             generation,
             initial_limit,
             request: tracking.evidence(),
             original,
             later,
-        })
+        }
     }
 
     /// Explicitly terminate only this owner's native process group/Job and wait.

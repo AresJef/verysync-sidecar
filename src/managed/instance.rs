@@ -92,6 +92,14 @@ impl ManagedInstance {
     /// retry can return [`Error::ManagedStateInUse`] while cleanup owns the lease.
     /// Dropping a Tokio task's JoinHandle alone does not cancel that task.
     pub async fn start(options: ManagedOptions) -> Result<Self> {
+        Self::start_bound(options, None, None).await
+    }
+
+    pub(super) async fn start_bound(
+        options: ManagedOptions,
+        origin: Option<bootstrap::RestartOrigin>,
+        workflow_deadline: Option<Instant>,
+    ) -> Result<Self> {
         tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidConfiguration {
             reason: "managed startup requires a Tokio runtime with I/O and timers",
         })?;
@@ -101,6 +109,7 @@ impl ManagedInstance {
                 .ok_or(Error::InvalidConfiguration {
                     reason: "managed startup deadline is not representable",
                 })?;
+        let deadline = workflow_deadline.map_or(deadline, |workflow| deadline.min(workflow));
         let (owner, cancel) = mpsc::channel();
         let (ready_sender, ready) = oneshot::channel();
         let (exit_sender, exit) = watch::channel(None);
@@ -113,7 +122,7 @@ impl ManagedInstance {
             .name("verysync-sidecar-owner".to_owned())
             .spawn(move || {
                 owner_thread(
-                    worker_options,
+                    (worker_options, origin),
                     cancel,
                     ready_sender,
                     exit_sender,
@@ -372,7 +381,7 @@ impl fmt::Debug for ManagedInstance {
 }
 
 fn owner_thread(
-    options: ManagedOptions,
+    startup: (ManagedOptions, Option<bootstrap::RestartOrigin>),
     cancel: Receiver<()>,
     ready: oneshot::Sender<Result<ReadyContext>>,
     exit: watch::Sender<Option<ManagedExit>>,
@@ -380,7 +389,9 @@ fn owner_thread(
     committed: Arc<AtomicBool>,
     shutdown_admission: Arc<super::ShutdownAdmission>,
 ) {
-    let mut prepared = match bootstrap::prepare(&options, &cancel, deadline) {
+    let (options, origin) = startup;
+    let mut prepared = match bootstrap::prepare_bound(&options, &cancel, deadline, origin.as_ref())
+    {
         Ok(prepared) => prepared,
         Err(error) => {
             let _ = ready.send(Err(error));
@@ -388,6 +399,10 @@ fn owner_thread(
         }
     };
     let state = prepared.lease.path().to_owned();
+    if let Err(error) = bootstrap::check_active(&cancel, deadline) {
+        let _ = ready.send(Err(error));
+        return;
+    }
     let spawned = spawn_core(
         &prepared.binary,
         &state,

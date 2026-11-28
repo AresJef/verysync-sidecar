@@ -68,6 +68,44 @@ error. Open-ended and suffix ranges are not inferred. A JSON file containing an
 `error` field remains ordinary downloaded data. Authentication/HTTP errors are
 separate and retain bounded private diagnostics where available.
 
+Use `download_file_and_verify` if you want the SDK to publish a whole file only
+after it checks the bytes against the authenticated v2.33.2 source checksum.
+Supply `expected_sha256` when you already know the digest you want. Select
+`resume_once` to permit one suffix request after an interrupted body. The SDK
+checks the source digest again and rereads the private local prefix before
+requesting the exact remaining bytes. It checks the entire staged file before
+making it visible at your destination. Schedule enough time for the reads,
+verification and publication within one operation deadline.
+
+```rust,no_run
+# async fn checked_download(client: &verysync_sidecar::Client,
+#     remote: &verysync_sidecar::ResourcePath,
+#     output: &std::path::Path) -> verysync_sidecar::Result<()> {
+use std::time::Duration;
+use verysync_sidecar::{OperationOptions, VerifiedDownloadOptions};
+
+let options = VerifiedDownloadOptions::new(
+    64 * 1024 * 1024,
+    OperationOptions::new(Duration::from_secs(60)),
+).resume_once();
+let report = client.download_file_and_verify(remote, output, options).await?;
+if let Some(file) = &report.completed {
+    println!("Saved and verified {} bytes.", file.bytes);
+} else {
+    eprintln!("{report}");
+}
+# Ok(())
+# }
+```
+
+Choose a new absolute destination in an existing directory you control. The
+local filesystem needs to support hard links so the SDK can publish without
+overwriting another file. If a transfer ends with retained staging, the report
+provides the private path for inspection or removal. A cancellation stops the
+SDK's wait, and previously submitted filesystem work may still settle. Inspect
+the returned report and the destination before deciding how to proceed. Archives
+and caller-selected byte ranges use their separate entry points.
+
 `download_resource_archive` asks the engine to archive a directory.
 `download_selected_resources` accepts explicit relative target paths within one
 base resource directory. Both stream the native archive to a new local file.

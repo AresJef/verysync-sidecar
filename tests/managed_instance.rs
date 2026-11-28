@@ -4,8 +4,8 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::time::Duration;
 use verysync_sidecar::{
-    Error, LocalProgram, ManagedInstance, ManagedOptions, ManagementEndpoint, RawMethod,
-    RawRequest, RequestEffect,
+    DeviceId, Error, LocalProgram, ManagedInstance, ManagedOptions, ManagementEndpoint,
+    OperationCompletion, OperationOptions, RawMethod, RawRequest, RequestEffect,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -571,6 +571,100 @@ async fn restart_preserves_identity_folders_settings_and_samples() -> TestResult
     assert_eq!(after["gui"]["apiKey"], before["gui"]["apiKey"]);
     instance.shutdown(Duration::from_secs(10)).await?;
     println!("public managed restart evidence: {{\"invalid_deadline_no_effect\":true,\"new_process_generation\":true,\"authenticated_same_identity\":true,\"actual_management_ready\":true,\"key_sha_unchanged\":true,\"cert_sha_unchanged\":true,\"folder_retained\":true,\"devices_and_options_unchanged\":true,\"sample_sha_unchanged\":true,\"api_key_unchanged\":true}}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_restart_workflow_keeps_shutdown_evidence_and_rejects_replaced_identity(
+) -> TestResult {
+    let root = tempfile::Builder::new().prefix("vss-r30-").tempdir()?;
+    let private = root.path().join("owned");
+    let program = source()?;
+    let mut core = start_checked(options(program.clone(), &private)?).await?;
+    let original_generation = core.control_generation();
+    let original_device = core.client().instance().device_id.clone();
+    let retained = root.path().join("retained.bin");
+    let sample = b"owned restart workflow retains this sample";
+    std::fs::write(&retained, sample)?;
+    let plan = || OperationOptions::new(Duration::from_secs(35));
+    let incorrect = LocalProgram::new(program.path())?.expected_sha256([0; 32]);
+    let partial = core
+        .restart_with_program_and_verify(incorrect, plan())
+        .await?;
+    assert_eq!(
+        partial.completion(),
+        OperationCompletion::PartiallyCompleted
+    );
+    assert!(partial.startup_attempted);
+    assert!(matches!(
+        partial.startup_error,
+        Some(Error::ProgramRejected { .. })
+    ));
+    assert!(partial.shutdown.request.dispatched);
+    let ended = partial
+        .shutdown
+        .confirmed_exit()
+        .ok_or("original tree did not exit")?;
+    assert_eq!(ended.code, Some(0));
+    assert_eq!(core.control_generation(), original_generation);
+
+    let generation_file = private.join(".verysync-sidecar-generation");
+    let record_before = std::fs::read(&generation_file)?;
+    let identity_file = private.join(".verysync-sidecar-identity");
+    let original_recorded_id = std::fs::read(&identity_file)?;
+    let foreign =
+        DeviceId::parse("BAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA")?;
+    assert_ne!(foreign, original_device);
+    std::fs::write(&identity_file, foreign.as_str())?;
+    let refused = core
+        .restart_with_program_and_verify(program.clone(), plan())
+        .await?;
+    assert_eq!(
+        refused.completion(),
+        OperationCompletion::PartiallyCompleted
+    );
+    assert!(!refused.shutdown.request.dispatched);
+    assert!(
+        matches!(refused.startup_error, Some(Error::IdentityMismatch { expected, actual })
+        if expected == original_device && actual == foreign)
+    );
+    assert_eq!(std::fs::read(&generation_file)?, record_before);
+    assert_eq!(std::fs::read(&identity_file)?, foreign.as_str().as_bytes());
+
+    std::fs::write(&identity_file, original_recorded_id)?;
+    let ready = core.restart_and_verify(plan()).await?;
+    assert_eq!(ready.completion(), OperationCompletion::Completed);
+    assert!(!ready.shutdown.request.dispatched);
+    assert!(ready.startup_attempted);
+    assert_eq!(core.client().instance().device_id, original_device);
+    assert_ne!(core.control_generation(), original_generation);
+    let transition = ready
+        .transition
+        .ok_or("expected ready process transition")?;
+    assert_eq!(
+        transition.current_program.sha256,
+        transition.previous_program.sha256
+    );
+    assert_eq!(std::fs::read(retained)?, sample);
+    let stopped = core.shutdown(Duration::from_secs(15)).await?;
+    assert!(
+        stopped.tree_stopped
+            && stopped.state_released
+            && !stopped.forced
+            && stopped.code == Some(0)
+    );
+    drop(core);
+    root.close()?;
+    println!(
+        "managed restart workflow {}",
+        serde_json::json!({
+            "kept_original_shutdown_after_pinned_startup_refusal":true,
+            "changed_identity_refused_without_replacing_generation_record":true,
+            "fresh_authorized_ready_path_reused_only_original_state":true,
+            "additional_shutdown_requests_after_original_exit":0,
+            "sample_preserved":true,"owned_cleanup":true
+        })
+    );
     Ok(())
 }
 

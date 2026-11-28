@@ -1,7 +1,11 @@
 use super::{mount, options, TestResult};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{fs, time::Duration};
+use std::{
+    fs,
+    io::{self, Write},
+    time::{Duration, Instant},
+};
 use verysync_sidecar::{ManagedInstance, RawMethod, RawRequest, RequestEffect, ResourceChecksum};
 
 #[tokio::test]
@@ -93,4 +97,80 @@ fn header(response: &verysync_sidecar::RawResponse, wanted: &str) -> Option<Stri
         name.eq_ignore_ascii_case(wanted)
             .then(|| String::from_utf8_lossy(bytes).into_owned())
     })
+}
+
+#[tokio::test]
+async fn native_resume_qualification_large_source_exposes_stable_digest_with_bounded_metadata(
+) -> TestResult {
+    let root = tempfile::Builder::new().prefix("vsl-").tempdir()?;
+    let mut core = ManagedInstance::start(options(&root.path().join("c"))?).await?;
+    let result: TestResult<Value> = async {
+        let (profile, base, _) = mount(&core).await?;
+        let path = profile.join("synthetic-resume-large.bin");
+        let total = 32 * 1024 * 1024u64;
+        let mut block = vec![0; 65_536];
+        for (index, value) in block.iter_mut().enumerate() {
+            *value = (index as u8).wrapping_mul(23).wrapping_add(31);
+        }
+        let mut source = fs::File::create(&path)?;
+        let mut hash = Sha256::new();
+        for _ in 0..total / block.len() as u64 {
+            source.write_all(&block)?;
+            hash.update(&block);
+        }
+        source.sync_all()?;
+        drop(source);
+        let expected: [u8; 32] = hash.finalize().into();
+        let expected_hex = expected
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let resource = base.child("synthetic-resume-large.bin")?;
+        let metadata = core.client().resource_info(&resource).await?;
+        assert!(!metadata.is_dir && metadata.size == total);
+        let mut checksum_us = Vec::new();
+        for _ in 0..3 {
+            let start = Instant::now();
+            let reading = core
+                .client()
+                .resource_checksum(&resource, ResourceChecksum::Sha256)
+                .await?;
+            checksum_us.push(start.elapsed().as_micros());
+            assert!(reading.eq_ignore_ascii_case(&expected_hex));
+        }
+        let destination = root.path().join("verified-local.bin");
+        let start = Instant::now();
+        let fetched = core
+            .client()
+            .download_resource(
+                &resource,
+                &destination,
+                None,
+                &verysync_sidecar::ResourceTransferOptions {
+                    max_bytes: total,
+                    deadline: Duration::from_secs(25),
+                },
+            )
+            .await?;
+        let transfer_us = start.elapsed().as_micros();
+        assert_eq!(fetched.bytes, total);
+        assert_eq!(fetched.sha256, expected);
+        let count = fs::metadata(&destination)?.len();
+        let mut copied = fs::File::open(destination)?;
+        let mut independent = Sha256::new();
+        io::copy(&mut copied, &mut independent)?;
+        assert_eq!(<[u8; 32]>::from(independent.finalize()), expected);
+        assert_eq!(count, total);
+        Ok(json!({
+            "qualification_only":true,"native_regular_file_size":metadata.size,
+            "bounded_checksum_read_and_actual_file_match":true,
+            "native_checksum_read_us":checksum_us,"full_loopback_transfer_us":transfer_us,
+            "independent_download_size":count
+        }))
+    }
+    .await;
+    let exit = core.shutdown(Duration::from_secs(10)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced);
+    println!("Native large source qualification: {}", result?);
+    Ok(())
 }

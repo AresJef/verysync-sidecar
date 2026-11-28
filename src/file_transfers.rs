@@ -1,6 +1,10 @@
 //! Explicit bounded payload transfers. Local output names are caller selected.
-use crate::{Error, Result};
-use std::{fmt, time::Duration};
+use crate::{Error, OperationCompletion, OperationOptions, Result};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// An inclusive, finite HTTP byte range. Suffix/open-ended ranges are not guessed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,6 +130,122 @@ impl fmt::Debug for ResourceDownload {
         f.debug_struct("ResourceDownload")
             .field("bytes", &self.bytes)
             .finish_non_exhaustive()
+    }
+}
+
+/// Limits and opt-in behavior for a verified single-file download.
+#[derive(Clone, Debug)]
+pub struct VerifiedDownloadOptions {
+    pub(crate) max_bytes: u64,
+    pub(crate) operation: OperationOptions,
+    pub(crate) resume: bool,
+    pub(crate) expected_sha256: Option<[u8; 32]>,
+}
+
+impl VerifiedDownloadOptions {
+    /// Set the maximum output length and a single deadline for the operation.
+    pub fn new(max_bytes: u64, operation: OperationOptions) -> Self {
+        Self {
+            max_bytes,
+            operation,
+            resume: false,
+            expected_sha256: None,
+        }
+    }
+
+    /// Permit one suffix request after an interrupted response, provided the
+    /// authenticated source digest and the staged prefix are still verified.
+    pub fn resume_once(mut self) -> Self {
+        self.resume = true;
+        self
+    }
+
+    /// Also require an independently known SHA-256 before opening a data stream.
+    pub fn expected_sha256(mut self, sha256: [u8; 32]) -> Self {
+        self.expected_sha256 = Some(sha256);
+        self
+    }
+}
+
+/// Evidence from downloading one specific remote version into a new file.
+#[non_exhaustive]
+pub struct VerifiedDownloadReport {
+    /// The verified write received by the caller's local destination.
+    pub completed: Option<ResourceDownload>,
+    /// Bytes accepted for the SDK's private staging file.
+    pub staged_bytes: u64,
+    /// How many data requests entered the HTTP transport.
+    pub data_requests: u8,
+    /// The original trusted source SHA-256, if available.
+    pub source_sha256: Option<[u8; 32]>,
+    /// The requested suffix, if the SDK tried one.
+    pub resumed_range: Option<ResourceByteRange>,
+    /// The interruption that led to checking if a suffix request was safe.
+    pub initial_error: Option<Error>,
+    /// The reason the selected download or local publication remained incomplete.
+    pub error: Option<Error>,
+    /// An error removing private staging after the output was already complete.
+    pub cleanup_error: Option<Error>,
+    pub(crate) partial: Option<PathBuf>,
+    pub(crate) publication_entered: bool,
+}
+
+impl VerifiedDownloadReport {
+    /// See the private path of retained data. Inspect it explicitly before use.
+    /// The SDK cannot confirm it as a complete download.
+    pub fn retained_staging_path(&self) -> Option<&Path> {
+        self.partial.as_deref()
+    }
+
+    /// Summarize whether the verified file was published at the destination.
+    pub fn completion(&self) -> OperationCompletion {
+        if self.completed.is_some() {
+            OperationCompletion::Completed
+        } else if self.publication_entered {
+            OperationCompletion::Unconfirmed
+        } else if self.staged_bytes > 0 {
+            OperationCompletion::PartiallyCompleted
+        } else {
+            OperationCompletion::GoalNotMet
+        }
+    }
+}
+
+impl fmt::Debug for VerifiedDownloadReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VerifiedDownloadReport")
+            .field("completion", &self.completion())
+            .field("staged_bytes", &self.staged_bytes)
+            .field("data_requests", &self.data_requests)
+            .field("resumed_range", &self.resumed_range)
+            .field("initial_error", &self.initial_error)
+            .field("error", &self.error)
+            .field("cleanup_error", &self.cleanup_error)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for VerifiedDownloadReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(download) = &self.completed {
+            return write!(
+                f,
+                "The verified file was saved with {} bytes.",
+                download.bytes
+            );
+        }
+        if self.publication_entered {
+            f.write_str("The local file could not be confirmed at the chosen destination. Check that destination before trying again.")?;
+        } else {
+            f.write_str("The download did not finish.")?;
+        }
+        if let Some(source) = &self.error {
+            write!(f, " {source}")?;
+        }
+        if self.partial.is_some() {
+            f.write_str(" The SDK retained a private staging file for inspection.")?;
+        }
+        Ok(())
     }
 }
 

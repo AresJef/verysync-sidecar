@@ -169,6 +169,18 @@ jobs:
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
             --test-target engine_control --test-filter folder_workflow_separates_paused_configuration_from_live_state \
             --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/folder-native"
+      - name: Verify exact restart admission and independent download bytes
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: |
+          set -o pipefail
+          result=0
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target managed_instance --test-filter managed_restart_workflow_keeps_shutdown_evidence_and_rejects_replaced_identity \
+            --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/restart-native" || result=1
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target file_transfer_engine --test-filter verified_download_native_ \
+            --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/verified-download-native" || result=1
+          exit "$result"
       - name: Confirm final owned process cleanup
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: |

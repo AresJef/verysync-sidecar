@@ -183,7 +183,7 @@ pub use file_mutations::{
 };
 pub use file_transfers::{
     ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,
-    ResourceUpload, ResourceUploadConflict,
+    ResourceUpload, ResourceUploadConflict, VerifiedDownloadOptions, VerifiedDownloadReport,
 };
 pub use files::{
     ResourceChecksum, ResourceInfo, ResourcePath, ResourcePreview, ResourceVolume, ResourceVolumeId,
@@ -260,7 +260,7 @@ pub use managed::{
 };
 pub use managed::{
     ManagedControlGeneration, ManagedExitObservation, ManagedExitObservationOutcome,
-    ManagedGenerationStatus, ManagedShutdownReport, ShutdownRequestEvidence,
+    ManagedGenerationStatus, ManagedRestartReport, ManagedShutdownReport, ShutdownRequestEvidence,
 };
 pub use management_auth::{ApiKeyRotation, GuiAuthMode, GuiAuthenticationConfig};
 pub use management_transport::{ManagementProxy, ManagementTransport};

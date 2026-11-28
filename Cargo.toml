@@ -1,6 +1,6 @@
 [package]
 name = "verysync-sidecar"
-version = "0.1.2-rc.11.dev.4"
+version = "0.1.2-rc.11.dev.5"
 edition = "2021"
 rust-version = "1.85"
 resolver = "3"

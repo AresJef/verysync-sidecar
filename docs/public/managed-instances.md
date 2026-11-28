@@ -306,6 +306,12 @@ The report retains the original error, the HTTP status and response
 completeness when available, and any later exit. Use `confirmed_exit()` to
 inspect the actual exit code, process tree and release of private state.
 
+Use `restart_and_verify` for the selected program or
+`restart_with_program_and_verify` to choose another trusted local executable.
+The restart report keeps the original shutdown outcome and reports startup
+separately. Startup checks the stopped generation and device under the state
+lease. A startup refusal leaves the previous shutdown evidence available.
+
 When a shutdown call times out, use the remaining part of your application
 deadline to observe the same owned process. Save its `control_generation()`
 before calling `shutdown` once. If the result is uncertain and time remains,

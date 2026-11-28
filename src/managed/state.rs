@@ -101,9 +101,17 @@ impl Drop for StateLease {
 
 impl StateLease {
     pub(super) fn acquire(path: &Path) -> Result<Self> {
+        Self::acquire_impl(path, false)
+    }
+
+    pub(super) fn acquire_for_restart(path: &Path) -> Result<Self> {
+        Self::acquire_impl(path, true)
+    }
+
+    fn acquire_impl(path: &Path, existing_only: bool) -> Result<Self> {
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(error) if error.kind() == io::ErrorKind::NotFound && !existing_only => {
                 if let Err(error) = native::create_directory(path) {
                     if error.kind() != io::ErrorKind::AlreadyExists {
                         return Err(io_error("create private state", error));
@@ -130,10 +138,13 @@ impl StateLease {
         // names. Re-read the marker if the other owner made progress while
         // this directory was being inspected.
         let marker_present = || present(&marker, "inspect state marker");
+        if existing_only && !marker_present()? {
+            return Err(Error::UnmanagedState);
+        }
         if !marker_present()? && unmarked_has_other_entries(&path)? && !marker_present()? {
             return Err(Error::UnmanagedState);
         }
-        let file = native::open_private(&path.join(LEASE), false)
+        let file = native::open_private(&path.join(LEASE), existing_only)
             .map_err(|e| io_error("open state lease", e))?;
         if !marker_present()?
             && file
@@ -165,7 +176,7 @@ impl StateLease {
                 return Err(Error::UnmanagedState);
             }
         } else {
-            if unmarked_has_other_entries(&path)? {
+            if existing_only || unmarked_has_other_entries(&path)? {
                 return Err(Error::UnmanagedState);
             }
             let mut output =

@@ -9,6 +9,8 @@ mod resource_faults;
 mod resource_fixture;
 #[path = "common/single_file_version_probe.rs"]
 mod single_file_version_probe;
+#[path = "common/verified_file_download.rs"]
+mod verified_file_download;
 use managed_fixture::{options, TestResult};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Read, path::Path, time::Duration};

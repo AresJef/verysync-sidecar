@@ -186,9 +186,36 @@ pub(super) fn prepare(
     cancel: &Receiver<()>,
     deadline: Instant,
 ) -> Result<Prepared> {
+    prepare_bound(options, cancel, deadline, None)
+}
+
+pub(super) struct RestartOrigin {
+    pub(super) generation: super::state::Generation,
+    pub(super) program_sha256: [u8; 32],
+    pub(super) device_id: DeviceId,
+    pub(super) clean_stop_required: bool,
+}
+
+pub(super) fn prepare_bound(
+    options: &ManagedOptions,
+    cancel: &Receiver<()>,
+    deadline: Instant,
+    origin: Option<&RestartOrigin>,
+) -> Result<Prepared> {
     check_active(cancel, deadline)?;
-    let lease = StateLease::acquire(&options.state)?;
-    let generation = lease.begin_generation()?;
+    let (lease, generation) = if let Some(origin) = origin {
+        let lease = StateLease::acquire_for_restart(&options.state)?;
+        lease.require_stopped_generation(
+            origin.generation,
+            origin.program_sha256,
+            origin.clean_stop_required,
+        )?;
+        (lease, None)
+    } else {
+        let lease = StateLease::acquire(&options.state)?;
+        let generation = lease.begin_generation()?;
+        (lease, Some(generation))
+    };
     let state = lease.path();
     let key_exists = persisted_file(state, "key.pem")?;
     let cert_exists = persisted_file(state, "cert.pem")?;
@@ -212,6 +239,18 @@ pub(super) fn prepare(
         });
     }
     let expected_id = state.join(".verysync-sidecar-identity");
+    if let Some(origin) = origin {
+        if fresh || !configured_exists || !identity_exists {
+            return Err(Error::UnmanagedState);
+        }
+        let actual = read_persisted_identity(&expected_id)?;
+        if actual != origin.device_id {
+            return Err(Error::IdentityMismatch {
+                expected: origin.device_id.clone(),
+                actual,
+            });
+        }
+    }
     for name in ["tmp", "roaming", "local", "profile"] {
         let path = state.join(name);
         if path
@@ -312,14 +351,14 @@ pub(super) fn prepare(
     let identity = identities.into_iter().next().ok_or(Error::ManagedFailure {
         reason: "identity missing",
     })?;
+    if let Some(origin) = origin.filter(|origin| origin.device_id != identity) {
+        return Err(Error::IdentityMismatch {
+            expected: origin.device_id.clone(),
+            actual: identity,
+        });
+    }
     if identity_exists {
-        let mut text = String::new();
-        native::open_private(&expected_id, true)
-            .map_err(|e| io_error("read persisted identity", e))?
-            .take(128)
-            .read_to_string(&mut text)
-            .map_err(|e| io_error("read persisted identity", e))?;
-        let expected = DeviceId::parse(&text)?;
+        let expected = read_persisted_identity(&expected_id)?;
         if expected != identity {
             return Err(Error::IdentityMismatch {
                 expected,
@@ -332,6 +371,10 @@ pub(super) fn prepare(
             .write_all(identity.as_str().as_bytes())
             .map_err(|e| io_error("persist identity record", e))?;
     }
+    let generation = match generation {
+        Some(generation) => generation,
+        None => lease.begin_generation()?,
+    };
     let ready = state.join(".verysync-sidecar-configured");
     let first_configuration = !configured_exists;
     if !first_configuration {
@@ -365,6 +408,16 @@ pub(super) fn prepare(
         identity,
         outbound_proxy,
     })
+}
+
+fn read_persisted_identity(path: &Path) -> Result<DeviceId> {
+    let mut text = String::new();
+    native::open_private(path, true)
+        .map_err(|error| io_error("read persisted identity", error))?
+        .take(128)
+        .read_to_string(&mut text)
+        .map_err(|error| io_error("read persisted identity", error))?;
+    DeviceId::parse(&text)
 }
 
 struct Scratch(PathBuf);

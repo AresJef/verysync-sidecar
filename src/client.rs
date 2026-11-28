@@ -41,6 +41,7 @@ mod selective;
 mod sync_observation;
 mod transport_control;
 mod upgrade_control;
+mod verified_download;
 
 use std::collections::BTreeMap;
 use std::fmt;

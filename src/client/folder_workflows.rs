@@ -75,10 +75,11 @@ impl Client {
                 .duration_since(context.started)
                 .mul_f64(2.0 / 3.0);
         let mut previous = None;
+        let mut mutation_guard = None;
         let attempt = context
             .wait(write_deadline, CHANGE, async {
                 context.phase(OperationPhase::Checking);
-                let _guard = self.connection.mutation_lock.lock().await;
+                mutation_guard = Some(self.connection.mutation_lock.lock().await);
                 self.observe_control_identity().await?;
                 let current = self.folder(folder).await?;
                 self.system_status().await?;
@@ -135,6 +136,7 @@ impl Client {
                 }
             }
         }
+        drop(mutation_guard);
         if let (Some(expected), Some(selected)) = (expected_runtime, report.observed.as_ref()) {
             if matches!(
                 report.outcome,

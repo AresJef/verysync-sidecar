@@ -80,7 +80,7 @@ impl Client {
                 response: ResponseDiagnostic::new(status, body),
             })
     }
-    async fn read_resource_metadata(
+    pub(super) async fn read_resource_metadata(
         &self,
         path: &ResourcePath,
         algorithm: Option<ResourceChecksum>,

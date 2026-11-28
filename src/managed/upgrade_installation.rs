@@ -308,10 +308,14 @@ impl ManagedInstance {
                     }
                     context.phase(OperationPhase::Starting);
                     report.sdk_start_attempted = true;
-                    let transition = self.restart_with_program(
-                        program,
-                        context.deadline.saturating_duration_since(Instant::now()),
-                    ).await?;
+                    let old_exit = report.installation.original_exit.clone()
+                        .ok_or(Error::ManagedFailure {
+                            reason: "the original upgrade owner has no confirmed exit",
+                        })?;
+                    let origin = self.restart_origin(false);
+                    let transition = self
+                        .start_on_stopped_state(program, old_exit, context.deadline, Some(origin))
+                        .await?;
                     let current = self.client().instance();
                     if current.device_id != original_identity
                         || current.version.version != target.version().as_str()
@@ -355,11 +359,12 @@ impl ManagedInstance {
         let mut admission_attempts = 0;
         let mut first_admission_failure = None;
         let mut admission_retry = None;
+        let mut mutation_guard = None;
 
         let prepared = context
             .wait(deadline, CHECK, async {
                 context.phase(OperationPhase::Checking);
-                let _lock = client.lock_for_kernel_upgrade().await;
+                mutation_guard = Some(client.lock_for_kernel_upgrade().await);
                 self.require_control_generation(&generation)?;
                 let scope = self
                     .bind_upgrade_position(target, deadline.into_std(), true)
@@ -485,6 +490,7 @@ impl ManagedInstance {
             self.verify_fixed_installation(&mut report, already_installed, context, deadline);
         let (saved, ()) = tokio::join!(save, verify);
         report.persistence_error = saved.err();
+        drop(mutation_guard);
         Ok(report)
     }
 
