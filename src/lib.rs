@@ -242,7 +242,8 @@ pub use local_sync_events::{
 };
 pub use local_sync_workflows::{
     LocalSyncPreviewReport, LocalSyncRegistrationOutcome, LocalSyncRegistrationReport,
-    LocalSyncRunOutcome, LocalSyncRunReceipt, LocalSyncRunReport, LocalSyncWorkflowOptions,
+    LocalSyncRunControlOutcome, LocalSyncRunControlReport, LocalSyncRunOutcome,
+    LocalSyncRunReceipt, LocalSyncRunReport, LocalSyncWorkflowOptions,
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
@@ -285,7 +286,10 @@ pub use operation_options::{
     ManagementWriteEvidence, OperationCompletion, OperationOptions, OperationPhase,
     ReadRetryDecision,
 };
-pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
+pub use operations::{
+    ScanCompletion, ScanFolderObservation, ScanObservation, ScanPhase, ScanProgress, ScanScope,
+    ScanUpdate, ScanWorkflowReport,
+};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};
 pub use recovery::MarkerRepairResult;

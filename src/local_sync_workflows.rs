@@ -9,6 +9,66 @@ use crate::{
     LocalSyncSummary, ManagementWriteEvidence, OperationCompletion, OperationOptions, Result,
 };
 
+/// Observed outcome of one command for a selected Local Sync run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum LocalSyncRunControlOutcome {
+    /// The requested state was already observed before writing.
+    AlreadyMatched,
+    /// Readback showed the requested state for the original run.
+    Observed,
+    /// The original run ended without reaching the selected state.
+    EndedWithoutGoal,
+    /// The command was not dispatched.
+    NotSubmitted,
+    /// The endpoint sent a complete authorization refusal.
+    Rejected,
+    /// The SDK could not establish the final state of the original run.
+    Unconfirmed,
+}
+
+/// One Local Sync control request and evidence from the exact, selected run.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct LocalSyncRunControlReport {
+    /// Selected job identifier.
+    pub job: crate::LocalSyncJobId,
+    /// The native operation selected by the caller.
+    pub operation: crate::LocalSyncOperationId,
+    /// The execution associated with that operation.
+    pub run: crate::LocalSyncRunId,
+    /// Pause, resume, or explicit cancellation of the native operation.
+    pub control: crate::LocalSyncOperationControl,
+    /// Final status of the requested goal.
+    pub outcome: LocalSyncRunControlOutcome,
+    /// Dispatch and reply details for any original write.
+    pub write: ManagementWriteEvidence,
+    /// Initial acknowledgement or error. The already-satisfied path has no write.
+    pub original: Result<()>,
+    /// Latest verified status belonging to the same selected operation.
+    pub observed: Option<crate::LocalSyncStatus>,
+    /// Native run readback associated with the confirmed observation.
+    pub observed_run: Option<LocalSyncRun>,
+    /// Why subsequent observation stopped without obtaining a final result.
+    pub observation_error: Option<crate::Error>,
+}
+
+impl LocalSyncRunControlReport {
+    /// Classify the selected operation state. Inspect destination files separately
+    /// to check effects that were in flight.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            LocalSyncRunControlOutcome::AlreadyMatched | LocalSyncRunControlOutcome::Observed => {
+                OperationCompletion::Completed
+            }
+            LocalSyncRunControlOutcome::EndedWithoutGoal
+            | LocalSyncRunControlOutcome::NotSubmitted
+            | LocalSyncRunControlOutcome::Rejected => OperationCompletion::GoalNotMet,
+            LocalSyncRunControlOutcome::Unconfirmed => OperationCompletion::Unconfirmed,
+        }
+    }
+}
+
 /// A shared deadline and explicit result limits for a Local Sync workflow.
 #[derive(Clone, Debug)]
 pub struct LocalSyncWorkflowOptions {

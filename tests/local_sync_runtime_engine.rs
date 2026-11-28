@@ -126,9 +126,24 @@ async fn runtime(protocol: StorageProtocol) -> TestResult {
     ));
     let pause = core
         .client()
-        .control_local_sync_operation(&job.job_id, &operation, LocalSyncOperationControl::Pause)
+        .control_local_sync_run_and_verify(
+            &job.job_id,
+            &operation,
+            &run.id,
+            LocalSyncOperationControl::Pause,
+            OperationOptions::new(Duration::from_secs(10)),
+        )
         .await?;
-    assert_eq!(pause.observed.state, "paused");
+    assert_eq!(
+        pause.outcome,
+        LocalSyncRunControlOutcome::Observed,
+        "{pause:?}"
+    );
+    assert_eq!(
+        pause.observed.as_ref().map(|status| status.state.as_str()),
+        Some("paused")
+    );
+    assert!(pause.write.dispatched && pause.write.response_complete);
     tokio::time::sleep(Duration::from_secs(1)).await;
     // The native paused state gates new work but is not an I/O cancellation
     // acknowledgement: an already opened temporary payload can still commit.
@@ -166,9 +181,27 @@ async fn runtime(protocol: StorageProtocol) -> TestResult {
     );
     let resumed = core
         .client()
-        .control_local_sync_operation(&job.job_id, &operation, LocalSyncOperationControl::Resume)
+        .control_local_sync_run_and_verify(
+            &job.job_id,
+            &operation,
+            &run.id,
+            LocalSyncOperationControl::Resume,
+            OperationOptions::new(Duration::from_secs(10)),
+        )
         .await?;
-    assert_eq!(resumed.observed.operation_id.as_ref(), Some(&operation));
+    assert_eq!(
+        resumed.outcome,
+        LocalSyncRunControlOutcome::Observed,
+        "{resumed:?}"
+    );
+    assert_eq!(
+        resumed
+            .observed
+            .as_ref()
+            .and_then(|status| status.operation_id.as_ref()),
+        Some(&operation)
+    );
+    assert!(resumed.write.dispatched && resumed.write.response_complete);
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if completed(&peer.share)? > paused_count {
@@ -178,21 +211,33 @@ async fn runtime(protocol: StorageProtocol) -> TestResult {
         }
     })
     .await??;
-    core.client()
-        .control_local_sync_operation(&job.job_id, &operation, LocalSyncOperationControl::Stop)
+    let stopped = core
+        .client()
+        .control_local_sync_run_and_verify(
+            &job.job_id,
+            &operation,
+            &run.id,
+            LocalSyncOperationControl::Stop,
+            OperationOptions::new(Duration::from_secs(10)),
+        )
         .await?;
-    let stopped = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let status = core.client().local_sync_status(&job.job_id).await?;
-            assert_eq!(status.operation_id.as_ref(), Some(&operation));
-            if status.state == "idle" {
-                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(status);
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await??;
-    assert_eq!(stopped.last_run_cancelled, Some(true));
+    assert!(stopped.write.dispatched && stopped.write.response_complete);
+    assert_eq!(
+        stopped.outcome,
+        LocalSyncRunControlOutcome::Observed,
+        "{stopped:?}"
+    );
+    assert_eq!(
+        stopped
+            .observed
+            .as_ref()
+            .and_then(|status| status.last_run_cancelled),
+        Some(true)
+    );
+    assert_eq!(
+        stopped.observed_run.as_ref().map(|result| &result.id),
+        Some(&run.id)
+    );
     let final_run = core.client().local_sync_run(&job.job_id).await?;
     assert_eq!(final_run.id, run.id);
     assert_eq!(final_run.cancelled, Some(true));

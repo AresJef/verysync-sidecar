@@ -20,6 +20,14 @@ shares the Client clone mutation lock and is never automatically retried.
 An acknowledgement is separate from actual indexed files or scan completion.
 The existing scan observer cannot correlate a cycle with a specific request.
 
+Use `scan_and_observe` to establish the event watch, submit one scan and
+return the original reply alongside a cycle and current status for each
+selected folder. An all-folders call skips paused folders and checks that
+the others are idle before it submits the scan. If another writer or a
+scheduled scan can act on the same folder, the observed cycle may belong
+to that initiator. An event gap or deadline leaves unfinished observations
+in the report. Ending the wait sends no stop command or second scan.
+
 ```no_run
 # async fn example(client: &verysync_sidecar::Client, folder: &verysync_sidecar::FolderId) -> verysync_sidecar::Result<()> {
 use std::path::Path;

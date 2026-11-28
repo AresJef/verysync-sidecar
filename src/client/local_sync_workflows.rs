@@ -5,8 +5,10 @@ use std::{collections::HashSet, time::Duration};
 use reqwest::Method;
 use tokio::time::Instant;
 
-use super::local_sync_control::requested_subset;
-use super::{local_sync_control::decode_local_sync_json, workflow_write_result, Client};
+use super::local_sync_control::{
+    decode_local_sync_json, local_sync_control_route, requested_subset,
+};
+use super::{mutation_error, workflow_write_result, Client};
 use crate::{
     control_operation::version_fingerprint, local_sync::invalid,
     operation_options::OperationContext, timestamps::parse_rfc3339, Error, LocalSyncJobId,
@@ -15,8 +17,9 @@ use crate::{
     LocalSyncSummary, LocalSyncWorkflowOptions, ManagementWriteEvidence, OperationPhase, Result,
 };
 use crate::{
-    CreateLocalSyncJob, LocalSyncJob, LocalSyncRegistrationOutcome, LocalSyncRegistrationReport,
-    OperationOptions,
+    CreateLocalSyncJob, LocalSyncJob, LocalSyncOperationControl, LocalSyncOperationId,
+    LocalSyncRegistrationOutcome, LocalSyncRegistrationReport, LocalSyncRunControlOutcome,
+    LocalSyncRunControlReport, LocalSyncRunId, LocalSyncStatus, OperationOptions,
 };
 
 const RUN: &str = "submit the selected Local Sync preview for execution";
@@ -25,8 +28,180 @@ const PREVIEW: &str = "start the selected Local Sync preview";
 const CHECK_PREVIEW: &str = "check the selected Local Sync preview";
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const UNFINISHED: &str = "0001-01-01T00:00:00Z";
+const CONTROL: &str = "control the selected Local Sync run";
+const CHECK_CONTROL: &str = "observe the selected Local Sync run state";
 
 impl Client {
+    /// Pause, resume or stop the selected, currently identified run. The
+    /// engine's paused status can precede completion of writes already in
+    /// flight. Confirm a stop only on a terminal cancellation of that run.
+    /// A timeout or cancellation of this SDK wait sends no second command.
+    pub async fn control_local_sync_run_and_verify(
+        &self,
+        job: &LocalSyncJobId,
+        operation: &LocalSyncOperationId,
+        run: &LocalSyncRunId,
+        control: LocalSyncOperationControl,
+        options: OperationOptions,
+    ) -> Result<LocalSyncRunControlReport> {
+        use LocalSyncRunControlOutcome as Outcome;
+        let context = options.start()?;
+        let mut write = ManagementWriteEvidence::default();
+        let mut before = None;
+        let mut observed = None;
+        let mut observed_run = None;
+        let mut original = context
+            .wait(context.dispatch_deadline(), CONTROL, async {
+                context.phase(OperationPhase::Checking);
+                let _guard = self.connection.mutation_lock.lock().await;
+                self.observe_control_identity().await?;
+                let generation = self.system_status().await?.start_time.ok_or_else(|| {
+                    invalid("the Local Sync instance did not report its start time")
+                })?;
+                let status = self.exact_local_sync_operation(job, operation).await?;
+                let current = self.local_sync_run(job).await?;
+                if &current.id != run || parse_rfc3339(&current.started).is_none() {
+                    return Err(invalid(
+                        "the selected Local Sync run changed before control",
+                    ));
+                }
+                self.require_local_sync_generation(&generation).await?;
+                if local_sync_control_outcome(control, &status, &current) == Some(Outcome::Observed)
+                {
+                    observed = Some(status);
+                    observed_run = Some(current);
+                    return Ok(());
+                }
+                if !matches!(status.state.as_str(), "running" | "paused")
+                    || current.finished != UNFINISHED
+                {
+                    return Err(invalid("the selected Local Sync run is no longer active"));
+                }
+                before = Some((generation, current.started));
+                let route = self.local_sync_url(
+                    &["jobs", job.as_str(), local_sync_control_route(control)],
+                    &[],
+                )?;
+                if Instant::now() >= context.dispatch_deadline() {
+                    return Err(Error::Timeout { operation: CONTROL });
+                }
+                let request = self
+                    .connection
+                    .authorized_request(Method::POST, route, None);
+                let response = self
+                    .connection
+                    .send_workflow_write(CONTROL, request, &context, &mut write)
+                    .await?;
+                let ack: serde_json::Value =
+                    decode_local_sync_json(CONTROL, response.status, response.body, true, false)?;
+                if ack.as_object().is_none_or(|object| !object.is_empty()) {
+                    return Err(mutation_error(
+                        CONTROL,
+                        true,
+                        invalid("the Local Sync control reply was not the expected empty object"),
+                    ));
+                }
+                Ok(())
+            })
+            .await;
+        original = workflow_write_result(CONTROL, write, original);
+        let mut outcome = if !write.dispatched {
+            if observed_run.is_some() {
+                Outcome::AlreadyMatched
+            } else {
+                Outcome::NotSubmitted
+            }
+        } else if write.response_complete
+            && matches!(
+                &original,
+                Err(Error::Authentication { .. }
+                    | Error::AccessDenied { .. }
+                    | Error::LicenseRequired { .. })
+            )
+        {
+            Outcome::Rejected
+        } else {
+            Outcome::Unconfirmed
+        };
+        let mut observation_error = None;
+        if let Some((generation, started)) =
+            before.filter(|_| outcome == Outcome::Unconfirmed && write.dispatched)
+        {
+            context.phase(OperationPhase::Verifying);
+            let result = context
+                .wait(context.deadline, CHECK_CONTROL, async {
+                    loop {
+                        self.require_local_sync_generation(&generation).await?;
+                        let status = self.exact_local_sync_operation(job, operation).await?;
+                        let candidate = match control {
+                            LocalSyncOperationControl::Pause => status.state == "paused",
+                            LocalSyncOperationControl::Resume => status.state == "running",
+                            LocalSyncOperationControl::Stop => false,
+                        };
+                        if candidate || matches!(status.state.as_str(), "idle" | "error") {
+                            let current = self.local_sync_run(job).await?;
+                            if &current.id != run || current.started != started {
+                                return Err(invalid(
+                                    "another Local Sync run replaced the selected result",
+                                ));
+                            }
+                            self.require_local_sync_generation(&generation).await?;
+                            let reached = local_sync_control_outcome(control, &status, &current);
+                            observed_run = Some(current);
+                            observed = Some(status);
+                            if let Some(reached) = reached {
+                                return Ok(reached);
+                            }
+                        } else {
+                            observed_run = None;
+                            observed = Some(status);
+                        }
+                        tokio::time::sleep(POLL_INTERVAL).await;
+                    }
+                })
+                .await;
+            match result {
+                Ok(reached) => outcome = reached,
+                Err(source) => observation_error = Some(source),
+            }
+        }
+        context.phase(OperationPhase::Finished);
+        Ok(LocalSyncRunControlReport {
+            job: job.clone(),
+            operation: operation.clone(),
+            run: run.clone(),
+            control,
+            outcome,
+            write,
+            original,
+            observed,
+            observed_run,
+            observation_error,
+        })
+    }
+
+    async fn exact_local_sync_operation(
+        &self,
+        job: &LocalSyncJobId,
+        operation: &LocalSyncOperationId,
+    ) -> Result<LocalSyncStatus> {
+        let status = self.local_sync_status(job).await?;
+        if status.operation_id.as_ref() != Some(operation) {
+            return Err(invalid(
+                "the selected Local Sync operation is no longer current",
+            ));
+        }
+        Ok(status)
+    }
+
+    async fn require_local_sync_generation(&self, expected: &str) -> Result<()> {
+        if self.system_status().await?.start_time.as_deref() != Some(expected) {
+            return Err(invalid(
+                "the Local Sync instance restarted during observation",
+            ));
+        }
+        Ok(())
+    }
     /// Register one native storage job and check the exact endpoints and
     /// settings. For an unanswered request, the SDK compares the earlier job
     /// list with a fresh one. A matching label alone cannot identify a new job.
@@ -524,6 +699,36 @@ impl Client {
         drop(guard);
         context.phase(OperationPhase::Finished);
         Ok(report)
+    }
+}
+
+fn local_sync_control_outcome(
+    control: LocalSyncOperationControl,
+    status: &LocalSyncStatus,
+    run: &LocalSyncRun,
+) -> Option<LocalSyncRunControlOutcome> {
+    use LocalSyncRunControlOutcome as Outcome;
+    if run.finished == UNFINISHED {
+        return match (control, status.state.as_str()) {
+            (LocalSyncOperationControl::Pause, "paused")
+            | (LocalSyncOperationControl::Resume, "running") => Some(Outcome::Observed),
+            _ => None,
+        };
+    }
+    if !matches!(status.state.as_str(), "idle" | "error")
+        || !parse_rfc3339(&run.finished)
+            .zip(parse_rfc3339(&run.started))
+            .is_some_and(|(finished, started)| finished >= started)
+    {
+        return None;
+    }
+    if control == LocalSyncOperationControl::Stop
+        && run.cancelled == Some(true)
+        && status.last_run_cancelled == Some(true)
+    {
+        Some(Outcome::Observed)
+    } else {
+        Some(Outcome::EndedWithoutGoal)
     }
 }
 

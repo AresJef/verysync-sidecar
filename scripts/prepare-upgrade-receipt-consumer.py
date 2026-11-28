@@ -48,16 +48,26 @@ def prepare(args):
     test_files = ["upgrade_engine.rs", "upgrade_receipt_contract.rs"]
     if args.sdk_completion:
         test_files.extend((
-            "authentication_engine.rs", "devices.rs", "engine_control.rs", "file_transfer_engine.rs", "local_sync_engine.rs",
-            "managed_instance.rs", "transport_contract.rs",
+            "authentication_engine.rs", "devices.rs", "engine_control.rs", "events_contract.rs",
+            "file_history_engine.rs", "file_mutation_engine.rs", "file_transfer_engine.rs",
+            "local_sync_engine.rs", "local_sync_runtime_engine.rs", "managed_instance.rs",
+            "sync_observation.rs", "transport_contract.rs",
         ))
     for name in test_files:
         shutil.copyfile(package / "tests" / name, testroot / name)
     shutil.copytree(package / "tests/common", testroot / "common")
+    fixture_sources = {}
     if args.sdk_completion:
         shutil.copytree(package / "tests/fixtures", testroot / "fixtures")
         shutil.copytree(package / "scripts", consumer / "scripts")
         shutil.copytree(package / "releases", consumer / "releases")
+        # The test-only device event witness also compiles this timestamp parser.
+        # The tested library remains the independently unpacked dependency.
+        name = "src/timestamps.rs"
+        fixture_source = consumer / name
+        fixture_source.parent.mkdir()
+        shutil.copyfile(package / name, fixture_source)
+        fixture_sources[name] = sha256(fixture_source)
     else:
         (consumer / "scripts").mkdir()
         shutil.copyfile(package / "scripts/prepare-test-engine.py", consumer / "scripts/prepare-test-engine.py")
@@ -117,6 +127,7 @@ windows-sys = {{ version = "0.61.2", features = ["Win32_Foundation", "Win32_Secu
         "unpacked_crate_lock_sha256": sha256(package / "Cargo.lock"),
         "native_test_source_sha256": sha256(testroot / "common/upgrade_receipt_native.rs"),
         "consumer_test_sources_sha256": {name: sha256(testroot / name) for name in test_files},
+        "consumer_fixture_sources_sha256": fixture_sources,
         "consumer_uses_separately_unpacked_package": True,
     }, sort_keys=True))
 

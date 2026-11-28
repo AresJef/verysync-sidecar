@@ -42,6 +42,7 @@ struct State {
     folder_state: Mutex<String>,
     folder_paused: AtomicBool,
     scan_requests: AtomicUsize,
+    scan_mode: AtomicUsize,
     hold_snapshot: AtomicBool,
     snapshots_held: AtomicUsize,
     released: Notify,
@@ -91,6 +92,7 @@ impl Server {
             folder_state: Mutex::new("idle".to_owned()),
             folder_paused: AtomicBool::new(false),
             scan_requests: AtomicUsize::new(0),
+            scan_mode: AtomicUsize::new(0),
             hold_snapshot: AtomicBool::new(false),
             snapshots_held: AtomicUsize::new(0),
             released: Notify::new(),
@@ -248,10 +250,37 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) -> TestResult {
                 return Err("scan command must use POST".into());
             }
             state.scan_requests.fetch_add(1, Ordering::SeqCst);
+            let mode = state.scan_mode.load(Ordering::SeqCst);
+            if mode != 0 {
+                let mut events = state.events.lock().unwrap();
+                events.push(scan_event(2, "idle", "scanning"));
+                events.push(scan_event(
+                    if mode == 2 { 4 } else { 3 },
+                    "scanning",
+                    "idle",
+                ));
+                if mode == 3 {
+                    return Ok(());
+                }
+                if mode == 4 {
+                    let mut entry = scan_event(4, "idle", "scanning");
+                    let mut exit = scan_event(5, "scanning", "idle");
+                    entry["data"]["folder"] = json!("second");
+                    exit["data"]["folder"] = json!("second");
+                    events.extend([entry, exit]);
+                }
+            }
             json!({})
         }
         "/rest/config" => {
-            json!({"folders":[{"id":"scan-contract","path":"/synthetic-only","label":"Scan contract","paused":state.folder_paused.load(Ordering::SeqCst)}]})
+            let mut folders = vec![
+                json!({"id":"scan-contract","path":"/synthetic-only","label":"Scan contract","paused":state.folder_paused.load(Ordering::SeqCst)}),
+            ];
+            if state.scan_mode.load(Ordering::SeqCst) == 4 {
+                folders.push(json!({"id":"second","path":"/separate-synthetic","label":"Separate folder","paused":false}));
+                folders.push(json!({"id":"paused","path":"/paused-synthetic","label":"Paused folder","paused":true}));
+            }
+            json!({"folders":folders})
         }
         _ => return Err("unapproved event fixture route".into()),
     };
@@ -572,6 +601,70 @@ fn scan_event(id: u64, from: &str, to: &str) -> Value {
     let mut value = event(id, "StateChanged");
     value["data"] = json!({"folder":"scan-contract","from":from,"to":to});
     value
+}
+
+#[tokio::test]
+async fn scan_workflow_keeps_scope_original_reply_and_event_gap_separate() -> TestResult {
+    use verysync_sidecar::{FolderId, OperationOptions, ScanFolderObservation, ScanScope};
+    for mode in [1, 2, 3, 4] {
+        let server = Server::start().await?;
+        let client = server.client().await?;
+        server.state.scan_mode.store(mode, Ordering::SeqCst);
+        let folder = FolderId::parse("scan-contract")?;
+        let scope = if mode == 4 {
+            ScanScope::All
+        } else {
+            ScanScope::Folder(folder.clone())
+        };
+        let report = client
+            .scan_and_observe(scope, OperationOptions::new(Duration::from_secs(6)))
+            .await?;
+        assert!(report.write.dispatched);
+        assert_eq!(report.write.response_complete, mode != 3);
+        assert_eq!(report.original.is_ok(), mode != 3);
+        assert_eq!(server.state.scan_requests.load(Ordering::SeqCst), 1);
+        if mode == 2 {
+            let gap = report.event_gap.ok_or("stream gap was not reported")?;
+            assert_eq!(gap.reason, EventGapReason::MissingEvents);
+            assert!(matches!(
+                &report.folders[&folder],
+                ScanFolderObservation::Pending { .. }
+            ));
+        } else {
+            let ScanFolderObservation::CycleObserved(cycle) = &report.folders[&folder] else {
+                return Err("full scan transition was not observed".into());
+            };
+            assert_eq!(cycle.started.last_id, 2);
+            assert_eq!(cycle.ended.last_id, 3);
+            assert_eq!(cycle.snapshot.local_files, Some(17));
+            assert!(report.event_gap.is_none());
+        }
+        if mode == 4 {
+            assert_eq!(report.folders.len(), 3);
+            assert!(
+                matches!(&report.folders[&FolderId::parse("second")?], ScanFolderObservation::CycleObserved(cycle) if cycle.started.last_id == 4 && cycle.ended.last_id == 5)
+            );
+            assert!(matches!(
+                &report.folders[&FolderId::parse("paused")?],
+                ScanFolderObservation::Paused
+            ));
+        }
+        server.finish().await?;
+    }
+    let server = Server::start().await?;
+    let client = server.client().await?;
+    server.state.folder_paused.store(true, Ordering::SeqCst);
+    let id = FolderId::parse("scan-contract")?;
+    let report = client
+        .scan_and_observe(
+            ScanScope::Folder(id),
+            OperationOptions::new(Duration::from_secs(6)),
+        )
+        .await?;
+    assert!(matches!(report.original, Err(Error::ScanNotIdle)));
+    assert!(!report.write.dispatched);
+    assert_eq!(server.state.scan_requests.load(Ordering::SeqCst), 0);
+    server.finish().await
 }
 
 #[tokio::test]

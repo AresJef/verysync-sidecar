@@ -380,11 +380,7 @@ impl Client {
                 "Local Sync operation changed before explicit control",
             ));
         }
-        let route = match control {
-            LocalSyncOperationControl::Pause => "pause",
-            LocalSyncOperationControl::Resume => "resume",
-            LocalSyncOperationControl::Stop => "stop",
-        };
+        let route = local_sync_control_route(control);
         let operation = "control exact native Local Sync operation";
         let ack: serde_json::Value = self
             .local_sync_json(
@@ -824,6 +820,14 @@ impl Client {
             }
         }
         Ok(url)
+    }
+}
+
+pub(super) fn local_sync_control_route(control: LocalSyncOperationControl) -> &'static str {
+    match control {
+        LocalSyncOperationControl::Pause => "pause",
+        LocalSyncOperationControl::Resume => "resume",
+        LocalSyncOperationControl::Stop => "stop",
     }
 }
 

@@ -551,7 +551,8 @@ def main():
     if args.sdk_completion_consumer and (
         args.upgrade_consumer or args.test_target not in {
             "authentication_engine", "devices", "engine_control", "file_transfer_engine",
-            "local_sync_engine", "managed_instance",
+            "file_history_engine", "file_mutation_engine", "local_sync_engine",
+            "local_sync_runtime_engine", "managed_instance", "sync_observation",
         }
     ):
         raise ValueError("select one separately unpacked SDK consumer for a supported workflow test")

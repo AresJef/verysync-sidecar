@@ -43,7 +43,7 @@ use sync_diagnostics::report as sync_stage_diagnostic;
 
 #[tokio::test]
 async fn actual_scan_scopes_schedule_and_watcher_preserve_files() -> TestResult {
-    use verysync_sidecar::FolderScanPatch;
+    use verysync_sidecar::{FolderScanPatch, ScanFolderObservation, ScanScope};
     let root = tempfile::Builder::new()
         .prefix("vss-scan-")
         .tempdir()?
@@ -83,15 +83,56 @@ async fn actual_scan_scopes_schedule_and_watcher_preserve_files() -> TestResult 
         std::fs::write(a_path.join(path), b"scope bytes")?;
     }
     std::fs::write(b_path.join("other.bin"), b"other folder bytes")?;
-    core.client()
-        .request_scan_subpaths(&a, &[TargetPath::local(&first), TargetPath::local(second)])
+    let scan_options = || OperationOptions::new(Duration::from_secs(25));
+    let scan = core
+        .client()
+        .scan_and_observe(
+            ScanScope::Subpaths {
+                folder: a.clone(),
+                paths: vec![TargetPath::local(&first), TargetPath::local(second)],
+            },
+            scan_options(),
+        )
         .await?;
+    assert!(
+        scan.write.response_complete && scan.event_gap.is_none(),
+        "{scan:?}"
+    );
+    assert!(
+        matches!(
+            &scan.folders[&a],
+            ScanFolderObservation::CycleObserved(cycle) if cycle.snapshot.local_files == Some(2)
+        ),
+        "{scan:?}"
+    );
+    scan.original?;
     indexed_files(core.client(), &a, 2).await?;
     assert_eq!(core.client().folder_status(&b).await?.local_files, Some(0));
-    core.client().request_scan(&a).await?;
+    let whole = core
+        .client()
+        .scan_and_observe(ScanScope::Folder(a.clone()), scan_options())
+        .await?;
+    assert!(
+        matches!(&whole.folders[&a], ScanFolderObservation::CycleObserved(cycle) if cycle.snapshot.local_files == Some(3)),
+        "{whole:?}"
+    );
+    whole.original?;
     indexed_files(core.client(), &a, 3).await?;
     assert_eq!(core.client().folder_status(&b).await?.local_files, Some(0));
-    core.client().request_all_scans().await?;
+    let all = core
+        .client()
+        .scan_and_observe(ScanScope::All, scan_options())
+        .await?;
+    assert_eq!(all.folders.len(), 2);
+    assert!(
+        matches!(&all.folders[&a], ScanFolderObservation::CycleObserved(cycle) if cycle.snapshot.local_files == Some(3)),
+        "{all:?}"
+    );
+    assert!(
+        matches!(&all.folders[&b], ScanFolderObservation::CycleObserved(cycle) if cycle.snapshot.local_files == Some(1)),
+        "{all:?}"
+    );
+    all.original?;
     indexed_files(core.client(), &b, 1).await?;
     core.client().pause_folder(&a).await?;
     std::fs::write(a_path.join("paused.bin"), b"paused folder bytes")?;

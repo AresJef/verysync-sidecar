@@ -239,3 +239,118 @@ async fn rejected_or_expired_local_sync_preview_never_submits_run() -> TestResul
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn local_sync_run_control_does_not_adopt_a_replacement_operation() -> TestResult {
+    use verysync_sidecar::{
+        LocalSyncOperationControl, LocalSyncOperationId, LocalSyncRunControlOutcome, LocalSyncRunId,
+    };
+    let generation = || Reply::json(json!({"myID": ID, "startTime": "generation-one"}));
+    let status = |operation: &str, state: &str, cancelled: bool| {
+        Reply::json(json!({
+            "jobId":"job-a","operationId":operation,"state":state,"lastRunCancelled":cancelled,
+        }))
+    };
+    let cancelled = || {
+        Reply::json(json!({
+            "id":"run-a","jobId":"job-a","started":"2026-01-02T03:04:05Z",
+            "finished":"2026-01-02T03:05:00Z","count":2,
+            "summary":{"completed":1,"failed":0,"skipped":1},"cancelled":true,
+        }))
+    };
+    let version = || Reply::json(json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    for (case, outcome) in [
+        ("normal", LocalSyncRunControlOutcome::Observed),
+        ("lost reply", LocalSyncRunControlOutcome::Observed),
+        ("replacement", LocalSyncRunControlOutcome::Unconfirmed),
+        ("wrong before", LocalSyncRunControlOutcome::NotSubmitted),
+        ("already", LocalSyncRunControlOutcome::AlreadyMatched),
+    ] {
+        let own = "operation-a";
+        let mut replies = connection();
+        replies.extend([version(), identity(), generation(), identity()]);
+        replies.push(status(
+            if case == "wrong before" {
+                "operation-b"
+            } else {
+                own
+            },
+            if case == "already" { "idle" } else { "running" },
+            case == "already",
+        ));
+        if case != "wrong before" {
+            replies.extend([
+                identity(),
+                if case == "already" {
+                    cancelled()
+                } else {
+                    run("run-a", 0, 0, false)
+                },
+                generation(),
+            ]);
+        }
+        if !matches!(case, "wrong before" | "already") {
+            replies.push(if case == "lost reply" {
+                Reply {
+                    status: 0,
+                    ..Reply::json(json!({}))
+                }
+            } else {
+                Reply::json(json!({}))
+            });
+            replies.extend([
+                generation(),
+                identity(),
+                status(
+                    if case == "replacement" {
+                        "operation-b"
+                    } else {
+                        own
+                    },
+                    "idle",
+                    true,
+                ),
+            ]);
+            if case != "replacement" {
+                replies.extend([identity(), cancelled(), generation()]);
+            }
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let report = client
+            .control_local_sync_run_and_verify(
+                &LocalSyncJobId::parse("job-a")?,
+                &LocalSyncOperationId::parse(own)?,
+                &LocalSyncRunId::parse("run-a")?,
+                LocalSyncOperationControl::Stop,
+                OperationOptions::new(Duration::from_secs(4)),
+            )
+            .await?;
+        assert_eq!(report.outcome, outcome, "{case}: {report:?}");
+        assert_eq!(
+            report.write.dispatched,
+            !matches!(case, "wrong before" | "already")
+        );
+        if case == "lost reply" {
+            assert!(matches!(
+                &report.original,
+                Err(Error::MutationOutcomeUnknown { .. })
+            ));
+        }
+        if matches!(case, "normal" | "lost reply" | "already") {
+            assert_eq!(
+                report.observed_run.as_ref().and_then(|run| run.cancelled),
+                Some(true)
+            );
+        }
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("POST "))
+                .count(),
+            usize::from(!matches!(case, "wrong before" | "already"))
+        );
+    }
+    Ok(())
+}

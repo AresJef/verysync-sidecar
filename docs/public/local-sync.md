@@ -25,6 +25,12 @@ registration. After a lost response, it looks for one newly observed job that
 matches the requested endpoints and settings. Coordinate other job writers so
 they cannot create an indistinguishable job during that check.
 
+Use `control_local_sync_run_and_verify` with the job, operation and run IDs
+to pause, resume or stop ongoing execution. A paused status can arrive before
+writes already in flight finish. A verified stop includes a terminal record
+for that run with cancellation set. Check destination files to see which
+actions had already affected them. Ending the SDK wait sends no stop command.
+
 The Local Sync API controls the official core's storage jobs. These
 registrations are distinct from P2P synchronization folders and file-manager
 volumes. Every method uses the selected authenticated connection. The SDK does
