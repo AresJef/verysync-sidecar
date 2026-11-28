@@ -11,8 +11,8 @@ use crate::{
     client::{classify_control_read_trust, retry_delay},
     operation_options::OperationContext,
     upgrade_receipt::UpgradeAttempt,
-    Client, Error, LocalProgram, OfficialProgram, OperationOptions, OperationPhase,
-    ReadRetryDecision, Result, UpgradeAction, UpgradeCheckpoint, UpgradeDispatch,
+    Client, Error, LocalProgram, OfficialProgram, OperationCompletion, OperationOptions,
+    OperationPhase, ReadRetryDecision, Result, UpgradeAction, UpgradeCheckpoint, UpgradeDispatch,
     UpgradeOperationResult, UpgradeOutcome,
 };
 
@@ -72,6 +72,19 @@ pub struct KernelInstallationReport {
     /// The request-finished checkpoint could not be saved. Its error does not
     /// change the observed effects or initiate another upload.
     pub persistence_error: Option<Error>,
+}
+
+impl KernelInstallationReport {
+    /// Summarize whether the target executable was verified on disk.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            KernelInstallationOutcome::AlreadyInstalled | KernelInstallationOutcome::Installed => {
+                OperationCompletion::Completed
+            }
+            KernelInstallationOutcome::Unconfirmed => OperationCompletion::Unconfirmed,
+            _ => OperationCompletion::GoalNotMet,
+        }
+    }
 }
 
 impl fmt::Display for KernelInstallationReport {
@@ -160,6 +173,21 @@ pub struct KernelReadinessReport {
     pub transition: Option<ProgramTransition>,
     /// The startup or readiness error, if one was observed.
     pub readiness_error: Option<Error>,
+}
+
+impl KernelReadinessReport {
+    /// Summarize the installed executable and readiness together.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            KernelReadinessOutcome::AlreadyReady | KernelReadinessOutcome::Ready => {
+                OperationCompletion::Completed
+            }
+            KernelReadinessOutcome::InstalledReadinessUnconfirmed => {
+                OperationCompletion::PartiallyCompleted
+            }
+            KernelReadinessOutcome::InstallationUnconfirmed => self.installation.completion(),
+        }
+    }
 }
 
 impl fmt::Display for KernelReadinessReport {

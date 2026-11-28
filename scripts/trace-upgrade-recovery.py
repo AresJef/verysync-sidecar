@@ -12,6 +12,7 @@ import time
 
 PHASES = ("before-control", "begin", "end", "after-control")
 CASES = ("cli-partial", "upload-drop")
+BUSINESS_CASE = "s30-install-drop"
 
 
 def record_linux(command, root):
@@ -119,7 +120,7 @@ class WindowsJobObserver:
         self.kernel.CloseHandle(self.job)
 
 
-def record_bracketed(command, root):
+def record_bracketed(command, root, cases=CASES):
     observer_class = {"darwin": DarwinForkObserver, "win32": WindowsJobObserver}[sys.platform]
     env = dict(os.environ, VERYSYNC_S29_PHASE_DIR=str(root))
     process = subprocess.Popen(command, env=env)
@@ -129,7 +130,7 @@ def record_bracketed(command, root):
     try:
         observer = observer_class(process.pid)
         (root / "attached").touch()
-        expected = {(name, phase) for name in CASES for phase in PHASES}
+        expected = {(name, phase) for name in cases for phase in PHASES}
         while process.poll() is None and expected:
             for name, phase in sorted(expected):
                 stem = root / f"{name}-{phase}"
@@ -154,13 +155,16 @@ def start(command):
         raise ValueError("the native process observers require an isolated GitHub runner")
     root = Path(os.environ["VERYSYNC_S29_TRACE_DIR"])
     root.mkdir(mode=0o700)
+    business = os.environ.get("VERYSYNC_S30_TRACE") == "1"
     if sys.platform == "linux":
         method = "strace"
         status, events, diagnostic = record_linux(command, root)
         brackets = []
     else:
         method = {"darwin": "darwin_kqueue", "win32": "windows_job_total"}[sys.platform]
-        status, brackets, diagnostic = record_bracketed(command, root)
+        status, brackets, diagnostic = record_bracketed(
+            command, root, (BUSINESS_CASE,) if business else CASES
+        )
         events = []
     (root / "intermediate.json").write_text(json.dumps({
         "test_exit": status,
@@ -168,15 +172,17 @@ def start(command):
         "diagnostic": diagnostic,
         "events": events,
         "brackets": brackets,
+        "business": business,
     }), encoding="utf-8")
     return status
 
 
-def read_test_rows(path):
+def read_test_rows(path, business=False):
     rows = []
+    marker = "s30-upgrade " if business else "s29-upgrade "
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if "s29-upgrade {" in line:
-            rows.append(json.loads(line.split("s29-upgrade ", 1)[1]))
+        if marker + "{" in line:
+            rows.append(json.loads(line.split(marker, 1)[1]))
     return rows
 
 
@@ -250,7 +256,7 @@ def check_case(name, rows, events, method="strace", brackets=()):
     }
 
 
-def verify_bracket(name, method, brackets, begin, end):
+def verify_bracket(name, method, brackets, begin, end, *, original_program_running=False):
     frames = sorted((row for row in brackets if row["case"] == name), key=lambda row: row["unix_ns"])
     if [row["phase"] for row in frames] != list(PHASES) or any(row["pid"] != begin["pid"] for row in frames):
         raise ValueError(f"{name}: missing independent kernel counter frames for the caller")
@@ -262,7 +268,11 @@ def verify_bracket(name, method, brackets, begin, end):
             row["root_exec"] for row in [b, c, d]
         )
     elif method == "windows_job_total":
-        good = all(row["active"] == 1 for row in [a, b, c, d]) and (
+        active_coverage = (
+            1 <= c["active"] <= b["active"] == a["active"] and c["active"] == d["active"]
+            if original_program_running else all(row["active"] == 1 for row in [a, b, c, d])
+        )
+        good = active_coverage and (
             b["total"] - a["total"], c["total"] - b["total"], d["total"] - c["total"]
         ) == (1, 0, 1)
     else:
@@ -271,12 +281,64 @@ def verify_bracket(name, method, brackets, begin, end):
         raise ValueError(f"{name}: kernel accounting did not prove short-child controls and zero creation: {frames}")
 
 
+def verify_business_case(rows, events, method, brackets):
+    name = BUSINESS_CASE
+    case = [row for row in rows if row["case"] == name]
+    required = ("calibration-child", "begin-business-operation", "native-response-withheld",
+                "end-business-operation", "calibration-after", "verified-within-original-call")
+    stages = {row["stage"]: row for row in case if row["stage"] in required}
+    if set(stages) != set(required) or len({row["pid"] for row in case}) != 1 or any(
+        sum(row["stage"] == stage for row in case) != 1 for stage in required
+    ):
+        raise ValueError(f"{name}: missing unique calibrated business-operation evidence")
+    before, begin, upstream, end, after, final = (stages[key] for key in required)
+    if not before["unix_ns"] <= begin["unix_ns"] < upstream["unix_ns"] < end["unix_ns"] <= after["unix_ns"]:
+        raise ValueError(f"{name}: upload response and observer windows do not agree")
+    observed = final["detail"]
+    if (end["detail"]["operation_id"] != observed["operation_id"]
+            or not observed["payload_preserved"] or not observed["original_reply_unknown"]
+            or observed["observed_disk_sha256"] != observed["target_sha256"]
+            or observed["previous_sha256"] == observed["target_sha256"]
+            or observed["routes"] != [["GET", "/rest/system/version"],
+                                      ["GET", "/rest/system/version"],
+                                      ["GET", "/rest/system/status"],
+                                      ["POST", "/rest/system/upgrade/upload"]]
+            or upstream["detail"]["upstream_status"] != 200
+            or upstream["detail"]["downstream_bytes"] != 0):
+        raise ValueError(f"{name}: installation/response/verification evidence is inconsistent")
+    if method == "strace":
+        for control, lower, upper in (
+            (before, before["unix_ns"] - 5_000_000_000, begin["unix_ns"]),
+            (after, end["unix_ns"], after["unix_ns"]),
+        ):
+            if not any(item["pid"] == control["detail"]["pid"]
+                       and lower <= item["time"] <= upper for item in events):
+                raise ValueError(f"{name}: short-lived process calibration was missed")
+        direct_creations = [
+            item for item in events if begin["unix_ns"] <= item["time"] <= end["unix_ns"]
+            and (item["parent"] == begin["pid"] or item["pid"] == begin["pid"])
+        ]
+        if direct_creations:
+            raise ValueError(f"{name}: the SDK caller created a process or executed another image in the observed window")
+    else:
+        verify_bracket(name, method, brackets, begin, end, original_program_running=True)
+    return {
+        "case": name, "operation_id": end["detail"]["operation_id"],
+        "begin_unix_ns": begin["unix_ns"], "end_unix_ns": end["unix_ns"],
+        "upload_submissions": 1, "sdk_process_creations": 0,
+        "scope": "observed caller activity; native response and exit are separate evidence",
+        "calibration_pids": [before["detail"]["pid"], after["detail"]["pid"]],
+        "kernel_brackets": [row for row in brackets if row["case"] == name],
+    }
+
+
 def verify(args):
     if not args.trace.is_file():
         raise ValueError("native runner did not produce a process witness")
     evidence = json.loads(args.trace.read_text(encoding="utf-8"))
     reason = evidence["diagnostic"]
-    rows = read_test_rows(args.log)
+    business = evidence.get("business", False)
+    rows = read_test_rows(args.log, business)
     events = scoped_events(rows, evidence["events"])
     if args.scoped_trace:
         args.scoped_trace.write_text(json.dumps({
@@ -288,7 +350,7 @@ def verify(args):
                   "test_exit": evidence["test_exit"]}
     else:
         try:
-            cases = [
+            cases = [verify_business_case(rows, events, evidence["observer"], evidence.get("brackets", []))] if business else [
                 check_case(name, rows, events, evidence["observer"], evidence.get("brackets", []))
                 for name in CASES
             ]

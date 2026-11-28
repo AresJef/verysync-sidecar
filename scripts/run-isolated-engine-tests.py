@@ -536,7 +536,10 @@ def main():
         raise ValueError("use --blocked-upgrade-check to select the provider-blocked CLI case")
     if args.upgrade_process_trace and (
         args.test_target != "upgrade_engine"
-        or args.test_filter != "native_same_attempt_observes"
+        or args.test_filter not in {
+            "native_same_attempt_observes",
+            "native_business_install_reports_verified_target_after_lost_reply",
+        }
         or not args.upgrade_consumer
         or os.environ.get("GITHUB_ACTIONS") != "true"
     ):
@@ -612,6 +615,8 @@ def main():
                 raise ValueError("the private native tracing runner requires launcher paths without spaces")
             env[runner] = " ".join(launcher)
             env["VERYSYNC_S29_TRACE_DIR"] = str(args.upgrade_process_trace)
+            if args.test_filter == "native_business_install_reports_verified_target_after_lost_reply":
+                env["VERYSYNC_S30_TRACE"] = "1"
         opener = None
         for name in ("VERYSYNC_TEST_OPENER_CAPTURE_DIR", "VERYSYNC_TEST_OPENER_EXECUTABLE", "VERYSYNC_TEST_OPENER_SYSTEM_ROOT", "VERYSYNC_TEST_OPENER_OWNED_CHILD", "VERYSYNC_TEST_OPENER_RUNTIME_PROBE", "VERYSYNC_TEST_BROWSER_HOLD", "VERYSYNC_TEST_BROWSER_ACTOR", "VERYSYNC_TEST_BROWSER_ISOLATION"):
             env.pop(name, None)

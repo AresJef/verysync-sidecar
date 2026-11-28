@@ -20,16 +20,7 @@ use crate::{operation_options::OperationContext, Error, OperationOptions, Operat
 const SHUTDOWN: &str = crate::error::GRACEFUL_SHUTDOWN_OPERATION;
 
 /// Transport facts from the shutdown request made by one owning call.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct ShutdownRequestEvidence {
-    /// The request was handed to the transport. This alone cannot prove receipt.
-    pub dispatched: bool,
-    /// The status recorded in response headers, if received.
-    pub status: Option<u16>,
-    /// The complete bounded response became available to the SDK.
-    pub response_complete: bool,
-}
+pub type ShutdownRequestEvidence = crate::ManagementWriteEvidence;
 
 /// The normal shutdown result and any later observation of the same owner.
 #[derive(Debug)]

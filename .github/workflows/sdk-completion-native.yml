@@ -104,6 +104,34 @@ jobs:
             --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/native"
           python -c 'import pathlib, sys; lines = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"); assert "test result: ok. 5 passed;" in lines' \
             "$RUNNER_TEMP/sdk-upgrade-evidence/native/upgrade-engine.log"
+      - name: Prepare the Linux process witness
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v strace >/dev/null; then
+            strace_dir=$(mktemp -d "$RUNNER_TEMP/sdk-strace.XXXXXX")
+            (
+              cd "$strace_dir"
+              apt-get download strace
+              dpkg-deb -x ./strace_*.deb "$strace_dir/unpacked"
+            )
+            printf '%s\n' "$strace_dir/unpacked/usr/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Count SDK process creation independently of the engine
+        run: |
+          result=0
+          trace="$RUNNER_TEMP/sdk-upgrade-process-trace"
+          raw="$RUNNER_TEMP/sdk-upgrade-evidence/process-witness"
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target upgrade_engine --test-filter native_business_install_reports_verified_target_after_lost_reply \
+            --upgrade-consumer "$RUNNER_TEMP/sdk-upgrade-consumer/consumer" \
+            --upgrade-process-trace "$trace" --evidence-dir "$raw" || result=1
+          if [ -f "$trace/observer.stderr" ]; then
+            cp "$trace/observer.stderr" "$raw/observer.stderr"
+          fi
+          python scripts/trace-upgrade-recovery.py --verify --trace "$trace/intermediate.json" \
+            --log "$raw/upgrade-engine.log" --output "$raw/independent-process-witness.json" \
+            --scoped-trace "$raw/owned-process-events.json" || result=1
+          exit "$result"
       - name: Verify the two isolated executable trees exited
         if: always() && env.VERYSYNC_TEST_BINARY != ''
         run: |
@@ -115,7 +143,7 @@ jobs:
           fi
           exit "$result"
       - name: Verify the real Windows ARM64 shutdown path
-        if: matrix.package == 'windows-arm64-standard'
+        if: always() && matrix.package == 'windows-arm64-standard' && env.VERYSYNC_TEST_BINARY != ''
         run: |
           set -o pipefail
           python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
@@ -131,6 +159,22 @@ jobs:
           set -o pipefail
           python scripts/prepare-test-engine.py check-cleanup \
             | tee "$RUNNER_TEMP/sdk-upgrade-evidence/windows-shutdown-cleanup.log"
+      - name: Verify the configured-folder workflow and actual index readback
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: |
+          set -o pipefail
+          cargo +"$TEST_TOOLCHAIN" test --locked --offline --test transport_contract \
+            folder_workflow_contracts -- --nocapture \
+            | tee "$RUNNER_TEMP/sdk-upgrade-evidence/folder-contract.log"
+          python scripts/run-isolated-engine-tests.py --toolchain "$TEST_TOOLCHAIN" \
+            --test-target engine_control --test-filter folder_workflow_separates_paused_configuration_from_live_state \
+            --evidence-dir "$RUNNER_TEMP/sdk-upgrade-evidence/folder-native"
+      - name: Confirm final owned process cleanup
+        if: always() && env.VERYSYNC_TEST_BINARY != ''
+        run: |
+          set -o pipefail
+          python scripts/prepare-test-engine.py check-cleanup \
+            | tee "$RUNNER_TEMP/sdk-upgrade-evidence/final-target-cleanup.log"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:

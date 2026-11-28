@@ -566,6 +566,118 @@ async fn folder_update_pause_preserves_fields_and_resumes_actual_indexing() -> T
 }
 
 #[tokio::test]
+async fn folder_workflow_separates_paused_configuration_from_live_state() -> TestResult {
+    use std::{fs, time::Duration};
+    use verysync_sidecar::{
+        CreateFolderOptions, FolderConfigurationOutcome, FolderId, FolderPatch, FolderState,
+        OperationCompletion, OperationOptions, TargetPath,
+    };
+    let mut instance = EngineFixture::start().await?;
+    let client = Client::connect(
+        ConnectOptions::new(endpoint(&instance)?, ApiKey::new(instance.api_key())?)
+            .expected_device_id(DeviceId::parse(instance.device_id())?),
+    )
+    .await?;
+    let result: TestResult = async {
+        let sample_root = instance.state_dir().join("workflow-files");
+        fs::create_dir(&sample_root)?;
+        let original_file = sample_root.join("original.bin");
+        fs::write(&original_file, b"owned workflow content")?;
+        let folder = FolderId::parse("sdk-workflow-pause")?;
+        let created = client
+            .create_folder(
+                &CreateFolderOptions::new(folder.clone(), TargetPath::local(&sample_root))
+                    .label("Original folder")
+                    .paused(false),
+            )
+            .await?;
+        let changed = client
+            .update_folder_and_verify(
+                &folder,
+                &FolderPatch::default().label("Verified folder"),
+                OperationOptions::new(Duration::from_secs(15)),
+            )
+            .await?;
+        assert_eq!(changed.completion(), OperationCompletion::Completed);
+        let actual = changed.observed.ok_or("expected native named readback")?;
+        assert_eq!(actual.label, "Verified folder");
+        assert_eq!(actual.extra, created.extra);
+        assert_eq!(actual.path, created.path);
+        let pause = client
+            .set_folder_pause_and_verify(
+                &folder,
+                true,
+                Some(FolderState::Paused),
+                OperationOptions::new(Duration::from_secs(3)),
+            )
+            .await?;
+        assert_eq!(pause.outcome, FolderConfigurationOutcome::CurrentMatches);
+        assert_eq!(pause.completion(), OperationCompletion::PartiallyCompleted);
+        assert!(pause.observed.as_ref().is_some_and(|folder| folder.paused));
+        let runtime = pause
+            .runtime
+            .ok_or("expected separate activity observation")?;
+        assert!(!runtime.expected_state_observed);
+        assert!(matches!(runtime.source, Some(Error::Timeout { .. })));
+        assert_eq!(
+            runtime.last_snapshot.and_then(|last| last.state),
+            Some(FolderState::Unknown(String::new()))
+        );
+        let same = client
+            .set_folder_pause_and_verify(
+                &folder,
+                true,
+                None,
+                OperationOptions::new(Duration::from_secs(15)),
+            )
+            .await?;
+        assert_eq!(same.outcome, FolderConfigurationOutcome::AlreadyMatched);
+        assert!(!same.write.dispatched);
+        let added = sample_root.join("while-paused.bin");
+        fs::write(&added, b"new owned workflow bytes")?;
+        let resume = client
+            .set_folder_pause_and_verify(
+                &folder,
+                false,
+                Some(FolderState::Idle),
+                OperationOptions::new(Duration::from_secs(25)),
+            )
+            .await?;
+        assert_eq!(resume.completion(), OperationCompletion::Completed);
+        assert!(resume
+            .observed
+            .as_ref()
+            .is_some_and(|folder| !folder.paused));
+        assert!(resume
+            .runtime
+            .is_some_and(|status| status.expected_state_observed));
+        tokio::time::timeout(Duration::from_secs(15), async {
+            while client.folder_status(&folder).await?.local_files != Some(2) {
+                tokio::time::sleep(Duration::from_millis(75)).await;
+            }
+            Ok::<(), Error>(())
+        })
+        .await??;
+        assert_eq!(fs::read(original_file)?, b"owned workflow content");
+        assert_eq!(fs::read(added)?, b"new owned workflow bytes");
+        println!(
+            "folder workflow native {}",
+            serde_json::json!({
+                "updated_label_and_preserved_unselected_fields":true,
+                "pause_configuration_matched":true,"native_paused_activity_empty":true,
+                "paused_configuration_already_matched_zero_writes":true,
+                "resume_observed_idle_and_two_files_independently":true,"synthetic_bytes_match":true
+            })
+        );
+        Ok(())
+    }
+    .await;
+    let stopped = instance.shutdown().await?;
+    assert!(stopped.success());
+    result
+}
+
+#[tokio::test]
 async fn folder_remove_keep_files_preserves_samples_and_unrelated_configuration() -> TestResult {
     use sha2::{Digest, Sha256};
     use std::{

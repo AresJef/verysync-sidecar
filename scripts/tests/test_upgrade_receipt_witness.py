@@ -35,6 +35,39 @@ def inputs():
 
 
 class UpgradeProcessWitnessTests(unittest.TestCase):
+    def test_business_window_requires_matching_disk_and_no_caller_spawn(self):
+        name, owner, operation = witness.BUSINESS_CASE, 50, list(range(16))
+        target, old = "a" * 64, "b" * 64
+        rows = [
+            {"case": name, "pid": owner, "stage": key, "unix_ns": stamp, "detail": values}
+            for key, stamp, values in [
+                ("calibration-child", 16_000, {"pid": 51}),
+                ("begin-business-operation", 20_000, {}),
+                ("native-response-withheld", 26_000, {"upstream_status": 200, "downstream_bytes": 0}),
+                ("end-business-operation", 30_000, {"operation_id": operation}),
+                ("calibration-after", 40_000, {"pid": 52}),
+                ("verified-within-original-call", 42_000, {
+                    "operation_id": operation, "payload_preserved": True,
+                    "original_reply_unknown": True, "observed_disk_sha256": target,
+                    "target_sha256": target, "previous_sha256": old,
+                    "routes": [["GET", "/rest/system/version"], ["GET", "/rest/system/version"],
+                               ["GET", "/rest/system/status"], ["POST", "/rest/system/upgrade/upload"]],
+                }),
+            ]
+        ]
+        events = [
+            {"event": "create", "time": stamp, "parent": parent, "pid": pid}
+            for stamp, parent, pid in [(14_000, owner, 51), (33_000, owner, 52), (25_000, 9, 10)]
+        ]
+        self.assertEqual(witness.verify_business_case(rows, events, "strace", [])["sdk_process_creations"], 0)
+        rows[-1]["detail"]["observed_disk_sha256"] = old
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            witness.verify_business_case(rows, events, "strace", [])
+        rows[-1]["detail"]["observed_disk_sha256"] = target
+        events.append({"event": "create", "time": 27_000, "parent": owner, "pid": 53})
+        with self.assertRaisesRegex(ValueError, "caller created a process"):
+            witness.verify_business_case(rows, events, "strace", [])
+
     def test_accepts_calibrated_empty_interval(self):
         name, rows, events = inputs()
         evidence = witness.check_case(name, rows, witness.scoped_events(rows, events))

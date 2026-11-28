@@ -109,6 +109,12 @@ writers; the precheck is not an external atomic transaction.
 `folders()` and `folder(&id)` read exact current folder configuration.
 `update_folder` with `FolderPatch` sends only explicit label/pause fields.
 `pause_folder` and `resume_folder` change only folder-level pause configuration.
+Use `set_folder_pause_and_verify` to check the same folder and skip a write if
+its pause setting already matches. You can also select a runtime state to wait
+for. Read `completion()` to see whether the configured flag and the requested
+activity were both observed. The fixed native release can return an empty
+activity state for a paused folder. In that case a matching pause flag alone
+leaves a requested activity check unconfirmed.
 Check each `FolderUpdate::requested_fields_match` and its actual configuration;
 false can mean pending application or another writer's change.
 

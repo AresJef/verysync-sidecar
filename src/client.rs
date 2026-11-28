@@ -15,6 +15,7 @@ mod file_control;
 mod file_mutation;
 mod file_transfer;
 mod folder_options;
+mod folder_workflows;
 mod gui_listener;
 mod gui_preferences;
 mod gui_resources;

@@ -514,6 +514,7 @@ fn fixed_upload_length(head: &str) -> TestResult<u64> {
 
 #[tokio::test]
 async fn native_business_install_reports_verified_target_after_lost_reply() -> TestResult {
+    await_process_observer().await?;
     let root = tempfile::Builder::new().prefix("u30h").tempdir()?;
     let (mut core, settings, program) = owned_old(root.path(), true).await?;
     let native = settings
@@ -579,6 +580,18 @@ async fn native_business_install_reports_verified_target_after_lost_reply() -> T
             .request_timeout(Duration::from_secs(35))?,
     )
     .await?;
+    let tracing = std::env::var_os("VERYSYNC_S29_PHASE_DIR").is_some()
+        || std::env::var_os("VERYSYNC_S30_TRACE").is_some();
+    if tracing {
+        process_observer_barrier("s30-install-drop", "before-control").await?;
+        calibrate_process_creation("s30-install-drop", "calibration-child")?;
+        process_observer_barrier("s30-install-drop", "begin").await?;
+        receipt_event(
+            "s30-install-drop",
+            "begin-business-operation",
+            serde_json::json!({}),
+        )?;
+    }
     armed.store(true, Ordering::SeqCst);
     let job = core.install_kernel_upgrade(
         archive,
@@ -589,6 +602,18 @@ async fn native_business_install_reports_verified_target_after_lost_reply() -> T
         result = job => result?,
         end = &mut server => { end??; return Err("native witness stopped before the report".into()); }
     };
+    if tracing {
+        receipt_event(
+            "s30-install-drop",
+            "end-business-operation",
+            serde_json::json!({
+                "operation_id":report.installation.receipt.operation_id()
+            }),
+        )?;
+        process_observer_barrier("s30-install-drop", "end").await?;
+        calibrate_process_creation("s30-install-drop", "calibration-after")?;
+        process_observer_barrier("s30-install-drop", "after-control").await?;
+    }
     let actual: Vec<_> = std::iter::from_fn(|| witnessed.try_recv().ok()).collect();
     let routes: Vec<_> = actual
         .iter()
@@ -652,7 +677,9 @@ async fn native_business_install_reports_verified_target_after_lost_reply() -> T
         serde_json::json!({
             "routes": actual, "native_exit":exit.code,"target_sha256":hex(target),
             "previous_sha256":hex(old), "payload_preserved":true,
-            "original_reply_unknown":true, "sdk_result":report.outcome.to_string()
+            "original_reply_unknown":true, "sdk_result":report.outcome.to_string(),
+            "observed_disk_sha256":disk.current_sha256.map(hex),
+            "operation_id":report.installation.receipt.operation_id()
         }),
     )?;
     server.abort();

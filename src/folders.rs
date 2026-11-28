@@ -1,6 +1,9 @@
 //! Folder configuration inputs and readback, preserving upstream defaults.
 
-use crate::{FolderId, PathStyle, Result, TargetPath};
+use crate::{
+    Error, FolderId, FolderState, FolderStatus, ManagementWriteEvidence, OperationCompletion,
+    PathStyle, Result, TargetPath,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -105,6 +108,125 @@ pub struct FolderUpdate {
     /// False can mean pending application or another writer's change. True
     /// confirms configuration only, not that transfers stopped or completed.
     pub requested_fields_match: bool,
+}
+
+/// What the SDK can establish about the requested folder fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum FolderConfigurationOutcome {
+    /// The selected fields already matched before a modification.
+    AlreadyMatched,
+    /// A later read of the selected folder reports all the requested values.
+    CurrentMatches,
+    /// The correct folder was read and at least one requested value differs.
+    CurrentDiffers,
+    /// The operation ended before submitting its change.
+    NotSubmitted,
+    /// The endpoint returned a complete authentication or permission refusal.
+    Rejected,
+    /// No trustworthy read of the current fields is available.
+    Unconfirmed,
+}
+
+/// A finite observation of the folder's reported activity.
+pub struct FolderRuntimeObservation {
+    /// The state the caller asked to observe.
+    pub expected: FolderState,
+    /// The expected state was observed for this folder.
+    pub expected_state_observed: bool,
+    /// Last authenticated snapshot, if one was available.
+    pub last_snapshot: Option<FolderStatus>,
+    /// A read error, cancellation or deadline that ended the observation.
+    pub source: Option<Error>,
+}
+
+impl fmt::Debug for FolderRuntimeObservation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FolderRuntimeObservation")
+            .field("expected_state_observed", &self.expected_state_observed)
+            .field("has_snapshot", &self.last_snapshot.is_some())
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The original folder write and the current configuration observed afterward.
+#[non_exhaustive]
+pub struct FolderConfigurationReport {
+    /// Confirmation status of the requested fields.
+    pub outcome: FolderConfigurationOutcome,
+    /// Request and response facts, independent of the field readback.
+    pub write: ManagementWriteEvidence,
+    /// Original request result or preflight error. Empty for an already matching target.
+    pub original: Option<Result<()>>,
+    /// The same selected folder's current configuration, if it could be checked.
+    pub observed: Option<FolderConfig>,
+    /// Failure to establish a trustworthy current configuration.
+    pub observation_error: Option<Error>,
+    /// Explicit optional runtime observation after confirming the configuration.
+    pub runtime: Option<FolderRuntimeObservation>,
+}
+
+impl FolderConfigurationReport {
+    /// Summarize both the configured fields and an optional activity goal.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            FolderConfigurationOutcome::AlreadyMatched
+            | FolderConfigurationOutcome::CurrentMatches => {
+                if self
+                    .runtime
+                    .as_ref()
+                    .is_some_and(|runtime| !runtime.expected_state_observed)
+                {
+                    OperationCompletion::PartiallyCompleted
+                } else {
+                    OperationCompletion::Completed
+                }
+            }
+            FolderConfigurationOutcome::Unconfirmed => OperationCompletion::Unconfirmed,
+            _ => OperationCompletion::GoalNotMet,
+        }
+    }
+}
+
+impl fmt::Debug for FolderConfigurationReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FolderConfigurationReport")
+            .field("outcome", &self.outcome)
+            .field("write", &self.write)
+            .field("original", &self.original)
+            .field("configuration_observed", &self.observed.is_some())
+            .field("observation_error", &self.observation_error)
+            .field("runtime", &self.runtime)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for FolderConfigurationReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let configuration = match self.outcome {
+            FolderConfigurationOutcome::AlreadyMatched => "The selected folder settings already match.",
+            FolderConfigurationOutcome::CurrentMatches => "The selected folder currently reports the requested settings.",
+            FolderConfigurationOutcome::CurrentDiffers => "The selected folder currently reports different settings. Review them before making another change.",
+            FolderConfigurationOutcome::NotSubmitted => "The call ended before submitting a folder change.",
+            FolderConfigurationOutcome::Rejected => "VerySync declined the folder change. Check the credentials and management permissions.",
+            FolderConfigurationOutcome::Unconfirmed => "The current folder settings could not be verified. Check the selected folder before sending another change.",
+        };
+        f.write_str(configuration)?;
+        if self.outcome == FolderConfigurationOutcome::NotSubmitted {
+            if let Some(Err(source)) = &self.original {
+                write!(f, " {source}")?;
+            }
+        }
+        if let Some(runtime) = &self.runtime {
+            f.write_str(if runtime.expected_state_observed {
+                " The engine reported the requested activity state."
+            } else {
+                " The requested activity state was not confirmed."
+            })?;
+        }
+        Ok(())
+    }
 }
 
 /// Readback after unregistering a folder without requesting file deletion.

@@ -192,7 +192,10 @@ pub use folder_options::{FolderAdvancedConfig, FolderAdvancedPatch};
 pub use folder_policies::{
     BlockPullOrder, CopyRangeMethod, ExtendedAttributeFilter, ExtendedAttributeRule, FolderType,
 };
-pub use folders::{CreateFolderOptions, FolderConfig, FolderPatch, FolderRemoval, FolderUpdate};
+pub use folders::{
+    CreateFolderOptions, FolderConfig, FolderConfigurationOutcome, FolderConfigurationReport,
+    FolderPatch, FolderRemoval, FolderRuntimeObservation, FolderUpdate,
+};
 pub use gui_listener::{
     GuiListenAddress, GuiListenerConfig, GuiListenerPatch, GuiListenerUpdate, GuiSocketPermissions,
 };
@@ -268,7 +271,10 @@ pub use network::{
 pub use official_account::{
     OfficialAccountChange, OfficialAccountCredentials, OfficialAccountState, OfficialAccountStatus,
 };
-pub use operation_options::{OperationOptions, OperationPhase, ReadRetryDecision};
+pub use operation_options::{
+    ManagementWriteEvidence, OperationCompletion, OperationOptions, OperationPhase,
+    ReadRetryDecision,
+};
 pub use operations::{ScanCompletion, ScanObservation, ScanPhase, ScanProgress, ScanUpdate};
 pub use path::{PathStyle, TargetPath};
 pub use raw::{RawMethod, RawRequest, RawResponse, RequestEffect};

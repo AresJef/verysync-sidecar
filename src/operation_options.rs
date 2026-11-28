@@ -37,6 +37,20 @@ pub enum OperationPhase {
     Finished,
 }
 
+/// How far an operation met the caller's selected goal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OperationCompletion {
+    /// All of the selected conditions were verified.
+    Completed,
+    /// At least one condition was verified and another remains open.
+    PartiallyCompleted,
+    /// The available evidence shows the selected goal was not reached.
+    GoalNotMet,
+    /// The operation cannot establish whether the selected goal was reached.
+    Unconfirmed,
+}
+
 /// How a high-level operation handled an observed first read failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -51,6 +65,18 @@ pub enum ReadRetryDecision {
     SharedBudgetExhausted,
     /// The operation could proceed to its bounded retry phase.
     Permitted,
+}
+
+/// Facts about one modifying request at its transport boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct ManagementWriteEvidence {
+    /// The request entered the transport. Server receipt requires more evidence.
+    pub dispatched: bool,
+    /// The actual status from response headers, when available.
+    pub status: Option<u16>,
+    /// Whether the SDK obtained the complete bounded response.
+    pub response_complete: bool,
 }
 
 #[derive(Default)]

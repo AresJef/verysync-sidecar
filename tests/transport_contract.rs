@@ -39,6 +39,8 @@ mod folder_peer_encryption_contracts;
 mod folder_policy_contracts;
 #[path = "common/folder_registration_ids.rs"]
 mod folder_registration_ids;
+#[path = "common/folder_workflow_contracts.rs"]
+mod folder_workflow_contracts;
 #[path = "common/gui_login_outcome.rs"]
 mod gui_login_outcome;
 #[path = "common/review_history_clock.rs"]
