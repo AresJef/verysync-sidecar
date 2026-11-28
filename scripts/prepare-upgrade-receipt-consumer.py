@@ -45,11 +45,42 @@ def prepare(args):
     consumer = args.work / "consumer"
     testroot = consumer / "tests"
     testroot.mkdir(parents=True)
-    for name in ("upgrade_engine.rs", "upgrade_receipt_contract.rs"):
+    test_files = ["upgrade_engine.rs", "upgrade_receipt_contract.rs"]
+    if args.sdk_completion:
+        test_files.extend((
+            "engine_control.rs", "file_transfer_engine.rs", "local_sync_engine.rs",
+            "managed_instance.rs", "transport_contract.rs",
+        ))
+    for name in test_files:
         shutil.copyfile(package / "tests" / name, testroot / name)
     shutil.copytree(package / "tests/common", testroot / "common")
-    (consumer / "scripts").mkdir()
-    shutil.copyfile(package / "scripts/prepare-test-engine.py", consumer / "scripts/prepare-test-engine.py")
+    if args.sdk_completion:
+        shutil.copytree(package / "tests/fixtures", testroot / "fixtures")
+        shutil.copytree(package / "scripts", consumer / "scripts")
+        shutil.copytree(package / "releases", consumer / "releases")
+    else:
+        (consumer / "scripts").mkdir()
+        shutil.copyfile(package / "scripts/prepare-test-engine.py", consumer / "scripts/prepare-test-engine.py")
+    extra_dependencies = ""
+    feature = ""
+    if args.sdk_completion:
+        feature = ('default = ["tls"]\n'
+                   'tls = ["verysync-sidecar/tls"]\n'
+                   'download = ["verysync-sidecar/download"]\n')
+        extra_dependencies = """bzip2 = "0.6.1"
+dunce = "1.0.5"
+flate2 = { version = "1.1.11", default-features = false, features = ["miniz_oxide"] }
+getrandom = "0.4.3"
+jiff = { version = "=0.2.38", default-features = false, features = ["std"] }
+libc = "=0.2.186"
+lz4_flex = "0.13.0"
+lzma-rust2 = { version = "=0.21.0", default-features = false, features = ["std", "xz"] }
+rawzip = "0.5.2"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream"] }
+serde = { version = "1.0.229", features = ["derive"] }
+snap = "1.1.1"
+tar = { version = "0.4.46", default-features = false }
+"""
     (consumer / "Cargo.toml").write_text(
         f"""[package]
 name = "verysync-upgrade-receipt-consumer"
@@ -60,7 +91,7 @@ rust-version = "1.85"
 
 [features]
 engine-tests = []
-
+{feature}
 [dependencies]
 verysync-sidecar = {{path = "../{package.name}", version = "={identity['version']}"}}
 fs2 = "0.4.3"
@@ -70,7 +101,7 @@ sha2 = "0.10.9"
 tempfile = "3.27.0"
 tokio = {{version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"]}}
 url = "2.5.9"
-
+{extra_dependencies}
 [target.'cfg(windows)'.dependencies]
 windows-sys = {{ version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Pipes", "Win32_System_Diagnostics_ToolHelp"] }}
 """,
@@ -85,6 +116,7 @@ windows-sys = {{ version = "0.61.2", features = ["Win32_Foundation", "Win32_Secu
         "consumer_lock_sha256": sha256(consumer / "Cargo.lock"),
         "unpacked_crate_lock_sha256": sha256(package / "Cargo.lock"),
         "native_test_source_sha256": sha256(testroot / "common/upgrade_receipt_native.rs"),
+        "consumer_test_sources_sha256": {name: sha256(testroot / name) for name in test_files},
         "consumer_uses_separately_unpacked_package": True,
     }, sort_keys=True))
 
@@ -95,4 +127,6 @@ if __name__ == "__main__":
     parser.add_argument("--crate", required=True, type=Path)
     parser.add_argument("--identity", required=True, type=Path)
     parser.add_argument("--toolchain", required=True)
+    parser.add_argument("--sdk-completion", action="store_true",
+                        help="include the additional public workflows for SDK completion")
     prepare(parser.parse_args())

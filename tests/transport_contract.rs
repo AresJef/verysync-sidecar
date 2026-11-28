@@ -20,6 +20,8 @@ mod local_api_contracts;
 mod local_api_event_contracts;
 #[path = "common/local_api_write_contracts.rs"]
 mod local_api_write_contracts;
+#[path = "common/local_sync_workflow_contracts.rs"]
+mod local_sync_workflow_contracts;
 const KEY: &str = "synthetic-transport-key";
 const ID: &str = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
 
@@ -359,6 +361,157 @@ async fn license_refresh_and_trial_are_separate_single_changing_get_requests() -
 }
 
 #[tokio::test]
+async fn license_business_reports_record_type_and_never_repeat_a_lost_request() -> TestResult {
+    use serde_json::json;
+    use verysync_sidecar::{LicenseRequestKind, OperationOptions, ProLicenseObservation};
+    let observe = |license| Reply::json(json!({"myID":ID,"myLicense":license}));
+    let free = json!({"licenses":[]});
+    for (command, http, after, expected, processed) in [
+        (
+            LicenseRequestKind::Refresh,
+            200,
+            json!({"licenses":[{"subject":"Pro","expire":0,"trial":false}]}),
+            Some(ProLicenseObservation::NonTrial),
+            true,
+        ),
+        (
+            LicenseRequestKind::Refresh,
+            0,
+            free.clone(),
+            Some(ProLicenseObservation::NoActiveRecord),
+            false,
+        ),
+        (
+            LicenseRequestKind::ProTrial,
+            0,
+            json!({"licenses":[{"subject":"Pro","expire":120,"trial":true}]}),
+            Some(ProLicenseObservation::Trial),
+            false,
+        ),
+        (
+            LicenseRequestKind::Refresh,
+            200,
+            json!({"licenses":[{"subject":"Pro","expire":100,"trial":false}]}),
+            Some(ProLicenseObservation::NoActiveRecord),
+            true,
+        ),
+        (
+            LicenseRequestKind::Refresh,
+            200,
+            json!({"licenses":[{"subject":"Pro","trial":false}]}),
+            Some(ProLicenseObservation::Unconfirmed),
+            true,
+        ),
+        (LicenseRequestKind::Refresh, 403, free.clone(), None, false),
+    ] {
+        let mut replies = vec![
+            Reply::json(json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(json!({"myID":ID})),
+            observe(free.clone()),
+            Reply {
+                status: http,
+                ..Reply::json(json!({}))
+            },
+        ];
+        if http != 403 {
+            replies.push(observe(after));
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let report = client
+            .request_license_and_verify(command, 100, OperationOptions::new(Duration::from_secs(3)))
+            .await?;
+        assert_eq!(
+            report.before.as_ref().map(|status| status.pro_at(100)),
+            Some(ProLicenseObservation::NoActiveRecord)
+        );
+        assert_eq!(
+            report.observed.as_ref().map(|status| status.pro_at(100)),
+            expected
+        );
+        assert_eq!(report.original.is_ok(), processed);
+        assert!(report.write.dispatched);
+        assert_eq!(report.write.response_complete, http != 0);
+        assert_eq!(
+            server
+                .finish()
+                .await?
+                .iter()
+                .filter(|r| r.contains("/rest/license/"))
+                .count(),
+            1
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn audit_workflow_reports_empty_snapshot_only_after_complete_verified_read() -> TestResult {
+    use serde_json::json;
+    use verysync_sidecar::{AuditHistoryResetOutcome as Outcome, OperationOptions};
+    let identity = || Reply::json(json!({"myID":ID}));
+    for (before, native, after, want) in [
+        (0, 200, None, Outcome::AlreadyEmpty),
+        (1, 200, Some(0), Outcome::CurrentHistoryEmpty),
+        (1, 0, Some(0), Outcome::CurrentHistoryEmpty),
+        (1, 200, Some(1), Outcome::CurrentHistoryHasRecords),
+        (1, 403, None, Outcome::Rejected),
+        (1, 200, Some(2), Outcome::Unconfirmed),
+    ] {
+        let page = |count| {
+            Reply::json(json!({
+                "data":if count == 0 {None} else {Some(vec![json!({"synthetic":KEY})])},
+                "total":count,"error":null
+            }))
+        };
+        let mut replies = vec![
+            Reply::json(json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            identity(),
+            identity(),
+            page(before),
+        ];
+        if before != 0 {
+            replies.extend([
+                identity(),
+                Reply {
+                    status: native,
+                    ..Reply::json(json!({"error":null}))
+                },
+            ]);
+        }
+        if let Some(after) = after {
+            replies.extend([identity(), page(after)]);
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let report = client
+            .reset_audit_history_and_verify(OperationOptions::new(Duration::from_secs(3)))
+            .await?;
+        assert_eq!(report.outcome, want, "{report:?}");
+        assert_eq!(report.write.dispatched, before != 0);
+        assert!(!format!("{report:?} {report}").contains(KEY));
+        if native == 0 {
+            assert!(matches!(
+                report.original,
+                Some(Err(Error::MutationOutcomeUnknown { .. }))
+            ));
+        }
+        if after == Some(2) {
+            assert!(report.observation_error.is_some());
+        }
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("GET /prefix/rest/history/reset "))
+                .count(),
+            usize::from(before != 0)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn license_missing_metadata_bad_ack_and_explicit_nested_errors_never_become_success(
 ) -> TestResult {
     for native in [
@@ -444,6 +597,132 @@ async fn official_account_acknowledgement_is_separate_from_matching_observed_sta
             }
         );
         assert_eq!(server.finish().await?.len(), 5);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_account_business_reports_keep_the_first_reply_and_check_the_selected_uid(
+) -> TestResult {
+    use serde_json::json;
+    use verysync_sidecar::{
+        OfficialAccountCredentials, OfficialAccountWorkflowOutcome as Outcome, OperationOptions,
+    };
+    let options = || OperationOptions::new(Duration::from_secs(3));
+    let status = |account| Reply::json(json!({"myID":ID,"account":account}));
+    let credentials = OfficialAccountCredentials::new("synthetic-only", KEY)?;
+    for (case, before, code, after, expected_count, expected_outcome) in [
+        (
+            "same UID no-op",
+            json!({"uid":99}),
+            0,
+            None,
+            0,
+            Outcome::AlreadyMatches,
+        ),
+        (
+            "different UID protected",
+            json!({"uid":77}),
+            0,
+            None,
+            0,
+            Outcome::NotSubmitted,
+        ),
+        (
+            "acknowledged exact UID",
+            json!({}),
+            200,
+            Some(json!({"uid":99})),
+            1,
+            Outcome::CurrentMatches,
+        ),
+        (
+            "unanswered exact UID",
+            json!({}),
+            0,
+            Some(json!({"uid":99})),
+            1,
+            Outcome::CurrentMatches,
+        ),
+        (
+            "acknowledged wrong UID",
+            json!({}),
+            200,
+            Some(json!({"uid":77})),
+            1,
+            Outcome::CurrentDiffers,
+        ),
+        (
+            "account logout no-op",
+            json!({}),
+            0,
+            None,
+            0,
+            Outcome::AlreadyMatches,
+        ),
+        ("cloud refusal", json!({}), 401, None, 1, Outcome::Rejected),
+        (
+            "logout with lost reply",
+            json!({"uid":99}),
+            0,
+            Some(json!({})),
+            1,
+            Outcome::CurrentMatches,
+        ),
+        (
+            "unanswered unspecified account",
+            json!({}),
+            0,
+            Some(json!({"uid":99})),
+            1,
+            Outcome::Unconfirmed,
+        ),
+    ] {
+        let mut replies = vec![
+            Reply::json(json!({"version":"v2.33.2","os":"linux","arch":"amd64"})),
+            Reply::json(json!({"myID":ID})),
+            status(before),
+        ];
+        if expected_count != 0 {
+            replies.push(Reply {
+                status: code,
+                ..Reply::json(json!({}))
+            });
+        }
+        if let Some(after) = after {
+            replies.push(status(after));
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let report = if case.contains("logout") {
+            client
+                .logout_official_account_and_verify(Some(99), options())
+                .await?
+        } else {
+            let expected = (case != "unanswered unspecified account").then_some(99);
+            client
+                .login_official_account_and_verify(&credentials, expected, options())
+                .await?
+        };
+        assert_eq!(report.outcome, expected_outcome, "{case}: {report:?}");
+        assert_eq!(report.write.dispatched, expected_count == 1);
+        assert_eq!(
+            report.write.response_complete,
+            expected_count == 1 && code != 0
+        );
+        assert!(!format!("{report:?} {report}").contains(KEY));
+        if expected_count == 1 && code == 0 {
+            assert!(matches!(
+                report.original,
+                Some(Err(Error::MutationOutcomeUnknown { .. }))
+            ));
+        }
+        let seen = server.finish().await?;
+        let distinct_writes: Vec<_> = seen
+            .iter()
+            .filter(|route| route.contains("/rest/account/"))
+            .collect();
+        assert_eq!(distinct_writes.len(), expected_count, "{case}");
     }
     Ok(())
 }

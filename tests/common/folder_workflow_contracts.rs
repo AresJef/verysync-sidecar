@@ -2,7 +2,8 @@
 use super::*;
 use serde_json::json;
 use verysync_sidecar::{
-    FolderConfigurationOutcome, FolderId, FolderPatch, FolderState, OperationOptions,
+    FolderConfigurationOutcome, FolderId, FolderPatch, FolderState, FolderUnregistrationOutcome,
+    OperationOptions,
 };
 
 fn version() -> Reply {
@@ -134,6 +135,111 @@ async fn folder_configuration_keeps_one_write_and_original_failure_before_readba
             serde_json::from_str::<serde_json::Value>(writes[0].split_once("\r\n\r\n").unwrap().1)?,
             json!({"paused":true})
         );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unregister_uses_one_delete_and_reports_config_and_file_evidence_separately() -> TestResult
+{
+    let absent = || Reply::json(json!({"folders":[]}));
+    for (name, preexisting, response, readback, expected) in [
+        (
+            "already absent",
+            false,
+            0,
+            0,
+            FolderUnregistrationOutcome::AlreadyAbsent,
+        ),
+        (
+            "success",
+            true,
+            200,
+            200,
+            FolderUnregistrationOutcome::Absent,
+        ),
+        (
+            "lost reply",
+            true,
+            0,
+            200,
+            FolderUnregistrationOutcome::Absent,
+        ),
+        (
+            "write refusal",
+            true,
+            403,
+            0,
+            FolderUnregistrationOutcome::Rejected,
+        ),
+        (
+            "read refusal",
+            true,
+            200,
+            403,
+            FolderUnregistrationOutcome::Unconfirmed,
+        ),
+        (
+            "register again",
+            true,
+            200,
+            201,
+            FolderUnregistrationOutcome::RegistrationPresent,
+        ),
+    ] {
+        let mut replies = controls(false);
+        if !preexisting {
+            replies[4] = absent();
+        } else {
+            replies.push(refused(response));
+            if response != 403 {
+                replies.extend([version(), identity()]);
+                replies.push(match readback {
+                    200 => absent(),
+                    201 => Reply::json(json!({"folders":[{"id":"folder-a","path":"/synthetic/other","label":"different","paused":true}]})),
+                    code => refused(code),
+                });
+                if readback != 403 {
+                    replies.push(identity());
+                }
+            }
+        }
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let report = client
+            .unregister_folder_and_verify(
+                &FolderId::parse("folder-a")?,
+                OperationOptions::new(Duration::from_secs(3)),
+            )
+            .await?;
+        assert_eq!(report.outcome, expected, "{name}: {report:?}");
+        assert_eq!(report.write.dispatched, preexisting);
+        assert_eq!(report.write.response_complete, preexisting && response != 0);
+        assert!(!format!("{report:?}").contains(KEY));
+        assert!(format!("{report}").contains("File contents were not checked"));
+        if name == "lost reply" {
+            assert!(matches!(
+                report.original,
+                Some(Err(Error::MutationOutcomeUnknown { .. }))
+            ));
+        }
+        if name == "read refusal" {
+            assert!(matches!(report.original, Some(Ok(()))));
+            assert!(matches!(
+                report.observation_error,
+                Some(Error::AccessDenied { .. })
+            ));
+        }
+        let requests = server.finish().await?;
+        let deletes: Vec<_> = requests
+            .iter()
+            .filter(|line| line.starts_with("DELETE "))
+            .collect();
+        assert_eq!(deletes.len(), usize::from(preexisting));
+        if let Some(delete) = deletes.first() {
+            assert!(delete.starts_with("DELETE /prefix/rest/config/folders/folder-a "));
+            assert!(delete.ends_with("\r\n\r\n"));
+        }
     }
     Ok(())
 }

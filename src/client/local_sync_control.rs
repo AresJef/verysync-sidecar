@@ -792,6 +792,20 @@ impl Client {
         mutation: bool,
     ) -> Result<T> {
         self.system_status().await?;
+        let url = self.local_sync_url(parts, query)?;
+        let (status, bytes) = self
+            .connection
+            .request_bytes(operation, method, url, body, mutation)
+            .await?;
+        let run_route = parts.len() == 3 && parts[0] == "jobs" && parts[2] == "run";
+        decode_local_sync_json(operation, status, bytes, mutation, run_route)
+    }
+
+    pub(super) fn local_sync_url(
+        &self,
+        parts: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<url::Url> {
         let mut url = self.connection.management_url("rest/localsync/", query)?;
         {
             let mut path = url
@@ -802,55 +816,59 @@ impl Client {
                 path.push(part);
             }
         }
-        let (status, bytes) = self
-            .connection
-            .request_bytes(operation, method, url, body, mutation)
-            .await?;
-        let decoded: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
-            mutation_error(
-                operation,
-                mutation,
-                Error::InvalidResponse {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes.clone()),
-                },
-            )
-        })?;
-        // A complete native run can legitimately contain an execution error.
-        // Only this exact run route and fully valid record schema distinguish
-        // it from an API-error envelope. Identity is still checked by its caller.
-        let native_run_record = parts.len() == 3
-            && parts[0] == "jobs"
-            && parts[2] == "run"
-            && serde_json::from_value::<LocalSyncRun>(decoded.clone()).is_ok();
-        // Local Sync also uses HTTP-success error envelopes; preserve any extra
-        // native error-code fields rather than accepting a malformed success.
-        if decoded
-            .get("error")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|e| !e.is_empty())
-            && !native_run_record
-        {
-            return Err(mutation_error(
-                operation,
-                mutation,
-                Error::Api {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                },
-            ));
-        }
-        serde_json::from_value(decoded).map_err(|_| {
-            mutation_error(
-                operation,
-                mutation,
-                Error::InvalidResponse {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                },
-            )
-        })
+        Ok(url)
     }
+}
+
+pub(super) fn decode_local_sync_json<T: DeserializeOwned>(
+    operation: &'static str,
+    status: u16,
+    bytes: Vec<u8>,
+    mutation: bool,
+    run_route: bool,
+) -> Result<T> {
+    let decoded: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
+        mutation_error(
+            operation,
+            mutation,
+            Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes.clone()),
+            },
+        )
+    })?;
+    // A complete native run can legitimately contain an execution error.
+    // Only this exact run route and fully valid record schema distinguish
+    // it from an API-error envelope. Identity is still checked by its caller.
+    let native_run_record =
+        run_route && serde_json::from_value::<LocalSyncRun>(decoded.clone()).is_ok();
+    // Local Sync also uses HTTP-success error envelopes; preserve any extra
+    // native error-code fields rather than accepting a malformed success.
+    if decoded
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|e| !e.is_empty())
+        && !native_run_record
+    {
+        return Err(mutation_error(
+            operation,
+            mutation,
+            Error::Api {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes),
+            },
+        ));
+    }
+    serde_json::from_value(decoded).map_err(|_| {
+        mutation_error(
+            operation,
+            mutation,
+            Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes),
+            },
+        )
+    })
 }
 fn value(v: &impl serde::Serialize) -> Result<serde_json::Value> {
     serde_json::to_value(v).map_err(|_| invalid("Local Sync input cannot be represented as JSON"))

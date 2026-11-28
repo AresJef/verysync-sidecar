@@ -1,6 +1,9 @@
 //! Explicit versioning policies and native archive operations, without retries.
-use super::{mutation_error, Client};
-use crate::{AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate};
+use super::{mutation_error, workflow_write_result, Client};
+use crate::{
+    AuditHistoryPage, AuditHistoryResetOutcome, AuditHistoryResetReport, AuditHistorySettings,
+    AuditHistoryUpdate, OperationOptions, OperationPhase,
+};
 use crate::{DirectoryVersionOrder, VersionArchiveLocation, VersionedDirectory};
 use crate::{
     Error, FileVersionRestore, FileVersionRestoreReport, FolderId, FolderVersionHistory,
@@ -14,6 +17,34 @@ use std::{
 
 fn restore_precondition(reason: &'static str) -> Error {
     Error::ArchiveRestorePrecondition { reason }
+}
+
+fn decode_audit_reset(operation: &'static str, status: u16, bytes: Vec<u8>) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Reset {
+        error: serde_json::Value,
+    }
+    let response: Reset = serde_json::from_slice(&bytes).map_err(|_| {
+        mutation_error(
+            operation,
+            true,
+            Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes.clone()),
+            },
+        )
+    })?;
+    if !response.error.is_null() && response.error.as_str() != Some("") {
+        return Err(mutation_error(
+            operation,
+            true,
+            Error::Api {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes),
+            },
+        ));
+    }
+    Ok(())
 }
 fn archive_second(value: &str) -> Result<i64> {
     if value.len() > 128 {
@@ -296,10 +327,6 @@ impl Client {
     /// separately; resetting an already empty free-instance log does not prove
     /// licensed recording or removal of real history records.
     pub async fn reset_audit_history(&self) -> Result<()> {
-        #[derive(serde::Deserialize)]
-        struct Reset {
-            error: serde_json::Value,
-        }
         let operation = "reset global file audit history";
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
@@ -308,27 +335,119 @@ impl Client {
             .connection
             .request_bytes(operation, reqwest::Method::GET, url, None, true)
             .await?;
-        let response: Reset = serde_json::from_slice(&bytes).map_err(|_| {
-            mutation_error(
-                operation,
-                true,
-                Error::InvalidResponse {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes.clone()),
-                },
-            )
-        })?;
-        if !response.error.is_null() && response.error.as_str() != Some("") {
-            return Err(mutation_error(
-                operation,
-                true,
-                Error::Api {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                },
+        decode_audit_reset(operation, status, bytes)
+    }
+
+    /// Clear the selected device's global audit history once and check the
+    /// current first page. If it already reports zero records, no reset is
+    /// submitted. New records after the request can come from later activity.
+    /// History recording and licensed data effects are separate observations.
+    pub async fn reset_audit_history_and_verify(
+        &self,
+        options: OperationOptions,
+    ) -> Result<AuditHistoryResetReport> {
+        const RESET: &str = "reset the selected device's audit history";
+        const READ: &str = "check the current file audit history";
+        use AuditHistoryResetOutcome as Outcome;
+        let context = options.start()?;
+        let mut report = AuditHistoryResetReport {
+            outcome: Outcome::NotSubmitted,
+            write: Default::default(),
+            original: None,
+            before: None,
+            observed: None,
+            observation_error: None,
+        };
+        let dispatch = context.started
+            + context
+                .deadline
+                .duration_since(context.started)
+                .mul_f64(2.0 / 3.0);
+        let mut guard = None;
+        let attempt = context
+            .wait(dispatch, RESET, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                let before = self.read_audit_history_for_reset().await?;
+                let empty = before.total == 0;
+                report.before = Some(before);
+                if empty {
+                    return Ok(false);
+                }
+                self.system_status().await?;
+                let url = self.connection.management_url("rest/history/reset", &[])?;
+                if tokio::time::Instant::now() >= dispatch {
+                    return Err(Error::Timeout { operation: RESET });
+                }
+                let request = self
+                    .connection
+                    .authorized_request(reqwest::Method::GET, url, None);
+                let response = self
+                    .connection
+                    .send_workflow_write(RESET, request, &context, &mut report.write)
+                    .await?;
+                decode_audit_reset(RESET, response.status, response.body)?;
+                Ok(true)
+            })
+            .await;
+        if matches!(attempt, Ok(false)) {
+            report.outcome = Outcome::AlreadyEmpty;
+        } else {
+            report.original = Some(workflow_write_result(
+                RESET,
+                report.write,
+                attempt.map(|_| ()),
             ));
+            if report.write.response_complete
+                && matches!(
+                    report.original,
+                    Some(Err(Error::Authentication { .. }
+                        | Error::AccessDenied { .. }
+                        | Error::LicenseRequired { .. }))
+                )
+            {
+                report.outcome = Outcome::Rejected;
+            } else if report.write.dispatched {
+                context.phase(OperationPhase::Verifying);
+                match context
+                    .wait(context.deadline, READ, self.read_audit_history_for_reset())
+                    .await
+                {
+                    Ok(current) => {
+                        report.outcome = if current.total == 0 {
+                            Outcome::CurrentHistoryEmpty
+                        } else {
+                            Outcome::CurrentHistoryHasRecords
+                        };
+                        report.observed = Some(current);
+                    }
+                    Err(source) => {
+                        report.outcome = Outcome::Unconfirmed;
+                        report.observation_error = Some(source);
+                    }
+                }
+            }
         }
-        Ok(())
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn read_audit_history_for_reset(&self) -> Result<AuditHistoryPage> {
+        const PAGE_SIZE: u16 = 20;
+        let page = self.audit_history(1, PAGE_SIZE).await?;
+        let count = page.records.as_ref().map_or(0, Vec::len) as u64;
+        if page
+            .error
+            .as_deref()
+            .is_some_and(|reason| !reason.is_empty())
+            || count != page.total.min(u64::from(PAGE_SIZE))
+        {
+            return Err(Error::InvalidConfiguration {
+                reason: "the selected audit history page did not account for the reported records",
+            });
+        }
+        Ok(page)
     }
     /// Read the actual versioner policy and archive location. This is not proof
     /// that historical files exist or that a custom backend is usable.

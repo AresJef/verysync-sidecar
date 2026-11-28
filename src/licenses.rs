@@ -1,5 +1,7 @@
 //! Native license observations and explicitly selected license requests.
-use crate::ResponseDiagnostic;
+use crate::{
+    Error, ManagementWriteEvidence, OperationCompletion, ResponseDiagnostic, Result as SdkResult,
+};
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 
@@ -133,6 +135,38 @@ impl LicenseStatus {
     pub fn extra(&self) -> &BTreeMap<String, serde_json::Value> {
         &self.extra
     }
+
+    /// Classify the reported Pro records at the given Unix second. This
+    /// observes the license data only. Each paid capability needs its own check.
+    pub fn pro_at(&self, unix_seconds: i64) -> ProLicenseObservation {
+        let records: Box<dyn Iterator<Item = &LicenseRecord> + '_> = match self.licenses() {
+            Some(LicenseEntries::List(records)) => Box::new(records.iter()),
+            Some(LicenseEntries::Map(records)) => Box::new(records.values()),
+            _ => return ProLicenseObservation::Unconfirmed,
+        };
+        let mut active_trial = false;
+        let mut missing_flag = false;
+        let mut unknown_expiry = false;
+        for record in records.filter(|record| record.is_pro()) {
+            match record.expiry_at(unix_seconds) {
+                Some(LicenseExpiry::Expired) => {}
+                None => unknown_expiry = true,
+                Some(LicenseExpiry::Perpetual | LicenseExpiry::NotExpired) => {
+                    match record.trial() {
+                        Some(false) => return ProLicenseObservation::NonTrial,
+                        Some(true) => active_trial = true,
+                        None => missing_flag = true,
+                    }
+                }
+            }
+        }
+        match (active_trial, missing_flag, unknown_expiry) {
+            (true, _, _) => ProLicenseObservation::Trial,
+            (_, true, _) => ProLicenseObservation::ActiveWithoutTrialFlag,
+            (_, _, true) => ProLicenseObservation::Unconfirmed,
+            _ => ProLicenseObservation::NoActiveRecord,
+        }
+    }
 }
 impl fmt::Debug for LicenseStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -150,6 +184,104 @@ pub enum LicenseRequestKind {
     Refresh,
     /// Explicitly request a Pro trial; this can consume trial eligibility.
     ProTrial,
+}
+
+/// What the device's license record says at one supplied time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProLicenseObservation {
+    /// A current record explicitly reports a non-trial Pro license.
+    NonTrial,
+    /// A current record explicitly reports a Pro trial.
+    Trial,
+    /// A current Pro record omits the trial flag.
+    ActiveWithoutTrialFlag,
+    /// The returned collection contains no current Pro record.
+    NoActiveRecord,
+    /// The collection or expiry evidence is insufficient.
+    Unconfirmed,
+}
+
+impl fmt::Display for ProLicenseObservation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NonTrial => "The device reports an active non-trial Pro record.",
+            Self::Trial => "The device reports an active Pro trial record.",
+            Self::ActiveWithoutTrialFlag => {
+                "The device reports an active Pro record with no trial designation."
+            }
+            Self::NoActiveRecord => "The device reports no active Pro record at the selected time.",
+            Self::Unconfirmed => {
+                "The available license records do not establish the current Pro status."
+            }
+        })
+    }
+}
+
+/// Original reply and independent native license snapshots for one request.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct LicenseWorkflowReport {
+    /// Requested native operation. A trial request is distinct from a refresh.
+    pub request: LicenseRequestKind,
+    /// Dispatch, status and response completeness for this one request.
+    pub write: ManagementWriteEvidence,
+    /// Original acknowledgement or preflight/dispatch failure.
+    pub original: SdkResult<ResponseDiagnostic>,
+    /// License data before dispatch, when available.
+    pub before: Option<LicenseStatus>,
+    /// Current license data read after the original request.
+    pub observed: Option<LicenseStatus>,
+    /// The reason the SDK could not read back the current data.
+    pub observation_error: Option<Error>,
+    /// Classification of the later records at the supplied Unix second.
+    pub current_pro: Option<ProLicenseObservation>,
+}
+
+impl LicenseWorkflowReport {
+    /// Summarize the acknowledgement and readback. A successful refresh does
+    /// not imply a positive Pro observation. A trial request also needs a
+    /// current trial record to meet its goal.
+    pub fn completion(&self) -> OperationCompletion {
+        if !self.write.dispatched
+            || matches!(
+                self.original,
+                Err(Error::Authentication { .. }
+                    | Error::AccessDenied { .. }
+                    | Error::LicenseRequired { .. })
+            )
+        {
+            OperationCompletion::GoalNotMet
+        } else if self.original.is_err() {
+            OperationCompletion::Unconfirmed
+        } else if self.observed.is_some()
+            && (self.request == LicenseRequestKind::Refresh
+                || self.current_pro == Some(ProLicenseObservation::Trial))
+        {
+            OperationCompletion::Completed
+        } else {
+            OperationCompletion::PartiallyCompleted
+        }
+    }
+}
+
+impl fmt::Display for LicenseWorkflowReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.original {
+            Ok(_) => f.write_str("VerySync acknowledged the license request.")?,
+            Err(source) if !self.write.dispatched => write!(
+                f,
+                "The call ended before sending a license request. {source}"
+            )?,
+            Err(source) => write!(f, "{source}")?,
+        }
+        if let Some(current) = self.current_pro {
+            write!(f, " {current}")?;
+        } else if self.observation_error.is_some() {
+            f.write_str(" The SDK could not read back the license data. Check the selected device's license before trying again.")?;
+        }
+        Ok(())
+    }
 }
 /// A native acknowledgement plus a fresh license observation, without a promise
 /// that a trial was issued, a signature is valid or any paid feature now works.

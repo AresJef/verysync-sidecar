@@ -241,6 +241,76 @@ pub struct FolderRemoval {
     pub configuration_absent: bool,
 }
 
+/// The result of removing a registration from the selected engine.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum FolderUnregistrationOutcome {
+    /// The selected ID was already absent. No DELETE was sent.
+    AlreadyAbsent,
+    /// A later authenticated configuration snapshot confirms the ID is absent.
+    Absent,
+    /// A registration with this ID remains or has appeared again.
+    RegistrationPresent,
+    /// The operation ended before submitting a change.
+    NotSubmitted,
+    /// The engine returned a complete authentication or permission refusal.
+    Rejected,
+    /// The current registration could not be determined.
+    Unconfirmed,
+}
+
+/// Evidence about the registration and its original configuration request.
+/// File retention requires a separate observation on the device.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct FolderUnregistrationReport {
+    /// What the SDK can confirm about the selected registration.
+    pub outcome: FolderUnregistrationOutcome,
+    /// Boundary of the single optional configuration DELETE.
+    pub write: ManagementWriteEvidence,
+    /// Original request result or preflight error. Empty for an already absent ID.
+    pub original: Option<Result<()>>,
+    /// Configuration of the registration immediately before the request.
+    pub previous: Option<FolderConfig>,
+    /// Configuration with this ID after the request, when it is present.
+    pub current: Option<FolderConfig>,
+    /// Reason a readback could not establish the current registration.
+    pub observation_error: Option<Error>,
+}
+
+impl FolderUnregistrationReport {
+    /// Summarize the configuration operation.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            FolderUnregistrationOutcome::AlreadyAbsent | FolderUnregistrationOutcome::Absent => {
+                OperationCompletion::Completed
+            }
+            FolderUnregistrationOutcome::Unconfirmed => OperationCompletion::Unconfirmed,
+            _ => OperationCompletion::GoalNotMet,
+        }
+    }
+}
+
+impl fmt::Display for FolderUnregistrationReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let result = match self.outcome {
+            FolderUnregistrationOutcome::AlreadyAbsent => "The folder was already absent from the selected device's configuration.",
+            FolderUnregistrationOutcome::Absent => "The folder is absent from the selected device's configuration.",
+            FolderUnregistrationOutcome::RegistrationPresent => "The selected device still reports a folder with this ID. Check its current configuration before removing it.",
+            FolderUnregistrationOutcome::NotSubmitted => "The call ended before sending a request to unregister the folder.",
+            FolderUnregistrationOutcome::Rejected => "VerySync declined to unregister the folder. Check the credentials and management permissions.",
+            FolderUnregistrationOutcome::Unconfirmed => "The current folder registration could not be verified. Check the folder list on the selected device.",
+        };
+        f.write_str(result)?;
+        if self.outcome == FolderUnregistrationOutcome::NotSubmitted {
+            if let Some(Err(source)) = &self.original {
+                write!(f, " {source}")?;
+            }
+        }
+        f.write_str(" File contents were not checked.")
+    }
+}
+
 /// Current configuration of one folder, not a directory/transfer readiness receipt.
 ///
 /// Paths returned by the target retain its syntax. Unknown fields can include

@@ -452,3 +452,75 @@ impl fmt::Debug for AuditHistoryPage {
             .finish_non_exhaustive()
     }
 }
+
+/// What a single audit history reset established on the selected device.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AuditHistoryResetOutcome {
+    /// The selected history was already empty. No reset was sent.
+    AlreadyEmpty,
+    /// A later authenticated read confirms the history is currently empty.
+    CurrentHistoryEmpty,
+    /// The history currently contains records. New activity can create records.
+    CurrentHistoryHasRecords,
+    /// The SDK stopped before submitting a reset.
+    NotSubmitted,
+    /// The native endpoint returned a complete refusal.
+    Rejected,
+    /// The current history could not be verified.
+    Unconfirmed,
+}
+
+/// The original reset request and separate audit snapshots.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct AuditHistoryResetReport {
+    /// Classification of the currently observed history.
+    pub outcome: AuditHistoryResetOutcome,
+    /// Dispatch and response facts for the optional reset request.
+    pub write: crate::ManagementWriteEvidence,
+    /// Original request result or preflight error. Empty when no reset was needed.
+    pub original: Option<crate::Result<()>>,
+    /// The first page selected before dispatch, if available.
+    pub before: Option<AuditHistoryPage>,
+    /// The first page selected after dispatch, if available.
+    pub observed: Option<AuditHistoryPage>,
+    /// Reason no trustworthy readback could be obtained.
+    pub observation_error: Option<crate::Error>,
+}
+
+impl AuditHistoryResetReport {
+    /// Summarize the requested empty-history goal.
+    pub fn completion(&self) -> crate::OperationCompletion {
+        match self.outcome {
+            AuditHistoryResetOutcome::AlreadyEmpty
+            | AuditHistoryResetOutcome::CurrentHistoryEmpty => {
+                crate::OperationCompletion::Completed
+            }
+            AuditHistoryResetOutcome::Unconfirmed
+            | AuditHistoryResetOutcome::CurrentHistoryHasRecords => {
+                crate::OperationCompletion::Unconfirmed
+            }
+            _ => crate::OperationCompletion::GoalNotMet,
+        }
+    }
+}
+
+impl fmt::Display for AuditHistoryResetReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.outcome {
+            AuditHistoryResetOutcome::AlreadyEmpty => "The selected device already reports an empty audit history.",
+            AuditHistoryResetOutcome::CurrentHistoryEmpty => "The selected device now reports an empty audit history.",
+            AuditHistoryResetOutcome::CurrentHistoryHasRecords => "The audit history currently contains records. Review the latest activity before considering another reset.",
+            AuditHistoryResetOutcome::NotSubmitted => "The call ended before submitting a request to clear the audit history.",
+            AuditHistoryResetOutcome::Rejected => "VerySync declined the audit history reset. Check the selected device's permissions and license.",
+            AuditHistoryResetOutcome::Unconfirmed => "The current audit history could not be verified. Check it on the selected device.",
+        })?;
+        if self.outcome == AuditHistoryResetOutcome::NotSubmitted {
+            if let Some(Err(source)) = &self.original {
+                write!(f, " {source}")?;
+            }
+        }
+        Ok(())
+    }
+}

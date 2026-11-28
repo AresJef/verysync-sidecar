@@ -95,6 +95,7 @@ mod ldap;
 mod licenses;
 mod local_sync;
 mod local_sync_events;
+mod local_sync_workflows;
 mod maintenance;
 mod managed;
 mod management_auth;
@@ -173,10 +174,11 @@ pub use events::{
     EventSource, EventStreamItem, EventSubscription,
 };
 pub use file_history::{
-    ArchivedFileVersion, AuditHistoryPage, AuditHistorySettings, AuditHistoryUpdate,
-    DirectoryVersionOrder, ExternalVersioningCommand, FileVersionRestore, FileVersionRestoreReport,
-    FolderVersionHistory, FolderVersioningConfiguration, FolderVersioningPolicy,
-    FolderVersioningUpdate, VersionArchiveLocation, VersionedDirectory,
+    ArchivedFileVersion, AuditHistoryPage, AuditHistoryResetOutcome, AuditHistoryResetReport,
+    AuditHistorySettings, AuditHistoryUpdate, DirectoryVersionOrder, ExternalVersioningCommand,
+    FileVersionRestore, FileVersionRestoreReport, FolderVersionHistory,
+    FolderVersioningConfiguration, FolderVersioningPolicy, FolderVersioningUpdate,
+    VersionArchiveLocation, VersionedDirectory,
 };
 pub use file_mutations::{
     ResourceConflictPolicy, ResourceDeleteScope, ResourceMutation, ResourceRemoval,
@@ -194,7 +196,8 @@ pub use folder_policies::{
 };
 pub use folders::{
     CreateFolderOptions, FolderConfig, FolderConfigurationOutcome, FolderConfigurationReport,
-    FolderPatch, FolderRemoval, FolderRuntimeObservation, FolderUpdate,
+    FolderPatch, FolderRemoval, FolderRuntimeObservation, FolderUnregistrationOutcome,
+    FolderUnregistrationReport, FolderUpdate,
 };
 pub use gui_listener::{
     GuiListenAddress, GuiListenerConfig, GuiListenerPatch, GuiListenerUpdate, GuiSocketPermissions,
@@ -218,6 +221,7 @@ pub use invitations::{
 pub use ldap::{GuiAuthModeUpdate, LdapConfiguration, LdapPatch, LdapTransport};
 pub use licenses::{
     LicenseChange, LicenseEntries, LicenseExpiry, LicenseRecord, LicenseRequestKind, LicenseStatus,
+    LicenseWorkflowReport, ProLicenseObservation,
 };
 pub use local_sync::{
     CreateLocalSyncJob, LocalSyncAction, LocalSyncActionRange, LocalSyncActionResult,
@@ -234,6 +238,10 @@ pub use local_sync::{
 pub use local_sync_events::{
     LocalSyncEvent, LocalSyncEventBatch, LocalSyncEventCancellation, LocalSyncEventCursor,
     LocalSyncEventGap, LocalSyncEventOptions, LocalSyncEventStreamItem, LocalSyncEventSubscription,
+};
+pub use local_sync_workflows::{
+    LocalSyncPreviewReport, LocalSyncRunOutcome, LocalSyncRunReceipt, LocalSyncRunReport,
+    LocalSyncWorkflowOptions,
 };
 pub use maintenance::{
     CoreDiagnostics, CoreErrorLog, CoreLogEntry, CoreLogLevel, CoreLogLevelUpdate, CoreLogLevels,
@@ -270,6 +278,7 @@ pub use network::{
 };
 pub use official_account::{
     OfficialAccountChange, OfficialAccountCredentials, OfficialAccountState, OfficialAccountStatus,
+    OfficialAccountWorkflowOutcome, OfficialAccountWorkflowReport,
 };
 pub use operation_options::{
     ManagementWriteEvidence, OperationCompletion, OperationOptions, OperationPhase,

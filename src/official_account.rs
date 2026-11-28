@@ -1,5 +1,5 @@
 //! Official VerySync accounts, separate from local GUI authentication.
-use crate::{Error, ResponseDiagnostic, Result};
+use crate::{Error, ManagementWriteEvidence, OperationCompletion, ResponseDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 
@@ -121,4 +121,76 @@ pub struct OfficialAccountChange {
     pub expected_state_matches: bool,
     /// Bounded private native response bytes, omitted by ordinary formatting.
     pub acknowledgement: ResponseDiagnostic,
+}
+
+/// The result of changing the account reported by the selected VerySync device.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OfficialAccountWorkflowOutcome {
+    /// The selected account state already matched and no request was needed.
+    AlreadyMatches,
+    /// The device now reports the requested state and, when given, account ID.
+    CurrentMatches,
+    /// The device reports another account or a different state.
+    CurrentDiffers,
+    /// The workflow stopped before submitting an account change.
+    NotSubmitted,
+    /// A complete reply reported a refusal.
+    Rejected,
+    /// There is insufficient evidence to confirm the requested state.
+    Unconfirmed,
+}
+
+/// The original request, its response boundary, and the selected device's
+/// current official account. The report contains no credentials or replay authority.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct OfficialAccountWorkflowReport {
+    /// Local account state requested by the application.
+    pub expected_state: OfficialAccountState,
+    /// What the SDK could verify.
+    pub outcome: OfficialAccountWorkflowOutcome,
+    /// Dispatch and response facts about the one optional native request.
+    pub write: ManagementWriteEvidence,
+    /// Preflight failure, complete acknowledgement or original dispatch error.
+    pub original: Option<Result<ResponseDiagnostic>>,
+    /// Device account snapshot before any request.
+    pub before: Option<OfficialAccountStatus>,
+    /// Authenticated account readback after the request, if available.
+    pub observed: Option<OfficialAccountStatus>,
+    /// Reason no trustworthy account readback was available.
+    pub observation_error: Option<Error>,
+}
+
+impl OfficialAccountWorkflowReport {
+    /// Summarize the selected device's account state without asserting a live
+    /// provider session or any paid rights.
+    pub fn completion(&self) -> OperationCompletion {
+        match self.outcome {
+            OfficialAccountWorkflowOutcome::AlreadyMatches
+            | OfficialAccountWorkflowOutcome::CurrentMatches => OperationCompletion::Completed,
+            OfficialAccountWorkflowOutcome::Unconfirmed => OperationCompletion::Unconfirmed,
+            _ => OperationCompletion::GoalNotMet,
+        }
+    }
+}
+
+impl fmt::Display for OfficialAccountWorkflowReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = match self.outcome {
+            OfficialAccountWorkflowOutcome::AlreadyMatches => "The selected device already reports the requested account state.",
+            OfficialAccountWorkflowOutcome::CurrentMatches => "The selected device now reports the requested account state.",
+            OfficialAccountWorkflowOutcome::CurrentDiffers => "The selected device reports a different account or sign-in state. Check its account settings before trying again.",
+            OfficialAccountWorkflowOutcome::NotSubmitted => "The call ended before sending an account change.",
+            OfficialAccountWorkflowOutcome::Rejected => "VerySync declined the account change. Check the sign-in details and permissions for this device.",
+            OfficialAccountWorkflowOutcome::Unconfirmed => "The requested account state could not be confirmed. Check the account on the selected device before trying again.",
+        };
+        f.write_str(state)?;
+        if self.outcome == OfficialAccountWorkflowOutcome::NotSubmitted {
+            if let Some(Err(source)) = &self.original {
+                write!(f, " {source}")?;
+            }
+        }
+        Ok(())
+    }
 }

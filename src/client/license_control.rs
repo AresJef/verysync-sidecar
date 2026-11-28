@@ -1,7 +1,8 @@
 //! Native license reads and single explicit state-changing GET requests.
-use super::{mutation_error, Client};
+use super::{mutation_error, workflow_write_result, Client};
 use crate::{
-    DeviceId, Error, LicenseChange, LicenseRequestKind, LicenseStatus, ResponseDiagnostic, Result,
+    DeviceId, Error, LicenseChange, LicenseRequestKind, LicenseStatus, LicenseWorkflowReport,
+    ManagementWriteEvidence, OperationOptions, OperationPhase, ResponseDiagnostic, Result,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -43,11 +44,86 @@ impl Client {
     pub async fn request_pro_trial(&self) -> Result<LicenseChange> {
         self.change_licenses(LicenseRequestKind::ProTrial).await
     }
-    async fn change_licenses(&self, request: LicenseRequestKind) -> Result<LicenseChange> {
-        let (route, operation) = match request {
-            LicenseRequestKind::Refresh => ("rest/license/fetch", "refresh native licenses"),
-            LicenseRequestKind::ProTrial => ("rest/license/trial", "request native Pro trial"),
+    /// Submit the selected license refresh or trial request once and read the
+    /// current license data within the same deadline. A trial request can
+    /// consume eligibility. The SDK preserves an unknown reply even when the
+    /// latest license data reports Pro. It never retries a request or exercise
+    /// paid features implicitly.
+    pub async fn request_license_and_verify(
+        &self,
+        request: LicenseRequestKind,
+        observed_unix_seconds: i64,
+        options: OperationOptions,
+    ) -> Result<LicenseWorkflowReport> {
+        let context = options.start()?;
+        let (route, operation) = license_route(request);
+        let url = self.connection.management_url(route, &[])?;
+        let write_deadline = context.started
+            + context
+                .deadline
+                .duration_since(context.started)
+                .mul_f64(2.0 / 3.0);
+        let mut guard = None;
+        let mut write = ManagementWriteEvidence::default();
+        let mut before = None;
+        let attempt = context
+            .wait(write_deadline, operation, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                before = Some(self.license_status().await?);
+                if tokio::time::Instant::now() >= write_deadline {
+                    return Err(Error::Timeout { operation });
+                }
+                let outgoing = self
+                    .connection
+                    .authorized_request(reqwest::Method::GET, url, None);
+                let response = self
+                    .connection
+                    .send_workflow_write(operation, outgoing, &context, &mut write)
+                    .await?;
+                license_acknowledgement(operation, response.status, response.body)
+            })
+            .await;
+        let original = workflow_write_result(operation, write, attempt);
+        let (observed, observation_error) = if write.dispatched
+            && !matches!(
+                original,
+                Err(Error::Authentication { .. }
+                    | Error::AccessDenied { .. }
+                    | Error::LicenseRequired { .. })
+            ) {
+            context.phase(OperationPhase::Verifying);
+            match context
+                .wait(
+                    context.deadline,
+                    "check the current license records",
+                    self.license_status(),
+                )
+                .await
+            {
+                Ok(status) => (Some(status), None),
+                Err(source) => (None, Some(source)),
+            }
+        } else {
+            (None, None)
         };
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(LicenseWorkflowReport {
+            request,
+            write,
+            original,
+            before,
+            current_pro: observed
+                .as_ref()
+                .map(|status| status.pro_at(observed_unix_seconds)),
+            observed,
+            observation_error,
+        })
+    }
+
+    async fn change_licenses(&self, request: LicenseRequestKind) -> Result<LicenseChange> {
+        let (route, operation) = license_route(request);
         let _guard = self.connection.mutation_lock.lock().await;
         self.system_status().await?;
         let (status, bytes) = self
@@ -60,27 +136,7 @@ impl Client {
                 true,
             )
             .await?;
-        let native: BTreeMap<String, serde_json::Value> =
-            serde_json::from_slice(&bytes).map_err(|_| {
-                mutation_error(
-                    operation,
-                    true,
-                    Error::InvalidResponse {
-                        operation,
-                        response: ResponseDiagnostic::new(status, bytes.clone()),
-                    },
-                )
-            })?;
-        if native.get("error").is_some_and(|v| !v.is_null()) {
-            return Err(mutation_error(
-                operation,
-                true,
-                Error::Api {
-                    operation,
-                    response: ResponseDiagnostic::new(status, bytes),
-                },
-            ));
-        }
+        let acknowledgement = license_acknowledgement(operation, status, bytes)?;
         let observed = self
             .license_status()
             .await
@@ -88,7 +144,43 @@ impl Client {
         Ok(LicenseChange {
             request,
             status: observed,
-            acknowledgement: ResponseDiagnostic::new(status, bytes),
+            acknowledgement,
         })
     }
+}
+
+fn license_route(request: LicenseRequestKind) -> (&'static str, &'static str) {
+    match request {
+        LicenseRequestKind::Refresh => ("rest/license/fetch", "refresh native licenses"),
+        LicenseRequestKind::ProTrial => ("rest/license/trial", "request native Pro trial"),
+    }
+}
+
+fn license_acknowledgement(
+    operation: &'static str,
+    status: u16,
+    bytes: Vec<u8>,
+) -> Result<ResponseDiagnostic> {
+    let native: BTreeMap<String, serde_json::Value> =
+        serde_json::from_slice(&bytes).map_err(|_| {
+            mutation_error(
+                operation,
+                true,
+                Error::InvalidResponse {
+                    operation,
+                    response: ResponseDiagnostic::new(status, bytes.clone()),
+                },
+            )
+        })?;
+    if native.get("error").is_some_and(|v| !v.is_null()) {
+        return Err(mutation_error(
+            operation,
+            true,
+            Error::Api {
+                operation,
+                response: ResponseDiagnostic::new(status, bytes),
+            },
+        ));
+    }
+    Ok(ResponseDiagnostic::new(status, bytes))
 }

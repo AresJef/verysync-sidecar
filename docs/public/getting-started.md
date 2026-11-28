@@ -122,6 +122,10 @@ false can mean pending application or another writer's change.
 deletion switch or body. Check `FolderRemoval::configuration_absent` after the
 write. A missing ID is an error. The library does not inspect or delete local
 files; fixed-engine tests separately verify retained directories and hashes.
+Use `unregister_folder_and_verify` for a bounded operation that skips the
+DELETE when the folder is already absent. Its report gives the original reply
+and the readback separately. Check the selected device's files independently
+when you need evidence of retention.
 
 ## Interpret observations and failures
 

@@ -9,6 +9,103 @@ use verysync_sidecar::{
 };
 
 #[tokio::test]
+async fn local_sync_business_native_executes_reviewed_preview_and_reads_exact_run() -> TestResult {
+    use sha2::{Digest, Sha256};
+    use verysync_sidecar::{
+        Client, ConnectOptions, LocalSyncActionRange, LocalSyncRunOutcome, LocalSyncRunReceipt,
+        LocalSyncSelection, LocalSyncWorkflowOptions, OperationCompletion, OperationOptions,
+    };
+    let root = tempfile::Builder::new().prefix("vls-flow-").tempdir()?;
+    let source = root.path().join("source");
+    let target = root.path().join("target");
+    std::fs::create_dir(&source)?;
+    std::fs::create_dir(&target)?;
+    let mut core = ManagedInstance::start(options(&root.path().join("c"))?).await?;
+    let verified: TestResult = async {
+        let one = b"fixed synthetic first payload";
+        let two = b"fixed synthetic second payload that must stay unselected";
+        std::fs::write(source.join("selected.txt"), one)?;
+        std::fs::write(source.join("unselected.txt"), two)?;
+        std::fs::write(target.join("outside.bin"), b"target sentinel")?;
+        let job = core.client().create_local_sync_job(
+            &CreateLocalSyncJob::new(
+                "one explicit synthetic preview",
+                StorageEndpoint::local(TargetPath::local(&source))?,
+                StorageEndpoint::local(TargetPath::local(&target))?,
+                LocalSyncMode::MirrorAToB,
+            )?.ignore_permissions(true),
+        ).await?;
+        let bounds = || LocalSyncWorkflowOptions::new(10, OperationOptions::new(Duration::from_secs(24))).page_size(1);
+        let plan = core.client().preview_local_sync_and_verify(&job.job_id, bounds()).await?;
+        assert_eq!(plan.completion(), OperationCompletion::Completed, "{plan:?}");
+        assert_eq!(plan.actions.len(), 2);
+        assert!(!target.join("selected.txt").exists());
+        let exact = plan.preview.ok_or("native preview missing")?;
+        assert_eq!(plan.initial?.id, exact.operation_id);
+        let selected = plan.actions.iter().find(|action| action.path == "selected.txt").ok_or("selected action missing")?.id;
+        let report = core.client()
+            .execute_local_sync_preview(
+                &job.job_id, &exact.id,
+                &LocalSyncSelection::including(vec![LocalSyncActionRange::single(selected)])?,
+                bounds(),
+            ).await?;
+        if report.outcome != LocalSyncRunOutcome::Completed {
+            use std::error::Error as _;
+            let original = report.initial.as_ref().and_then(|result| result.as_ref().err());
+            let later = core.client().local_sync_run(&job.job_id).await?;
+            println!("{}", serde_json::json!({
+                "controlled_nanosecond_or_count_probe":true,
+                "sdk_initial":original.map(ToString::to_string),
+                "sdk_cause":original.and_then(|error|error.source()).map(ToString::to_string),
+                "selected_count":1,"preview_count":2,"native_run_count":later.count,
+                "elapsed_time_fields":[later.started,later.finished],
+                "native_summary":[later.summary.completed,later.summary.failed,later.summary.skipped],
+                "extra_field_names":later.extra.keys().collect::<Vec<_>>()
+            }));
+            return Err("the native Local Sync acknowledgement did not bind as expected".into());
+        }
+        assert!(report.write.dispatched && report.write.response_complete);
+        let receipt = report.receipt.ok_or("native run was not bound")?;
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].action_id, selected);
+        assert_eq!(report.results[0].path, "selected.txt");
+        assert_eq!(report.terminal.as_ref().map(|run| &run.id), Some(receipt.run()));
+        assert_eq!(Sha256::digest(std::fs::read(target.join("selected.txt"))?), Sha256::digest(one));
+        assert!(!target.join("unselected.txt").exists());
+        assert_eq!(std::fs::read(target.join("outside.bin"))?, b"target sentinel");
+        let private_bytes = receipt.encode()?;
+        let reopened = LocalSyncRunReceipt::decode(&private_bytes)?;
+        let borrowed = Client::connect(
+            ConnectOptions::new(core.client().endpoint().clone(), core.client().gui_authentication().await?.api_key()?)
+                .expected_device_id(core.client().instance().device_id.clone()),
+        ).await?;
+        let observed = borrowed.observe_local_sync_execution(&reopened, bounds()).await?;
+        assert_eq!(observed.outcome, LocalSyncRunOutcome::Completed, "{observed:?}");
+        assert!(!observed.write.dispatched && observed.initial.is_none());
+        assert_eq!(observed.results.len(), 1);
+        assert_eq!(observed.receipt.as_ref().map(|receipt| receipt.run()), Some(receipt.run()));
+        let next = core.client().preview_local_sync_and_verify(&job.job_id, bounds()).await?;
+        assert_eq!(next.completion(), OperationCompletion::Completed, "{next:?}");
+        let newer_plan = next.preview.ok_or("new native preview missing")?;
+        let new = core.client()
+            .execute_local_sync_preview(&job.job_id, &newer_plan.id, &LocalSyncSelection::all(), bounds()).await?;
+        assert_eq!(new.outcome, LocalSyncRunOutcome::Completed, "{new:?}");
+        let replaced = borrowed.observe_local_sync_execution(&reopened, bounds()).await?;
+        assert_eq!(replaced.outcome, LocalSyncRunOutcome::Unconfirmed, "{replaced:?}");
+        assert!(replaced.results.is_empty() && !replaced.write.dispatched);
+        assert_eq!(Sha256::digest(std::fs::read(target.join("unselected.txt"))?), Sha256::digest(two));
+        assert_eq!(std::fs::read(source.join("selected.txt"))?, one);
+        println!("Checked Local Sync workflow: exact preview, two independent pages, one selected action, digest and sentinel preserved, reopened receipt zero writes, newer result never substituted for older run");
+        Ok(())
+    }.await;
+    let exit = core.shutdown(Duration::from_secs(15)).await?;
+    assert!(exit.tree_stopped && exit.state_released && !exit.forced);
+    root.close()?;
+    println!("Checked Local Sync workflow: owned tree exited and fixture removed");
+    verified
+}
+
+#[tokio::test]
 async fn public_local_sync_preview_execution_and_registration_changes_preserve_actual_data(
 ) -> TestResult {
     let root = tempfile::Builder::new()

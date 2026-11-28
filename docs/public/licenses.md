@@ -57,6 +57,12 @@ outcomes. Changing requests are not automatically retried, rolled back or
 followed by account login or program restart. Reconcile account/license state
 before another explicit attempt after uncertainty.
 
+`request_license_and_verify` also retains the license state before the
+request. Its bounded report shows the original reply and the later native
+records separately. `LicenseStatus::pro_at(reference_unix_seconds)` describes
+whether those records show a current non-trial license, a trial, or an unclear
+state. Verify the behavior of each paid feature separately.
+
 The controlled unlicensed/unlogged macOS baseline returned no complete
 management response to a single explicit fetch. The SDK retains that transport
 uncertainty. Actual empty license/account state, configuration, identity and

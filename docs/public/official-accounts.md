@@ -46,6 +46,14 @@ management API key. Malformed acknowledgements and failed post-request reads
 remain unknown mutation outcomes. No changing request is retried, reversed or
 silently followed by license refresh, trial activation or restart.
 
+Use `login_official_account_and_verify` and `logout_official_account_and_verify`
+to keep the original reply and current account state in one report under a
+single deadline. Supply a positive UID when you know the account expected on
+the device. The SDK can then recognize an account that already matches, and
+refuses to sign out a different account. Without an expected UID, a new
+unacknowledged login can leave the selected account uncertain even if a later
+read reports an active account.
+
 Credentials preserve input spelling. Usernames must be nonblank, at most 1024
 UTF-8 bytes and contain no control characters; passwords must be nonempty, at
 most 4096 bytes and contain no NUL. These are SDK input bounds. Ordinary Debug

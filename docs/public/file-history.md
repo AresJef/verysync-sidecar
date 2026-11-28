@@ -286,6 +286,12 @@ native error-free response, and never retries. It clears the global audit log,
 independently from version archives. Follow-up totals are a separate observation;
 an empty free-instance reset is not evidence of removing real recorded history.
 
+`reset_audit_history_and_verify` checks the first page before and after the
+request within one deadline. A device that reports an already empty history
+needs no reset. The report preserves the original reply. If the later page
+contains records, check their timestamps and scope before considering another
+reset because new activity can have added them.
+
 ## Whole-folder version inventory
 
 `folder_version_inventory(folder)` reads the distinct `/rest/folder/versions`

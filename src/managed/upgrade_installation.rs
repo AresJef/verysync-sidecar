@@ -114,6 +114,11 @@ impl fmt::Display for KernelInstallationReport {
                 }
             }
             KernelInstallationOutcome::Unconfirmed => {
+                if self.original_exit.is_none()
+                    && matches!(self.verification_error, Some(Error::Timeout { .. }))
+                {
+                    return f.write_str("The original VerySync process did not confirm its exit before the deadline. Check that instance before sending another installation request.");
+                }
                 if let Some(disk) = &self.disk {
                     match disk.comparison {
                         UpgradeProgramMatch::Other => return f.write_str(

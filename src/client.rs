@@ -27,6 +27,7 @@ mod ldap_control;
 mod license_control;
 mod local_api;
 mod local_sync_control;
+mod local_sync_workflows;
 mod maintenance_control;
 mod management_auth;
 mod native_helpers;
@@ -1144,6 +1145,27 @@ pub(crate) fn management_http(
 }
 
 impl<Authorization: RequestAuthorization> Connection<Authorization> {
+    async fn send_workflow_write(
+        &self,
+        operation: &'static str,
+        request: reqwest::RequestBuilder,
+        context: &crate::operation_options::OperationContext,
+        evidence: &mut crate::ManagementWriteEvidence,
+    ) -> Result<RawResponse> {
+        evidence.dispatched = true;
+        context.phase(crate::OperationPhase::Submitting);
+        let response = send_bounded_observing_headers(
+            operation,
+            request,
+            true,
+            self.response_limit,
+            |status| evidence.status = Some(status),
+        )
+        .await?;
+        evidence.response_complete = true;
+        checked_response(operation, response, true)
+    }
+
     async fn get_json<T: DeserializeOwned>(
         &self,
         operation: &'static str,
@@ -1423,6 +1445,21 @@ fn mutation_error(operation: &'static str, mutation: bool, source: Error) -> Err
     } else {
         source
     }
+}
+
+fn workflow_write_result<T>(
+    operation: &'static str,
+    evidence: crate::ManagementWriteEvidence,
+    result: Result<T>,
+) -> Result<T> {
+    result.map_err(|source| {
+        let uncertain = evidence.dispatched
+            && matches!(
+                source,
+                Error::Timeout { .. } | Error::OperationWaitCancelled { .. }
+            );
+        mutation_error(operation, uncertain, source)
+    })
 }
 
 fn transport_error(operation: &'static str, error: reqwest::Error) -> Error {

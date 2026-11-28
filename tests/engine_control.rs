@@ -678,6 +678,53 @@ async fn folder_workflow_separates_paused_configuration_from_live_state() -> Tes
 }
 
 #[tokio::test]
+async fn folder_unregistration_workflow_preserves_native_files_and_unrelated_registration(
+) -> TestResult {
+    use sha2::{Digest, Sha256};
+    use std::{fs, time::Duration};
+    use verysync_sidecar::{
+        CreateFolderOptions, FolderId, FolderUnregistrationOutcome, OperationOptions, TargetPath,
+    };
+    let mut fixture = EngineFixture::start().await?;
+    let result: TestResult = async {
+        let client = Client::connect(
+            ConnectOptions::new(endpoint(&fixture)?, ApiKey::new(fixture.api_key())?)
+                .expected_device_id(DeviceId::parse(fixture.device_id())?),
+        ).await?;
+        let mut samples = Vec::new();
+        for label in ["this-folder", "beside-it"] {
+            let path = fixture.state_dir().join(label);
+            fs::create_dir_all(&path)?;
+            let sample = path.join("leave-in-place.txt");
+            fs::write(&sample, format!("Synthetic content for {label}"))?;
+            let original_hash = Sha256::digest(fs::read(&sample)?);
+            let id = FolderId::parse(label)?;
+            client.create_folder(&CreateFolderOptions::new(id.clone(), TargetPath::local(path)).paused(true)).await?;
+            samples.push((id, sample, original_hash));
+        }
+        let opts = || OperationOptions::new(Duration::from_secs(12));
+        let result = client.unregister_folder_and_verify(&samples[0].0, opts()).await?;
+        assert_eq!(result.outcome, FolderUnregistrationOutcome::Absent);
+        assert!(result.write.dispatched && result.write.response_complete);
+        assert_eq!(result.previous.as_ref().map(|c| &c.id), Some(&samples[0].0));
+        assert!(result.current.is_none());
+        let second = client.unregister_folder_and_verify(&samples[0].0, opts()).await?;
+        assert_eq!(second.outcome, FolderUnregistrationOutcome::AlreadyAbsent);
+        assert!(!second.write.dispatched);
+        let retained = client.folders().await?;
+        assert!(!retained.iter().any(|c| c.id == samples[0].0));
+        assert!(retained.iter().any(|c| c.id == samples[1].0));
+        for (_, sample, hash) in samples {
+            assert_eq!(Sha256::digest(fs::read(sample)?), hash);
+        }
+        println!("Native folder unregistration: configured ID absent; one DELETE; repeated goal zero writes; two independently checked file digests unchanged; unrelated registration retained");
+        Ok(())
+    }.await;
+    assert!(fixture.shutdown().await?.success());
+    result
+}
+
+#[tokio::test]
 async fn folder_remove_keep_files_preserves_samples_and_unrelated_configuration() -> TestResult {
     use sha2::{Digest, Sha256};
     use std::{

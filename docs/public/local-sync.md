@@ -8,6 +8,18 @@ before resuming or starting another run. Removing the job removes its
 registration. Check the documented file retention behavior for the operation
 you are using.
 
+Use `preview_local_sync_and_verify` to generate one bounded preview and read
+its action pages. Review the actions, then pass that preview ID and your exact
+selection to `execute_local_sync_preview`. The report keeps the original reply,
+the identified native run and the checked action results. It distinguishes
+cancellation and partial failure. Check actual destination data when you need
+proof that selected files arrived.
+
+You can read an acknowledged run later with `observe_local_sync_execution`.
+Store the encoded receipt privately and reopen the trusted device connection.
+A newer run can make the older results unavailable. If the original response
+never identified a run, inspect the job before deciding whether to run it again.
+
 The Local Sync API controls the official core's storage jobs. These
 registrations are distinct from P2P synchronization folders and file-manager
 volumes. Every method uses the selected authenticated connection. The SDK does

@@ -28,6 +28,14 @@ async fn owned_old(
     root: &Path,
     tcp: bool,
 ) -> TestResult<(ManagedInstance, ManagedOptions, PathBuf)> {
+    owned_old_with_app_settings(root, tcp, false).await
+}
+
+async fn owned_old_with_app_settings(
+    root: &Path,
+    tcp: bool,
+    app_settings: bool,
+) -> TestResult<(ManagedInstance, ManagedOptions, PathBuf)> {
     let source = upgrade_source()?;
     let program = root.join(
         source
@@ -45,13 +53,16 @@ async fn owned_old(
     } else {
         base.management_endpoint().clone()
     };
-    let config = ManagedOptions::new(
+    let mut config = ManagedOptions::new(
         LocalProgram::new(&program)?.expected_sha256(previous),
         base.state_directory(),
         endpoint,
     )?
     .version_policy(VersionPolicy::AllowUnverified)
     .with_transient_read_retries();
+    if app_settings {
+        config = config.local_api_enabled(false)?;
+    }
     let core = ManagedInstance::start(config.clone()).await?;
     assert_eq!(core.program_info().version, "v2.33.1");
     Ok((core, config, program))
@@ -697,20 +708,33 @@ async fn native_business_install_reports_verified_target_after_lost_reply() -> T
 
 #[tokio::test]
 async fn native_business_install_reports_previous_after_unanswered_upload() -> TestResult {
-    verify_non_target_after_unanswered_upload(false).await
+    verify_non_target_after_unanswered_upload(DiskControl::Previous).await
 }
 
 #[tokio::test]
 async fn native_business_install_preserves_unknown_when_program_file_is_unavailable() -> TestResult
 {
-    verify_non_target_after_unanswered_upload(true).await
+    verify_non_target_after_unanswered_upload(DiskControl::Unavailable).await
 }
 
-async fn verify_non_target_after_unanswered_upload(remove_program: bool) -> TestResult {
-    let case = if remove_program {
-        "s30-install-missing"
-    } else {
-        "s30-install-previous"
+#[tokio::test]
+async fn native_business_install_never_adopts_a_third_program_after_an_unanswered_upload(
+) -> TestResult {
+    verify_non_target_after_unanswered_upload(DiskControl::Other).await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiskControl {
+    Previous,
+    Unavailable,
+    Other,
+}
+
+async fn verify_non_target_after_unanswered_upload(disk_control: DiskControl) -> TestResult {
+    let case = match disk_control {
+        DiskControl::Previous => "s30-install-previous",
+        DiskControl::Unavailable => "s30-install-missing",
+        DiskControl::Other => "s30-install-other",
     };
     let root = tempfile::Builder::new().prefix("u30d").tempdir()?;
     let (mut core, settings, program) = owned_old(root.path(), true).await?;
@@ -769,15 +793,23 @@ async fn verify_non_target_after_unanswered_upload(remove_program: bool) -> Test
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             })
             .await??;
-            if remove_program {
+            if disk_control != DiskControl::Previous {
                 std::fs::rename(&position, &displaced)?;
+            }
+            if disk_control == DiskControl::Other {
+                std::fs::write(
+                    &position,
+                    b"synthetic third program content; never executed",
+                )?;
             }
             receipt_event(
                 case,
                 "controlled-no-upstream-upload",
                 serde_json::json!({
                     "sdk_uploads":1,"forwarded_uploads":0,"fixture_shutdowns":1,
-                    "input_bytes_consumed":received,"program_temporarily_unavailable":remove_program
+                    "input_bytes_consumed":received,
+                    "program_temporarily_unavailable":disk_control == DiskControl::Unavailable,
+                    "stable_third_file_written_by_fixture":disk_control == DiskControl::Other
                 }),
             )?;
             conn.shutdown().await?;
@@ -809,27 +841,46 @@ async fn verify_non_target_after_unanswered_upload(remove_program: bool) -> Test
         UpgradeOutcome::Unknown
     );
     assert_eq!(report.admission_attempts, 1);
-    let disk = report.disk.ok_or("expected SDK disk observation")?;
-    if remove_program {
-        assert_eq!(report.outcome, KernelInstallationOutcome::Unconfirmed);
-        assert_eq!(
-            disk.comparison,
-            UpgradeProgramMatch::Unconfirmed(UpgradeProgramUncertainty::FileUnverified)
-        );
-        assert!(disk.current_sha256.is_none());
-        std::fs::rename(restored, &program)?;
-    } else {
-        assert_eq!(
-            report.outcome,
-            KernelInstallationOutcome::PreviousProgramRemains
-        );
-        assert_eq!(disk.comparison, UpgradeProgramMatch::Previous);
-        assert_eq!(disk.current_sha256, Some(old));
+    let disk = report
+        .disk
+        .as_ref()
+        .ok_or("expected SDK disk observation")?;
+    match disk_control {
+        DiskControl::Previous => {
+            assert_eq!(
+                report.outcome,
+                KernelInstallationOutcome::PreviousProgramRemains
+            );
+            assert_eq!(disk.comparison, UpgradeProgramMatch::Previous);
+            assert_eq!(disk.current_sha256, Some(old));
+        }
+        DiskControl::Unavailable => {
+            assert_eq!(report.outcome, KernelInstallationOutcome::Unconfirmed);
+            assert_eq!(
+                disk.comparison,
+                UpgradeProgramMatch::Unconfirmed(UpgradeProgramUncertainty::FileUnverified)
+            );
+            assert!(disk.current_sha256.is_none());
+            std::fs::rename(restored, &program)?;
+        }
+        DiskControl::Other => {
+            assert_eq!(report.outcome, KernelInstallationOutcome::Unconfirmed);
+            assert_eq!(disk.comparison, UpgradeProgramMatch::Other);
+            let third = hash(&program)?;
+            assert_ne!(third, old);
+            assert_ne!(third, hash(&pinned_program()?)?);
+            assert_eq!(disk.current_sha256, Some(third));
+            assert!(report
+                .to_string()
+                .contains("matches neither the previous nor the selected version"));
+            std::fs::remove_file(&program)?;
+            std::fs::rename(restored, &program)?;
+        }
     }
     assert!(observed.try_recv()? > target.archive_bytes());
     assert!(observed.try_recv().is_err());
     assert_eq!(hash(&program)?, old);
-    let ended = report.original_exit.ok_or("missing owned exit")?;
+    let ended = report.original_exit.as_ref().ok_or("missing owned exit")?;
     assert!(ended.tree_stopped && ended.state_released && !ended.forced);
     assert!(exact_program_pids(&program).await?.is_empty());
     witness.abort();
@@ -841,7 +892,7 @@ async fn verify_non_target_after_unanswered_upload(remove_program: bool) -> Test
         "result-and-cleanup",
         serde_json::json!({
             "original_unknown":true, "later_comparison":format!("{:?}", disk.comparison),
-            "final_report":report.outcome.to_string(), "native_exit_code":ended.code,
+            "final_report":report.to_string(), "native_exit_code":ended.code,
             "owned_program_pids":0, "removed":true
         }),
     )
@@ -959,6 +1010,257 @@ async fn native_business_upgrade_and_ready_reuses_owned_data_and_same_device() -
             "owned_program_pids":0, "removed":true
         }),
     )
+}
+
+#[tokio::test]
+async fn native_business_upgrade_preserves_verified_disk_when_readiness_admission_fails(
+) -> TestResult {
+    const PRIVATE_CONFLICT: &[u8] = b"fixture_only: do not replace unknown application settings\n";
+    let root = tempfile::Builder::new().prefix("u30g").tempdir()?;
+    let (mut core, settings, executable) =
+        owned_old_with_app_settings(root.path(), true, true).await?;
+    let state = settings.state_directory();
+    let prepared = state.join("appconf.yaml");
+    assert!(std::fs::read(&prepared)?.starts_with(b"verysync:"));
+    let retained = root.path().join("retained.txt");
+    std::fs::write(&retained, b"synthetic bytes preserved on startup refusal")?;
+    let before = hash(&retained)?;
+    let controlled_path = prepared.clone();
+    let opts =
+        OperationOptions::new(Duration::from_secs(45)).save_upgrade_checkpoints(move |stage| {
+            let controlled_path = controlled_path.clone();
+            async move {
+                if stage.stage == UpgradeCheckpointStage::RequestFinished {
+                    tokio::fs::write(controlled_path, PRIVATE_CONFLICT).await?;
+                }
+                Ok(())
+            }
+        });
+    let target = baseline_asset()?;
+    let archive =
+        PathBuf::from(std::env::var_os("VERYSYNC_TEST_ARCHIVE").ok_or("fixed archive missing")?);
+    let report = core
+        .upgrade_kernel_and_wait_ready(archive, &target, opts)
+        .await?;
+    assert_eq!(
+        report.outcome,
+        KernelReadinessOutcome::InstalledReadinessUnconfirmed,
+        "{report:?}"
+    );
+    assert_eq!(
+        report.installation.outcome,
+        KernelInstallationOutcome::Installed
+    );
+    assert_eq!(
+        report.installation.installation.receipt.outcome(),
+        UpgradeOutcome::Acknowledged
+    );
+    assert!(report.sdk_start_attempted && report.transition.is_none());
+    assert!(
+        matches!(&report.readiness_error, Some(Error::ManagedFailure { reason }) if reason.contains("app settings are not a known library-generated file"))
+    );
+    let verified_digest = hash(&pinned_program()?)?;
+    assert_eq!(
+        report
+            .installation
+            .disk
+            .as_ref()
+            .and_then(|d| d.current_sha256),
+        Some(verified_digest)
+    );
+    assert_eq!(hash(&executable)?, verified_digest);
+    assert_eq!(hash(&retained)?, before);
+    assert_eq!(std::fs::read(prepared)?, PRIVATE_CONFLICT);
+    let ended = report
+        .installation
+        .original_exit
+        .as_ref()
+        .ok_or("no original exit")?;
+    assert!(ended.tree_stopped && ended.state_released && !ended.forced);
+    assert!(exact_program_pids(&executable).await?.is_empty());
+    let receipt = serde_json::json!({
+        "verified_target_sha256":hex(verified_digest),
+        "original_ended":ended.code,"ready":false,"sdk_entered_startup":true,
+        "readiness_error":report.readiness_error.as_ref().map(ToString::to_string),
+        "report":report.to_string(),"files_and_application_settings_preserved":true,
+        "owned_program_pids":0,"removed":true
+    });
+    drop(core);
+    root.close()?;
+    receipt_event(
+        "s30-start-refusal",
+        "disk-verified-before-startup-refusal",
+        receipt,
+    )
+}
+
+#[tokio::test]
+async fn native_business_install_exercises_preflight_response_and_live_writer_boundaries(
+) -> TestResult {
+    const COMPLETE_401: usize = 1;
+    const COMPLETE_403: usize = 2;
+    const INCOMPLETE_403: usize = 3;
+    const ADMISSION_TIMEOUT: usize = 4;
+    let root = tempfile::Builder::new().prefix("u30f").tempdir()?;
+    let (mut core, settings, executable) = owned_old(root.path(), true).await?;
+    let old = hash(&executable)?;
+    let native = SocketAddr::from((
+        Ipv4Addr::LOCALHOST,
+        settings
+            .management_endpoint()
+            .http_url()
+            .and_then(|url| url.port())
+            .ok_or("missing private fixture port")?,
+    ));
+    let parsed = rmpv::decode::read_value(&mut std::fs::File::open(
+        settings.state_directory().join("setting.dat"),
+    )?)?;
+    let key = ApiKey::new(
+        parsed["4"]["6"]
+            .as_str()
+            .ok_or("private fixture key missing")?,
+    )?;
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let proxy = ManagementEndpoint::http(&format!("http://{}/", listener.local_addr()?))?;
+    let intercepted_uploads = Arc::new(AtomicUsize::new(0));
+    let uploads = intercepted_uploads.clone();
+    let behavior = Arc::new(AtomicUsize::new(0));
+    let selected = behavior.clone();
+    let service = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await?;
+            let head = bounded_request_head(&mut socket).await?;
+            let mode = selected.load(Ordering::SeqCst);
+            if head.starts_with("GET /rest/system/version ") && mode == ADMISSION_TIMEOUT {
+                // Hold the first admission read until the controller closes its timeout.
+                let _ = socket.read_u8().await;
+                continue;
+            }
+            if !head.starts_with("POST /rest/system/upgrade/upload ") {
+                forward_native_management(socket, native, head, false, "s30-boundaries").await?;
+                continue;
+            }
+            assert!(matches!(mode, COMPLETE_401 | COMPLETE_403 | INCOMPLETE_403));
+            uploads.fetch_add(1, Ordering::SeqCst);
+            let bytes = fixed_upload_length(&head)?;
+            assert_eq!(
+                tokio::io::copy(&mut (&mut socket).take(bytes), &mut tokio::io::sink()).await?,
+                bytes
+            );
+            let reply = match mode {
+                COMPLETE_401 => {
+                    b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}"
+                        .as_slice()
+                }
+                COMPLETE_403 => {
+                    b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}"
+                        .as_slice()
+                }
+                INCOMPLETE_403 => {
+                    b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 12\r\n\r\n{"
+                        .as_slice()
+                }
+                _ => unreachable!(),
+            };
+            socket.write_all(reply).await?;
+            socket.shutdown().await?;
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    });
+    let identity = core.client().instance().device_id.clone();
+    core.reconnect_management(
+        ConnectOptions::new(proxy, key)
+            .version_policy(VersionPolicy::AllowUnverified)
+            .expected_device_id(identity),
+    )
+    .await?;
+    let verified: TestResult = async {
+        let target = baseline_asset()?;
+        let wrong_target = verysync_sidecar::official_programs()?.into_iter()
+            .find(|asset| asset.target().os() != target.target().os())
+            .ok_or("nonmatching official profile missing")?;
+        let archive = PathBuf::from(std::env::var_os("VERYSYNC_TEST_ARCHIVE").ok_or("fixed archive missing")?);
+        let bad_file = root.path().join("not-the-pinned-archive.zip");
+        std::fs::write(&bad_file, b"deliberately incorrect synthetic ZIP")?;
+        for (name, input, selection) in [
+            ("wrong-platform", &archive, &wrong_target),
+            ("wrong-archive", &bad_file, &target),
+        ] {
+            let report = core.install_kernel_upgrade(input, selection, OperationOptions::new(Duration::from_secs(12))).await?;
+            assert_eq!(report.installation.receipt.dispatch(), UpgradeDispatch::Preparing);
+            assert_eq!(report.installation.receipt.outcome(), UpgradeOutcome::NotSubmitted);
+            assert_eq!(report.outcome, KernelInstallationOutcome::NotInstalled);
+            assert_eq!(report.admission_attempts, 0);
+            assert_eq!(intercepted_uploads.load(Ordering::SeqCst), 0);
+            assert_eq!(hash(&executable)?, old);
+            receipt_event(name, "before-upload-boundary",
+                serde_json::json!({"upload_requests":0,"display":report.to_string(),"old_hash_retained":true}))?;
+        }
+        behavior.store(ADMISSION_TIMEOUT, Ordering::SeqCst);
+        let timeout = core.install_kernel_upgrade(
+            &archive, &target,
+            OperationOptions::new(Duration::from_secs(5)).without_read_retry(),
+        ).await?;
+        assert_eq!(timeout.installation.receipt.dispatch(), UpgradeDispatch::Preparing);
+        assert_eq!(timeout.admission_attempts, 1);
+        assert!(matches!(timeout.installation.result, Err(Error::Timeout { .. })));
+        assert_eq!(intercepted_uploads.load(Ordering::SeqCst), 0);
+        receipt_event("s30-preflight-timeout", "before-upload-boundary",
+            serde_json::json!({"upload_requests":0,"version_admission_reads":1,"display":timeout.to_string()}))?;
+
+        let mut expected_count = 0;
+        for (mode, status, complete) in [
+            (COMPLETE_401, 401, true),
+            (COMPLETE_403, 403, true),
+            (INCOMPLETE_403, 403, false),
+        ] {
+            behavior.store(mode, Ordering::SeqCst);
+            let start = tokio::time::Instant::now();
+            let total = Duration::from_secs(if complete { 30 } else { 18 });
+            let report = core.install_kernel_upgrade(&archive, &target, OperationOptions::new(total)).await?;
+            let elapsed = start.elapsed();
+            expected_count += 1;
+            assert_eq!(intercepted_uploads.load(Ordering::SeqCst), expected_count);
+            assert_eq!(report.installation.receipt.dispatch(), UpgradeDispatch::Http {status: Some(status), complete});
+            assert_eq!(report.installation.receipt.outcome(), if complete { UpgradeOutcome::Rejected } else { UpgradeOutcome::Unknown });
+            match (status, complete) {
+                (401, true) => assert!(matches!(report.installation.result, Err(Error::Authentication { status: 401 }))),
+                (403, true) => assert!(matches!(report.installation.result, Err(Error::AccessDenied { .. }))),
+                (403, false) => {
+                    assert!(matches!(report.installation.result, Err(Error::MutationOutcomeUnknown { .. })));
+                    assert!(matches!(report.verification_error, Some(Error::Timeout { .. })));
+                    assert_eq!(report.outcome, KernelInstallationOutcome::Unconfirmed);
+                    assert!(elapsed >= total - Duration::from_millis(50));
+                    assert!(elapsed < total + Duration::from_secs(3));
+                }
+                _ => unreachable!(),
+            }
+            assert!(report.original_exit.is_none() && report.disk.is_none());
+            assert_eq!(hash(&executable)?, old);
+            assert!(!exact_program_pids(&executable).await?.is_empty());
+            receipt_event("s30-install-boundaries", "same-caller-response-and-end",
+                serde_json::json!({"fixture_response":true,"status":status,"complete":complete,
+                    "cumulative_upload_requests":expected_count,"forwarded_upstream_uploads":0,
+                    "original_core_alive":true,"old_hash_retained":true,
+                    "elapsed_ms":elapsed.as_millis(),"deadline_ms":total.as_millis(),"display":report.to_string()}))?;
+        }
+        Ok(())
+    }.await;
+    behavior.store(0, Ordering::SeqCst);
+    let stopped = core.shutdown(Duration::from_secs(15)).await?;
+    assert!(stopped.tree_stopped && stopped.state_released && !stopped.forced);
+    assert!(exact_program_pids(&executable).await?.is_empty());
+    service.abort();
+    assert!(service.await.is_err_and(|error| error.is_cancelled()));
+    drop(core);
+    root.close()?;
+    receipt_event(
+        "s30-install-boundaries",
+        "cleanup",
+        serde_json::json!({"owned_program_pids":0,"normal":true,"removed":true}),
+    )?;
+    verified
 }
 
 #[tokio::test]
