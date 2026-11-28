@@ -140,6 +140,216 @@ async fn received(
 }
 
 #[tokio::test]
+async fn actual_delivery_batch_waits_for_the_late_receiver_and_checks_bytes() -> TestResult {
+    use std::time::SystemTime;
+    use verysync_sidecar::{
+        DeliveryBatch, DeliveryEvidenceSource, DeliveryFile, DeliveryFileOutcome, DeliveryReceipt,
+        OperationCompletion, OperationOptions, ResourceFileState,
+    };
+    let root = tempfile::Builder::new().prefix("vbd-").tempdir()?;
+    let mut a = ManagedInstance::start(options(&root.path().join("a"))?).await?;
+    let mut b = ManagedInstance::start(options(&root.path().join("b"))?).await?;
+    let mut c = ManagedInstance::start(options(&root.path().join("c"))?).await?;
+    let since = SystemTime::now();
+    let a_id = a.client().instance().device_id.clone();
+    let b_id = b.client().instance().device_id.clone();
+    let c_id = c.client().instance().device_id.clone();
+    let source = a.state_directory().join("profile").join("delivery-source");
+    let first = b.state_directory().join("profile").join("delivery-first");
+    let late = c.state_directory().join("profile").join("delivery-late");
+    std::fs::create_dir(&source)?;
+    let samples = vec![
+        (
+            PathBuf::from("sample.bin"),
+            b"transfer from original sender".to_vec(),
+        ),
+        (PathBuf::from("empty.bin"), Vec::new()),
+    ];
+    for (name, contents) in &samples {
+        std::fs::write(source.join(name), contents)?;
+    }
+    let keys = a.client().generate_share().await?;
+    let af = a
+        .client()
+        .join_folder(
+            &JoinFolderOptions::new(
+                a.client().validate_share_key(&keys.read_write_key).await?,
+                TargetPath::local(&source),
+            )
+            .paused(true),
+        )
+        .await?
+        .configuration
+        .id;
+    let bf = b
+        .client()
+        .join_folder(
+            &JoinFolderOptions::new(
+                b.client().validate_share_key(&keys.read_only_key).await?,
+                TargetPath::local(&first),
+            )
+            .paused(true),
+        )
+        .await?
+        .configuration
+        .id;
+    let cf = c
+        .client()
+        .join_folder(
+            &JoinFolderOptions::new(
+                c.client().validate_share_key(&keys.read_only_key).await?,
+                TargetPath::local(&late),
+            )
+            .paused(true),
+        )
+        .await?
+        .configuration
+        .id;
+    let a_address = private_tcp(a.client()).await?;
+    associate(
+        a.client(),
+        &af,
+        &b_id,
+        &private_tcp(b.client()).await?,
+        false,
+    )
+    .await?;
+    associate(
+        a.client(),
+        &af,
+        &c_id,
+        &private_tcp(c.client()).await?,
+        false,
+    )
+    .await?;
+    associate(b.client(), &bf, &a_id, &a_address, false).await?;
+    associate(c.client(), &cf, &a_id, &a_address, false).await?;
+    a.client().resume_folder(&af).await?;
+    b.client().resume_folder(&bf).await?;
+    a.client().request_scan(&af).await?;
+    received(
+        "first selected recipient",
+        b.client(),
+        &bf,
+        &first,
+        &samples,
+    )
+    .await?;
+    assert!(!late.join("sample.bin").exists());
+    let files = samples
+        .iter()
+        .map(|(name, contents)| {
+            DeliveryFile::new(
+                name.to_str().unwrap(),
+                contents.len() as u64,
+                Sha256::digest(contents).into(),
+            )
+        })
+        .collect::<verysync_sidecar::Result<Vec<_>>>()?;
+    let batch = DeliveryBatch::new(
+        a_id,
+        af.clone(),
+        files,
+        [(b_id.clone(), bf.clone()), (c_id.clone(), cf.clone())],
+    )?;
+    let limit = || OperationOptions::new(Duration::from_secs(15));
+    let first_only = a
+        .client()
+        .observe_delivery_batch(&batch, &[b.client(), c.client()], &[], since, limit())
+        .await?;
+    assert_eq!(
+        first_only.completion(),
+        OperationCompletion::PartiallyCompleted,
+        "{first_only:#?}"
+    );
+    assert!(first_only.recipients[&b_id]
+        .files
+        .iter()
+        .all(|file| file.outcome == DeliveryFileOutcome::Matched));
+    assert!(first_only.recipients[&c_id]
+        .files
+        .iter()
+        .all(|file| file.outcome != DeliveryFileOutcome::Matched));
+
+    let without_receivers = a
+        .client()
+        .observe_delivery_batch(&batch, &[], &[], since, limit())
+        .await?;
+    assert_eq!(
+        without_receivers.completion(),
+        OperationCompletion::Unconfirmed
+    );
+    assert!(without_receivers
+        .recipients
+        .values()
+        .flat_map(|peer| &peer.files)
+        .all(|file| file.outcome == DeliveryFileOutcome::Unobserved));
+
+    c.client().resume_folder(&cf).await?;
+    received("late selected recipient", c.client(), &cf, &late, &samples).await?;
+    let complete = a
+        .client()
+        .observe_delivery_batch(&batch, &[b.client(), c.client()], &[], since, limit())
+        .await?;
+    assert_eq!(
+        complete.completion(),
+        OperationCompletion::Completed,
+        "{complete:#?}"
+    );
+    assert!(complete
+        .recipients
+        .values()
+        .flat_map(|peer| &peer.files)
+        .all(|file| {
+            file.evidence.len() == 1
+                && file.evidence[0].source == DeliveryEvidenceSource::RecipientRead
+        }));
+    let at = SystemTime::now();
+    let measured = ResourceFileState::Present {
+        bytes: samples[0].1.len() as u64,
+        sha256: Sha256::digest(std::fs::read(first.join("sample.bin"))?).into(),
+    };
+    let actual = DeliveryReceipt::witnessed(&batch, b_id.clone(), 0, at, at, measured)?;
+    let actual = DeliveryReceipt::decode(&batch, &actual.encode()?)?;
+    let disputed = DeliveryReceipt::witnessed(
+        &batch,
+        b_id.clone(),
+        0,
+        at,
+        at,
+        ResourceFileState::Present {
+            bytes: samples[0].1.len() as u64,
+            sha256: [0x99; 32],
+        },
+    )?;
+    let conflicts = a
+        .client()
+        .observe_delivery_batch(&batch, &[], &[actual, disputed], since, limit())
+        .await?;
+    let conflict = &conflicts.recipients[&b_id].files[0];
+    assert_eq!(conflict.outcome, DeliveryFileOutcome::Conflicting);
+    assert_eq!(conflict.evidence.len(), 2);
+    assert!(conflict
+        .evidence
+        .iter()
+        .all(|item| item.source == DeliveryEvidenceSource::CallerWitness));
+    for core in [&mut c, &mut b, &mut a] {
+        let exit = core.shutdown(Duration::from_secs(10)).await?;
+        assert!(exit.tree_stopped && !exit.forced && exit.code == Some(0));
+    }
+    println!(
+        "native delivery batch evidence: {}",
+        json!({
+            "owned_nodes":3, "selected_files":2, "selected_receivers":2,
+            "one_late_receiver_before_ready":true, "actual_full_digest_both_receivers":true,
+            "model_progress_alone_did_not_complete_batch":true, "conflicting_simultaneous_witnesses_retained":true,
+            "external_witness_conflict_fixture_is_synthetic":true, "all_owned_trees_exited_cleanly":true,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn actual_readonly_node_serves_blank_readonly_peer_after_source_exits() -> TestResult {
     let root = tempfile::Builder::new().prefix("vs3-").tempdir()?.keep();
     let phase = three_node_diagnostic::Phase::new(root.clone());

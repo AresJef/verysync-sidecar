@@ -8,6 +8,7 @@ mod control_preflight;
 mod control_preview;
 mod control_recovery;
 mod default_versioning;
+mod delivery;
 mod device_control;
 mod device_ignore;
 mod device_recovery;

@@ -1,6 +1,6 @@
 //! Logical remote file-manager volumes and bounded resource metadata.
 use crate::{Error, PathStyle, Result, TargetPath};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::{collections::BTreeMap, fmt};
 
 /// An opaque file-manager mount ID, distinct from a synchronization FolderId.
@@ -195,6 +195,25 @@ impl fmt::Debug for ResourceInfo {
             .finish_non_exhaustive()
     }
 }
+
+/// A file-content observation for a selected native resource.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ResourceFileState {
+    /// The reported regular file length and full SHA-256.
+    Present {
+        /// Length in bytes.
+        bytes: u64,
+        /// Digest of the complete file.
+        sha256: [u8; 32],
+    },
+    /// No resource was observed at that exact path.
+    Missing,
+    /// A resource of a different kind occupied the path.
+    OtherKind,
+}
+
 /// Explicit native checksum request; MD5/SHA-1 are compatibility checksums, not
 /// authentication or recommended cryptographic integrity mechanisms.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

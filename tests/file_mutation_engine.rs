@@ -97,6 +97,7 @@ async fn diagnose_owned_paths(
 #[tokio::test]
 async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthetic_bytes(
 ) -> TestResult {
+    use verysync_sidecar::{OperationOptions, ResourceFileState, ResourceRelocationOutcome};
     let root = tempfile::Builder::new().prefix("vfm-").tempdir()?.keep();
     let mut core = ManagedInstance::start(options(&root.join("c"))?).await?;
     let identity = core.client().instance().device_id.clone();
@@ -133,6 +134,52 @@ async fn public_resource_changes_create_copy_move_edit_and_delete_actual_synthet
         std::fs::read(native.join("source.bin"))?,
         b"source original bytes"
     );
+    let verified_copy_path = base.clone().child("verified-copy.bin")?;
+    let verified_move_path = base.clone().child("verified-move.bin")?;
+    let operation = || OperationOptions::new(Duration::from_secs(10));
+    let copied = core
+        .client()
+        .copy_file_and_verify(
+            &source,
+            &verified_copy_path,
+            Conflict::RejectExisting,
+            operation(),
+        )
+        .await?;
+    assert_eq!(
+        copied.outcome,
+        ResourceRelocationOutcome::ExpectedStateObserved,
+        "{copied:?}"
+    );
+    assert!(copied.original.is_ok() && copied.write.response_complete);
+    let source_fact = core.client().resource_file_state(&source).await?;
+    assert_eq!(copied.source_after.transpose()?, Some(source_fact));
+    assert_eq!(copied.destination_after.transpose()?, Some(source_fact));
+    let moved = core
+        .client()
+        .move_file_and_verify(
+            &verified_copy_path,
+            &verified_move_path,
+            Conflict::RejectExisting,
+            operation(),
+        )
+        .await?;
+    assert_eq!(
+        moved.outcome,
+        ResourceRelocationOutcome::ExpectedStateObserved,
+        "{moved:?}"
+    );
+    assert_eq!(
+        moved.source_after.transpose()?,
+        Some(ResourceFileState::Missing)
+    );
+    assert_eq!(moved.destination_after.transpose()?, Some(source_fact));
+    assert!(!native.join("verified-copy.bin").exists());
+    assert_eq!(
+        std::fs::read(native.join("verified-move.bin"))?,
+        std::fs::read(native.join("source.bin"))?
+    );
+    println!("native verified file copy and move: original response, matched SHA-256, expected source state, physical file matches");
     let copied = base.clone().child("copied 二 %.bin")?;
     let result = core
         .client()

@@ -5,6 +5,26 @@ Use progress and need snapshots to see what the selected engine reports as
 remaining. When you need to prove that particular files have arrived, compare
 those files on the two endpoints. A reported percentage describes the index.
 
+Use `DeliveryBatch` when you need to verify that specific files reached every
+selected recipient. Supply the source device and folder, the expected length
+and SHA-256 of each file, and the actual folder ID on each recipient. The core
+can use different local folder IDs for different members of a share.
+
+`observe_delivery_batch` reads one round. Provide authorized management clients
+for recipients whose files the SDK may read. The SDK checks the recipient's
+identity and uses a native local file-manager mount that contains its configured
+folder. If that path is unavailable, a trusted `DeliveryReceipt` can record an
+independent check. The report identifies the source, time interval and file
+fact of each receipt. Overlapping evidence that differs leaves that file
+unconfirmed. An independently observed change between two separate times
+retains both readings.
+
+Read `completion()` before assuming the whole batch arrived. Sender-side
+progress can help track an unfinished batch. To verify delivery, each selected
+recipient needs matching bytes for every selected file. Read again to check
+late arrivals. This operation leaves native synchronization running and does
+not send a scan, start a transfer, or retry either one.
+
 `folder_completion`, `folder_completions` and `batch_folder_status` read actual
 engine snapshots. A completion value is a reported percentage for an index;
 even 100 can accompany `remote_state = Some("unknown")`. It does not establish

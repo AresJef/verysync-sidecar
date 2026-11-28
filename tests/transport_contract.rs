@@ -6209,6 +6209,150 @@ async fn resource_keep_both_ambiguous_parent_changes_are_unknown_without_retries
 }
 
 #[tokio::test]
+async fn verified_file_relocation_reads_both_paths_after_one_lost_response() -> TestResult {
+    use verysync_sidecar::{
+        OperationOptions, PathStyle, ResourceConflictPolicy, ResourceFileState, ResourcePath,
+        ResourceRelocationOutcome, ResourceVolumeId,
+    };
+    let version =
+        || Reply::json(serde_json::json!({"version":"v2.33.2","os":"linux","arch":"amd64"}));
+    let generation = || Reply::json(serde_json::json!({"myID":ID, "startTime":"owned-generation"}));
+    let file = |digest: &str| {
+        Reply::json(serde_json::json!({
+            "path":"/private/file","name":"selected","size":5,"mode":420,"modified":"native", "isDir":false,
+            "checksums":{"sha256":digest.repeat(32)}
+        }))
+    };
+    let missing = || Reply {
+        status: 404,
+        ..Reply::json(serde_json::json!({}))
+    };
+    for (case, moving, expected) in [
+        (
+            "copy",
+            false,
+            ResourceRelocationOutcome::ExpectedStateObserved,
+        ),
+        (
+            "move",
+            true,
+            ResourceRelocationOutcome::ExpectedStateObserved,
+        ),
+        (
+            "move retained original",
+            true,
+            ResourceRelocationOutcome::PartiallyObserved,
+        ),
+        (
+            "copy different bytes",
+            false,
+            ResourceRelocationOutcome::CurrentStateDiffers,
+        ),
+        (
+            "competing names",
+            false,
+            ResourceRelocationOutcome::Unconfirmed,
+        ),
+    ] {
+        let parent = |after| {
+            let items = if after {
+                vec!["archive (1).bin", "outside.bin"]
+            } else {
+                Vec::new()
+            };
+            Reply::json(
+                serde_json::json!({"path":"/","name":"root","size":0,"mode":493,
+                "modified":"native","isDir":true,"items":items.into_iter().map(|name| {
+                    serde_json::json!({"path":"/owned","name":name,"size":5,"mode":420,"modified":"native","isDir":false})
+                }).collect::<Vec<_>>()}),
+            )
+        };
+        let keep = case == "competing names";
+        let mut replies = vec![
+            version(),
+            generation(),
+            version(),
+            generation(),
+            generation(),
+            generation(),
+            file("11"),
+            generation(),
+            missing(),
+        ];
+        if keep {
+            replies.extend([generation(), parent(false)]);
+        }
+        replies.extend([
+            generation(),
+            Reply {
+                status: 0,
+                ..Reply::json(serde_json::json!({}))
+            },
+            generation(),
+            generation(),
+            if case == "move" {
+                missing()
+            } else {
+                file("11")
+            },
+            generation(),
+            if keep {
+                parent(true)
+            } else if case == "copy different bytes" {
+                file("22")
+            } else {
+                file("11")
+            },
+            generation(),
+        ]);
+        let server = ScriptedServer::start(replies).await?;
+        let client = Client::connect(server.options()?).await?;
+        let root = ResourcePath::root(ResourceVolumeId::parse("volume")?, PathStyle::Unix);
+        let from = root.clone().child("source.bin")?;
+        let to = root.child("archive.bin")?;
+        let options = OperationOptions::new(Duration::from_secs(5));
+        let conflict = if keep {
+            ResourceConflictPolicy::KeepBoth
+        } else {
+            ResourceConflictPolicy::RejectExisting
+        };
+        let report = if moving {
+            client
+                .move_file_and_verify(&from, &to, conflict, options)
+                .await?
+        } else {
+            client
+                .copy_file_and_verify(&from, &to, conflict, options)
+                .await?
+        };
+        assert_eq!(report.outcome, expected, "{case} {report:?}");
+        assert!(
+            matches!(report.original, Err(Error::MutationOutcomeUnknown { .. })),
+            "{case}"
+        );
+        assert_eq!(
+            report.source_before,
+            Some(ResourceFileState::Present {
+                bytes: 5,
+                sha256: [0x11; 32]
+            })
+        );
+        if keep {
+            assert!(report.destination.is_none());
+        }
+        let requests = server.finish().await?;
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("PATCH "))
+                .count(),
+            1
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn local_sync_target_syntax_subpaths_and_unbounded_pages_are_refused_before_requests(
 ) -> TestResult {
     use verysync_sidecar::{

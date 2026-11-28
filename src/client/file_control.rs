@@ -1,7 +1,8 @@
 //! Remote file-manager reads, separate from native controller filesystem I/O.
-use super::Client;
+use super::{verified_download::decode_sha256, Client};
 use crate::{
-    Error, ResourceChecksum, ResourceInfo, ResourcePath, ResourceVolume, ResponseDiagnostic, Result,
+    Error, ResourceChecksum, ResourceFileState, ResourceInfo, ResourcePath, ResourceVolume,
+    ResponseDiagnostic, Result,
 };
 impl Client {
     /// Fetch the engine's thumbnail for an explicit resource with inline=true.
@@ -79,6 +80,39 @@ impl Client {
                 operation: "read resource checksum",
                 response: ResponseDiagnostic::new(status, body),
             })
+    }
+
+    /// Read the selected regular file's length and native full SHA-256 in one
+    /// resource snapshot. Only a native 404 counts as absence. Refusals or
+    /// malformed digests remain errors. This reads no controller filesystem.
+    pub async fn resource_file_state(&self, path: &ResourcePath) -> Result<ResourceFileState> {
+        let algorithm = ResourceChecksum::Sha256;
+        let (metadata, status, body) =
+            match self.read_resource_metadata(path, Some(algorithm)).await {
+                Ok(result) => result,
+                Err(Error::Http { response }) if response.status() == 404 => {
+                    return Ok(ResourceFileState::Missing);
+                }
+                Err(error) => return Err(error),
+            };
+        // The fixed engine's resource mode is the Go os.FileMode value.
+        const TYPE_BITS: u32 =
+            (1 << 31) | (1 << 27) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 21) | (1 << 19);
+        if metadata.is_dir || metadata.mode & TYPE_BITS != 0 {
+            return Ok(ResourceFileState::OtherKind);
+        }
+        let sha256 = metadata
+            .checksums
+            .get(algorithm.name())
+            .and_then(|text| decode_sha256(text))
+            .ok_or(Error::InvalidResponse {
+                operation: "read the selected file's SHA-256",
+                response: ResponseDiagnostic::new(status, body),
+            })?;
+        Ok(ResourceFileState::Present {
+            bytes: metadata.size,
+            sha256,
+        })
     }
     pub(super) async fn read_resource_metadata(
         &self,

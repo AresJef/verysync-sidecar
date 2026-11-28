@@ -1,11 +1,15 @@
 //! Explicit native resource changes, separate from sync registration changes.
-use super::{mutation_error, Client};
+use super::{mutation_error, workflow_write_result, Client};
 use crate::{
-    Error, ResourceConflictPolicy, ResourceDeleteScope, ResourceInfo, ResourceMutation,
-    ResourcePath, ResourceRemoval, ResponseDiagnostic, Result,
+    Error, OperationOptions, OperationPhase, ResourceConflictPolicy, ResourceDeleteScope,
+    ResourceFileState, ResourceInfo, ResourceMutation, ResourcePath, ResourceRelocationOutcome,
+    ResourceRelocationReport, ResourceRemoval, ResponseDiagnostic, Result,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use tokio::time::Instant;
+
+const VERIFY_FILE: &str = "verify the current source and destination of the selected file";
 
 impl Client {
     /// Create a directory at a non-root resource path. Refuse a currently
@@ -86,6 +90,188 @@ impl Client {
         self.relocate_resource(source, destination, conflict, true)
             .await
     }
+
+    /// Copy one regular file in a native volume and verify whole-file contents
+    /// at the destination and the original source. If acknowledgements are
+    /// lost, the SDK reads the same paths without sending another copy.
+    pub async fn copy_file_and_verify(
+        &self,
+        source: &ResourcePath,
+        destination: &ResourcePath,
+        conflict: ResourceConflictPolicy,
+        options: OperationOptions,
+    ) -> Result<ResourceRelocationReport> {
+        self.relocate_file_and_verify(source, destination, conflict, false, options)
+            .await
+    }
+
+    /// Move one regular file and verify the resulting bytes and absence at
+    /// the original path. Coordinate other writers when using KeepBoth.
+    pub async fn move_file_and_verify(
+        &self,
+        source: &ResourcePath,
+        destination: &ResourcePath,
+        conflict: ResourceConflictPolicy,
+        options: OperationOptions,
+    ) -> Result<ResourceRelocationReport> {
+        self.relocate_file_and_verify(source, destination, conflict, true, options)
+            .await
+    }
+
+    async fn relocate_file_and_verify(
+        &self,
+        source: &ResourcePath,
+        destination: &ResourcePath,
+        conflict: ResourceConflictPolicy,
+        moving: bool,
+        options: OperationOptions,
+    ) -> Result<ResourceRelocationReport> {
+        use ResourceFileState as File;
+        use ResourceRelocationOutcome as Outcome;
+        validate_relocation(source, destination)?;
+        let context = options.start()?;
+        let parent = destination
+            .parent()
+            .ok_or_else(|| rejected("destination has no parent"))?;
+        let operation = if moving {
+            "move the selected file"
+        } else {
+            "copy the selected file"
+        };
+        let mut guard = None;
+        let mut write = Default::default();
+        let mut before = None;
+        let mut admission = None;
+        let result = context
+            .wait(context.dispatch_deadline(), operation, async {
+                context.phase(OperationPhase::Checking);
+                guard = Some(self.connection.mutation_lock.lock().await);
+                self.observe_control_identity().await?;
+                let generation = self
+                    .system_status()
+                    .await?
+                    .start_time
+                    .ok_or_else(|| rejected("VerySync did not report its start time"))?;
+                let file = self.resource_file_state(source).await?;
+                before = Some(file);
+                match file {
+                    File::Present { .. } => {}
+                    File::Missing => return Err(Error::ResourceNotFound),
+                    File::OtherKind => return Err(rejected("the source is not a regular file")),
+                }
+                let target = self.resource_file_state(destination).await?;
+                if conflict == ResourceConflictPolicy::RejectExisting && target != File::Missing {
+                    return Err(Error::ResourceAlreadyExists);
+                }
+                if target == File::OtherKind {
+                    return Err(rejected("the destination is not a regular file"));
+                }
+                let keep_both = conflict == ResourceConflictPolicy::KeepBoth;
+                let names = if keep_both {
+                    Some(self.resource_child_names(&parent).await?)
+                } else {
+                    None
+                };
+                let preserve = (keep_both && target != File::Missing).then_some(target);
+                self.check_relocation_generation(&generation).await?;
+                if Instant::now() >= context.dispatch_deadline() {
+                    return Err(Error::Timeout { operation });
+                }
+                let request =
+                    self.resource_relocation_request(source, destination, conflict, moving)?;
+                admission = Some((generation, names, preserve));
+                let response = self
+                    .connection
+                    .send_workflow_write(operation, request, &context, &mut write)
+                    .await?;
+                verify_mutation_ack(operation, response.status, response.body)
+            })
+            .await;
+        let original = workflow_write_result(operation, write, result);
+        let refused = write.response_complete
+            && matches!(
+                &original,
+                Err(Error::Authentication { .. } | Error::AccessDenied { .. })
+            );
+        let mut report = ResourceRelocationReport {
+            outcome: if refused {
+                Outcome::Rejected
+            } else if write.dispatched {
+                Outcome::Unconfirmed
+            } else {
+                Outcome::NotSubmitted
+            },
+            write,
+            original,
+            source_before: before,
+            source_after: None,
+            destination: None,
+            destination_after: None,
+            kept_target_after: None,
+            observation_error: None,
+        };
+        if let Some((generation, names, preserve)) =
+            admission.filter(|_| report.outcome == Outcome::Unconfirmed)
+        {
+            context.phase(OperationPhase::Verifying);
+            report.observation_error = context
+                .wait(context.deadline, VERIFY_FILE, async {
+                    self.check_relocation_generation(&generation).await?;
+                    let origin = self.resource_file_state(source).await;
+                    let actual = self
+                        .resource_relocation_destination(destination, &parent, names.as_ref())
+                        .await;
+                    let (actual, observed) = match actual {
+                        Ok(path) => {
+                            let evidence = self.resource_file_state(&path).await;
+                            (Some(path), evidence)
+                        }
+                        Err(error) => (None, Err(error)),
+                    };
+                    let kept = if preserve.is_some() {
+                        Some(self.resource_file_state(destination).await)
+                    } else {
+                        None
+                    };
+                    self.check_relocation_generation(&generation).await?;
+                    let origin_expected = if moving { Some(File::Missing) } else { before };
+                    let source_matches = origin.as_ref().ok().copied() == origin_expected;
+                    let destination_matches = observed.as_ref().ok().copied() == before;
+                    let kept_matches =
+                        kept.as_ref().and_then(|value| value.as_ref().ok()).copied() == preserve;
+                    report.outcome = if source_matches && destination_matches && kept_matches {
+                        Outcome::ExpectedStateObserved
+                    } else if destination_matches || (moving && source_matches) {
+                        Outcome::PartiallyObserved
+                    } else if origin.is_ok()
+                        && observed.is_ok()
+                        && kept.as_ref().is_none_or(|value| value.is_ok())
+                    {
+                        Outcome::CurrentStateDiffers
+                    } else {
+                        Outcome::Unconfirmed
+                    };
+                    report.source_after = Some(origin);
+                    report.destination = actual;
+                    report.destination_after = Some(observed);
+                    report.kept_target_after = kept;
+                    Ok(())
+                })
+                .await
+                .err();
+        }
+        drop(guard);
+        context.phase(OperationPhase::Finished);
+        Ok(report)
+    }
+
+    async fn check_relocation_generation(&self, generation: &str) -> Result<()> {
+        if self.system_status().await?.start_time.as_deref() != Some(generation) {
+            return Err(Error::ConfigurationChanged);
+        }
+        Ok(())
+    }
+
     async fn relocate_resource(
         &self,
         source: &ResourcePath,
@@ -93,24 +279,7 @@ impl Client {
         conflict: ResourceConflictPolicy,
         moving: bool,
     ) -> Result<ResourceMutation> {
-        nonroot(source)?;
-        nonroot(destination)?;
-        // The fixed native handler resolves destination components within the
-        // SOURCE mount even when another volume ID was supplied. Reject that
-        // unsafe request before reads/writes; never guess a cross-mount mapping.
-        if source.volume != destination.volume {
-            return Err(rejected(
-                "native mutations require a single explicit logical volume",
-            ));
-        }
-        if source.style != destination.style {
-            return Err(rejected("resource target syntax differs"));
-        }
-        if source.volume == destination.volume && source.components == destination.components {
-            return Err(rejected(
-                "source and destination are the same logical resource",
-            ));
-        }
+        validate_relocation(source, destination)?;
         let operation = if moving {
             "move resource"
         } else {
@@ -149,67 +318,12 @@ impl Client {
         } else {
             None
         };
-        let mut url = self.resource_url("rest/f/api/resources", source)?;
-        // Native destination is an escaped resource URI inside a query value.
-        // The UI supplies encoded names before encodeURIComponent on that value.
-        // Preserve both URI levels, including literal percent and C0 filenames.
-        let destination_url = self.resource_url("rest/f/api/resources", destination)?;
-        let route = self
-            .connection
-            .management_url("rest/f/api/resources", &[])?;
-        let logical = destination_url
-            .path()
-            .strip_prefix(route.path().trim_end_matches('/'))
-            .ok_or_else(|| rejected("destination URI escaped its resource route"))?;
-        url.query_pairs_mut()
-            .append_pair("action", if moving { "rename" } else { "copy" })
-            .append_pair("destination", logical)
-            .append_pair(
-                "override",
-                if conflict == ResourceConflictPolicy::OverwriteAndMerge {
-                    "true"
-                } else {
-                    "false"
-                },
-            )
-            .append_pair(
-                "rename",
-                if conflict == ResourceConflictPolicy::KeepBoth {
-                    "true"
-                } else {
-                    "false"
-                },
-            );
-        let request = self
-            .connection
-            .http
-            .patch(url)
-            .header("X-API-Key", self.connection.key.header());
+        let request = self.resource_relocation_request(source, destination, conflict, moving)?;
         self.resource_mutation_ack(operation, request).await?;
-        let actual = if let Some(names) = old_names {
-            let after = self
-                .resource_child_names(&parent)
-                .await
-                .map_err(|e| unknown(operation, e))?;
-            let mut added = after.difference(&names);
-            let name = added.next().ok_or_else(|| {
-                unknown(
-                    operation,
-                    rejected("no unambiguous new destination entry was observed"),
-                )
-            })?;
-            if added.next().is_some() {
-                return Err(unknown(
-                    operation,
-                    rejected("multiple new entries prevent generated-name reconciliation"),
-                ));
-            }
-            parent
-                .child(name.clone())
-                .map_err(|e| unknown(operation, e))?
-        } else {
-            destination.clone()
-        };
+        let actual = self
+            .resource_relocation_destination(destination, &parent, old_names.as_ref())
+            .await
+            .map_err(|error| unknown(operation, error))?;
         let metadata = self
             .resource_info(&actual)
             .await
@@ -246,6 +360,73 @@ impl Client {
             destination: actual,
             metadata,
         })
+    }
+
+    fn resource_relocation_request(
+        &self,
+        source: &ResourcePath,
+        destination: &ResourcePath,
+        conflict: ResourceConflictPolicy,
+        moving: bool,
+    ) -> Result<reqwest::RequestBuilder> {
+        let mut url = self.resource_url("rest/f/api/resources", source)?;
+        // Native destination is an escaped resource URI inside a query value.
+        // The UI supplies encoded names before encodeURIComponent on that value.
+        // Preserve both URI levels, including literal percent and C0 filenames.
+        let destination_url = self.resource_url("rest/f/api/resources", destination)?;
+        let route = self
+            .connection
+            .management_url("rest/f/api/resources", &[])?;
+        let logical = destination_url
+            .path()
+            .strip_prefix(route.path().trim_end_matches('/'))
+            .ok_or_else(|| rejected("destination URI escaped its resource route"))?;
+        url.query_pairs_mut()
+            .append_pair("action", if moving { "rename" } else { "copy" })
+            .append_pair("destination", logical)
+            .append_pair(
+                "override",
+                if conflict == ResourceConflictPolicy::OverwriteAndMerge {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .append_pair(
+                "rename",
+                if conflict == ResourceConflictPolicy::KeepBoth {
+                    "true"
+                } else {
+                    "false"
+                },
+            );
+        Ok(self
+            .connection
+            .http
+            .patch(url)
+            .header("X-API-Key", self.connection.key.header()))
+    }
+
+    async fn resource_relocation_destination(
+        &self,
+        destination: &ResourcePath,
+        parent: &ResourcePath,
+        previous_names: Option<&BTreeSet<String>>,
+    ) -> Result<ResourcePath> {
+        let Some(names) = previous_names else {
+            return Ok(destination.clone());
+        };
+        let after = self.resource_child_names(parent).await?;
+        let mut added = after.difference(names);
+        let name = added
+            .next()
+            .ok_or_else(|| rejected("no unambiguous new destination entry was observed"))?;
+        if added.next().is_some() {
+            return Err(rejected(
+                "multiple new entries prevent generated-name reconciliation",
+            ));
+        }
+        parent.clone().child(name.clone())
     }
 
     /// Delete an explicit file or explicitly recursive directory, then observe
@@ -373,16 +554,41 @@ impl Client {
             .connection
             .request_prepared(operation, request, true)
             .await?;
-        if body != b"200 OK\n" {
-            return Err(unknown(
-                operation,
-                Error::InvalidResponse {
-                    operation,
-                    response: ResponseDiagnostic::new(status, body),
-                },
-            ));
-        }
+        verify_mutation_ack(operation, status, body)
+    }
+}
+
+fn validate_relocation(source: &ResourcePath, destination: &ResourcePath) -> Result<()> {
+    nonroot(source)?;
+    nonroot(destination)?;
+    // The native handler resolves both paths within the source mount.
+    if source.volume != destination.volume {
+        return Err(rejected(
+            "native mutations require a single explicit logical volume",
+        ));
+    }
+    if source.style != destination.style {
+        return Err(rejected("resource target syntax differs"));
+    }
+    if source.components == destination.components {
+        return Err(rejected(
+            "source and destination are the same logical resource",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_mutation_ack(operation: &'static str, status: u16, body: Vec<u8>) -> Result<()> {
+    if body == b"200 OK\n" {
         Ok(())
+    } else {
+        Err(unknown(
+            operation,
+            Error::InvalidResponse {
+                operation,
+                response: ResponseDiagnostic::new(status, body),
+            },
+        ))
     }
 }
 fn nonroot(path: &ResourcePath) -> Result<()> {

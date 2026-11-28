@@ -21,6 +21,13 @@ both and require one unambiguous newly generated name. Native merge is not
 whole-tree replacement. `ResourceMutation` returns observed destination metadata;
 it does not attest every recursive byte or make the operation atomic.
 
+Use `copy_file_and_verify` or `move_file_and_verify` to check one regular
+file's full SHA-256 and length at the resulting path. A copy checks that the
+original bytes remain. A move checks that the old path is absent. The report
+keeps the first reply and later observations separately. With KeepBoth, two
+new names prevent identifying the destination. Check the destination listing
+before deciding whether to copy again.
+
 `write_resource_text()` explicitly replaces an existing file with bounded UTF-8
 text, including an empty value, and verifies native size/SHA-256 readback. It
 rejects missing files and directories. `delete_resource()` requires an explicit

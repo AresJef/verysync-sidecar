@@ -71,6 +71,7 @@ mod client;
 mod configuration;
 mod control_observation;
 mod control_operation;
+mod delivery;
 mod device_options;
 mod devices;
 mod diagnostics_preferences;
@@ -160,6 +161,10 @@ pub use control_operation::{
     ControlOperationEvent, ControlOperationKind, ControlOperationReceipt, ControlOperationResult,
     ControlSubmission, DeviceRemovalProgress, PreparedControlOperation,
 };
+pub use delivery::{
+    DeliveryBatch, DeliveryEvidence, DeliveryEvidenceSource, DeliveryFile, DeliveryFileOutcome,
+    DeliveryFileReport, DeliveryReceipt, DeliveryRecipientReport, DeliveryReport,
+};
 pub use device_options::{DeviceAdvancedConfig, DeviceAdvancedPatch, IntroductionSource};
 pub use devices::{
     CreateDeviceOptions, DeviceCompression, DeviceConfig, DeviceDefaults, DevicePatch,
@@ -181,7 +186,8 @@ pub use file_history::{
     VersionArchiveLocation, VersionedDirectory,
 };
 pub use file_mutations::{
-    ResourceConflictPolicy, ResourceDeleteScope, ResourceMutation, ResourceRemoval,
+    ResourceConflictPolicy, ResourceDeleteScope, ResourceMutation, ResourceRelocationOutcome,
+    ResourceRelocationReport, ResourceRemoval,
 };
 pub use file_transfers::{
     ResourceArchiveFormat, ResourceByteRange, ResourceDownload, ResourceTransferOptions,
@@ -189,7 +195,8 @@ pub use file_transfers::{
     VerifiedUploadOutcome, VerifiedUploadReport,
 };
 pub use files::{
-    ResourceChecksum, ResourceInfo, ResourcePath, ResourcePreview, ResourceVolume, ResourceVolumeId,
+    ResourceChecksum, ResourceFileState, ResourceInfo, ResourcePath, ResourcePreview,
+    ResourceVolume, ResourceVolumeId,
 };
 pub use folder_options::{FolderAdvancedConfig, FolderAdvancedPatch};
 pub use folder_policies::{

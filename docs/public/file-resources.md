@@ -49,6 +49,10 @@ writer or establish that synchronization/transfer completed. Missing digests
 retain the bounded private response diagnostic and are not empty successes.
 Metadata/path Debug output omits names, content and private mount information.
 
+`resource_file_state` reads one regular file's reported length and full
+SHA-256. A native 404 records absence. Read permission errors and malformed
+digests remain errors.
+
 `resource_thumbnail` reads the native `inline=true` preview and returns its
 actual image Content-Type and complete bounded bytes in `ResourcePreview`.
 Empty responses and responses not advertised as image content are errors.
