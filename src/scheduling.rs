@@ -83,6 +83,8 @@ pub struct FilePriorityReport {
     pub write: crate::ManagementWriteEvidence,
     /// Original need page returned by the request, if it was sent.
     pub original: crate::Result<Option<crate::NeedPage>>,
+    /// Selected file's position in the original reply, when the page verifies.
+    pub original_position: Option<FilePriorityState>,
     /// Exact position before submission, when readable.
     pub before: Option<FilePriorityState>,
     /// Latest exact position in a verified page.
@@ -94,12 +96,20 @@ pub struct FilePriorityReport {
 }
 
 impl FilePriorityReport {
-    /// Classify the observed priority without inferring that bytes arrived.
+    /// Classify the current priority and preserve an earlier promotion that
+    /// only the original verified response shows. Check file bytes separately.
     pub fn completion(&self) -> crate::OperationCompletion {
         use crate::OperationCompletion as Completion;
         match self.current {
             Some(FilePriorityState::FirstQueued | FilePriorityState::InProgress) => {
                 Completion::Completed
+            }
+            _ if matches!(
+                self.original_position,
+                Some(FilePriorityState::FirstQueued | FilePriorityState::InProgress)
+            ) =>
+            {
+                Completion::PartiallyCompleted
             }
             Some(FilePriorityState::Waiting) => Completion::GoalNotMet,
             Some(FilePriorityState::Unobserved) => Completion::Unconfirmed,

@@ -7708,22 +7708,39 @@ async fn file_priority_workflow_observes_delayed_queue_change_after_one_post() -
             serde_json::json!({"page":1,"perpage":20,"queued":queue,"rest":[],"progress":[]}),
         )
     };
-    for (label, ack_status, later_pages, expected_state, expected_completion) in [
+    for (label, ack_status, promoted_in_reply, later_pages, expected_state, expected_completion) in [
         (
             "delayed",
             200,
+            true,
             vec![false, true],
             Some(FilePriorityState::FirstQueued),
             OperationCompletion::Completed,
         ),
         (
-            "still waiting",
+            "requeued",
             200,
+            true,
+            vec![false; 4],
+            Some(FilePriorityState::Waiting),
+            OperationCompletion::PartiallyCompleted,
+        ),
+        (
+            "never promoted",
+            200,
+            false,
             vec![false; 4],
             Some(FilePriorityState::Waiting),
             OperationCompletion::GoalNotMet,
         ),
-        ("denied", 403, vec![], None, OperationCompletion::GoalNotMet),
+        (
+            "denied",
+            403,
+            false,
+            vec![],
+            None,
+            OperationCompletion::GoalNotMet,
+        ),
     ] {
         let mut replies = vec![
             version(),
@@ -7739,7 +7756,7 @@ async fn file_priority_workflow_observes_delayed_queue_change_after_one_post() -
             status(), // recheck the target before the write
             Reply {
                 status: ack_status,
-                ..need(true)
+                ..need(promoted_in_reply)
             }, // one original POST with its own reply
         ];
         for &selected_is_first in &later_pages {
@@ -7770,6 +7787,14 @@ async fn file_priority_workflow_observes_delayed_queue_change_after_one_post() -
             "{label}: {report:?}"
         );
         assert_eq!(report.current, expected_state, "{label}");
+        assert_eq!(
+            report.original_position,
+            match (ack_status, promoted_in_reply) {
+                (200, true) => Some(FilePriorityState::FirstQueued),
+                (200, false) => Some(FilePriorityState::Waiting),
+                _ => None,
+            }
+        );
         assert!(report.write.dispatched && report.write.response_complete);
         assert_eq!(report.write.status, Some(ack_status));
         if ack_status == 403 {
@@ -7777,7 +7802,11 @@ async fn file_priority_workflow_observes_delayed_queue_change_after_one_post() -
         } else {
             assert_eq!(
                 report.original?.expect("original selected file").queued[0].name,
-                "selected.bin"
+                if promoted_in_reply {
+                    "selected.bin"
+                } else {
+                    "other.bin"
+                }
             );
         }
         let requests = receiver.finish().await?;

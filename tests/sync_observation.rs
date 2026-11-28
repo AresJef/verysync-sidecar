@@ -1117,16 +1117,41 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
             "readback_completed":report.completion()==verysync_sidecar::OperationCompletion::Completed
         })
     );
-    assert_eq!(
-        report.completion(),
-        verysync_sidecar::OperationCompletion::Completed,
+    use verysync_sidecar::{FilePriorityState, OperationCompletion};
+    assert!(
+        matches!(
+            report.original_position,
+            Some(FilePriorityState::FirstQueued | FilePriorityState::InProgress)
+        ),
         "{report:?}"
     );
-    assert!(report.original?.is_some());
-    let prioritized = report
-        .current_need
-        .expect("verified native queue is available");
-    assert!(!prioritized.queued.is_empty());
+    let original = report
+        .original
+        .as_ref()
+        .ok()
+        .and_then(Option::as_ref)
+        .expect("native priority reply includes its own page");
+    assert!(!original.queued.is_empty());
+    assert!(
+        original.queued.first().is_some_and(|f| f.name == target)
+            || original.progress.iter().any(|f| f.name == target)
+    );
+    assert!(original.queued.iter().any(|f| f.name != target));
+    let current = report
+        .current
+        .expect("independent queue position must be checked");
+    let expected = match current {
+        FilePriorityState::FirstQueued | FilePriorityState::InProgress => {
+            OperationCompletion::Completed
+        }
+        FilePriorityState::Waiting | FilePriorityState::Unobserved => {
+            OperationCompletion::PartiallyCompleted
+        }
+        _ => return Err("unrecognized independent priority state".into()),
+    };
+    assert_eq!(report.completion(), expected, "{report:?}");
+    assert!(report.observation_error.is_none());
+    let prioritized = report.current_need.expect("verified independent need page");
     let absent = b
         .client()
         .prioritize_file_and_verify(
@@ -1141,11 +1166,18 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
         absent.current,
         Some(verysync_sidecar::FilePriorityState::Unobserved)
     );
-    assert!(
-        prioritized.queued.first().is_some_and(|f| f.name == target)
-            || prioritized.progress.iter().any(|f| f.name == target)
+    assert!(prioritized
+        .queued
+        .iter()
+        .chain(&prioritized.progress)
+        .chain(&prioritized.rest)
+        .any(|file| file.name != target));
+    let latest_first = prioritized.queued.first().is_some_and(|f| f.name == target);
+    let latest_active = prioritized.progress.iter().any(|f| f.name == target);
+    assert_eq!(
+        latest_first || latest_active,
+        expected == OperationCompletion::Completed
     );
-    assert!(prioritized.queued.iter().any(|f| f.name != target));
     assert_eq!(prioritized.page, Some(1));
     assert_eq!(prioritized.per_page, Some(1000));
     assert!(b
@@ -1224,7 +1256,7 @@ async fn actual_folder_order_and_specific_priority_change_preserve_samples() -> 
     std::fs::remove_dir_all(root)?;
     println!(
         "public folder priority evidence: {}",
-        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"actual_511_backlog_files_created_after_throttle":backlog_created_after_throttle,"explicit_owned_fixture_reconnection_seconds":5,"all_six_actual_order_readbacks":true,"paused_scope_rejected":true,"legacy_queue_fixture_fields_read_back":true,"actual_alphabetic_backlog_has_nonfirst_target":true,"actual_target_promoted_while_other_work_still_queued":true,"priority_reply_and_independent_readback":true,"unlisted_target_zero_write":true,"actual_page_scope_preserved":true,"unrelated_folder_settings_retained":true,"unknown_order_and_invalid_relative_path_rejected":true,"explicit_rate_restoration_read_back":true,"actual_all_512_files_received":true,"all_source_and_destination_contents_match":true,"both_actual_normal_tree_and_state_exits":true})
+        json!({"normal_rate_readiness_received_within_original_20s":normal_rate_readiness_received,"actual_511_backlog_files_created_after_throttle":backlog_created_after_throttle,"explicit_owned_fixture_reconnection_seconds":5,"all_six_actual_order_readbacks":true,"paused_scope_rejected":true,"legacy_queue_fixture_fields_read_back":true,"actual_alphabetic_backlog_has_nonfirst_target":true,"actual_target_promoted_while_other_work_still_queued":true,"priority_reply_and_independent_readback":true,"promotion_only_observed_in_original_reply":expected==OperationCompletion::PartiallyCompleted,"unlisted_target_zero_write":true,"actual_page_scope_preserved":true,"unrelated_folder_settings_retained":true,"unknown_order_and_invalid_relative_path_rejected":true,"explicit_rate_restoration_read_back":true,"actual_all_512_files_received":true,"all_source_and_destination_contents_match":true,"both_actual_normal_tree_and_state_exits":true})
     );
     Ok(())
 }

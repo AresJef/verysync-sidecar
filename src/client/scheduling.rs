@@ -197,9 +197,15 @@ impl Client {
                 original,
                 Err(Error::Authentication { .. } | Error::AccessDenied { .. })
             );
+        let original_position = original
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .and_then(|response_page| file_priority(response_page, relative, page).ok());
         let mut report = FilePriorityReport {
             write,
             original,
+            original_position,
             before,
             current: None,
             current_need: None,

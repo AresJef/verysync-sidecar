@@ -83,8 +83,9 @@ throughput, SLA, speedup, CPU filtering or time deduction.
 
 
 Use `prioritize_file_and_verify` with the first need page to check one waiting
-file. The report shows the queue before the request and after a separate read.
-A file already first or in progress needs no write. If the file is missing from
-the page, increase the page limit or check its contents at the receiving device.
-A queue position shows which file is scheduled next or active. Verify the
-received file separately.
+file. The report shows the selected file's position before submission, in the
+original reply, and in a later verified page. A file already first or in progress
+needs no write. If the original reply shows that the file reached the front
+or became active and a later read cannot confirm that position, the report
+marks the goal partially completed. If the file leaves the page, check its
+contents at the receiving device.
